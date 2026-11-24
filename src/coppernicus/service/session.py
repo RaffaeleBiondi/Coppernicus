@@ -1,0 +1,666 @@
+"""The session: opened boards and solved results, addressable by id across calls.
+
+Every public method takes and returns plain JSON-serialisable data and raises
+:class:`~coppernicus.service.errors.ServiceError` with a code, a message and a hint. The
+CLI (``--json``) and the MCP server are thin layers over it; the GUI can move onto it later.
+
+Results are big (a large ground net is ~1 GB of arrays), so the session keeps the arrays of
+only the most recently used results, within a count and a memory bound. An evicted
+result keeps its compact summary (``compare_results`` still works) and asks to be solved
+again for anything that needs the field.
+"""
+
+from __future__ import annotations
+
+import difflib
+import fnmatch
+import math
+import os
+import tempfile
+import threading
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+
+import numpy as np
+from shapely.geometry import LineString
+from shapely.ops import unary_union
+
+from coppernicus.engine import Board, Cancelled, EngineError, solve_rail, tied_nets
+from coppernicus.engine.board import board_file_filter
+from coppernicus.maps import FIELDS, render_layer_map, safe_name, save_layer_maps
+from coppernicus.problems import Problem, find_problems
+from coppernicus.project import Project, ProjectError, Rail, Settings
+from coppernicus.results import LayerField, RailResult
+from coppernicus.service import convert as C
+from coppernicus.service import errors as E
+from coppernicus.service import fields as F
+from coppernicus.service.errors import ServiceError
+
+Progress = Optional[Callable[[str], None]]
+Cancel = Optional[Callable[[], bool]]
+
+DEFAULT_MAX_RESULTS = 8
+DEFAULT_MAX_RESULT_MB = 2048
+DEFAULT_MAX_BOARDS = 4
+MAX_SUMMARIES = 256
+LIST_LIMIT = 200
+PIN_LIST_LIMIT = 64
+
+
+@dataclass
+class _BoardEntry:
+    id: str
+    path: Path
+    mtime_ns: int
+    board: Board
+    _outline: Optional[list] = None
+    _variants: Dict[Tuple, Board] = field(default_factory=dict)
+
+    def outline(self) -> list:
+        if self._outline is None:
+            self._outline = self.board.outline()
+        return self._outline
+
+    def variant(self, thickness: Mapping[str, float]) -> Board:
+        """The board, or a what-if copy with other copper thicknesses."""
+        if not thickness:
+            return self.board
+        key = tuple(sorted(thickness.items()))
+        if key not in self._variants:
+            try:
+                self._variants[key] = self.board.with_copper_thickness(dict(thickness))
+            except EngineError as e:
+                raise ServiceError(E.LAYER_NOT_FOUND, str(e),
+                                   "copper_thickness_mm takes copper layer names as in KiCad") from None
+        return self._variants[key]
+
+    def stale(self) -> bool:
+        try:
+            return self.path.stat().st_mtime_ns != self.mtime_ns
+        except OSError:
+            return True
+
+    def warnings(self) -> List[str]:
+        out = list(self.board.warnings)
+        if self.stale():
+            out.append(f"The board file {self.path.name} changed on disk (or is gone) since it "
+                       "was opened; call open_board again to analyse the current file.")
+        return out
+
+
+@dataclass
+class _ResultRecord:
+    id: str
+    board_id: str
+    board: Optional[Board]
+    outline: Optional[list]
+    rail: Rail
+    settings: Settings
+    thickness: Dict[str, float]
+    layer_thickness: Dict[str, float]
+    result: Optional[RailResult]
+    problems: List[Problem]
+    summary: Dict[str, Any]
+    nbytes: int
+    queries: Dict[str, Any] = field(default_factory=dict)      # per layer: locator, J, copper
+
+
+def _result_nbytes(res: RailResult) -> int:
+    return int(sum(a.nbytes for lf in res.layers for a in (
+        lf.points, lf.tris, lf.voltage, lf.current_density, lf.tri_power, lf.tri_area)))
+
+
+def _limited(names: Sequence[str], limit: int = 30) -> str:
+    names = list(names)
+    more = f" … and {len(names) - limit} more" if len(names) > limit else ""
+    return ", ".join(names[:limit]) + more
+
+
+class Session:
+    """Boards and results by id. Thread-safe; solves run one at a time."""
+
+    def __init__(self, out_dir=None, max_results: int = DEFAULT_MAX_RESULTS,
+                 max_result_mb: float = DEFAULT_MAX_RESULT_MB, max_boards: int = DEFAULT_MAX_BOARDS):
+        self._out_dir = Path(out_dir).expanduser().resolve() if out_dir else None
+        self.max_results = max(1, int(max_results))
+        self.max_result_bytes = int(max_result_mb * 1024 * 1024)
+        self.max_boards = max(1, int(max_boards))
+        self._boards: "OrderedDict[str, _BoardEntry]" = OrderedDict()
+        self._board_keys: Dict[Tuple[str, int], str] = {}
+        self._results: "OrderedDict[str, _ResultRecord]" = OrderedDict()
+        self._n_boards = self._n_results = 0
+        self._lock = threading.RLock()
+        self._solve_lock = threading.Lock()
+
+    # ================================================================== boards
+    def open_board(self, path) -> Dict[str, Any]:
+        """Open a board file read-only (or reuse it when already open and unchanged)."""
+        entry = self._open_entry(path)
+        board = entry.board
+        kinds = {"power": 0, "ground": 0}
+        for n in board.nets():
+            k = board.net_kind(n)
+            if k in kinds:
+                kinds[k] += 1
+        rings = entry.outline()
+        if rings:
+            allpts = np.vstack(rings)
+            x0, y0 = allpts.min(axis=0)
+            x1, y1 = allpts.max(axis=0)
+            bbox = [x0, y0, x1, y1]
+        else:
+            bbox = None
+        return C.jsonable({
+            "board_id": entry.id, "path": entry.path, "name": board.name,
+            "layers": [{"name": lay.name, "thickness_mm": lay.thickness_mm} for lay in board.layers()],
+            "counts": board.counts(), "power_nets": kinds["power"], "ground_nets": kinds["ground"],
+            "outline_bbox_mm": bbox,
+            "assumptions": ["Coordinates are mm in KiCad's frame (x right, y down); layer names "
+                            "as in KiCad.", C.NET_KIND_CAVEAT],
+            "warnings": entry.warnings(),
+        })
+
+    def _open_entry(self, path) -> _BoardEntry:
+        p = Path(str(path)).expanduser()
+        try:
+            p = p.resolve()
+            st = p.stat()
+        except OSError:
+            raise ServiceError(E.FILE_NOT_FOUND, f"No such file: {path}",
+                               "give an absolute path to a board file") from None
+        key = (str(p), st.st_mtime_ns)
+        with self._lock:
+            bid = self._board_keys.get(key)
+            if bid in self._boards:
+                self._boards.move_to_end(bid)
+                return self._boards[bid]
+        try:
+            board = Board.open(p)
+        except EngineError as e:
+            raise ServiceError(E.BOARD_UNREADABLE, f"Could not read {p.name}: {e}",
+                               f"readable formats: {board_file_filter()}") from None
+        with self._lock:
+            self._n_boards += 1
+            entry = _BoardEntry(f"b{self._n_boards}", p, st.st_mtime_ns, board)
+            self._boards[entry.id] = entry
+            self._board_keys[key] = entry.id
+            while len(self._boards) > self.max_boards:
+                old, _ = self._boards.popitem(last=False)
+                self._board_keys = {k: v for k, v in self._board_keys.items() if v != old}
+        return entry
+
+    def _entry(self, board_id: str) -> _BoardEntry:
+        with self._lock:
+            entry = self._boards.get(str(board_id))
+            if entry is None:
+                open_ids = ", ".join(self._boards) or "none"
+                raise ServiceError(E.BOARD_NOT_OPEN, f"No open board with id {board_id!r}",
+                                   f"call open_board first (open boards: {open_ids})")
+            self._boards.move_to_end(entry.id)
+            return entry
+
+    def _check_net(self, board: Board, net: str) -> None:
+        nets = board.nets()
+        if net in nets:
+            return
+        folded = {n.casefold(): n for n in nets}
+        close = difflib.get_close_matches(net.casefold(), list(folded), n=8, cutoff=0.5)
+        same_case = folded.get(net.casefold())
+        hint = (f"did you mean {same_case!r}?" if same_case else
+                "close matches: " + ", ".join(folded[c] for c in close) if close else
+                "use list_nets to see the board's nets")
+        raise ServiceError(E.NET_NOT_FOUND, f"No net {net!r} on this board", hint)
+
+    def list_nets(self, board_id: str, kind: str = "power_or_ground", filter: Optional[str] = None,
+                  limit: int = LIST_LIMIT) -> Dict[str, Any]:
+        """Nets with their kind and the layers they have copper on."""
+        entry = self._entry(board_id)
+        board = entry.board
+        kinds = {"power_or_ground": ("power", "ground"), "power": ("power",), "ground": ("ground",),
+                 "signal": ("signal",), "all": ("power", "ground", "signal")}
+        if kind not in kinds:
+            raise ServiceError(E.INVALID_INPUT, f"unknown kind {kind!r}",
+                               f"kind is one of: {', '.join(kinds)}")
+        names = {lay.id: lay.name for lay in board.layers()}
+        nets = [n for n in board.nets() if board.net_kind(n) in kinds[kind]]
+        if filter:
+            pat = filter.casefold()
+            globbing = any(c in pat for c in "*?[")
+            nets = [n for n in nets if (fnmatch.fnmatchcase(n.casefold(), pat) if globbing
+                                        else pat in n.casefold())]
+        limit = max(1, int(limit))
+        shown = nets[:limit]
+        return C.jsonable({
+            "board_id": entry.id, "kind": kind, "filter": filter, "count": len(nets),
+            "returned": len(shown), "truncated": len(nets) > len(shown),
+            "nets": [{"name": n, "kind": board.net_kind(n),
+                      "layers": [names[i] for i in board.net_layers(n)]} for n in shown],
+            "assumptions": [C.NET_KIND_CAVEAT], "warnings": entry.warnings(),
+        })
+
+    def net_parts(self, board_id: str, net: str) -> Dict[str, Any]:
+        """Parts and pins on a net, and the net ties joining it to other nets."""
+        entry = self._entry(board_id)
+        board = entry.board
+        self._check_net(board, net)
+        parts = []
+        for p in board.parts_on_net(net):
+            parts.append({"ref": p.ref, "value": p.value, "footprint": p.footprint,
+                          "pin_count": len(p.pins), "pins": p.pins[:PIN_LIST_LIMIT],
+                          "pins_truncated": len(p.pins) > PIN_LIST_LIMIT})
+        ties = [t for t in board.net_ties() if net in (t.net_a, t.net_b)]
+        joined, _ = tied_nets(board, net)
+        return C.jsonable({
+            "board_id": entry.id, "net": net, "kind": board.net_kind(net), "count": len(parts),
+            "parts": parts,
+            "net_ties": [{"ref": t.ref, "net_a": t.net_a, "net_b": t.net_b} for t in ties],
+            "solved_with": [n for n in joined if n != net],
+            "assumptions": ["Net ties are solved as shorts: nets in 'solved_with' are solved "
+                            "together with this one unless follow_net_ties is false."],
+            "warnings": entry.warnings(),
+        })
+
+    # ================================================================== solving
+    def solve_rail(self, board_id: str, net: str, sources: Sequence[Mapping[str, Any]],
+                   loads: Sequence[Mapping[str, Any]], limits: Optional[Mapping[str, Any]] = None,
+                   settings: Optional[Mapping[str, Any]] = None, follow_net_ties: bool = True,
+                   top: int = 5, progress: Progress = None, cancelled: Cancel = None) -> Dict[str, Any]:
+        """Solve one rail: sources hold ``voltage_v`` on their pins, loads draw ``current_a``
+        split equally across their pins. Returns a compact summary with a ``result_id``."""
+        entry = self._entry(board_id)
+        if not isinstance(sources, (list, tuple)) or not isinstance(loads, (list, tuple)):
+            raise ServiceError(E.INVALID_INPUT, "sources and loads must be lists of objects")
+        rail = Rail(str(net), sources=[C.terminal_from_dict(s, "source") for s in sources],
+                    loads=[C.terminal_from_dict(ld, "load") for ld in loads],
+                    limits=C.limits_from_dict(limits), follow_net_ties=bool(follow_net_ties))
+        solve_settings, thickness = C.settings_from_dict(settings)
+        rec = self._solve(entry, rail, solve_settings, thickness, top, progress, cancelled)
+        return C.jsonable(rec.summary)
+
+    def _validate_rail(self, board: Board, rail: Rail) -> None:
+        self._check_net(board, rail.net)
+        if not rail.sources:
+            raise ServiceError(E.MISSING_SOURCE, f"{rail.net}: add a source (the regulator output) "
+                               "before solving", "a source is {ref, voltage_v, pins?}")
+        if not rail.loads:
+            raise ServiceError(E.MISSING_LOAD, f"{rail.net}: add at least one load before solving",
+                               "a load is {ref, current_a, pins?}")
+        nets = tied_nets(board, rail.net)[0] if rail.follow_net_ties else [rail.net]
+        pins_by_ref: Dict[str, set] = {}
+        for n in nets:
+            for p in board.parts_on_net(n):
+                pins_by_ref.setdefault(p.ref, set()).update(p.pins)
+        where = " / ".join(nets)
+        for t in [*rail.sources, *rail.loads]:
+            if t.ref not in pins_by_ref:
+                raise ServiceError(E.PART_NOT_ON_NET, f"{t.ref} has no pads on net {where}",
+                                   f"parts on {where}: {_limited(sorted(pins_by_ref))}")
+            available = sorted(pins_by_ref[t.ref], key=lambda s: (len(s), s))
+            for pattern in t.pins or ():
+                if not any(fnmatch.fnmatchcase(p, pattern) for p in available):
+                    raise ServiceError(E.PIN_NOT_ON_NET, f"{t.ref} has no pin {pattern!r} on net {where}",
+                                       f"pins of {t.ref} on this net: {_limited(available, 64)}")
+
+    def _solve(self, entry: _BoardEntry, rail: Rail, settings: Settings, thickness: Dict[str, float],
+               top: int, progress: Progress, cancelled: Cancel) -> _ResultRecord:
+        board = entry.variant(thickness)
+        self._validate_rail(board, rail)
+        with self._solve_lock:
+            if progress is not None:
+                progress(f"solving {rail.net}")
+            try:
+                res = solve_rail(board, rail, settings, progress=progress,
+                                 cancelled=cancelled or (lambda: False))
+            except Cancelled:
+                raise ServiceError(E.CANCELLED, f"{rail.net}: solve cancelled") from None
+            except EngineError as e:
+                raise ServiceError(E.SOLVE_FAILED, f"{rail.net}: {e}",
+                                   "check that the sources and loads are connected by copper of "
+                                   "this net") from None
+        original = {lay.name: lay.thickness_mm for lay in entry.board.layers()}
+        layer_thickness = {lay.name: lay.thickness_mm for lay in board.layers()}
+        if thickness:
+            res.assumptions.append("What-if copper thickness (not the board file's): " + ", ".join(
+                f"{name} {mm:g} mm (board file: {original.get(name, float('nan')):g} mm)"
+                for name, mm in sorted(thickness.items())) + ".")
+        problems = find_problems(res, rail.limits, top=max(1, int(top)))
+        with self._lock:
+            self._n_results += 1
+            rid = f"r{self._n_results}"
+        summary = C.rail_summary(rid, entry.id, res, rail, problems, settings, thickness,
+                                 layer_thickness)
+        summary["warnings"] = entry.warnings() + summary["warnings"]
+        rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
+                            layer_thickness, res, problems, summary, _result_nbytes(res))
+        with self._lock:
+            self._results[rid] = rec
+            self._evict()
+        return rec
+
+    def _evict(self) -> None:
+        """Drop the arrays of the least recently used results beyond the bounds (never the
+        newest), keeping their summaries."""
+        heavy = [r for r in self._results.values() if r.result is not None]
+        total = sum(r.nbytes for r in heavy)
+        for r in heavy[:-1]:
+            if len(heavy) <= self.max_results and total <= self.max_result_bytes:
+                break
+            heavy.remove(r)
+            total -= r.nbytes
+            r.result, r.board, r.outline, r.queries, r.nbytes = None, None, None, {}, 0
+        while len(self._results) > MAX_SUMMARIES:
+            oldest = next(iter(self._results))
+            if self._results[oldest].result is not None:
+                break
+            self._results.pop(oldest)
+
+    def solve_project(self, project_path, rails: Optional[Sequence[str]] = None, top: int = 5,
+                      maps_dir=None, stop_on_error: bool = False, progress: Progress = None,
+                      cancelled: Cancel = None,
+                      on_rail: Optional[Callable[[str, Dict[str, Any]], None]] = None
+                      ) -> Dict[str, Any]:
+        """Solve the rails of a project file (all, or those named in ``rails``) with the
+        project's settings and limits. With ``maps_dir``, write drop and current PNGs per
+        layer there. A rail that fails to solve is reported in place unless
+        ``stop_on_error``. ``on_rail(result_id, summary)`` is called after each rail, while
+        its full result is still in memory."""
+        path = Path(str(project_path)).expanduser()
+        try:
+            project = Project.load(path)
+        except FileNotFoundError:
+            raise ServiceError(E.FILE_NOT_FOUND, f"No such project file: {project_path}",
+                               "give an absolute path to a *.coppernicus.yml file") from None
+        except (ProjectError, OSError) as e:
+            raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}") from None
+        board_info = self.open_board(project.board_path())
+        entry = self._entry(board_info["board_id"])
+        wanted = list(rails or [])
+        selected = [r for r in project.rails if not wanted or r.net in wanted]
+        if not selected:
+            names = ", ".join(r.net for r in project.rails) or "none"
+            raise ServiceError(E.INVALID_INPUT,
+                               "No rails to solve" + (f" matching {wanted}" if wanted else ""),
+                               f"rails in the project: {names}")
+        out_rails, verdicts = [], []
+        for i, rail in enumerate(selected, start=1):
+            if progress is not None:
+                progress(f"rail {i}/{len(selected)}: {rail.net}")
+            try:
+                rec = self._solve(entry, rail, project.settings, {}, top, progress, cancelled)
+            except ServiceError as e:
+                if stop_on_error or e.code == E.CANCELLED:
+                    raise
+                out_rails.append({"net": rail.net, "error": e.to_dict()})
+                verdicts.append("error")
+                continue
+            summary = dict(rec.summary)
+            if maps_dir is not None:
+                summary["maps"] = [str(p) for p in save_layer_maps(
+                    rec.result, rec.outline, Path(maps_dir), rec.problems)]
+            if on_rail is not None:
+                on_rail(rec.id, summary)
+            out_rails.append(summary)
+            verdicts.append(summary["verdict"])
+        overall = ("error" if "error" in verdicts else "fail" if "fail" in verdicts else
+                   "pass" if verdicts and all(v == "pass" for v in verdicts) else
+                   "pass_partially_judged" if "pass" in verdicts else "not_judged")
+        return C.jsonable({
+            "project": path.resolve(), "board": board_info, "rails": out_rails, "verdict": overall,
+            "verdict_note": "fail: a limit you set is exceeded on some rail; pass: every rail has "
+                            "limits and none is exceeded; not_judged: no limits set.",
+            "assumptions": [], "warnings": entry.warnings(),
+        })
+
+    # ================================================================== result queries
+    def _record(self, result_id: str, heavy: bool = True) -> _ResultRecord:
+        with self._lock:
+            rec = self._results.get(str(result_id))
+            if rec is None:
+                known = ", ".join(self._results) or "none"
+                raise ServiceError(E.RESULT_NOT_FOUND, f"No result with id {result_id!r}",
+                                   f"solve_rail returns a result_id (results: {known})")
+            if heavy and rec.result is None:
+                raise ServiceError(E.RESULT_EVICTED, f"Result {result_id} was dropped from memory "
+                                   "to make room for newer ones (its summary is kept)",
+                                   f"solve rail {rec.rail.net} again to query its field")
+            self._results.move_to_end(rec.id)
+            return rec
+
+    def rail_result(self, result_id: str) -> RailResult:
+        """The full result object (for in-process callers such as the CLI)."""
+        return self._record(result_id).result
+
+    def rail_problems(self, result_id: str) -> List[Problem]:
+        return list(self._record(result_id).problems)
+
+    def _layer(self, rec: _ResultRecord, layer: Optional[str]) -> LayerField:
+        res = rec.result
+        if layer is None or layer == "":
+            return max(res.layers, key=lambda lf: lf.power)
+        lf = res.layer(str(layer))
+        if lf is None:
+            raise ServiceError(E.LAYER_NOT_FOUND, f"Rail {res.net} has no copper on layer {layer!r}",
+                               f"layers of this result: {', '.join(x.name for x in res.layers)}")
+        return lf
+
+    def _queries(self, rec: _ResultRecord, lf: LayerField) -> Dict[str, Any]:
+        with self._lock:
+            q = rec.queries.get(lf.name)
+            if q is None:
+                q = {"locator": F.TriangleLocator(lf.points, lf.tris), "j": F.current_vectors(lf)}
+                rec.queries[lf.name] = q
+            return q
+
+    def _copper(self, rec: _ResultRecord, lf: LayerField):
+        q = self._queries(rec, lf)
+        if "copper" not in q:
+            q["copper"] = unary_union([rec.board.copper(n, lf.layer_id) for n in rec.result.nets])
+        return q["copper"]
+
+    def get_problems(self, result_id: str, limits: Optional[Mapping[str, Any]] = None,
+                     top: int = 5) -> Dict[str, Any]:
+        """Re-rank a result's problems against other limits, without solving again."""
+        rec = self._record(result_id)
+        lim = rec.rail.limits if limits is None else C.limits_from_dict(limits)
+        problems = find_problems(rec.result, lim, top=max(1, int(top)))
+        return C.jsonable({
+            "result_id": rec.id, "net": rec.result.net, **C.verdict(problems, lim),
+            "problems": [C.problem_dict(p) for p in problems],
+            "assumptions": [
+                "Loads are ranked by drop at their worst pin; hotspots are connected regions in the "
+                "top 1 % of a layer's copper area by |J| (or above max_current_density_a_mm2 when "
+                "set), reported by their area-weighted mean |J|; vias by barrel current."],
+            "warnings": [],
+        })
+
+    def render_map(self, result_id: str, layer: Optional[str] = None, field: str = "drop",
+                   region_mm: Optional[Sequence[float]] = None, dpi: int = 110,
+                   out_dir=None) -> Dict[str, Any]:
+        """A PNG map of ``field`` (drop / voltage / current) on one layer (default: the layer
+        with the most copper loss), optionally zoomed to region_mm = [x_min, y_min, x_max, y_max]."""
+        rec = self._record(result_id)
+        lf = self._layer(rec, layer)
+        if field not in FIELDS:
+            raise ServiceError(E.INVALID_INPUT, f"unknown field {field!r}",
+                               f"field is one of: {', '.join(FIELDS)}")
+        region = None
+        if region_mm is not None:
+            if len(region_mm) != 4:
+                raise ServiceError(E.INVALID_INPUT, "region_mm must be [x_min, y_min, x_max, y_max]")
+            x0, y0, x1, y1 = (C._number(v, "region_mm") for v in region_mm)
+            if x0 == x1 or y0 == y1:
+                raise ServiceError(E.INVALID_INPUT, "region_mm has no area")
+            region = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+        dpi = int(min(max(dpi, 50), 300))
+        folder = Path(out_dir).expanduser().resolve() if out_dir else self.out_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        tag = "" if region is None else "_" + safe_name("_".join(f"{v:g}" for v in region))
+        path = folder / f"{rec.id}_{safe_name(rec.result.net)}_{safe_name(lf.name)}_{field}{tag}.png"
+        scale = render_layer_map(rec.result, lf, field, rec.outline, path, rec.problems, region, dpi)
+        key = {"mV": "scale_mv", "V": "scale_v", "A/mm²": "scale_a_mm2"}[scale["unit"]]
+        return C.jsonable({
+            "result_id": rec.id, "net": rec.result.net, "layer": lf.name, "field": field,
+            "path": path, "region_mm": list(region) if region else None,
+            key: [scale["min"], scale["max"]], "image_px": [8 * dpi, 6 * dpi],
+            "legend": "green triangles: sources; red dots: loads; crosses: current-crowding "
+                      "spots on this layer; grey: board outline. y points down as in KiCad.",
+            "assumptions": (["Current-density colour scale is clipped at the layer's 99.5th "
+                             "percentile; point maxima at sharp corners are mesh-dependent."]
+                            if field == "current" else []),
+            "warnings": [],
+        })
+
+    def probe(self, result_id: str, layer: str, x_mm: float, y_mm: float) -> Dict[str, Any]:
+        """Voltage, drop and current density at a point of a layer."""
+        rec = self._record(result_id)
+        lf = self._layer(rec, layer)
+        x, y = C._number(x_mm, "x_mm"), C._number(y_mm, "y_mm")
+        q = self._queries(rec, lf)
+        loc, jv = q["locator"], q["j"]
+        res = rec.result
+        out: Dict[str, Any] = {"result_id": rec.id, "net": res.net, "layer": lf.name,
+                               "x_mm": x, "y_mm": y}
+        k = loc.locate(x, y)
+        if k < 0:
+            here = [o.name for o in res.layers
+                    if o.name != lf.name and self._queries(rec, o)["locator"].locate(x, y) >= 0]
+            kn, dist = loc.nearest(x, y)
+            near = loc.centroids[kn] if kn >= 0 else (math.nan, math.nan)
+            out.update({"on_copper": False, "layers_with_copper_here": here,
+                        "nearest_copper_mm": {"x_mm": near[0], "y_mm": near[1], "distance_mm": dist},
+                        "assumptions": [], "warnings": [f"No solved copper of {res.net} on {lf.name} "
+                                                        "at this point."]})
+            return C.jsonable(out)
+        w = loc.weights(k, x, y)
+        v = float(w @ lf.voltage[lf.tris[k]])
+        connected = math.isfinite(v)
+        out.update({
+            "on_copper": True, "connected": connected, "voltage_v": v,
+            "drop_mv": (res.v_ref - v) * 1e3,
+            "drop_pct": 100.0 * (res.v_ref - v) / res.v_ref if res.v_ref else None,
+            "j_a_mm2": float(lf.current_density[k]), "j_vector_a_mm2": jv[k],
+            "assumptions": ["Voltage is interpolated linearly in the mesh triangle; |J| is constant "
+                            "per triangle and uniform through the copper thickness."],
+            "warnings": [] if connected else ["This copper is not connected to a source."],
+        })
+        return C.jsonable(out)
+
+    def cut_current(self, result_id: str, layer: str, p1_mm: Sequence[float],
+                    p2_mm: Sequence[float]) -> Dict[str, Any]:
+        """Copper width along the segment p1→p2 on a layer and the current through it."""
+        rec = self._record(result_id)
+        lf = self._layer(rec, layer)
+        p1 = [C._number(v, "p1_mm") for v in p1_mm]
+        p2 = [C._number(v, "p2_mm") for v in p2_mm]
+        if len(p1) != 2 or len(p2) != 2:
+            raise ServiceError(E.INVALID_INPUT, "p1_mm and p2_mm are [x, y] in mm")
+        if p1 == p2:
+            raise ServiceError(E.INVALID_INPUT, "the two points of a cut must differ")
+        q = self._queries(rec, lf)
+        copper = self._copper(rec, lf)
+        t_mm = rec.layer_thickness[lf.name]
+        cut = F.cut_current(lf, q["locator"], q["j"], copper, t_mm, p1, p2)
+        res = rec.result
+        if cut.width_mm <= 0:
+            line = LineString([p1, p2])
+            crossed = [o.name for o in res.layers if o.name != lf.name
+                       and not self._copper(rec, o).intersection(line).is_empty]
+            raise ServiceError(E.CUT_MISSES_COPPER,
+                               f"The segment crosses no copper of {res.net} on {lf.name}",
+                               f"layers it does cross: {', '.join(crossed)}" if crossed else
+                               "it crosses no copper of this rail on any layer; check the coordinates "
+                               "(mm, KiCad frame, y down)")
+        warnings = []
+        if cut.samples_off_mesh > 0.005 * cut.samples:
+            warnings.append(f"{cut.samples_off_mesh} of {cut.samples} samples on the copper fall outside "
+                            "the solved mesh (copper not part of the solve, such as an island); only "
+                            "meshed copper carries current here.")
+        if cut.samples_unconnected:
+            warnings.append(f"{cut.samples_unconnected} samples lie on copper not connected to a source.")
+        if abs(cut.meshed_width_mm - cut.width_mm) > 0.02 * cut.width_mm:
+            warnings.append(f"Meshed width {cut.meshed_width_mm:.4g} mm differs from the copper width "
+                            f"{cut.width_mm:.4g} mm by more than 2 %.")
+        area = cut.width_mm * t_mm
+        return C.jsonable({
+            "result_id": rec.id, "net": res.net, "layer": lf.name, "p1_mm": p1, "p2_mm": p2,
+            "length_mm": cut.length_mm, "normal": list(cut.normal),
+            "copper_spans_mm": [[a, b] for a, b in cut.intervals],
+            "width_mm": cut.width_mm, "thickness_mm": t_mm, "area_mm2": area,
+            "current_a": cut.current_a, "abs_current_a": abs(cut.current_a),
+            "mean_normal_j_a_mm2": abs(cut.current_a) / area if area else None,
+            "mean_abs_j_a_mm2": cut.mean_abs_j, "max_abs_j_a_mm2": cut.max_abs_j,
+            "samples": cut.samples,
+            "assumptions": [
+                "current_a = ∫ J·n t ds over the copper the segment crosses; positive means current "
+                "flowing along 'normal', which points to the right of p1→p2 as the board is seen in "
+                "KiCad (y down).",
+                "J per triangle has the direction of −∇V and the engine's |J| (uniform through the "
+                "copper thickness); copper width is the copper outline ∩ the segment "
+                "('copper_spans_mm' are distances from p1).",
+                "A cut through one layer counts only that layer's copper; current can also flow on "
+                "other layers and through vias.",
+            ],
+            "warnings": warnings,
+        })
+
+    def compare_results(self, result_a: str, result_b: str) -> Dict[str, Any]:
+        """Per-load and per-layer deltas, b − a (works on evicted results too)."""
+        a, b = self._record(result_a, heavy=False), self._record(result_b, heavy=False)
+        sa, sb = a.summary, b.summary
+        warnings = []
+        if sa["net"] != sb["net"]:
+            warnings.append(f"Different rails: {sa['net']} vs {sb['net']}.")
+        if a.board_id != b.board_id:
+            warnings.append(f"Different board ids: {a.board_id} vs {b.board_id}.")
+        la = {d["name"]: d for d in sa["loads"]}
+        lb = {d["name"]: d for d in sb["loads"]}
+        loads = []
+        for name in [*la, *[n for n in lb if n not in la]]:
+            da, db = la.get(name), lb.get(name)
+            row = {"name": name, "drop_mv_a": da and da["drop_mv"], "drop_mv_b": db and db["drop_mv"],
+                   "drop_pct_a": da and da["drop_pct"], "drop_pct_b": db and db["drop_pct"]}
+            if da and db:
+                row["delta_drop_mv"] = _delta(db["drop_mv"], da["drop_mv"])
+                row["delta_drop_pct"] = _delta(db["drop_pct"], da["drop_pct"])
+            else:
+                warnings.append(f"Load {name} is only in result {'a' if da else 'b'}.")
+            loads.append(row)
+        pa, pb = sa["loss_breakdown_w"], sb["loss_breakdown_w"]
+        losses = [{"name": k, "power_w_a": pa.get(k), "power_w_b": pb.get(k),
+                   "delta_power_w": _delta(pb.get(k), pa.get(k))}
+                  for k in [*pa, *[k for k in pb if k not in pa]]]
+        changed = {k: {"a": sa["settings"].get(k), "b": sb["settings"].get(k)}
+                   for k in sorted({*sa["settings"], *sb["settings"]})
+                   if sa["settings"].get(k) != sb["settings"].get(k)}
+        return C.jsonable({
+            "result_a": a.id, "result_b": b.id, "net_a": sa["net"], "net_b": sb["net"],
+            "settings_changed": changed,
+            "max_drop_mv": {"a": sa["max_drop_mv"], "b": sb["max_drop_mv"],
+                            "delta": _delta(sb["max_drop_mv"], sa["max_drop_mv"])},
+            "power_loss_w": {"a": sa["power_loss_w"], "b": sb["power_loss_w"],
+                             "delta": _delta(sb["power_loss_w"], sa["power_loss_w"])},
+            "loads": loads, "losses": losses,
+            "verdict_a": sa["verdict"], "verdict_b": sb["verdict"],
+            "assumptions": ["Deltas are b − a. Loads are matched by name, losses by layer name."],
+            "warnings": warnings,
+        })
+
+    # ================================================================== misc
+    def out_dir(self) -> Path:
+        """Where maps go unless a folder is given: the session's folder, created on first use
+        (a fresh folder under the system temp directory by default, never a board's folder)."""
+        with self._lock:
+            if self._out_dir is None:
+                stamp = f"session-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+                self._out_dir = Path(tempfile.gettempdir()).resolve() / "coppernicus" / stamp
+            self._out_dir.mkdir(parents=True, exist_ok=True)
+            return self._out_dir
+
+
+def _delta(b, a):
+    if a is None or b is None:
+        return None
+    return b - a
