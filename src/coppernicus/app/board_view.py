@@ -22,8 +22,8 @@ from PySide6.QtCore import Qt, Signal  # noqa: E402
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QHBoxLayout, QWidget  # noqa: E402
 from pyvistaqt import QtInteractor  # noqa: E402
-from scipy.spatial import cKDTree  # noqa: E402
 
+from coppernicus.fields import TriangleLocator  # noqa: E402 - also re-exported for old imports
 from coppernicus.results import LayerField, RailResult  # noqa: E402
 
 FIELDS = {
@@ -294,35 +294,6 @@ class BoardView(QWidget):
     def closeEvent(self, event):
         self.plotter.close()
         super().closeEvent(event)
-
-
-class TriangleLocator:
-    """Which triangle contains a point. A KD-tree on centroids narrows the search to nearby
-    triangles, then a barycentric test picks the one containing the point. Unlike
-    matplotlib's trapezoid map it accepts meshes made of separate pieces with coincident
-    points, as a layer of real copper is."""
-
-    def __init__(self, points: np.ndarray, tris: np.ndarray, candidates: int = 24):
-        self.points, self.tris, self.k = points, tris, min(candidates, len(tris))
-        self.tree = cKDTree(points[tris].mean(axis=1)) if len(tris) else None
-
-    def weights(self, k: int, x: float, y: float) -> np.ndarray:
-        p = self.points[self.tris[k]]
-        t = np.array([[p[0, 0] - p[2, 0], p[1, 0] - p[2, 0]], [p[0, 1] - p[2, 1], p[1, 1] - p[2, 1]]])
-        lam = np.linalg.solve(t, [x - p[2, 0], y - p[2, 1]])
-        return np.array([lam[0], lam[1], 1.0 - lam.sum()])
-
-    def locate(self, x: float, y: float, tol: float = 1e-9) -> int:
-        if self.tree is None:
-            return -1
-        _, idx = self.tree.query([x, y], k=self.k)
-        for k in np.atleast_1d(idx):
-            try:
-                if self.weights(int(k), x, y).min() >= -tol:
-                    return int(k)
-            except np.linalg.LinAlgError:         # degenerate triangle
-                continue
-        return -1
 
 
 def copper_rings(geom) -> List[np.ndarray]:

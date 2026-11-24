@@ -2,7 +2,8 @@
 
 import numpy as np
 
-from coppernicus.app.board_view import TriangleLocator, copper_rings
+from coppernicus.app.board_view import copper_rings
+from coppernicus.fields import TriangleLocator
 
 
 def test_locator_handles_separate_pieces_with_coincident_points():
