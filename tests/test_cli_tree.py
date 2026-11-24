@@ -66,3 +66,9 @@ def test_tree_text_names_what_was_not_judged_and_regulator_input_drops(chain, tm
     assert "not_judged" in verdict and "U3" in verdict and "OUT OF REGULATION" in verdict
     u1 = next(line for line in out.splitlines() if line.strip().startswith("U1 "))
     assert "input drop" in u1
+
+
+def test_tree_summary_file_is_written_with_forward_slashes(chain, tmp_path, capsys):
+    assert main(["solve", str(chain), "--tree", "--json", "--out", str(tmp_path / "o")]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
+    assert "\\" not in doc["summary_file"] and doc["summary_file"].endswith("_tree_summary.json")

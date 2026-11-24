@@ -657,3 +657,13 @@ def test_a_drop_limit_on_a_rail_at_0_v_is_not_judged():
     tree = solve_project_tree(Board(strip_board()), _strip_project(0.0, limits=Limits(max_drop_pct=1.0)))
     gv = group_verdict(tree, Strip.NET)
     assert gv.verdict == "not_judged" and any("0 V nominal" in x for x in gv.not_judged)
+
+
+# ------------------------------------------------------------------ T7.1
+
+def test_a_load_on_a_0_v_net_has_no_percentage_in_its_title():
+    from coppernicus.engine.synthetic import strip_board
+    from coppernicus.problems import find_problems
+    res = solve_rail(Board(strip_board()), _strip_project(0.0).rails[0])
+    [u1] = [p for p in find_problems(res) if p.kind == "load"]
+    assert "nan" not in u1.title.lower() and "%" not in u1.title

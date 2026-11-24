@@ -247,7 +247,7 @@ def _cmd_solve_tree(args) -> int:
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / f"{safe_name(Path(args.project).stem)}_tree_summary.json"
-    doc["summary_file"] = str(summary_path)
+    doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
     summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
                             encoding="utf-8")
     if quiet:

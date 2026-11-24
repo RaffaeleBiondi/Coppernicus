@@ -61,9 +61,10 @@ def _loads(result: RailResult, limits: Limits) -> List[Problem]:
         fail = limits.max_drop_pct is not None and pct > limits.max_drop_pct
         x, y = t.positions[0] if t.positions else (np.nan, np.nan)
         limit = f"limit {limits.max_drop_pct:g} %" if limits.max_drop_pct is not None else "no limit set"
+        share = f", {pct:.2f} %" if np.isfinite(pct) else ""        # none at 0 V
         out.append(Problem(
             FAIL if fail else INFO, "load",
-            f"{t.name}: {t.v_min:.4f} V at its worst pin ({mv:.2f} mV, {pct:.2f} % below "
+            f"{t.name}: {t.v_min:.4f} V at its worst pin ({mv:.2f} mV{share} below "
             f"{result.v_ref:g} V)",
             f"{t.ref}, {len(t.pad_ids)} pin(s), {t.current:g} A; {limit}.",
             pct, float(x), float(y),
