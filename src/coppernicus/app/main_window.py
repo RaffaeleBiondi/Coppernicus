@@ -549,6 +549,7 @@ class MainWindow(QMainWindow):
         except (OSError, ProjectError) as e:
             QMessageBox.critical(self, "Cannot save project", str(e))
             return
+        self._remerge()                 # its path, board path and rails, as saved
         self.dirty = False
         self._update_title()
         self.statusBar().showMessage(f"Saved {path}")

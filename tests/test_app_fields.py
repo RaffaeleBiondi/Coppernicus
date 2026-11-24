@@ -446,3 +446,12 @@ def test_reload_board_rereads_the_fields_and_keeps_the_project(window, tmp_path)
     assert window.project.rails == [Rail("VCC", limits=Limits(max_via_current=2.0))]
     assert window.merged.project.rail("VCC").loads[0].current == pytest.approx(0.5)
     assert window.rail_panel.loads.rows() == [("", "U1", ["1"], 0.5)]
+
+
+def test_save_as_merges_again_so_the_merged_project_has_the_new_path(window, tmp_path):
+    open_net(window, strip(tmp_path))
+    moved = tmp_path / "elsewhere" / "moved.coppernicus.yml"
+    moved.parent.mkdir()
+    window._save(moved)
+    assert window.merged.project.path == window.project.path == moved
+    assert window.merged.project.board == window.project.board == "../strip.kicad_pcb"

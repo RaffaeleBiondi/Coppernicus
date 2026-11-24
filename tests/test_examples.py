@@ -58,5 +58,6 @@ def test_the_fields_example_has_a_kicad_rail_over_a_different_project_rail():
 def test_make_examples_writes_the_committed_fields_example(tmp_path):
     make = runpy.run_path(str(ROOT / "examples" / "make_examples.py"))
     make["write_fields_example"](tmp_path)
-    for name in ("fields.kicad_pcb", "fields.coppernicus.yml"):
-        assert (tmp_path / name).read_bytes() == (FIELDS_PROJECT.parent / name).read_bytes(), name
+    for name in ("fields.kicad_pcb", "fields.coppernicus.yml"):         # as text: any line ending
+        assert (tmp_path / name).read_text(encoding="utf-8") == \
+            (FIELDS_PROJECT.parent / name).read_text(encoding="utf-8"), name
