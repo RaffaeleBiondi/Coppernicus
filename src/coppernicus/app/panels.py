@@ -512,6 +512,8 @@ class RailPanel(QWidget):
                                  "on its group in Solve power tree, and when this net is solved alone.")
         for e in (self.max_drop, self.max_j, self.max_via, self.max_rise):
             e.setValidator(DecimalValidator(0.0, 1e9, 6))
+        self.max_drop.setToolTip("For a supply net: the largest load drop, % of the source voltage.")
+        self._tips = {e: e.toolTip() for e in (self.max_drop, self.max_rise)}
         form = QFormLayout(limits)
         form.addRow("Max drop (%)", self.max_drop)
         form.addRow("Max current density (A/mm²)", self.max_j)
@@ -616,6 +618,20 @@ class RailPanel(QWidget):
                 table.table.setCurrentCell(0, 0)
         self._show_source(0 if rail.sources else -1)
         self._show_load(0 if rail.loads else -1)
+
+    def set_net_kind(self, at_0v: Optional[bool]):
+        """Disable the limit that does not apply to the shown net (one rule, by its reference
+        voltage): the ground rise on a net with a nonzero nominal, the % drop on a net at 0 V.
+        ``None`` (not set up yet): both stay editable. A value read from the file stays shown
+        and editable, so it can be cleared; it is reported as not judged."""
+        off = {True: self.max_drop, False: self.max_rise}.get(at_0v)
+        why = {True: "Applies to nets with a nonzero nominal only: this net is at 0 V (a ground), "
+                     "so a value here is not judged. Use Max ground rise.",
+               False: "Applies to nets at 0 V (grounds) only: this net has a nonzero nominal, so "
+                      "a value here is not judged."}.get(at_0v, "")
+        for edit in (self.max_drop, self.max_rise):
+            edit.setEnabled(edit is not off or bool(edit.text().strip()))
+            edit.setToolTip(why if edit is off else self._tips[edit])
 
     # ------------------------------------------------------------------ power-tree fields
     def select_source(self, row: int):

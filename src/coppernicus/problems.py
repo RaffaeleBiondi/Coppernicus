@@ -48,8 +48,8 @@ def find_problems(result: RailResult, limits: Optional[Limits] = None,
     """Every load, then at most ``top`` current-crowding spots and ``top`` vias (more when
     they exceed a limit). Fails first."""
     limits = limits or Limits()
-    out = (_rise(result, limits) + _loads(result, limits) + _hotspots(result, limits, top)
-           + _vias(result, limits, top))
+    rise = _rise(result, limits) if not result.v_ref else []    # a ground-rise limit: 0 V nets only
+    out = rise + _loads(result, limits) + _hotspots(result, limits, top) + _vias(result, limits, top)
     order = {"rise": 0, "load": 0, "hotspot": 1, "via": 2}
     return sorted(out, key=lambda p: (p.severity != FAIL, order[p.kind], -p.value))
 
@@ -172,14 +172,38 @@ LIMIT_KEYS = {"max_drop_pct": "max_drop_pct", "max_current_density_a_mm2": "max_
               "max_via_current_a": "max_via_current", "max_ground_rise_mv": "max_ground_rise_mv"}
 
 
-def limits_dict(limits: Optional[Limits], kind: str = "rail") -> Dict[str, float]:
-    """The limits that apply to a group of ``kind``, keyed with their units. A ground has
-    no nominal voltage, so a drop limit does not apply to it."""
+GROUND_ONLY = "applies to nets at 0 V (grounds) only"
+SUPPLY_ONLY = "0 V nominal: a % drop limit does not apply (set max_ground_rise_mv)"
+
+
+def limits_dict(limits: Optional[Limits], kind: str = "rail",
+                v_ref: Optional[float] = None) -> Dict[str, float]:
+    """The limits that apply to a net or group, keyed with their units. One rule, by the
+    reference voltage: ``max_ground_rise_mv`` applies to a net at 0 V (a ground group, or a
+    rail driven at 0 V: ``v_ref`` 0), ``max_drop_pct`` to a net with a nonzero nominal; a
+    ground group has no nominal at all. Copper limits apply to both."""
     limits = limits or Limits()
     out = {key: getattr(limits, attr) for key, attr in LIMIT_KEYS.items()
            if getattr(limits, attr) is not None}
-    # A ground has no nominal voltage for a drop limit; a supply rail of a tree has no rise.
-    out.pop("max_drop_pct" if kind == "ground" else "max_ground_rise_mv", None)
+    if kind == "ground":
+        out.pop("max_drop_pct", None)
+    elif v_ref is None or v_ref != 0:
+        out.pop("max_ground_rise_mv", None)
+    return out
+
+
+def inapplicable_limits(net: str, limits: Optional[Limits], v_ref: float,
+                        kind: str = "rail") -> List[Dict[str, str]]:
+    """The limits set on ``net`` that do not apply to it (:func:`limits_dict`), as not-judged
+    entries ``{item, limit, reason}``: a ground-rise limit on a net with a nonzero nominal, a
+    drop limit on a ground group. (A drop limit on a rail driven at 0 V is listed load by
+    load: "0 V nominal".)"""
+    limits = limits or Limits()
+    out = []
+    if limits.max_ground_rise_mv is not None and kind != "ground" and v_ref != 0:
+        out.append({"item": net, "limit": "max_ground_rise_mv", "reason": GROUND_ONLY})
+    if limits.max_drop_pct is not None and kind == "ground":
+        out.append({"item": net, "limit": "max_drop_pct", "reason": SUPPLY_ONLY})
     return out
 
 
@@ -221,6 +245,8 @@ def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = 
                  + _returns(res, None, per_net))
     else:
         first = _tree_loads(tree, group, res, per_net) + _tree_inputs(tree, group, res, per_net)
+        if not res.v_ref:                                   # a rail driven at 0 V
+            first += _rise(res, glim, source("max_ground_rise_mv"))
     out = (first + _hotspots(res, glim, top, source("max_current_density"))
            + _vias(res, glim, top, source("max_via_current")))
     order = {"rise": 0, "load": 0, "return": 0, "hotspot": 1, "via": 2}

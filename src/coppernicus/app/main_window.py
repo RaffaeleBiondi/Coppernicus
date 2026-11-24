@@ -39,9 +39,11 @@ from coppernicus.app.worker import ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
+from coppernicus.engine.pisetup import ground_nets
 from coppernicus.power_tree import (
     apply_limits,
     group_verdict,
+    has_limits,
     not_judged_text,
     tree_verdicts,
     unsolved_limits,
@@ -49,6 +51,7 @@ from coppernicus.power_tree import (
 from coppernicus.problems import FAIL, find_problems, from_0v
 from coppernicus.project import Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
+from coppernicus.service.convert import not_judged_items
 
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 
@@ -429,6 +432,7 @@ class MainWindow(QMainWindow):
         _, ties = tied_nets(self.board, net)
         self.rail_panel.set_rail(self.board, rail, ties)
         self._rail_draft = rail
+        self.rail_panel.set_net_kind(self._net_at_0v(rail))
         self.layer_box.blockSignals(True)
         self.layer_box.clear()
         for lid in self.board.net_layers(net):
@@ -452,8 +456,16 @@ class MainWindow(QMainWindow):
         self._update_title()
         return rail
 
+    def _net_at_0v(self, rail: Rail) -> Optional[bool]:
+        """True for a net at 0 V (named as a ground, or driven at 0 V), False for one with a
+        nonzero nominal, None while it has neither: which limits apply to it."""
+        if rail.net in ground_nets(self.project):
+            return True
+        return (rail.sources[0].voltage == 0) if rail.sources else None
+
     def _rail_edited(self):
         rail = self._adopt_draft()
+        self.rail_panel.set_net_kind(self._net_at_0v(rail))
         self._revision += 1
         self._drop_tree("The setup changed: solve the power tree again (Ctrl+T)")
         # Rails solved alone that drew an estimate from the project may depend on this rail.
@@ -470,6 +482,7 @@ class MainWindow(QMainWindow):
 
     def _limits_edited(self):
         rail = self._adopt_draft()
+        self.rail_panel.set_net_kind(self._net_at_0v(rail))       # a cleared field may close
         if self.tree is not None:                                  # re-judge, no re-solve
             apply_limits(self.tree, self.project)
             self.tree_panel.set_tree(self.tree, self._tree_verdict())
@@ -729,7 +742,7 @@ class MainWindow(QMainWindow):
         unsolved = unsolved_limits(self.tree)
         return verdict_html(overall, sum(v.failed for v in groups.values()),
                             [x for v in groups.values() for x in v.not_judged] + unsolved,
-                            any(v.limits for v in groups.values()) or bool(unsolved))
+                            any(has_limits(v) for v in groups.values()) or bool(unsolved))
 
     def _drop_tree(self, reason: str):
         """The power-tree result no longer matches the project (or the board)."""
@@ -799,7 +812,7 @@ class MainWindow(QMainWindow):
         gv = group_verdict(self.tree, key)
         worst = (f"max ground rise {from_0v(res.max_drop)}" if res.kind == "ground"
                  else f"max drop {res.max_drop * 1e3:.2f} mV below the {res.v_ref:.4g} V set point")
-        verdict = verdict_html(gv.verdict, gv.failed, gv.not_judged, bool(gv.limits))
+        verdict = verdict_html(gv.verdict, gv.failed, gv.not_judged, has_limits(gv))
         nets = " + ".join(res.nets)
         self.problems.set_result(
             f"<b>{key}</b> ({res.kind} of the power tree: {nets}): {worst} · copper loss "
@@ -903,8 +916,10 @@ class MainWindow(QMainWindow):
         worst = max(res.loads, key=res.drop_pct) if res.loads else None
         worst_txt = (f"worst load <b>{worst.name}</b> {worst.v_min:.4f} V "
                      f"({res.drop(worst) * 1e3:.2f} mV, {res.drop_pct(worst):.2f} %) · ") if worst else ""
-        verdict = (f"<span style='color:#c0392b'><b>{fails} limit(s) exceeded</b></span>" if fails
-                   else ("no limits exceeded" if any(vars(rail.limits).values()) else "no limits set"))
+        missing = not_judged_items(res, rail.limits)      # the per-rail rule (service), one source
+        set_any = any(v is not None for v in vars(rail.limits).values())
+        verdict = verdict_html("fail" if fails else "not_judged" if missing or not set_any else "pass",
+                               fails, missing, set_any)
         self.problems.set_result(
             f"<b>{res.net}</b>: {worst_txt}max drop {res.max_drop * 1e3:.2f} mV · copper loss "
             f"{res.power_loss * 1e3:.3g} mW ({split}) · {verdict}",

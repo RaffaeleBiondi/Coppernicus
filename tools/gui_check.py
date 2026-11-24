@@ -917,6 +917,36 @@ def run_power_tree(window, check: Checks, args, out: Path):
     header = window.problems.summary.text()
     check("... and the +1V8 group's Problems header says so", "not judged" in header and "U3" in header
           and "no limits exceeded" not in header, header[-160:])
+    rp = window.rail_panel
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    check("limits: on a supply rail the ground-rise field is disabled, the drop field is not",
+          not rp.max_rise.isEnabled() and rp.max_drop.isEnabled() and "0 V" in rp.max_rise.toolTip(),
+          rp.max_rise.toolTip())
+    window.nets.select("GND")
+    QApplication.processEvents()
+    check("... on a ground net the drop field is disabled, the ground-rise field is not",
+          not rp.max_drop.isEnabled() and rp.max_rise.isEnabled(), rp.max_drop.toolTip())
+    from coppernicus.project import Limits
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    window.project.rail("+3V3").limits = Limits(max_ground_rise_mv=0.001)   # as read from a file
+    solve_and_wait(window, args.timeout)
+    header = window.problems.summary.text()
+    check("... a ground-rise limit on +3V3 solved alone is named as not judged, not passed",
+          "not judged" in header and "max_ground_rise_mv" in header and "no limits exceeded" not in header,
+          header[-160:])
+    window.nets.select("VIN")
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    check("... the field holding it stays editable, so it can be cleared, and says why it is not judged",
+          rp.max_rise.isEnabled() and rp.max_rise.text() == "0.001" and "not judged" in rp.max_rise.toolTip())
+    rp.max_rise.setText("")
+    rp.max_rise.editingFinished.emit()
+    QApplication.processEvents()
+    check("... cleared, it is disabled again", not rp.max_rise.isEnabled()
+          and window.project.rail("+3V3").limits.max_ground_rise_mv is None)
+    window.project.rail("+3V3").limits = Limits()
     assert g.I_U4 == 0.5       # the example itself is unchanged
 
 

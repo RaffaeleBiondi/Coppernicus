@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from coppernicus.problems import FAIL, Problem
+from coppernicus.problems import FAIL, Problem, inapplicable_limits
 from coppernicus.problems import LIMIT_KEYS as PROBLEM_LIMIT_KEYS
 from coppernicus.project import Limits, ProjectError, Settings, check_copper_thickness, parse_pins, pins_text
 from coppernicus.results import RailResult
@@ -239,7 +239,7 @@ def not_judged_items(res: RailResult, limits: Limits) -> List[Dict[str, str]]:
                       "max_ground_rise_mv)" if not res.v_ref else
                       "no voltage at its pins: not connected to the source by copper")
             out.append({"item": t.name, "limit": "max_drop_pct", "reason": reason})
-    return out
+    return out + inapplicable_limits(res.net, limits, res.v_ref)    # e.g. a ground rise on a supply rail
 
 
 def not_judged_text(items: Sequence[Mapping[str, str]]) -> str:

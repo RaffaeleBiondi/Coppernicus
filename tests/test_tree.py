@@ -673,3 +673,52 @@ def test_a_load_on_a_0_v_net_has_no_percentage_in_its_title():
     res = solve_rail(Board(strip_board()), _strip_project(0.0).rails[0])
     [u1] = [p for p in find_problems(res) if p.kind == "load"]
     assert "nan" not in u1.title.lower() and "%" not in u1.title
+
+
+def test_a_limit_of_the_wrong_kind_is_not_judged_in_the_tree(board):
+    """One rule by reference voltage: max_ground_rise_mv applies to nets at 0 V, max_drop_pct
+    to nets with a nonzero nominal; one set on the other kind is a not-judged entry."""
+    from coppernicus.power_tree import tree_summary
+    from coppernicus.project import Rail
+    project = power_chain_project()
+    project.rail("VIN").limits = Limits(max_drop_pct=5.0)
+    project.rail("+3V3").limits = Limits(max_ground_rise_mv=0.001)
+    doc = tree_summary(solve_project_tree(board, project))
+    assert doc["verdict"] == "not_judged"
+    [item] = [x for x in doc["not_judged"] if x["net"] == "+3V3"]
+    assert (item["item"], item["limit"]) == ("+3V3", "max_ground_rise_mv") and "0 V" in item["reason"]
+    assert _group_doc(doc, "+3V3")["verdict"] == "not_judged"
+    project.rail("+3V3").limits = Limits()
+    project.rails.append(Rail("GND", limits=Limits(max_drop_pct=1.0)))
+    doc = tree_summary(solve_project_tree(board, project))
+    assert doc["verdict"] == "not_judged"
+    [item] = [x for x in doc["not_judged"] if x["net"] == "GND"]
+    assert (item["item"], item["limit"]) == ("GND", "max_drop_pct")
+
+
+def test_a_rail_driven_at_0_v_in_the_tree_takes_a_ground_rise_limit():
+    from coppernicus.engine.synthetic import Strip, strip_board
+    tree = solve_project_tree(Board(strip_board()),
+                              _strip_project(0.0, limits=Limits(max_ground_rise_mv=1.0)))
+    probs = find_tree_problems(tree, Strip.NET)
+    assert any(p.kind == "rise" and p.severity == FAIL for p in probs)
+
+
+def test_a_ground_rise_limit_on_a_supply_rail_solved_alone_is_not_judged(tmp_path):
+    """The same rule for a rail solved alone: no rise problem on a 3.3 V rail, and the
+    service lists the limit as not judged instead of failing it."""
+    from coppernicus.engine.synthetic import Strip, save_snapshot, strip_board
+    from coppernicus.problems import find_problems, inapplicable_limits
+    from coppernicus.service import Session
+    res = solve_rail(Board(strip_board()), _strip_project(3.3).rails[0])
+    limits = Limits(max_ground_rise_mv=0.001)
+    assert not [p for p in find_problems(res, limits) if p.kind == "rise"]
+    [item] = inapplicable_limits(Strip.NET, limits, res.v_ref)
+    assert item["item"] == Strip.NET and item["limit"] == "max_ground_rise_mv" and "0 V" in item["reason"]
+    assert inapplicable_limits(Strip.NET, limits, 0.0) == []
+    save_snapshot(strip_board(), tmp_path / "strip.kipi.json.gz")
+    session = Session(out_dir=tmp_path / "out")
+    bid = session.open_board(tmp_path / "strip.kipi.json.gz")["board_id"]
+    out = session.solve_rail(bid, Strip.NET, [{"ref": "J1", "voltage_v": 3.3}],
+                             [{"ref": "U1", "current_a": 1.0}], limits={"max_ground_rise_mv": 0.001})
+    assert out["verdict"] == "not_judged" and out["not_judged"][0]["limit"] == "max_ground_rise_mv"
