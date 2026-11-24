@@ -99,3 +99,6 @@ boards_local/
 .claude/settings.local.json
 .claude/worktrees/
 .worktrees/
+
+# Browser-automation leftovers (Playwright MCP)
+.playwright-mcp/
