@@ -49,8 +49,6 @@ def test_negative_rail_percentages_are_of_the_magnitude(session, strip, tmp_path
     assert meta["rails"][0]["worst"]["max_drop_pct"] == pytest.approx(out["max_drop_pct"])
 
 
-@pytest.mark.xfail(strict=True, reason="needs results.drop_pct over |v_ref| (the peer's "
-                                       "fix/t7-review); remove this mark after the rebase")
 def test_negative_rail_drop_limit_fires(session, strip):
     out = solve(session, strip, -3.3, max_drop_pct=0.001)
     assert out["loads"][0]["drop_pct"] > 0
