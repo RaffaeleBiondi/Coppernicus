@@ -1,7 +1,7 @@
 """Command line.
 
     coppernicus                         open the app
-    coppernicus gui [BOARD|PROJECT]     open the app on a board or project file
+    coppernicus gui [BOARD|PROJECT] [--solve NET] [--field drop|voltage|current]
     coppernicus nets BOARD [--all]      power and ground nets (all nets with --all)
     coppernicus parts BOARD NET         parts and pins on a net (to write sources and loads)
     coppernicus solve PROJECT [--out DIR] [--rail NET ...] [--no-maps]
@@ -148,9 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("gui", help="open the app")
     p.add_argument("path", nargs="?", help="a board (.kicad_pcb, ...) or project (.coppernicus.yml)")
-    # Test hooks (hidden): open, solve a net, save window and view images, quit.
-    for flag in ("--screenshot", "--solve-net", "--layer", "--field"):
-        p.add_argument(flag, help=argparse.SUPPRESS)
+    p.add_argument("--solve", dest="solve_net", metavar="NET", help="solve this rail of the project at start")
+    p.add_argument("--field", choices=["drop", "voltage", "current"], help="map to show after --solve")
+    p.add_argument("--layer", help="layer to show after --solve (default: the one with the most copper loss)")
+    # Test hook (hidden): with --solve, save window and view images, then quit.
+    p.add_argument("--screenshot", help=argparse.SUPPRESS)
     p.set_defaults(func=_cmd_gui)
 
     p = sub.add_parser("nets", help="list power and ground nets of a board")

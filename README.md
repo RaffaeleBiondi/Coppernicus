@@ -74,7 +74,7 @@ uv sync
 
 # A synthetic demo board ships in examples/demo
 uv run coppernicus solve examples/demo/demo.coppernicus.yml --out results/demo
-uv run coppernicus gui examples/demo/demo.coppernicus.yml
+uv run coppernicus gui examples/demo/demo.coppernicus.yml --solve +3V3 --field current
 
 # Your own board
 uv run coppernicus nets path/to/board.kicad_pcb            # power and ground nets

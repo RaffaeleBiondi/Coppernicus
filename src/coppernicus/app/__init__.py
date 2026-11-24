@@ -14,8 +14,9 @@ ICON = Path(__file__).resolve().parent / "resources" / "icon.png"
 
 def run(path: Optional[str] = None, screenshot: Optional[str] = None, solve_net: Optional[str] = None,
         layer: Optional[str] = None, field: Optional[str] = None) -> int:
-    """Open the main window. ``screenshot`` (with optional ``solve_net``, ``layer``, ``field``)
-    is a test hook: open ``path``, solve, save window and view images, then quit."""
+    """Open the main window, optionally on ``path``. ``solve_net`` solves that rail at start and
+    shows ``field`` ('drop', 'voltage', 'current') on ``layer``. ``screenshot`` is a test hook:
+    solve, save window and view images, then quit."""
     from PySide6.QtCore import QTimer
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
@@ -31,7 +32,26 @@ def run(path: Optional[str] = None, screenshot: Optional[str] = None, solve_net:
         QTimer.singleShot(0, lambda: window.open_path(path))
     if screenshot:
         QTimer.singleShot(200, lambda: _screenshot_run(window, Path(screenshot), solve_net, layer, field))
+    elif solve_net:
+        QTimer.singleShot(200, lambda: _auto_solve(window, solve_net, layer, field))
     return app.exec()
+
+
+def _auto_solve(window, net: str, layer: Optional[str], field: Optional[str]):
+    """Select ``net``, solve it, then show ``field`` on ``layer`` (default: the busiest layer)."""
+    from PySide6.QtWidgets import QApplication
+
+    def show(_result):
+        if field:
+            window.field_box.setCurrentIndex(max(0, window.field_box.findData(field)))
+        if layer and window.layer_box.findText(layer) >= 0:
+            window.layer_box.setCurrentIndex(window.layer_box.findText(layer))
+
+    window.nets.select(net)
+    QApplication.processEvents()
+    window.solve()
+    if window.worker is not None:
+        window.worker.succeeded.connect(show)
 
 
 def _screenshot_run(window, out: Path, solve_net, layer, field):
