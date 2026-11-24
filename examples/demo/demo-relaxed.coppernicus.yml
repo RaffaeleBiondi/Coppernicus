@@ -1,0 +1,24 @@
+board: demo.kipi.json.gz
+settings:
+  max_edge_mm: 0.5
+  via_plating_um: null
+  copper_temp_c: 20.0
+rails:
+- net: +3V3
+  sources:
+  - name: Supply
+    ref: J1
+    pins: all
+    voltage: 3.3
+  loads:
+  - ref: U1
+    pins: all
+    current: 2.0
+  - ref: U2
+    pins: all
+    current: 1.5
+  - ref: U3
+    pins: all
+    current: 0.3
+  limits:
+    max_drop_pct: 1.0

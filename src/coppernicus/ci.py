@@ -1,0 +1,263 @@
+"""Continuous integration helper: solve every matching project file, then write a summary.
+
+Used by the GitHub Action (``action.yml`` at the repository root), and usable from any CI:
+
+    python -m coppernicus.ci solve --out DIR [--top N] [--no-html] "PATTERN" ["PATTERN" ...]
+    python -m coppernicus.ci summary --out DIR [--artifact-url URL] > summary.md
+
+``solve`` runs ``coppernicus solve PROJECT --json`` once per matching ``*.coppernicus.yml``,
+each in its own process and into its own subfolder of DIR, never next to a board. It writes
+``DIR/coppernicus-ci.json`` (every project's JSON document and exit code) and exits with
+0 (no limit exceeded), 1 (a limit set in a project is exceeded) or 2 (an error, or no project
+matched). ``summary`` turns that file into Markdown for a job summary.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
+
+from coppernicus.maps import safe_name
+
+INDEX = "coppernicus-ci.json"
+EXIT_OK, EXIT_LIMIT, EXIT_ERROR = 0, 1, 2
+
+
+# ---------------------------------------------------------------------- solving
+
+def find_projects(patterns: Sequence[str]) -> List[Path]:
+    """Project files matching the patterns (globs, ``**`` allowed; one per line or
+    argument), relative to the current folder, sorted and without duplicates."""
+    found: List[Path] = []
+    for raw in patterns:
+        for pattern in (line.strip() for line in str(raw).splitlines()):
+            if not pattern:
+                continue
+            hits = sorted(glob.glob(pattern, recursive=True)) if glob.has_magic(pattern) else (
+                [pattern] if Path(pattern).is_file() else [])
+            found.extend(Path(h) for h in hits if Path(h).is_file())
+    return list(dict.fromkeys(found))
+
+
+def _subfolder(project: Path) -> str:
+    rel = project.with_suffix("").as_posix()
+    return safe_name(rel.replace("/", "_")) or "project"
+
+
+def _board_folder(project: Path) -> Optional[Path]:
+    try:
+        from coppernicus.project import Project
+        return Project.load(project).board_path().resolve().parent
+    except Exception:                 # an invalid project: solve will report it
+        return None
+
+
+def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool = True) -> Dict[str, Any]:
+    """Solve every matching project; return the index written to ``out_dir/INDEX``."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    projects = find_projects(patterns)
+    entries: List[Dict[str, Any]] = []
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    for project in projects:
+        folder = out_dir / _subfolder(project)
+        board_dir = _board_folder(project)
+        if board_dir is not None and folder.resolve() == board_dir:
+            entries.append({"project": project.as_posix(), "exit_code": EXIT_ERROR,
+                            "error": {"code": "invalid_input",
+                                      "message": f"{folder} is the board's own folder",
+                                      "hint": "choose an output folder away from the board files"}})
+            continue
+        cmd = [sys.executable, "-m", "coppernicus", "solve", str(project), "--json", "--out", str(folder),
+               "--top", str(top)]
+        if html:
+            cmd.append("--html")
+        print(f"coppernicus: solving {project.as_posix()}", file=sys.stderr, flush=True)
+        run = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
+        if run.stderr:
+            sys.stderr.write(run.stderr)
+        try:
+            doc = json.loads(run.stdout)
+        except json.JSONDecodeError:
+            doc = {"error": {"code": "internal_error",
+                             "message": f"coppernicus solve exited with {run.returncode} and no JSON",
+                             "hint": "see the log above"}}
+        entry: Dict[str, Any] = {"project": project.as_posix(), "exit_code": run.returncode,
+                                 "folder": folder.as_posix()}
+        if "error" in doc:
+            entry["error"] = doc["error"]
+        else:
+            entry["doc"] = doc
+        entries.append(entry)
+    codes = [e["exit_code"] for e in entries]
+    exit_code = (EXIT_ERROR if not entries or EXIT_ERROR in codes or any(c not in (0, 1) for c in codes)
+                 else EXIT_LIMIT if EXIT_LIMIT in codes else EXIT_OK)
+    index = {"patterns": [str(p) for p in patterns], "projects": entries, "exit_code": exit_code,
+             "verdict": overall_verdict(entries), "top": top}
+    if not entries:
+        index["error"] = {"code": "file_not_found", "message": "No project file matched the patterns",
+                          "hint": "give the path or a glob of *.coppernicus.yml files, relative to the "
+                                  "repository root"}
+    (out_dir / INDEX).write_text(json.dumps(index, indent=1, ensure_ascii=False), encoding="utf-8")
+    return index
+
+
+def overall_verdict(entries: Sequence[Dict[str, Any]]) -> str:
+    """``error`` if a project could not be solved, else ``fail`` if a limit is exceeded,
+    ``pass`` if every project was judged and passed, ``not_judged`` if none had limits."""
+    if not entries or any("error" in e for e in entries):
+        return "error"
+    verdicts = [e["doc"].get("verdict") for e in entries]
+    if "error" in verdicts:
+        return "error"
+    if "fail" in verdicts:
+        return "fail"
+    if all(v == "pass" for v in verdicts):
+        return "pass"
+    return "pass_partially_judged" if any(v in ("pass", "pass_partially_judged") for v in verdicts) \
+        else "not_judged"
+
+
+# ---------------------------------------------------------------------- the summary
+
+def _cell(text: Any) -> str:
+    """Text safe inside a Markdown table cell."""
+    return (str(text).replace("\\", "\\\\").replace("|", "\\|").replace("<", "&lt;")
+            .replace(">", "&gt;").replace("\n", " "))
+
+
+def _num(x: Any, fmt: str) -> str:
+    return "–" if x is None else format(x, fmt)
+
+
+def _limits_text(limits: Dict[str, Any]) -> str:
+    parts = []
+    if limits.get("max_drop_pct") is not None:
+        parts.append(f"drop ≤ {limits['max_drop_pct']:g} %")
+    if limits.get("max_current_density_a_mm2") is not None:
+        parts.append(f"|J| ≤ {limits['max_current_density_a_mm2']:g} A/mm²")
+    if limits.get("max_via_current_a") is not None:
+        parts.append(f"via ≤ {limits['max_via_current_a']:g} A")
+    return ", ".join(parts)
+
+
+def _verdict_cell(rail: Dict[str, Any]) -> str:
+    v, lim = rail.get("verdict"), _limits_text(rail.get("limits") or {})
+    if v == "fail":
+        return f"**FAIL** ({_cell(lim)})"
+    if v == "pass":
+        return f"PASS ({_cell(lim)})"
+    return "not judged (no limits)"
+
+
+def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per_rail: int = 5) -> str:
+    """The job summary: one row per rail, then each rail's top problems, the assumptions and
+    where the files are."""
+    lines = ["## Coppernicus: DC power integrity", ""]
+    entries = index.get("projects", [])
+    if index.get("error") and not entries:
+        lines += [f"**Error:** {_cell(index['error']['message'])}. {_cell(index['error']['hint'])}.", ""]
+        return "\n".join(lines) + "\n"
+    verdict = index.get("verdict", "error")
+    headline = {"fail": "**FAIL**: a limit set in a project file is exceeded.",
+                "pass": "PASS: every rail is within the limits set in its project file.",
+                "not_judged": "Not judged: no limits are set in the project files; the numbers are "
+                              "ranked only.",
+                "pass_partially_judged": "PASS where limits are set; some rails have none and are "
+                                         "not judged.",
+                "error": "**Error**: a project could not be solved."}.get(verdict, verdict)
+    lines += [headline, "",
+              "| Project | Rail | Worst load | Max drop (mV) | Max drop (%) | Copper loss (mW) | Verdict |",
+              "|---|---|---|---:|---:|---:|---|"]
+    assumptions: List[str] = []
+    details: List[str] = []
+    for e in entries:
+        project = f"`{_cell(e['project'])}`"
+        if "error" in e:
+            err = e["error"]
+            lines.append(f"| {project} | – | – | – | – | – | **error**: {_cell(err.get('message', ''))} |")
+            continue
+        for rail in e["doc"].get("rails", []):
+            if "error" in rail:
+                lines.append(f"| {project} | {_cell(rail.get('net', '?'))} | – | – | – | – | "
+                             f"**error**: {_cell(rail['error'].get('message', ''))} |")
+                continue
+            worst = next((ld for ld in rail.get("loads", [])
+                          if ld.get("name") == rail.get("worst_load")), None)
+            worst_text = (f"{_cell(worst['name'])}: {_num(worst.get('drop_mv'), '.3g')} mV"
+                          if worst else "–")
+            loss = rail.get("power_loss_w")
+            loss_mw = _num(loss * 1e3 if loss is not None else None, ".3g")
+            lines.append(f"| {project} | {_cell(rail['net'])} | {worst_text} | "
+                         f"{_num(rail.get('max_drop_mv'), '.3g')} | "
+                         f"{_num(rail.get('max_drop_pct'), '.3g')} | {loss_mw} | {_verdict_cell(rail)} |")
+            problems = rail.get("problems", [])
+            shown = [p for p in problems if p.get("severity") == "fail"]
+            room = max(0, problems_per_rail - len(shown))
+            shown += [p for p in problems if p.get("severity") != "fail"][:room]
+            if shown:
+                details += ["", f"**{_cell(rail['net'])}** ({_cell(e['project'])}): top problems", ""]
+                for p in shown:
+                    tag = "**FAIL** " if p.get("severity") == "fail" else ""
+                    layer = p.get("layer")
+                    where = f" on {layer}" if layer and layer not in p["title"] else ""
+                    details.append(f"- {tag}{_cell(p['title'])}{_cell(where)} at "
+                                   f"({_num(p.get('x_mm'), '.2f')}, {_num(p.get('y_mm'), '.2f')}) mm")
+            assumptions += [a for a in rail.get("assumptions", []) if a not in assumptions]
+    lines += ["", "Verdicts are judged only against the limits written in the project files. Peak current "
+              "densities at sharp corners depend on the mesh; the problems give spot means instead."]
+    lines += details
+    if assumptions:
+        lines += ["", "<details><summary>Assumptions</summary>", ""]
+        lines += [f"- {_cell(a)}" for a in assumptions]
+        lines += ["", "</details>"]
+    lines += [""]
+    if artifact_url:
+        lines.append(f"Maps (PNG), the interactive HTML report and the JSON summaries: "
+                     f"[download the results]({artifact_url}).")
+    else:
+        lines.append("Maps (PNG), the interactive HTML report and the JSON summaries are in the "
+                     "results folder.")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------- command line
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    ap = argparse.ArgumentParser(prog="python -m coppernicus.ci", description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("solve", help="solve every matching project file")
+    p.add_argument("patterns", nargs="+", help="project files or globs (one per line or argument)")
+    p.add_argument("--out", required=True, help="results folder")
+    p.add_argument("--top", type=int, default=5, help="hotspots and vias listed per rail")
+    p.add_argument("--no-html", action="store_true", help="skip the HTML reports")
+    p = sub.add_parser("summary", help="print the Markdown summary of a solve")
+    p.add_argument("--out", required=True, help="results folder of the solve")
+    p.add_argument("--artifact-url", default="", help="link to the uploaded results")
+    p.add_argument("--top", type=int, default=5, help="problems shown per rail")
+    args = ap.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):          # the summary holds ≤, µ, Ω...
+        if hasattr(stream, "reconfigure") and (stream.encoding or "").lower().replace("-", "") != "utf8":
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    if args.command == "solve":
+        index = solve_all(args.patterns, Path(args.out), top=args.top, html=not args.no_html)
+        if "error" in index:
+            print(f"error: {index['error']['message']}", file=sys.stderr)
+        return index["exit_code"]
+    path = Path(args.out) / INDEX
+    if not path.is_file():
+        print("## Coppernicus: DC power integrity\n\n**Error:** Coppernicus did not run; see the job log.")
+        return EXIT_ERROR
+    index = json.loads(path.read_text(encoding="utf-8"))
+    print(summary_markdown(index, args.artifact_url, args.top), end="")
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

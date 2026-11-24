@@ -11,6 +11,10 @@ then try them:
 ``demo``: one rail, three loads, a tight drop budget. ``power_chain``: a whole power tree
 (12 V input, switcher, ferrite, remote-sensed LDO, ground pins), copied from KiPI's
 power-chain validation board.
+
+``demo.coppernicus.yml`` has a deliberately tight 0.25 % drop budget, so it fails;
+``demo-relaxed.coppernicus.yml`` is the same rail with a 1 % budget, so it passes. The
+GitHub Action's self-test runs both.
 """
 
 from pathlib import Path
@@ -23,18 +27,22 @@ HERE = ROOT / "demo"
 CHAIN = ROOT / "power_chain"
 
 
-def main():
-    HERE.mkdir(exist_ok=True)
-    # With LED_A, a net the power heuristic misses: right-click it to mark it as a rail.
-    save_snapshot(demo_board(led_net=True), HERE / "demo.kipi.json.gz")
-    project = Project(board="demo.kipi.json.gz", rails=[Rail(
+def demo_project(max_drop_pct: float) -> Project:
+    return Project(board="demo.kipi.json.gz", rails=[Rail(
         "+3V3",
         sources=[Source("J1", 3.3, name="Supply")],
         loads=[Load("U1", 2.0), Load("U2", 1.5), Load("U3", 0.3)],
-        # A deliberately tight drop budget, so the demo shows a failing load.
-        limits=Limits(max_drop_pct=0.25),
+        limits=Limits(max_drop_pct=max_drop_pct),
     )])
-    project.save(HERE / "demo.coppernicus.yml")
+
+
+def main(board: bool = True):
+    HERE.mkdir(exist_ok=True)
+    if board:
+        # With LED_A, a net the power heuristic misses: right-click it to mark it as a rail.
+        save_snapshot(demo_board(led_net=True), HERE / "demo.kipi.json.gz")
+    demo_project(0.25).save(HERE / "demo.coppernicus.yml")
+    demo_project(1.0).save(HERE / "demo-relaxed.coppernicus.yml")
     print(f"Wrote {HERE}")
 
     CHAIN.mkdir(exist_ok=True)
