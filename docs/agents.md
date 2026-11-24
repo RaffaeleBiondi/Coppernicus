@@ -84,6 +84,12 @@ the `top` vias by current (default 5 each), plus any that exceed a limit you set
 under a millionth of the rail current are left out. That current is solver round-off, and
 leaving them out is not a judgement.
 
+Each load has `v_min_v`, `v_max_v` and `v_worst_v`: the pin furthest from the source in the
+direction of the drop, the lowest on a positive rail and the highest on a negative rail or a
+0 V net, so read `v_worst_v`, not `v_min_v`. The summary's `drop_sign` (+1 or −1) gives that
+direction: drop = `drop_sign` · (`v_ref_v` − V). The HTML report carries the same, per rail
+(`drop_sign`, `drop_unit`) and per load (`v_worst_v`).
+
 On a **ground rail**, which is solved with the source at 0 V, `v_ref_v` is 0. A percentage has
 no meaning there: `max_drop_pct` and `drop_pct` are `null`, and a `max_drop_pct` limit cannot
 judge its loads (they are listed in `not_judged`). Give the drops in mV, and judge a ground
@@ -204,7 +210,11 @@ ground. It needs the project's v2 fields: each regulator's `kind` and `input` pi
 ground net is solved, each regulator's and load's `ground` pins (see
 `docs/engine-mapping.md`). The document has:
 - `verdict`, `verdict_note`, `failed` and a top-level `not_judged`: judged per group against
-  the project's limits only. `verdict_note` lists the limits per net, then ". Not judged: …";
+  the project's limits only. `verdict_note` lists the limits per net, then ". Not judged: …".
+  A tree's not-judged entry is `{"item", "net", "limit", "reason"}`: the item is a load,
+  `"U2 (input)"`, a return pin, or the net itself for a net-level entry (a limit of the wrong
+  kind, a net the tree does not solve, a group that did not converge, a `max_drop_pct` with
+  nothing to judge);
 - `vrms`: each source and regulator, with `v_set_v`, `v_out_v`, `i_out_a`, `v_in_v`, `i_in_a`,
   `p_loss_w` and `regulation` (why it cannot hold its voltage, if so). A regulator's input, as
   a load of the rail that feeds it: `input_net`, `input_drop_mv`, `input_drop_pct`,
@@ -232,18 +242,22 @@ Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;
 - `max_current_density_a_mm2`;
 - `max_via_current_a`;
-- `max_ground_rise_mv`: for a ground net solved on its own (a 0 V source at the reference
-  point, its return pins as loads), the largest allowed rise of its copper above the source,
-  in mV. A single-rail solve judges it on any net it is set on. In the power tree
-  (`solve_tree`, `coppernicus solve --tree`) it judges ground groups only, and is ignored on a
-  supply rail.
+- `max_ground_rise_mv`: for a net at 0 V (a ground solved on its own, with a 0 V source at
+  the reference point and its return pins as loads, or a ground group of the power tree), the
+  largest allowed rise of its copper above 0 V, in mV.
+
+Each limit judges its own kind of net: `max_ground_rise_mv` nets at 0 V only, `max_drop_pct`
+nets with a nonzero nominal voltage. A limit of the wrong kind is not judged: it is listed in
+`not_judged` (`"+3V3 (max_ground_rise_mv): applies to nets at 0 V (grounds) only"`), never
+passed or failed. **Behaviour change:** a rise limit on a supply rail used to fail; it is now
+`not_judged`.
 
 Problem kinds, in `problems` of every summary and of `get_problems`:
 - `load`: a load's drop at its worst pin (`drop_mv`, `drop_pct`);
 - `hotspot`: a current-crowding spot (`mean_j_a_mm2`, `peak_j_a_mm2`, `area_mm2`);
 - `via`: a via or plated hole by barrel current (`current_a`);
-- `rise`: only with `max_ground_rise_mv` set, the copper furthest from the source voltage
-  (`rise_mv`, `limit_mv`), with its layer and x/y;
+- `rise`: only with `max_ground_rise_mv` set on a net at 0 V, the copper furthest from 0 V
+  (`rise_mv`, signed: negative below 0 V; judged by its magnitude), with its layer and x/y;
 - `return`: in a power-tree ground group, one ground return pin and its rise above 0 V
   (`rise_mv`, `current_a`), judged against `max_ground_rise_mv`.
 
@@ -265,15 +279,18 @@ Problem kinds, in `problems` of every summary and of `get_problems`:
   argument of the wrong type is rejected by the tool's input schema before it runs.
 - **Verdicts.** A verdict exists only against limits the user gives:
   - `fail`: an item exceeds a limit you set;
-  - `not_judged`: no limits are set, so problems are ranked and nothing is judged; or the
-    drop limit you set applies to a load it could not judge. `not_judged` then lists each item
-    with `limit` and `reason`: a load of a 0 V net (a % has no meaning there), a load with no
-    voltage at its pins, no load at all. A failure elsewhere still makes the verdict `fail`;
+  - `not_judged`: no limits are set, so problems are ranked and nothing is judged; or a limit
+    you set could not judge something. `not_judged` then lists each item as `{item, limit,
+    reason}`: a load of a 0 V net (a % has no meaning there), a load with no voltage at its
+    pins, no load at all, a limit of the wrong kind for the net (above), or a rail that was not
+    solved (skipped: no source or loads, or nothing to draw), each of whose limits is listed.
+    A failure elsewhere still makes the verdict `fail`;
   - `pass`: limits are set and none is exceeded. A copper limit (`max_via_current_a`,
     `max_current_density_a_mm2`, `max_ground_rise_mv`) with nothing to judge, such as a via
     limit on a rail with no vias, passes, as in the power tree.
 
-  `solve_project` adds a top-level `not_judged` with the rail of each item, and its verdict is
+  `solve_project` adds a top-level `not_judged` with the rail of each item (skipped rails
+  included, so a limit never drops out of the verdict), and its verdict is
   `not_judged` when any rail has such items (`pass_partially_judged` stays for "the rails with
   limits pass, others have none"). The CLI text and the CI job summary print each item as
   "NOT JUDGED …". Exit code 0, as for `pass`.

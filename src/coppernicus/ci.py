@@ -219,8 +219,13 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
                              f"**error**: {_cell(rail['error'].get('message', ''))} |")
                 continue
             if "skipped" in rail:      # no loads, feeds nothing: not solved, not an error
+                unjudged = rail.get("not_judged") or []
                 lines.append(f"| {project} | {_cell(rail.get('net', '?'))} | – | – | – | – | "
-                             "skipped: nothing to draw |")
+                             "skipped: nothing to draw" + (" (NOT JUDGED)" if unjudged else "") + " |")
+                if unjudged:            # its limits judged nothing: say so, never a silent pass
+                    details += ["", f"**{_cell(rail['net'])}** ({_cell(e['project'])}): not solved", ""]
+                    details += [f"- NOT JUDGED {_cell(u['item'])} ({_cell(u['limit'])}): "
+                                f"{_cell(u['reason'])}" for u in unjudged]
                 continue
             worst = next((ld for ld in rail.get("loads", [])
                           if ld.get("name") == rail.get("worst_load")), None)

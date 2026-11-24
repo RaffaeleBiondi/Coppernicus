@@ -228,6 +228,8 @@ def _cmd_solve(args) -> int:
             if "skipped" in rail:
                 print(f"\nRail {rail['net']}: skipped. {rail['skipped']['message']}; "
                       f"{rail['skipped']['hint']}.")
+                for u in rail.get("not_judged", []):
+                    print(f"  NOT JUDGED {u['item']} ({u['limit']}): {u['reason']}")
         print(f"Summary: {summary_path}")
         if "report_file" in doc:
             print(f"Report: {doc['report_file']}")

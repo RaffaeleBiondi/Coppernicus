@@ -112,3 +112,43 @@ def test_not_judged_items_are_listed_in_the_cli_text_and_the_ci_summary(strip, t
         {"project": "gnd.coppernicus.yml", "exit_code": 0, "doc": doc}]})
     assert "NOT JUDGED (drop ≤ 1 %)" in md
     assert "- NOT JUDGED U1 (max_drop_pct): 0 V nominal" in md
+
+
+SKIPPED_REASON = "not solved alone: no source or loads (solve the power tree, or set up the rail)"
+
+
+def test_a_skipped_rail_with_limits_is_not_judged_not_passed(tmp_path, monkeypatch, capsys):
+    """The reviewer's case: a rail that carries only limits (GND, max_ground_rise_mv) is not
+    solved on its own. Its limits must not drop out of the verdict: each becomes a not-judged
+    item, so the project is not_judged (exit 0), listed in the CLI text and the CI summary."""
+    import shutil
+    from pathlib import Path
+    chain = Path(__file__).resolve().parents[1] / "examples" / "power_chain"
+    shutil.copytree(chain, tmp_path / "chain")
+    path = tmp_path / "chain" / "power_chain.coppernicus.yml"
+    p = Project.load(path)
+    for r in p.rails:
+        r.limits = Limits(max_drop_pct=50.0)
+    p.rails.append(Rail("GND", limits=Limits(max_ground_rise_mv=1.0)))
+    p.save()
+    doc = Session(out_dir=tmp_path / "out").solve_project(path)
+    gnd = next(r for r in doc["rails"] if r["net"] == "GND")
+    assert "skipped" in gnd
+    item = {"item": "GND", "limit": "max_ground_rise_mv", "reason": SKIPPED_REASON}
+    assert gnd["not_judged"] == [item]
+    assert doc["verdict"] == "not_judged" and {"rail": "GND", **item} in doc["not_judged"]
+    assert main(["solve", str(path), "--no-maps", "--out", str(tmp_path / "o")]) == EXIT_OK
+    assert f"  NOT JUDGED GND (max_ground_rise_mv): {SKIPPED_REASON}" in capsys.readouterr().out
+    monkeypatch.chdir(tmp_path)
+    index = ci.solve_all(["chain/power_chain.coppernicus.yml"], Path("res"), html=False)
+    assert index["verdict"] == "not_judged" and index["exit_code"] == 0
+    assert f"- NOT JUDGED GND (max_ground_rise_mv): {SKIPPED_REASON}" in ci.summary_markdown(index)
+
+
+@pytest.mark.parametrize("volts", [1.0, -3.3, 0.0])
+def test_each_load_gives_its_worst_pin_voltage(session, strip, volts):
+    """v_worst_v is the pin furthest from the source in the direction the drop goes: the
+    lowest on a positive rail, the highest on a negative rail or a 0 V net."""
+    out = solve(session, strip, volts)
+    [load] = out["loads"]
+    assert load["v_worst_v"] == (load["v_min_v"] if volts > 0 else load["v_max_v"])

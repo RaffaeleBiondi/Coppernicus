@@ -457,9 +457,18 @@ class Session:
                 # not stop the other rails.
                 message = (f"{rail.net}: no loads, and it feeds no regulator input or link"
                            if rail.sources else f"{rail.net}: no source and no loads, so not solved")
-                out_rails.append({"net": rail.net, **self._origin_info(merged, rail.net), "skipped": {
-                    "code": E.MISSING_LOAD, "message": message,
-                    "hint": "add a load, or the regulator or link it feeds, to solve it"}})
+                # Its limits judge nothing here: each is a not-judged item, never a silent pass.
+                why = ("not solved: no loads, and it feeds no regulator input or link (add a load)"
+                       if rail.sources else "not solved alone: no source or loads (solve the power "
+                       "tree, or set up the rail)")
+                checked = C.limits_to_dict(rail.limits)
+                out_rails.append({"net": rail.net, **self._origin_info(merged, rail.net),
+                                  "limits": checked,
+                                  "not_judged": [{"item": rail.net, "limit": k, "reason": why}
+                                                 for k in checked],
+                                  "skipped": {"code": E.MISSING_LOAD, "message": message,
+                                              "hint": "add a load, or the regulator or link it "
+                                                      "feeds, to solve it"}})
                 continue
             origin = merged.origins.get(rail.net)
             info = self._origin_info(merged, rail.net)
@@ -495,8 +504,8 @@ class Session:
         note = ("fail: a limit you set is exceeded on some rail; not_judged: a limit set could "
                 "not judge some items (listed in not_judged), or no limits are set; pass: every "
                 "rail has limits and none is exceeded; pass_partially_judged: the rails with "
-                "limits pass, others have none. Rails skipped for having nothing to draw are "
-                "left out.")
+                "limits pass, others have none. A rail skipped for having nothing to draw is "
+                "left out, but its limits are listed as not judged.")
         if unjudged:
             note += " Not judged: " + "; ".join(f"{u['rail']}: {u['item']} ({u['limit']}): "
                                                 f"{u['reason']}" for u in unjudged)
@@ -754,8 +763,9 @@ class Session:
                 "Loads are ranked by drop at their worst pin; hotspots are connected regions in the "
                 "top 1 % of a layer's copper area by |J| (or above max_current_density_a_mm2 when "
                 "set), reported by their area-weighted mean |J|; vias by barrel current. With "
-                "max_ground_rise_mv, one 'rise' problem gives the copper furthest from the source "
-                "voltage."],
+                "max_ground_rise_mv on a net at 0 V, one 'rise' problem gives the copper furthest "
+                "from 0 V; a limit of the wrong kind for the net (a rise limit on a supply rail, "
+                "a % drop limit on a 0 V net) is listed in not_judged."],
             "warnings": [],
         })
 

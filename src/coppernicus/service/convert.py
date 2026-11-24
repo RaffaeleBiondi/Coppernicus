@@ -305,6 +305,7 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         x, y = t.positions[0] if t.positions else (float("nan"), float("nan"))
         loads.append({"name": t.name, "ref": t.ref, "pins": pins, "estimated": t.name in estimated,
                       "pin_count": len(t.pad_ids), "current_a": t.current, "v_min_v": t.v_min,
+                      "v_worst_v": res.worst_v(t),
                       "v_max_v": t.v_max, "drop_mv": drop * 1e3, "drop_pct": res.drop_pct(t),
                       "exceeds_drop_limit": exceeds, "x_mm": x, "y_mm": y})
     sources = []

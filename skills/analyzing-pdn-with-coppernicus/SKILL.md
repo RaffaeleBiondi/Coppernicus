@@ -39,9 +39,11 @@ why, and ask for what is missing.
    Pass `limits` only if the user gave them.
 5. `get_problems(result_id, limits?)` re-judges without re-solving. Limits:
    `max_drop_pct`, `max_current_density_a_mm2`, `max_via_current_a`, and
-   `max_ground_rise_mv` for a ground net solved on its own (0 V source, return pins as loads).
-   Problem kinds: `load`, `hotspot`, `via`; `rise` (the copper furthest from the source,
-   only with `max_ground_rise_mv`); `return` (a ground return pin in the power tree).
+   `max_ground_rise_mv` for a net at 0 V (a ground solved on its own: 0 V source, return pins
+   as loads); a limit of the wrong kind for the net is not judged. Problem kinds: `load`,
+   `hotspot`, `via`; `rise` (the copper furthest from 0 V, signed, only with
+   `max_ground_rise_mv`); `return` (a ground return pin in the power tree). A load's worst pin
+   voltage is `v_worst_v` (not `v_min_v`, which is the best pin on a negative rail).
 6. Explain with `render_map` (field `drop`, `current` or `voltage`; `region_mm` zooms; look at the
    image), `probe(layer, x_mm, y_mm)` and `cut_current(layer, x1, y1, x2, y2)`. Use the cut to
    **measure** a neck or track width and the current through it. Do not back-compute widths
@@ -128,8 +130,9 @@ to a measured cross-section (`cut_current`).
    (`v_ref_v` 0) the % is n/a (`null`): give mV only.
 3. **Verdict:** only against user limits. Otherwise write "not judged", followed by what you need.
    A `not_judged` verdict with items listed means a limit was set but could not judge them
-   (a % drop limit on a load of a 0 V net, a load with no voltage): name each item and its
-   reason; never report it as a pass.
+   (a % drop limit on a load of a 0 V net, a load with no voltage, a limit of the wrong kind
+   for the net, a rail that was not solved): name each item and its reason; never report it as
+   a pass.
 4. **Where and why:** the layer, the location in mm, and the cause (a neck, a slot, a single via,
    a thin track), with the cut that proves it.
 5. **Assumptions** from the `assumptions` field: plating, temperature, mesh, the equal split

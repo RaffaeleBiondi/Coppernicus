@@ -41,14 +41,17 @@ The results (PNG maps, HTML report, JSON) are attached to the run as the
 
 Without limits in the project file, nothing is judged: the numbers are reported and the check
 passes. Coppernicus has no built-in thresholds. The limits are `max_drop_pct`,
-`max_current_density`, `max_via_current` and, for a ground net solved on its own,
+`max_current_density`, `max_via_current` and, for a net at 0 V (a ground),
 `max_ground_rise_mv`; the summary names the ones that were set ("ground rise ≤ 10 mV").
 
-A rail is "NOT JUDGED" when its drop limit applies to a load it cannot judge: a load of a 0 V
-net (use `max_ground_rise_mv` there), or a load with no voltage at its pins. The summary lists
-each such item with its reason, and the overall verdict is then `not_judged`. This does not
-fail the check (exit code 0, as for a pass); a limit exceeded elsewhere still fails it. A via,
-current-density or ground-rise limit with nothing to judge (no vias, say) passes.
+A rail is "NOT JUDGED" when a limit you set cannot judge something: a drop limit on a load of
+a 0 V net (use `max_ground_rise_mv` there) or on a load with no voltage at its pins, a limit
+of the wrong kind for the net (`max_ground_rise_mv` judges nets at 0 V only, `max_drop_pct`
+nets with a nonzero nominal; a rise limit on a supply rail used to fail and is now not
+judged), or a rail that was not solved (skipped), whose every limit is listed. The summary
+lists each item with its reason, and the overall verdict is then `not_judged`. This does not
+fail the check (exit code 0, as for a pass); a limit exceeded elsewhere still fails it. A via
+or current-density limit with nothing to judge (no vias, say) passes.
 
 A rail that feeds a regulator's input or a link (`links:`) also draws that current,
 estimated at nominal voltages without copper losses, as the desktop app does. It is listed as
