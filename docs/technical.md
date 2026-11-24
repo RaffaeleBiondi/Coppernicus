@@ -42,6 +42,16 @@ This is KiPI's DC model, checked in stage 1 (see [the analysis](kipi-analysis.md
 Inputs that are not in the board file, such as via plating and copper temperature, are explicit
 settings. Every result lists the values that were used.
 
+**Power tree** (`engine/tree.py`, KiPI's `solve_tree`). Every net group (nets joined by links
+and net ties) is solved from its one source, ground nets included:
+- a regulator's input pins are a load on the group feeding it: LDO I_in = I_out + I_q, switcher
+  I_in = V_out·I_out / (η·V_in) + I_q, with V_out and V_in measured across its own pins;
+- loads and regulators return their current through their ground pins, so ground rises above
+  the 0 V reference held at the main source's ground pins;
+- a load's drop is nominal − (lowest supply pin − highest ground pin);
+- a remote-sense regulator holds its set point across the sensed pins.
+The mapping from the project file to KiPI's setup is in [engine-mapping.md](engine-mapping.md).
+
 **Current density at sharp corners.** With linear elements, |J| at a re-entrant corner (the inner
 corner of an L, the end of a slot) grows as the mesh gets finer: the point value is singular.
 The Problems panel therefore ranks crowding spots by their area-weighted mean |J| and shows the

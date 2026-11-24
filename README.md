@@ -157,6 +157,25 @@ the drop grew (red) or shrank.
 Finally, **Save project**. It writes a small `*.coppernicus.yml` file with the board path, the
 rails, their sources, loads and limits. Open it again later, or use it from the command line.
 
+### The whole power tree, ground included
+
+One rail at a time is the quick check. When regulators feed each other (12 V → switcher →
+3.3 V → LDO → 1.8 V), press **Solve power tree** (Ctrl+T) to solve every rail and the ground
+together. Try it on `examples/power_chain/power_chain.coppernicus.yml`.
+
+- Each regulator is a load on the rail that feeds it. Its input current comes from its output:
+  an LDO draws I_out + I_q; a switcher draws V_out·I_out / (η·V_in) + I_q.
+- The return current flows in the ground copper, so ground rises above 0 V away from the
+  supply. A load's drop counts both sides: nominal minus (supply pin − ground pin).
+- The **Power tree** tab lists every regulator (voltages, currents, loss) and every load (the
+  voltage across its pins). **Group** shows one rail or the ground net on the board.
+- Click a regulator under **Sources** to set its kind (LDO or switcher), efficiency, quiescent
+  current and input, ground and sense pins.
+- On a ground net, **Max ground rise (mV)** is an optional limit.
+
+A rail solved on its own (F5) also draws the regulators it feeds, with their input current
+estimated at nominal voltages; its assumptions say so.
+
 ## What the numbers mean
 
 - **Drop**: source voltage minus the voltage at a point, in mV. For a load, the worst of its pins.
@@ -178,6 +197,7 @@ Everything the app solves can also be run without a window, in scripts or in CI:
 uv run coppernicus nets board.kicad_pcb                  # power and ground nets
 uv run coppernicus parts board.kicad_pcb +3V3            # parts and pins on a net
 uv run coppernicus solve project.coppernicus.yml         # solve every rail of a project
+uv run coppernicus solve project.coppernicus.yml --tree  # the whole power tree, ground included
 uv run coppernicus gui project.coppernicus.yml --solve +3V3 --field current
 ```
 
@@ -241,6 +261,8 @@ settings:
   max_edge_mm: 0.5                # largest mesh edge on planes
   via_plating_um: null            # null = engine table (IPC-6012 Class 2 minimum average)
   copper_temp_c: 20.0             # resistivity is referenced to 20 °C
+  copper_thickness_mm:            # optional what-if, mm per copper layer (1 oz = 0.035, not 35)
+    B.Cu: 0.07                    # the board file is not changed; real changes are made in KiCad
 rails:
 - net: +3V3
   sources:
@@ -255,6 +277,12 @@ rails:
   limits:
     max_drop_pct: 0.25            # optional; also max_current_density, max_via_current
 ```
+
+`copper_thickness_mm` is optional. When set, every solve of the project (app, CLI, MCP, GitHub
+Action, power tree) uses that copper instead of the board file's, and the assumptions name the
+overridden layers. Leave it out to solve the board as designed. A ground net takes
+`max_ground_rise_mv` as its limit. Regulator details (kind, efficiency, input and ground pins)
+and links such as ferrites are described in [docs/engine-mapping.md](docs/engine-mapping.md).
 
 ## Status
 
@@ -279,9 +307,12 @@ rails:
 | Copper loss by layer as a chart (baseline beside current) | ✅ |
 | Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
 | Readout while hovering (today: double-click) | ⏳ |
-| Project file v2: regulator kind (source / LDO / switcher), efficiency, quiescent current; input, ground and remote-sense pins; load ground pins; links (ferrites, sense resistors, fuses). Old project files load and save unchanged | ✅ (set in the project file; GUI editors and the power-tree solve come next) |
-| Power tree with ground return | 🔄 next |
-| Board temperature (electro-thermal) | ⏳ (KiPI's engine has it) |
+| Project file v2: regulator kind (source / LDO / switcher), efficiency, quiescent current; input, ground and remote-sense pins; load ground pins; links (ferrites, sense resistors, fuses). Old project files load and save unchanged | ✅ (regulators editable in the app; links set in the project file) |
+| Power tree with ground return: regulators as loads on the rail feeding them, ground rise, remote sense; Solve power tree (Ctrl+T), Group selector, Power tree tab; `solve --tree` (and `--json`) | ✅ |
+| A rail solved alone draws the regulator inputs and links it feeds, estimated at nominal voltages | ✅ in the app; CLI and MCP next |
+| Optional ground-rise limit (`max_ground_rise_mv`) on a ground net | ✅ |
+| What-if copper thickness per layer (`copper_thickness_mm`, optional) | ✅ (project file and MCP; an app field comes next) |
+| Board temperature (electro-thermal) | 🔄 next |
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
 | Standalone `.app` / `.exe` that needs no uv | ⏳ later |
 

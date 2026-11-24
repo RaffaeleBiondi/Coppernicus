@@ -54,8 +54,9 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
    - Checked by the coordinator: `solve --json` on a local real board gives the same numbers
      as the human report.
    - Not yet tried: registration in a real Claude Code or Claude Desktop host; Windows.
-   - Owner's decisions (2026-11-24): `copper_thickness_mm` stays an MCP-only what-if (real
-     changes are made in KiCad); `*_summary.json` moves to the unit-keyed format in Phase 2;
+   - Owner's decisions (2026-11-24): `copper_thickness_mm` is an optional what-if in the
+     project settings and the MCP (real changes are made in KiCad; first MCP-only, made a
+     project setting the same evening); `*_summary.json` moves to the unit-keyed format in Phase 2;
      the memory bound stays at 8 results / 2 GB; the HTML report may take up to about 30 MB.
    - The MCP server is registered for the owner in Claude Code (user scope).
 2. **Phase 2:** interactive offline HTML report per rail (zoom/pan, drop and current maps per
@@ -103,7 +104,8 @@ The project model must grow first: VRMs and loads with ground pins, series links
 capacitor models and noise aggressors, mapped to KiPI's `PISetup` inside `engine/`.
 
 Order (each step needs the previous one):
-1. power tree and ground return;
+1. power tree and ground return; ✅ (T6 project model v2, T7 power-tree solve, optional
+   `max_ground_rise_mv`);
 2. electro-thermal (board temperature);
 3. AC PDN impedance (probes, capacitor models, target impedance, load-step response);
 4. coupled noise and DC-DC ripple at probes (fields, victims);
