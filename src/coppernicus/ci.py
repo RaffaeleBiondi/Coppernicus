@@ -203,8 +203,12 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
               "|---|---|---|---:|---:|---:|---|"]
     assumptions: List[str] = []
     details: List[str] = []
+    field_warnings: List[str] = []           # from the KiCad footprint fields: shown in full
     for e in entries:
         project = f"`{_cell(e['project'])}`"
+        if "error" not in e:
+            field_warnings += [w for w in e["doc"].get("board_fields_warnings", [])
+                               if w not in field_warnings]
         if "error" in e:
             err = e["error"]
             lines.append(f"| {project} | – | – | – | – | – | **error**: {_cell(err.get('message', ''))} |")
@@ -245,6 +249,9 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
             assumptions += [a for a in rail.get("assumptions", []) if a not in assumptions]
     lines += ["", "Verdicts are judged only against the limits written in the project files. Peak current "
               "densities at sharp corners depend on the mesh; the problems give spot means instead."]
+    if field_warnings:
+        lines += ["", "**Warnings (KiCad footprint fields):**", ""]
+        lines += [f"- {_cell(w)}" for w in field_warnings]
     lines += details
     if assumptions:
         lines += ["", "<details><summary>Assumptions</summary>", ""]

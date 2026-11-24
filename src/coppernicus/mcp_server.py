@@ -179,10 +179,10 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
     @mcp.tool(annotations=READ_ONLY)
     def board_fields(board_id: str) -> dict[str, Any]:
         """The board's KiCad footprint fields (PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS,
-        PI_LIMIT_DROP; KiCad board files only) and the rails they describe, each value with
-        the field it came from. Nothing is solved: solve them with solve_project and
-        use_board_fields. If you copy these values into solve_rail, say they come from the
-        KiCad fields."""
+        PI_LIMIT_DROP, PI_KIND, PI_EFF, PI_IQ, PI_INPUT, PI_GND, PI_LINK...; KiCad board files
+        only) and the rails and links they describe, each value with the field it came from.
+        Nothing is solved; solve_project and solve_tree use them by default. If you copy these
+        values into solve_rail, say they come from the KiCad fields."""
         return _call("board_fields", session.board_fields, board_id)
 
     @mcp.tool(annotations=READ_ONLY)
@@ -260,19 +260,20 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                           description="Nets to solve; default all.")] = None,
                       top: Annotated[int, Field(ge=1, le=50)] = 5,
                       use_board_fields: Annotated[Optional[bool], Field(
-                          description="Also take rails from the board's KiCad footprint fields "
-                                      "(PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS, PI_LIMIT_DROP); "
-                                      "default: the project file's use_board_fields.")] = None,
+                          description="false: ignore the board's KiCad footprint fields (PI_RAIL, "
+                                      "PI_SOURCE, PI_LOAD, ...); default: the project file's "
+                                      "use_board_fields, which is on.")] = None,
                       ) -> dict[str, Any]:
         """Solve the rails of a project file with its sources, loads, limits and settings
         (including its optional what-if copper_thickness_mm, named in each rail's
         assumptions). Each rail also draws the regulator inputs and links it feeds, estimated
         at nominal voltages: loads with "estimated": true. Returns one solve_rail summary
         (with result_id) per rail, a rail that fails reported in place, a rail with nothing
-        to draw as skipped, and an overall verdict. With use_board_fields, rails come from
-        the KiCad footprint fields too (a project rail replaces the fields' rail of its net):
-        each summary has from_board_fields, and its assumptions give each value with its
-        field ("from KiCad field PI_LOAD ...")."""
+        to draw as skipped, and an overall verdict. Rails also come from the board's KiCad
+        footprint fields (on by default), which win over a project-file rail of the same net
+        unless it sets override_board_fields: each summary has from_board_fields,
+        overrides_board_fields and board_fields_warnings, and its assumptions give each value
+        with its field ("from KiCad field PI_LOAD ...")."""
         bridge = _Bridge(ctx)
         return _call("solve_project", session.solve_project, project_path, rails, top,
                      progress=bridge.progress, cancelled=bridge.cancelled,
@@ -284,9 +285,9 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                    ctx: Context,
                    top: Annotated[int, Field(ge=1, le=50)] = 5,
                    use_board_fields: Annotated[Optional[bool], Field(
-                       description="Also take rails from the board's KiCad footprint fields "
-                                   "(PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS, PI_LIMIT_DROP); "
-                                   "default: the project file's use_board_fields.")] = None,
+                       description="false: ignore the board's KiCad footprint fields (PI_RAIL, "
+                                   "PI_SOURCE, PI_LOAD, ...); default: the project file's "
+                                   "use_board_fields, which is on.")] = None,
                       ) -> dict[str, Any]:
         """Solve a project's whole power tree at once: every rail and ground group together,
         with the regulators' input currents and the ground return computed exactly (when a

@@ -67,7 +67,7 @@ input.
 |---|---|---|
 | `open_board` | `path` | Opens a board read-only. Returns `board_id`, copper layers with thickness, counts, the outline bounding box and import warnings. Reopening an unchanged file returns the same `board_id`. |
 | `list_nets` | `board_id`, `kind`?, `filter`?, `limit`? | Nets with their kind (`power_or_ground` by default, or `power`, `ground`, `signal`, `all`) and their copper layers: `layers` (all touched), `layers_with_copper` (tracks or zones) and `layers_with_only_vias_or_pads`. Through vias touch every layer, so `layers_with_copper` is the guide to where a rail runs. `filter` is a case-insensitive substring, or a glob over whole names such as `+3V*`. |
-| `board_fields` | `board_id` | The board's KiCad footprint fields (`PI_RAIL`, `PI_SOURCE`, `PI_LOAD`, `PI_PINS`, `PI_LIMIT_DROP`; `.kicad_pcb` only) and the rails they describe, each value with the field it came from. Nothing is solved. See [KiCad footprint fields](#kicad-footprint-fields). |
+| `board_fields` | `board_id` | The board's KiCad footprint fields (`PI_*`; `.kicad_pcb` only) and the rails and links they describe, each value with the field it came from. Nothing is solved. See [KiCad footprint fields](#kicad-footprint-fields). |
 | `net_parts` | `board_id`, `net` | Parts on the net with value, footprint and pins, used to choose sources and loads. Also the net ties that join the net to others, which are solved as shorts. |
 | `solve_rail` | `board_id`, `net`, `sources`, `loads`, `limits`?, `settings`?, `follow_net_ties`?, `top`? | Solves one rail. A source is `{ref, voltage_v, pins?, name?}`; a load is `{ref, current_a, pins?, name?}`. Returns `result_id` and a summary: load voltages and drops, max drop, loss per layer, busiest layer, top problems, verdict. |
 | `get_problems` | `result_id`, `limits`?, `top`? | Ranked problems: loads by drop, current-crowding spots by mean \|J\|, vias by current. Each has a layer and x/y in mm. Pass `limits` to re-judge without solving again. |
@@ -75,7 +75,7 @@ input.
 | `probe` | `result_id`, `layer`, `x_mm`, `y_mm` | Voltage, drop and current density (magnitude and vector) at a point. Off copper, it says which layers have copper there and where the nearest copper is. |
 | `cut_current` | `result_id`, `layer`, `x1_mm`, `y1_mm`, `x2_mm`, `y2_mm` | A cross-section along a segment: the copper width crossed, the current through it (∫ J·n t ds, signed along `normal`), and the mean and max \|J\|. Use it to measure a neck. |
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
-| `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings. Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. |
+| `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. |
 | `solve_tree` | `project_path`, `top`?, `use_board_fields`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. |
 | `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
 
@@ -114,42 +114,68 @@ positive like the drops.
 
 ### KiCad footprint fields
 
-Sources, loads and a drop limit can also come from fields on the parts' symbols in KiCad.
-KiCad 8 and later copy a symbol's fields onto its footprint, so they reach the board file;
-Coppernicus reads them from the `.kicad_pcb` (only) and never writes it. This is optional and
-**off unless asked**: `use_board_fields: true` in the project file, `--board-fields` on
-`coppernicus solve`, or `use_board_fields: true` on the `solve_project` / `solve_tree` tools.
+The power data can live on the parts' symbols in KiCad, as fields. KiCad 8 and later copy a
+symbol's fields onto its footprint, so they reach the board file; Coppernicus reads them from
+the `.kicad_pcb` (only; other formats have none) and never writes it. They are **read by
+default** whenever the board has `PI_*` fields; a board without them behaves as before. To
+turn them off: `use_board_fields: false` in the project file, `--no-board-fields` on
+`coppernicus solve`, or `use_board_fields: false` on the `solve_project` / `solve_tree` tools.
 
-| Field | Example | Meaning |
-|---|---|---|
-| `PI_RAIL` | `+3V3` | The net the part is a source or load on. Required with any other field. Several rails: `VIN;+3V3`. |
-| `PI_SOURCE` | `3.3V` | The part holds the rail at this voltage (a regulator output, a connector). |
-| `PI_LOAD` | `2A`, `250mA` | The part draws this current, split equally across its pins on the rail. |
-| `PI_PINS` | `1,2`, `A*` | Which pads take part, by number or glob. Default: every pad of the part on the rail. |
-| `PI_LIMIT_DROP` | `2%` | A drop limit for the rail, written by the designer; the strictest one on a rail is used. |
+| Field | Example | On | Meaning |
+|---|---|---|---|
+| `PI_RAIL` | `+3V3` | source, load | The net the part is a source or load on. Required with every per-rail field below. Several rails: `VIN;+3V3`. |
+| `PI_SOURCE` | `3.3V` | source | The part holds the rail at this voltage (a regulator output, a connector). |
+| `PI_LOAD` | `2A`, `250mA` | load | The part draws this current, split equally across its pins on the rail. |
+| `PI_PINS` | `1,2`, `A*` | source, load | Which pads take part, by number or glob. Default: every pad of the part on the rail. |
+| `PI_LIMIT_DROP` | `2%` | source, load | A drop limit for the rail; the strictest one on a rail is used. |
+| `PI_KIND` | `ldo` | source | `source` (an ideal supply, the default), `ldo` or `smps`. |
+| `PI_EFF` | `90%` | switcher | Its efficiency; required with `PI_KIND` `smps`. |
+| `PI_IQ` | `2mA`, `50uA` | regulator | Its quiescent current (`A`, `mA`, `uA` or `µA`). |
+| `PI_INPUT` | `VIN` | regulator | The net it draws from (its pads there); required with `ldo` and `smps`. `PI_INPUT_PINS` chooses the pads. |
+| `PI_GND` | `GND` | source, load | The ground net of its ground pins (the return path the power tree solves). `PI_GND_PINS` chooses the pads. |
+| `PI_LINK` | `50mOhm` | a two-net part | A link (ferrite, sense resistor, fuse) of this resistance between the nets of its pads (`Ohm`, `mOhm`, `Ω`). Not with `PI_RAIL`. |
 
-- **Several rails on one part** give one value per rail, by position, separated by `;`. An
-  empty value skips that rail: a regulator is `PI_RAIL=VIN;+3V3`, `PI_LOAD=0.8A;`,
-  `PI_SOURCE=;3.3V`. Every field must have as many values as `PI_RAIL`.
-- **Units are required:** `V`; `A` or `mA`; `%`. A bare number (`2`), a comma (`2,5A`) or a
-  KiCad-style value (`3V3`) is refused, with the part, the field and the text in the message.
-  An unknown `PI_*` name (a typo such as `PI_LOADS`, or `pi_load` in lower case) is refused
-  too. A blank field is not set. An error found while solving a field rail (a `PI_RAIL` net not
-  on the board, a part with no pad on it, a `PI_PINS` that matches nothing) says the rail came
-  from the fields and names the parts.
-- **Rails.** A net with at least one `PI_SOURCE` and one `PI_LOAD` is a rail. A net the fields
-  leave incomplete (a load but no source, or the reverse) is an `invalid_board_field` error
-  naming the missing field, unless the project file defines that rail.
-- **The project file wins.** A rail in the project file replaces the fields' rail of the same
-  net entirely (sources, loads, pins and limit), and its assumptions say so. The other field
-  rails are added after the project's, sorted by net. A project file can hold only `board:`,
-  `settings:` and `use_board_fields: true`.
-- **Where each number came from.** A rail from the fields has `"from_board_fields": true` in its
-  summary, and one assumption line gives every value with its field: `load U1 2 A (from KiCad
-  field PI_LOAD "2A" on U1)`. Say so when you report these numbers. If you copy values from
-  `board_fields` into `solve_rail`, say that they come from the KiCad fields.
-- Field rails carry no regulator kind, input or ground pins (v1 rails). `coppernicus solve
-  --tree` and the desktop app do not read the fields yet; the `solve_tree` tool does.
+- **Several rails on one part** give one value per rail, by position, separated by `;`, in
+  every per-rail field. An empty value skips that rail: a dual-output regulator is
+  `PI_RAIL=+3V3;+1V8`, `PI_SOURCE=3.3V;1.8V`, `PI_KIND=smps;ldo`, `PI_INPUT=VIN;+3V3`. A
+  regulator draws its input through `PI_INPUT`; a `PI_LOAD` on that same net is refused as
+  counted twice.
+- **Units are required:** a bare number (`2`), a comma (`2,5A`) or a KiCad-style value
+  (`3V3`) is refused, with the part, the field and the text in the message. An unknown `PI_*`
+  name (a typo such as `PI_LOADS`, or `pi_load` in lower case) is refused too. A blank field
+  is not set. Nothing is assumed: a regulator without `PI_INPUT`, a switcher without
+  `PI_EFF`, a net with loads but no source is an `invalid_board_field` error naming the
+  missing field. A malformed field fails the whole run; its hint names the off switch. An
+  error found while solving a field rail (a `PI_RAIL` net not on the board, a part with no pad
+  on it, a `PI_PINS` that matches nothing) says the rail came from the fields.
+- **Rails.** A net with a `PI_SOURCE` and a `PI_LOAD` is a rail. So is a net with a source and
+  no load that feeds a regulator's input or a link: it draws their estimated current.
+- **KiCad wins.** For a net the fields define, the fields give the design data: sources,
+  loads, pins and converter data. A project-file rail of the same net is **ignored**, with a
+  warning that lists the differences ("project file rail +3V3 ignored: KiCad fields define it
+  (KiCad U1 2 A, project U1 3 A); set override_board_fields: true on the rail to use the
+  project's values"). An identical project rail gives no warning: that is the normal case once
+  the project has been saved with the fields' rails.
+- **`override_board_fields: true`** on a project rail keeps that rail entirely instead; its
+  summary says `"overrides_board_fields": true` with the KiCad values it overrode in
+  `board_fields_overridden`, and its assumptions say so.
+- **Limits:** `PI_LIMIT_DROP` wins over the project's `max_drop_pct` on that net (a warning when
+  they differ). `max_current_density`, `max_via_current` and `max_ground_rise_mv` come only
+  from the project file, and they apply to the fields' rail. Settings stay project-only.
+- **Remote sense** stays in the project file: when the fields replace a project rail, the
+  sense pins of its sources are carried over by part, and the assumptions say so.
+- **Links:** a `PI_LINK` part replaces a project link on the same part (a warning when they
+  differ); there is no override for links yet.
+- **Where each number came from.** Every rail summary has `from_board_fields`,
+  `overrides_board_fields` and `board_fields_warnings` (the warnings about that rail, also in
+  `warnings`); `solve_project` adds a top-level `board_fields_warnings` with all of them. A rail
+  from the fields has one assumption line giving every value with its field: `load U1 2 A
+  (from KiCad field PI_LOAD "2A" on U1)`. Say so when you report these numbers, and if you copy
+  values from `board_fields` into `solve_rail`.
+- `solve_project`, `solve_tree`, `coppernicus solve` (with or without `--tree`) and the GitHub
+  Action read the fields. The desktop app does not yet; the merge is a pure function
+  (`coppernicus.board_fields.merge(project, fields, pad_nets)`, returning the merged project,
+  each net's origin and the warnings) that it can call.
 
 ### Estimated draws
 
@@ -384,13 +410,14 @@ data as the tools) and nothing else; progress from `-v` goes to stderr.
 uv run coppernicus nets board.kicad_pcb --json [--all]
 uv run coppernicus parts board.kicad_pcb +3V3 --json
 uv run coppernicus solve project.coppernicus.yml --out results --json [--rail NET] [--no-maps] \
-  [--top N] [--html [PATH]] [--open] [--board-fields]
+  [--top N] [--html [PATH]] [--open] [--no-board-fields] [--tree]
 uv run coppernicus fields board.kicad_pcb --json
 ```
 
 `fields` lists a board's KiCad footprint fields and the rails they make, as the `board_fields`
-tool does. `--board-fields` takes rails from them for one run, as `use_board_fields: true` in
-the project file does (see [KiCad footprint fields](#kicad-footprint-fields)).
+tool does. `solve` reads them by default; `--no-board-fields` ignores them for one run, as
+`use_board_fields: false` in the project file does (see
+[KiCad footprint fields](#kicad-footprint-fields)).
 
 `--top N` sets how many current-crowding spots and vias are listed per rail (default 5 each;
 every load is always listed).
@@ -456,7 +483,8 @@ setting with the others.
   smaller than a cell, such as a hole or a very thin track, can look blocky or vanish in the
   map, while the numbers, the problems and the probes stay exact.
 - **KiCad footprint fields are read from `.kicad_pcb` files only**, not from ODB++, HyperLynx
-  or snapshots, and give v1 rails (no regulator kind, input or ground pins).
+  or snapshots. Remote sense cannot be a field yet, and the desktop app does not read the
+  fields yet.
 - **Tested** on macOS, with synthetic boards and the SDK's own client (in memory and over stdio).
   Registration in Claude Code and Claude Desktop follows their documented commands but has not
   been run in those hosts yet. Windows runs in CI as an informative job.

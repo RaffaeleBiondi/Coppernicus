@@ -194,6 +194,9 @@ class Rail:
     limits: Limits = field(default_factory=Limits)
     # Nets joined to this one by net-tie footprints are solved with it, the tie a short.
     follow_net_ties: bool = True
+    # Use this rail even where the board's KiCad footprint fields define the net (which
+    # otherwise win; see coppernicus.board_fields). Saved only when on.
+    override_board_fields: bool = False
 
 
 @dataclass
@@ -253,9 +256,9 @@ class Project:
     # Engine-specific options, passed through to the engine and checked there (KiPI:
     # ``excluded_nets``). Saved only when not empty.
     engine_options: Dict[str, Any] = field(default_factory=dict)
-    # Also take rails from the board's KiCad footprint fields (PI_RAIL, PI_SOURCE, ...; see
-    # coppernicus.board_fields). Off unless set; saved only when on.
-    use_board_fields: bool = False
+    # Take rails from the board's KiCad footprint fields (PI_RAIL, PI_SOURCE, ...; see
+    # coppernicus.board_fields) when it has any. On by default; saved only when off.
+    use_board_fields: bool = True
 
     # ------------------------------------------------------------------ queries
     def board_path(self) -> Path:
@@ -306,6 +309,8 @@ class Project:
                 rd["limits"] = limits
             if not r.follow_net_ties:
                 rd["follow_net_ties"] = False
+            if r.override_board_fields:
+                rd["override_board_fields"] = True
             rails.append(rd)
         out: Dict[str, Any] = {"board": self.board, "settings": _settings_out(self.settings), "rails": rails}
         if self.links:
@@ -316,8 +321,8 @@ class Project:
             out["engine_options"] = dict(self.engine_options)
         if self.marked_rails:
             out["marked_rails"] = list(self.marked_rails)
-        if self.use_board_fields:
-            out["use_board_fields"] = True
+        if not self.use_board_fields:
+            out["use_board_fields"] = False
         return out
 
     @classmethod
@@ -334,6 +339,7 @@ class Project:
                     loads=[_load_in(ld) for ld in rd.get("loads") or []],
                     limits=_limits_in(rd.get("limits") or {}, str(rd["net"])),
                     follow_net_ties=bool(rd.get("follow_net_ties", True)),
+                    override_board_fields=_flag(rd, "override_board_fields", False),
                 ))
             marked = data.get("marked_rails") or []
             if not isinstance(marked, list):
@@ -342,9 +348,7 @@ class Project:
             options = data.get("engine_options") or {}
             if not isinstance(options, dict):
                 raise ValueError("engine_options must be a mapping of option names to values")
-            use_fields = data.get("use_board_fields", False)
-            if not isinstance(use_fields, bool):
-                raise ValueError(f"use_board_fields must be true or false, not {use_fields!r}")
+            use_fields = _flag(data, "use_board_fields", True)
         except (KeyError, TypeError, ValueError) as e:
             raise ProjectError(f"invalid project file: {e}") from e
         return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path,
@@ -379,6 +383,13 @@ class Project:
 
 
 # ---------------------------------------------------------------------- file helpers
+
+def _flag(data: Dict[str, Any], key: str, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be true or false, not {value!r}")
+    return value
+
 
 def _settings_out(settings: Settings) -> Dict[str, Any]:
     """The settings as written to the file; copper_thickness_mm only when set, so a project

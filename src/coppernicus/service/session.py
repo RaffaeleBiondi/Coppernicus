@@ -58,6 +58,11 @@ LIST_LIMIT = 200
 PIN_LIST_LIMIT = 64
 
 
+FIELD_HINT = ("fix the field in KiCad (on the symbol, then update the PCB); or give the rail in the "
+              "project file with override_board_fields: true; or turn the fields off with "
+              "use_board_fields: false (CLI: --no-board-fields)")
+
+
 @dataclass
 class _BoardEntry:
     id: str
@@ -65,6 +70,7 @@ class _BoardEntry:
     mtime_ns: int
     board: Board
     _outline: Optional[list] = None
+    _board_fields: Optional[BF.BoardFields] = None     # read on first use
 
     def outline(self) -> list:
         if self._outline is None:
@@ -338,11 +344,12 @@ class Session:
 
     def _solve(self, entry: _BoardEntry, rail: Rail, settings: Settings, top: int,
                progress: Progress, cancelled: Cancel, project: Optional[Project] = None,
-               notes: Sequence[str] = (), from_board_fields: bool = False) -> _Live:
+               notes: Sequence[str] = (), warnings: Sequence[str] = (),
+               fields_info: Optional[Mapping[str, Any]] = None) -> _Live:
         """Solve one rail. With ``project`` (a project rail), it also draws the regulator
         inputs and links it feeds, estimated at nominal voltages, as the app solves it.
-        ``notes`` are added to the result's assumptions (where its rail came from), and
-        the summary's ``from_board_fields`` says whether the rail came from footprint fields."""
+        ``notes`` and ``warnings`` (where its rail came from) are added to the result's, and
+        ``fields_info`` to the summary (``from_board_fields``, ``overrides_board_fields``...)."""
         # The what-if thickness is in the settings; the engine applies it (to the variant
         # here, already that thickness, it is a no-op) and writes the assumption.
         thickness = dict(settings.copper_thickness_mm)
@@ -362,6 +369,7 @@ class Session:
                                    "this net" + (", and the regulators and links it feeds"
                                                  if project is not None else "")) from None
         res.assumptions.extend(notes)     # reaches the summary, the CLI text and the report
+        res.warnings.extend(warnings)
         layer_thickness = {lay.name: lay.thickness_mm for lay in board.layers()}
         problems = find_problems(res, rail.limits, top=max(1, int(top)))
         with self._lock:
@@ -372,7 +380,8 @@ class Session:
                                  pin_numbers=lambda pid: board.pad(pid).number,
                                  estimated=[t.name for t in res.loads[len(rail.loads):]])
         summary["warnings"] = entry.warnings() + summary["warnings"]
-        summary["from_board_fields"] = bool(from_board_fields)
+        summary.update({"from_board_fields": False, "overrides_board_fields": False,
+                        "board_fields_warnings": [], **(fields_info or {})})
         rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
                             layer_thickness, res, problems, summary, _result_nbytes(res))
         with self._lock:
@@ -424,9 +433,9 @@ class Session:
         if not selected:
             names = ", ".join(r.net for r in project.rails) or "none"
             hint = f"rails in the project: {names}"
-            if not project.rails and not project.use_board_fields and not use_board_fields:
-                hint += ("; to take the rails from KiCad footprint fields (PI_RAIL, PI_SOURCE, "
-                         "PI_LOAD), set use_board_fields: true in the project file")
+            if not project.rails:
+                hint += ("; give rails in the project file, or as KiCad footprint fields (PI_RAIL, "
+                         "PI_SOURCE, PI_LOAD) on the parts of a .kicad_pcb board")
             raise ServiceError(E.INVALID_INPUT,
                                "No rails to solve" + (f" matching {wanted}" if wanted else ""), hint)
         if on_board is not None:
@@ -448,24 +457,24 @@ class Session:
                 # not stop the other rails.
                 message = (f"{rail.net}: no loads, and it feeds no regulator input or link"
                            if rail.sources else f"{rail.net}: no source and no loads, so not solved")
-                out_rails.append({"net": rail.net, "from_board_fields": False, "skipped": {
+                out_rails.append({"net": rail.net, **self._origin_info(merged, rail.net), "skipped": {
                     "code": E.MISSING_LOAD, "message": message,
                     "hint": "add a load, or the regulator or link it feeds, to solve it"}})
                 continue
-            from_fields = rail.net in merged.from_fields
+            origin = merged.origins.get(rail.net)
+            info = self._origin_info(merged, rail.net)
             try:
                 live = self._solve(entry, rail, project.settings, top, progress, cancelled,
-                                   project=project, notes=merged.notes.get(rail.net, ()),
-                                   from_board_fields=from_fields)
+                                   project=project, notes=origin.notes if origin else (),
+                                   warnings=origin.warnings if origin else (), fields_info=info)
             except ServiceError as e:
-                if from_fields and e.code != E.CANCELLED:     # say where the rail came from
+                if info["from_board_fields"] and e.code != E.CANCELLED:   # say where it came from
+                    parts = ", ".join((origin.board_fields or {}).get("parts", []))
                     e = ServiceError(e.code, f"{e.message} (rail {rail.net} from KiCad footprint "
-                                     f"fields: check PI_RAIL and PI_PINS on "
-                                     f"{', '.join(merged.parts.get(rail.net, []))})", e.hint)
+                                     f"fields: check PI_RAIL and PI_PINS on {parts})", e.hint)
                 if stop_on_error or e.code == E.CANCELLED:
                     raise e from None
-                out_rails.append({"net": rail.net, "from_board_fields": from_fields,
-                                  "error": e.to_dict()})
+                out_rails.append({"net": rail.net, **info, "error": e.to_dict()})
                 verdicts.append("error")
                 continue
             summary = dict(live.rec.summary)
@@ -493,7 +502,7 @@ class Session:
                                                 f"{u['reason']}" for u in unjudged)
         return C.jsonable({
             "project": path.resolve(), "board": board_info, "rails": out_rails, "verdict": overall,
-            "verdict_note": note, "not_judged": unjudged,
+            "verdict_note": note, "not_judged": unjudged, "board_fields_warnings": merged.warnings,
             "assumptions": [], "warnings": entry.warnings(),
         })
 
@@ -527,44 +536,53 @@ class Session:
 
     def _merge_board_fields(self, path: Path, project: Project, entry: _BoardEntry,
                             use: Optional[bool]) -> BF.Merged:
-        """The project with the rails of the board's KiCad footprint fields added, when
-        ``use`` (default: the project's ``use_board_fields``) is on; else the project as is."""
-        if not (project.use_board_fields if use is None else use):
-            return BF.Merged(project, [], {})
-        fields = self._part_fields(entry)
+        """The project merged with the board's KiCad footprint fields (on by default: ``use``
+        None follows the project's ``use_board_fields``). A board with no fields, or of
+        another format than .kicad_pcb, leaves the project as it is."""
         try:
-            return BF.merge(project, fields)
+            return BF.apply(project, lambda: self._board_fields(entry), use)
         except BF.FieldError as e:
-            raise ServiceError(E.INVALID_BOARD_FIELD, f"{path.name}: {e}",
-                               "fix the field in KiCad (on the symbol, then update the PCB), or "
-                               "define the rail in the project file") from None
+            raise ServiceError(E.INVALID_BOARD_FIELD, f"{path.name}: {e}", FIELD_HINT) from None
 
-    def _part_fields(self, entry: _BoardEntry) -> Dict[str, Dict[str, str]]:
-        from coppernicus.engine.kicad_fields import read_part_fields
-        try:
-            return read_part_fields(entry.path)
-        except EngineError as e:
-            raise ServiceError(E.INVALID_INPUT, str(e), "footprint fields need the KiCad board "
-                               "file (.kicad_pcb); leave use_board_fields off for other "
-                               "formats") from None
+    def _board_fields(self, entry: _BoardEntry) -> BF.BoardFields:
+        from coppernicus.engine.kicad_fields import read_board_fields
+        if entry._board_fields is None:
+            try:
+                entry._board_fields = read_board_fields(entry.path)
+            except EngineError as e:
+                raise ServiceError(E.INVALID_BOARD_FIELD, str(e), FIELD_HINT) from None
+        return entry._board_fields
+
+    @staticmethod
+    def _origin_info(merged: BF.Merged, net: str) -> Dict[str, Any]:
+        """The summary keys that say where a rail came from."""
+        origin = merged.origins.get(net)
+        info: Dict[str, Any] = {
+            "from_board_fields": origin is not None and origin.source == "fields",
+            "overrides_board_fields": origin is not None and origin.source == "overridden",
+            "board_fields_warnings": list(origin.warnings) if origin else []}
+        if info["overrides_board_fields"]:
+            info["board_fields_overridden"] = origin.board_fields
+        return info
 
     def board_fields(self, board_id: str) -> Dict[str, Any]:
-        """The KiCad footprint fields of an open board (``PI_*`` only) and the rails they
-        describe, each value with the field it came from. Nothing is solved."""
+        """The KiCad footprint fields of an open board (``PI_*`` only), the rails and links
+        they describe, each value with the field it came from. Nothing is solved."""
         entry = self._entry(board_id)
-        fields = self._part_fields(entry)
+        found = self._board_fields(entry)
         try:
-            rails = BF.listing(fields)
+            listed = BF.listing(found.fields, found.pad_nets)
         except BF.FieldError as e:
-            raise ServiceError(E.INVALID_BOARD_FIELD, str(e),
-                               "fix the field in KiCad (on the symbol, then update the PCB)") from None
+            raise ServiceError(E.INVALID_BOARD_FIELD, str(e), FIELD_HINT) from None
         return C.jsonable({
             "board_id": entry.id, "fields": [{"ref": ref, "fields": dict(f)} for ref, f in
-                                             sorted(fields.items(), key=lambda kv: BF._ref_key(kv[0]))],
-            "rails": rails,
+                                             sorted(found.fields.items(), key=lambda kv: BF._ref_key(kv[0]))],
+            **listed,
             "assumptions": ["Fields are read from the board file's footprints, as KiCad copies "
                             "them from the symbols; only PI_* fields are listed. A rail needs a "
-                            "PI_SOURCE and a PI_LOAD; each value carries its unit."],
+                            "PI_SOURCE, and a PI_LOAD or a regulator input or link it feeds; each "
+                            "value carries its unit. Solves use them by default; a project-file "
+                            "rail of the same net is ignored unless it sets override_board_fields."],
             "warnings": entry.warnings(),
         })
 
@@ -592,7 +610,7 @@ class Session:
                 raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}",
                                    "fix the project file (sources, loads, their ground pins, "
                                    "links), then solve again") from None
-        tree.assumptions.extend(n for net in sorted(merged.notes) for n in merged.notes[net])
+        merged.annotate(tree)
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
         return json.loads(json.dumps(tree_summary(tree, top=max(1, int(top))), allow_nan=False))
 

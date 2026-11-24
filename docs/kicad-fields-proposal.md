@@ -1,10 +1,12 @@
 # Proposal: sources and loads defined in KiCad footprint fields
 
-> **Status: implemented as an optional input, off unless asked** (option 1 below:
-> `coppernicus.engine.kicad_fields` reads the board file; `coppernicus.board_fields` builds
-> the rails). The project file stays the first and complete way. How to use the fields is in
-> [docs/agents.md](agents.md#kicad-footprint-fields); the choices made are at the end of
-> this page. The rest is the proposal as it was approved.
+> **Status: implemented**, with the owner's decisions at the end of this page (they replace
+> the proposal where they differ: the fields are read by default, and KiCad wins over the
+> project file unless a rail says otherwise). `coppernicus.engine.kicad_fields` reads the
+> board file (option 1 below); `coppernicus.board_fields` builds the project's own v2
+> objects from the fields and merges them. How to use them is in
+> [docs/agents.md](agents.md#kicad-footprint-fields). The rest of the page is the proposal
+> as it was approved.
 
 ## Why
 
@@ -103,40 +105,53 @@ So the custom fields are parsed with the rest of the file and then dropped.
 - Tests: a small synthetic `.kicad_pcb` under `tests/boards/` with fields on two parts.
   Synthetic snapshots cannot carry fields until option 2 lands.
 
-## Decisions (as implemented)
+## Decisions (the owner's, as implemented)
 
-The owner approved the fields as an optional input. Where the proposal left a choice open,
-the simplest one was taken:
-
-1. **Names:** the `PI_` prefix, as proposed. An unknown `PI_*` name (a typo such as
-   `PI_LOADS`, or `pi_load` in another case) is an error, so a misspelt current is never
-   silently missing.
-2. **`PI_LIMIT_DROP` exists.** When several parts on one rail give one, the strictest is used,
-   and the assumptions name the part it came from.
-3. **Off by default.** `use_board_fields: true` in the project file (saved only when on), or
-   `--board-fields` on `coppernicus solve`, or `use_board_fields` on the MCP `solve_project`
-   and `solve_tree` tools. Nothing changes for a run that does not ask, so point 3 of the
-   precedence ("`use_board_fields: false` turns the fields off") became the default.
-4. **Option 1 only**, with KiPI's own s-expression reader. It works for `.kicad_pcb` files;
-   any other format with the option on is an error. Option 2 (fields in KiPI's snapshot)
-   can come later.
-5. **`PI_RAIL` is always required** next to any other field. The proposal asks for it only
-   when the part has pads on several power nets, but telling power nets apart needs the
-   net-kind heuristic, so nothing is guessed.
-6. **Several rails on one part:** every field has as many `;`-separated values as `PI_RAIL`
-   (a count mismatch is an error); an empty value skips that rail (a regulator: `PI_LOAD`
-   `0.8A;`, `PI_SOURCE` `;3.3V`). A blank field is not set. A part that is both source and
-   load of the same rail is an error.
-7. **Units:** `V`; `A` or `mA`; `%`, with an optional single space. A bare number, a decimal
-   comma or a KiCad-style value (`3V3`) is refused.
-8. **A net the fields leave incomplete** (loads but no source, or the reverse) is an error
-   naming the missing field, unless the project file defines that rail.
-9. **Provenance:** a rail from the fields has `from_board_fields: true`, and one assumption
-   line gives every value with its field, e.g. `load U1 2 A (from KiCad field PI_LOAD "2A" on
-   U1)`. A project rail that replaces a field rail says so in its assumptions.
-10. **Two footprints with the same reference** that both carry `PI_*` fields are an error.
-    A footprint marked "do not populate" is read like any other: remove its fields (or the
-    part) if it draws nothing.
-11. **Not yet:** the desktop app and `coppernicus solve --tree` do not read the fields; the
-    MCP `solve_tree` tool does. Field rails are v1 rails (no regulator kind, input or ground
-    pins). The test board is a synthetic `.kicad_pcb` written by `tests/kicad_fixture.py`.
+1. **Names:** the `PI_` prefix. An unknown `PI_*` name (a typo such as `PI_LOADS`, or
+   `pi_load` in another case) is an error, so a misspelt current is never silently missing.
+2. **On by default.** The fields are read whenever a `.kicad_pcb` has `PI_*` fields; a board
+   without them, or of another format, behaves as before. `use_board_fields: false` in the
+   project file (saved only when off), `--no-board-fields` on `coppernicus solve`, or
+   `use_board_fields: false` on the MCP `solve_project` and `solve_tree` tools turns them
+   off. The file is scanned for a `PI_` property before it is parsed a second time.
+3. **KiCad wins, with an explicit override.**
+   - For a net the fields define, they give the design data: sources, loads, pins and
+     converter data. A project-file rail of the same net is ignored, with a warning listing
+     the differences ("project file rail +3V3 ignored: KiCad fields define it (KiCad U1 2 A,
+     project U1 3 A); set override_board_fields: true on the rail to use the project's
+     values"). An identical project rail (part by part; names, limits and remote sense are not
+     compared) gives no warning.
+   - `override_board_fields: true` on a project rail keeps it entirely; the result says
+     `overrides_board_fields: true`, with the KiCad values it overrode.
+   - `PI_LIMIT_DROP` wins over the project's `max_drop_pct` on that net (a warning when they
+     differ; the strictest field value when several parts give one). The other limits come
+     only from the project file and apply to the fields' rail. Settings stay project-only.
+   - The merge is a pure function for the app: `board_fields.merge(project, fields,
+     pad_nets)` returns the merged project (a copy), each net's origin (`fields`, `project` or
+     `overridden`, with its notes, warnings and the fields' rail as plain data) and all the
+     warnings.
+4. **Converters, grounds and links in fields:** `PI_KIND` (`source`, `ldo`, `smps`),
+   `PI_EFF` (`90%`, required for `smps`), `PI_IQ` (`2mA`, `50uA`), `PI_INPUT` (required for
+   `ldo` and `smps`) with `PI_INPUT_PINS`, `PI_GND` (on sources and loads) with
+   `PI_GND_PINS`, and `PI_LINK` (`50mOhm`) on a part whose pads are on exactly two nets. They
+   map onto `Source.kind`, `efficiency`, `quiescent_a`, `input_*`, `ground_*`,
+   `Load.ground_*` and `Link`, so the engine is unchanged; the power-chain example described in
+   fields gives the same objects as its project file, remote sense aside. **Remote sense
+   stays in the project file** for now: when the fields replace a project rail, its sources'
+   sense pins are carried over by part. A `PI_LINK` part replaces a project link on the same
+   part (a warning when they differ; links have no override yet). A regulator that also has a
+   `PI_LOAD` on its `PI_INPUT` net is refused (counted twice).
+5. **A rail with a source and no load** is complete when it feeds a regulator's input or a
+   link (from the fields or the project): it draws their estimated current. A net with loads
+   and no source, or a source feeding nothing, is an error naming the missing field, unless
+   the project file defines the rail; then that rail is used, with a warning that the fields
+   are incomplete.
+6. **`coppernicus solve --tree`** reads the fields too, as the MCP `solve_tree` tool does.
+7. Confirmed from the first version: `PI_RAIL` is always required next to a per-rail field
+   (nothing is guessed from net names); values per rail by position, `;`-separated, an empty
+   one skips a rail, a count mismatch is an error; units required (`V`; `A`, `mA`; `%`;
+   `uA`/`µA` for `PI_IQ`; `Ohm`, `mOhm`, `Ω` for `PI_LINK`); two footprints with the same
+   reference carrying fields are an error; a malformed field fails the run, and its hint names
+   the off switch. A footprint marked "do not populate" is read like any other.
+8. **Not yet:** the desktop app does not read the fields (the peer will call the merge).
+   The test board is a synthetic `.kicad_pcb` written by `tests/kicad_fixture.py`.

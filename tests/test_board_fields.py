@@ -1,7 +1,10 @@
-"""Rails from KiCad footprint fields (PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS, PI_LIMIT_DROP):
-the field grammar, the reader, the merge with a project file, and every solve path that
-takes them. The board is a synthetic .kicad_pcb written by tests/kicad_fixture.py."""
+"""Rails from KiCad footprint fields, as the owner decided: on by default, KiCad wins over a
+project-file rail of the same net (with a visible warning listing the differences) unless
+that rail sets override_board_fields, converters and links in fields too. The grammar, the
+reader, the pure merge, and every solve path that takes them. The board is a synthetic
+.kicad_pcb written by tests/kicad_fixture.py."""
 
+import copy
 import json
 import os
 from pathlib import Path
@@ -13,18 +16,29 @@ from mcp import Client
 
 from coppernicus import ci
 from coppernicus.board_fields import FieldError, field_rails, merge, quantity
-from coppernicus.cli import EXIT_ERROR, EXIT_LIMIT, EXIT_OK, main
-from coppernicus.engine import EngineError
-from coppernicus.engine.kicad_fields import read_part_fields
+from coppernicus.cli import EXIT_LIMIT, EXIT_OK, main
+from coppernicus.engine.kicad_fields import read_board_fields, read_part_fields
 from coppernicus.engine.synthetic import OZ1, save_snapshot, strip_board
 from coppernicus.mcp_server import build_server
-from coppernicus.project import Load, Project, Rail, Source
+from coppernicus.project import Limits, Load, Project, Rail, Source
 from coppernicus.service import ServiceError, Session
 
 RHO = 1.724e-5                                              # Ω·mm, the engine's ρ at 20 °C
 DROP_MV_PER_A = RHO * (X1 - X0 - PAD) / (W * OZ1) * 1e3     # ≈ 37.9 mV per A
 FIELDS = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "1V"},
           "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1000mA", "PI_PINS": "1", "PI_LIMIT_DROP": "2%"}}
+CHAIN = Path(__file__).resolve().parents[1] / "examples" / "power_chain" / "power_chain.coppernicus.yml"
+# The power-chain example, described in fields (remote sense stays project-only).
+CHAIN_FIELDS = {
+    "J1": {"PI_RAIL": "VIN", "PI_SOURCE": "12V", "PI_PINS": "1", "PI_GND": "GND", "PI_GND_PINS": "2"},
+    "U1": {"PI_RAIL": "+3V3", "PI_SOURCE": "3.3V", "PI_PINS": "2", "PI_KIND": "smps", "PI_EFF": "90%",
+           "PI_IQ": "5mA", "PI_INPUT": "VIN", "PI_INPUT_PINS": "1", "PI_GND": "GND", "PI_GND_PINS": "3"},
+    "U4": {"PI_RAIL": "+3V3", "PI_LOAD": "500mA", "PI_PINS": "1", "PI_GND": "GND", "PI_GND_PINS": "2"},
+    "U2": {"PI_RAIL": "+1V8", "PI_SOURCE": "1.8V", "PI_PINS": "2", "PI_KIND": "ldo", "PI_IQ": "2mA",
+           "PI_INPUT": "+3V3_F", "PI_INPUT_PINS": "1", "PI_GND": "GND", "PI_GND_PINS": "3"},
+    "U3": {"PI_RAIL": "+1V8", "PI_LOAD": "2A", "PI_PINS": "1", "PI_GND": "GND", "PI_GND_PINS": "2"},
+    "FB1": {"PI_LINK": "50mOhm"}}
+CHAIN_PADS = {"FB1": {"1": "+3V3", "2": "+3V3_F"}}
 
 
 @pytest.fixture()
@@ -32,8 +46,16 @@ def board(tmp_path):
     return write_strip_board(tmp_path / "strip.kicad_pcb", FIELDS)
 
 
-def project_file(tmp_path, rails=(), use=True, name="fields.coppernicus.yml"):
-    return Project(board="strip.kicad_pcb", rails=list(rails), use_board_fields=use).save(tmp_path / name)
+def project_file(tmp_path, rails=(), name="fields.coppernicus.yml", **kw):
+    return Project(board="strip.kicad_pcb", rails=list(rails), **kw).save(tmp_path / name)
+
+
+def no_sense(rail):
+    rail = copy.deepcopy(rail)
+    for s in rail.sources:
+        s.sense_ref, s.sense_pins, s.sense_net = "", None, ""
+        s.ground_sense_ref, s.ground_sense_pins, s.ground_sense_net = "", None, ""
+    return rail
 
 
 # ---------------------------------------------------------------------- the grammar
@@ -41,7 +63,10 @@ def project_file(tmp_path, rails=(), use=True, name="fields.coppernicus.yml"):
 @pytest.mark.parametrize("name, text, value", [
     ("PI_SOURCE", "3.3V", 3.3), ("PI_SOURCE", "-5V", -5.0), ("PI_SOURCE", "0V", 0.0),
     ("PI_LOAD", "2A", 2.0), ("PI_LOAD", "250mA", 0.25), ("PI_LOAD", "1.5 A", 1.5),
-    ("PI_LIMIT_DROP", "2%", 2.0), ("PI_LIMIT_DROP", "0.5%", 0.5)])
+    ("PI_LIMIT_DROP", "2%", 2.0), ("PI_EFF", "90%", 0.9), ("PI_EFF", "100%", 1.0),
+    ("PI_IQ", "1mA", 1e-3), ("PI_IQ", "50uA", 50e-6), ("PI_IQ", "50µA", 50e-6),
+    ("PI_IQ", "50μA", 50e-6), ("PI_LINK", "50mOhm", 0.05), ("PI_LINK", "0Ohm", 0.0),
+    ("PI_LINK", "1.2Ohm", 1.2), ("PI_LINK", "10mΩ", 0.01), ("PI_LINK", "2Ω", 2.0)])
 def test_values_carry_their_unit(name, text, value):
     assert quantity("U1", name, text) == pytest.approx(value)
 
@@ -49,8 +74,10 @@ def test_values_carry_their_unit(name, text, value):
 @pytest.mark.parametrize("name, text, words", [
     ("PI_LOAD", "2", "give the unit (A or mA)"), ("PI_SOURCE", "3.3", "a bare number is refused"),
     ("PI_LOAD", "2,5A", "use a dot"), ("PI_SOURCE", "3V3", "not a value with its unit"),
-    ("PI_LOAD", "2V", "PI_LOAD takes A or mA, not V"), ("PI_SOURCE", "2A", "takes V, not A"),
-    ("PI_LOAD", "-1A", "≥ 0"), ("PI_LIMIT_DROP", "0%", "> 0"), ("PI_LIMIT_DROP", "2", "give the unit")])
+    ("PI_LOAD", "2V", "PI_LOAD takes A or mA, not V"), ("PI_LOAD", "-1A", "≥ 0"),
+    ("PI_LIMIT_DROP", "0%", "> 0"), ("PI_EFF", "0.9", "give the unit"), ("PI_EFF", "120%", "100 %"),
+    ("PI_IQ", "-1mA", "≥ 0"), ("PI_LINK", "50m", "takes Ohm or mOhm, not m"),
+    ("PI_LINK", "-1Ohm", "≥ 0")])
 def test_a_value_without_its_unit_is_refused(name, text, words):
     with pytest.raises(FieldError) as e:
         quantity("U1", name, text)
@@ -58,15 +85,14 @@ def test_a_value_without_its_unit_is_refused(name, text, words):
 
 
 def test_one_part_on_several_rails_by_position():
-    """A regulator: a load on its input rail, the source of its output rail; an empty value
-    skips that rail, an empty field is not set."""
     rails = field_rails({"U2": {"PI_RAIL": "VIN;+3V3", "PI_LOAD": "0.8A;", "PI_SOURCE": ";3.3V",
                                 "PI_PINS": ";2", "PI_LIMIT_DROP": ""}})
-    [(load, fv, pins)] = rails["VIN"].loads
-    assert (load.ref, load.current, load.pins, fv.text, pins) == ("U2", 0.8, None, "0.8A", None)
-    [(src, _, pins)] = rails["+3V3"].sources
-    assert (src.voltage, src.pins, pins.text) == (3.3, ["2"], "2")
-    assert rails["VIN"].limit is None
+    [load] = rails["VIN"].loads
+    assert (load.term.ref, load.term.current, load.term.pins) == ("U2", 0.8, None)
+    assert [fv.text for _, fv in load.values] == ["0.8A"]
+    [src] = rails["+3V3"].sources
+    assert (src.term.voltage, src.term.pins) == (3.3, ["2"])
+    assert [(fv.field, fv.text) for _, fv in src.values] == [("PI_SOURCE", "3.3V"), ("PI_PINS", "2")]
 
 
 @pytest.mark.parametrize("fields, words", [
@@ -74,13 +100,25 @@ def test_one_part_on_several_rails_by_position():
     ({"PI_LOAD": "1A"}, "PI_LOAD without PI_RAIL"),
     ({"PI_RAIL": "VCC"}, "no PI_SOURCE or PI_LOAD"),
     ({"PI_RAIL": "VCC", "PI_LOADS": "1A"}, "unknown field PI_LOADS"),
+    ({"PI_RAIL": "VCC", "pi_load": "1A"}, "unknown field pi_load"),
     ({"PI_RAIL": "VCC", "PI_LOAD": "1A", "PI_SOURCE": "1V"}, "both PI_SOURCE and PI_LOAD"),
     ({"PI_RAIL": "A;B", "PI_LOAD": "1A;"}, "rail B (PI_RAIL position 2) has neither"),
-    ({"PI_RAIL": "A;", "PI_LOAD": "1A;1A"}, "empty net name")])
+    ({"PI_RAIL": "A;", "PI_LOAD": "1A;1A"}, "empty net name"),
+    ({"PI_RAIL": "V", "PI_SOURCE": "1V", "PI_KIND": "buck"}, "PI_KIND is one of source, ldo, smps"),
+    ({"PI_RAIL": "V", "PI_SOURCE": "1V", "PI_KIND": "smps", "PI_INPUT": "VIN"}, "needs PI_EFF"),
+    ({"PI_RAIL": "V", "PI_SOURCE": "1V", "PI_KIND": "ldo"}, "needs PI_INPUT"),
+    ({"PI_RAIL": "V", "PI_SOURCE": "1V", "PI_EFF": "90%"}, "PI_EFF is for a switcher"),
+    ({"PI_RAIL": "V", "PI_SOURCE": "1V", "PI_IQ": "1mA"}, "PI_IQ is for a regulator"),
+    ({"PI_RAIL": "V", "PI_SOURCE": "1V", "PI_INPUT": "VIN"}, "PI_INPUT is for a regulator"),
+    ({"PI_RAIL": "V", "PI_LOAD": "1A", "PI_KIND": "ldo"}, "PI_KIND is for a source"),
+    ({"PI_RAIL": "V", "PI_SOURCE": "1V", "PI_GND_PINS": "3"}, "PI_GND_PINS without PI_GND"),
+    ({"PI_RAIL": "VIN;V", "PI_LOAD": "1A;", "PI_SOURCE": ";1V", "PI_KIND": ";ldo", "PI_INPUT": ";VIN"},
+     "counted twice"),
+    ({"PI_RAIL": "V", "PI_LOAD": "1A", "PI_LINK": "1Ohm"}, "a link part has no PI_RAIL")])
 def test_fields_that_cannot_be_used_name_the_part_and_the_field(fields, words):
     with pytest.raises(FieldError) as e:
-        field_rails({"U7": fields})
-    assert str(e.value).startswith("U7: ") and words in str(e.value)
+        merge(Project(), {"U7": fields}, {"U7": {"1": "V", "2": "W"}})
+    assert "U7: " in str(e.value) and words in str(e.value)
 
 
 def test_the_strictest_drop_limit_wins_and_says_where_it_is_from():
@@ -91,149 +129,197 @@ def test_the_strictest_drop_limit_wins_and_says_where_it_is_from():
     assert 'limit max_drop_pct 2 (from KiCad field PI_LIMIT_DROP "2%" on U1)' in rails["V"].note()
 
 
+# ---------------------------------------------------------------------- the merge (pure)
+
+def test_the_power_chain_in_fields_is_the_example_minus_sense():
+    """Converters, grounds and a link described in fields map onto the same v2 objects as
+    the project file, so the engine is unchanged. VIN has a source and no load, but it feeds
+    U1: complete."""
+    example = Project.load(CHAIN)
+    merged = merge(Project(), CHAIN_FIELDS, CHAIN_PADS)
+    got = {r.net: r for r in merged.project.rails}
+    assert set(got) == {r.net for r in example.rails}
+    for rail in example.rails:
+        assert got[rail.net] == no_sense(rail), rail.net
+    assert merged.project.links == example.links
+    assert merged.warnings == [] and all(o.source == "fields" for o in merged.origins.values())
+    note = " ".join(merged.origins["+3V3"].notes)
+    for name in ("PI_KIND", "PI_EFF", "PI_IQ", "PI_INPUT", "PI_INPUT_PINS", "PI_GND", "PI_GND_PINS",
+                 "PI_LINK"):
+        assert f"from KiCad field {name}" in note, name
+
+
+def test_kicad_wins_over_a_different_project_rail_with_a_warning():
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 3.0, ["1"]), Load("U9", 1.0)],
+               limits=Limits(max_drop_pct=5.0, max_via_current=2.0))
+    merged = merge(Project(rails=[own]), FIELDS)
+    [rail] = merged.project.rails
+    assert [(ld.ref, ld.current) for ld in rail.loads] == [("U1", 1.0)]           # the fields'
+    assert rail.limits.max_drop_pct == 2.0 and rail.limits.max_via_current == 2.0  # J, via kept
+    origin = merged.origins["VCC"]
+    assert origin.source == "fields"
+    [ignored, limit] = origin.warnings
+    assert ignored.startswith("project file rail VCC ignored: KiCad fields define it (")
+    assert "KiCad U1 1 A pins 1, project U1 3 A pins 1" in ignored
+    assert "project has load U9 1 A, KiCad does not" in ignored
+    assert "set override_board_fields: true on the rail to use the project's values" in ignored
+    assert "max_drop_pct" in limit and "PI_LIMIT_DROP" in limit and "5" in limit
+
+
+def test_override_board_fields_keeps_the_project_rail_and_says_so():
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 0.5)], override_board_fields=True)
+    merged = merge(Project(rails=[own]), FIELDS)
+    assert merged.project.rails == [own]
+    origin = merged.origins["VCC"]
+    assert origin.source == "overridden" and origin.warnings == []
+    assert origin.board_fields["loads"][0]["current_a"] == 1.0                  # what it overrode
+    assert "override_board_fields" in origin.notes[0] and "1000mA" in origin.notes[0]
+
+
+def test_saving_the_merged_project_makes_the_next_merge_silent(tmp_path):
+    """The normal case once the app has saved: the project file holds the fields' rails, so
+    merging again changes nothing and warns about nothing."""
+    first = merge(Project.load(CHAIN), CHAIN_FIELDS, CHAIN_PADS)     # sense comes from the project
+    path = first.project.save(tmp_path / "saved.coppernicus.yml")
+    again = merge(Project.load(path), CHAIN_FIELDS, CHAIN_PADS)
+    assert again.warnings == [] and all(not o.warnings for o in again.origins.values())
+    assert again.project.rails == Project.load(path).rails and again.project.links == first.project.links
+
+
+def test_remote_sense_is_carried_over_from_an_ignored_project_rail():
+    merged = merge(Project.load(CHAIN), CHAIN_FIELDS, CHAIN_PADS)
+    u2 = next(s for s in next(r for r in merged.project.rails if r.net == "+1V8").sources)
+    assert (u2.sense_ref, u2.sense_net, u2.ground_sense_net) == ("U3", "+1V8", "GND")
+    assert any("sense pins of U2 from the project file" in n for n in merged.origins["+1V8"].notes)
+
+
+def test_incomplete_fields_leave_a_full_project_rail_in_place_with_a_warning():
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0)])
+    merged = merge(Project(rails=[own]), {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "2A"}})
+    assert merged.project.rails == [own] and merged.origins["VCC"].source == "project"
+    assert "incomplete" in merged.origins["VCC"].warnings[0]
+    with pytest.raises(FieldError, match="no part on this net has PI_SOURCE"):
+        merge(Project(), {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "2A"}})
+
+
+@pytest.mark.parametrize("how", ["project regulator", "field regulator", "through a link"])
+def test_a_source_only_rail_that_feeds_something_is_complete(how):
+    fields = {"J1": {"PI_RAIL": "VIN", "PI_SOURCE": "12V"}}
+    project = Project()
+    reg = {"PI_RAIL": "OUT", "PI_SOURCE": "3.3V", "PI_KIND": "ldo", "PI_INPUT": "VIN"}
+    if how == "project regulator":
+        project.rails.append(Rail("OUT", [Source("U2", 3.3, kind="ldo", input_net="VIN")], [Load("U4", 1.0)]))
+    elif how == "field regulator":
+        fields.update(U2=reg, U4={"PI_RAIL": "OUT", "PI_LOAD": "1A"})
+    else:                                    # VIN feeds FB1, behind which U2 draws from VIN_F
+        fields.update(FB1={"PI_LINK": "10mOhm"}, U2=dict(reg, PI_INPUT="VIN_F"),
+                      U4={"PI_RAIL": "OUT", "PI_LOAD": "1A"})
+    merged = merge(project, fields, {"FB1": {"1": "VIN", "2": "VIN_F"}})
+    assert "VIN" in [r.net for r in merged.project.rails]
+    with pytest.raises(FieldError, match="has PI_SOURCE but no part on this net has PI_LOAD"):
+        merge(Project(), {"J1": {"PI_RAIL": "VIN", "PI_SOURCE": "12V"}})
+
+
+def test_a_project_link_on_a_field_link_part_is_replaced_with_a_warning():
+    project = Project.load(CHAIN)
+    project.links[0].resistance_ohm = 0.1
+    merged = merge(project, CHAIN_FIELDS, CHAIN_PADS)
+    assert merged.project.links[0].resistance_ohm == pytest.approx(0.05)
+    assert any("project file link FB1 ignored" in w and "0.1" in w for w in merged.warnings)
+
+
 def test_merge_never_changes_the_loaded_project():
-    project = Project(board="b.kicad_pcb", rails=[Rail("OTHER", [Source("J9", 5.0)], [Load("U9", 1.0)])])
-    merged = merge(project, FIELDS)
-    assert [r.net for r in project.rails] == ["OTHER"]
-    assert [r.net for r in merged.project.rails] == ["OTHER", "VCC"] and merged.from_fields == ["VCC"]
-    with pytest.raises(FieldError) as e:
-        merge(project, {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}})
-    assert "no part on this net has PI_SOURCE" in str(e.value)
-    # A project rail on that net replaces the incomplete fields: no error.
-    merge(Project(rails=[Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0)])]),
-          {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}})
+    project = Project(rails=[Rail("VCC", [Source("J1", 1.0)], [Load("U1", 3.0)])])
+    before = copy.deepcopy(project)
+    merge(project, FIELDS)
+    assert project == before
 
 
 # ---------------------------------------------------------------------- the reader
 
-def test_reader_returns_only_pi_fields_of_parts_that_have_them(board, tmp_path):
-    fields = read_part_fields(board)
-    assert fields == FIELDS                                   # Reference and Value left out
+def test_reader_returns_only_pi_fields_and_the_pads_nets(board, tmp_path, monkeypatch):
+    assert read_part_fields(board) == FIELDS
+    both = read_board_fields(board)
+    assert both.fields == FIELDS and both.pad_nets == {"J1": {"1": "VCC"}, "U1": {"1": "VCC"}}
     write_strip_board(tmp_path / "plain.kicad_pcb", {})
-    assert read_part_fields(tmp_path / "plain.kicad_pcb") == {}
-    with pytest.raises(EngineError, match=r"\.kicad_pcb\) only"):
-        read_part_fields(tmp_path / "strip.kipi.json.gz")
+    import coppernicus.engine.kicad_fields as kf
+    monkeypatch.setattr(kf, "load_tree", lambda path: (_ for _ in ()).throw(AssertionError("parsed")))
+    assert read_board_fields(tmp_path / "plain.kicad_pcb").fields == {}   # no PI_ text: no parse
+    monkeypatch.undo()
+    save_snapshot(strip_board(), tmp_path / "strip.kipi.json.gz")
+    assert read_board_fields(tmp_path / "strip.kipi.json.gz").fields == {}  # another format: none
     dup = write_strip_board(tmp_path / "dup.kicad_pcb", {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}},
                             extra_parts=[("U1", 20.0, 3.0, "VCC")])
-    with pytest.raises(EngineError, match="two footprints are 'U1'"):
+    with pytest.raises(Exception, match="two footprints are 'U1'"):
         read_part_fields(dup)
 
 
 # ---------------------------------------------------------------------- solving
 
-def test_a_project_with_only_the_board_takes_its_rails_from_the_fields(board, tmp_path):
+def test_fields_are_read_by_default(board, tmp_path):
     before = (board.read_bytes(), os.stat(board).st_mtime_ns)
     project = project_file(tmp_path)
     project_bytes = project.read_bytes()
     doc = Session(out_dir=tmp_path / "out").solve_project(project)
     [rail] = doc["rails"]
     assert rail["net"] == "VCC" and rail["from_board_fields"] is True
+    assert rail["overrides_board_fields"] is False
     assert rail["loads"][0]["drop_mv"] == pytest.approx(DROP_MV_PER_A, rel=1e-5)
     assert rail["limits"] == {"max_drop_pct": 2.0} and rail["verdict"] == "fail"   # 3.8 % > 2 %
     [note] = [a for a in rail["assumptions"] if a.startswith("Rail VCC from KiCad footprint fields")]
     for name in ("PI_RAIL", "PI_SOURCE", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP"):
         assert f"from KiCad field {name}" in note
-    assert 'load U1 1 A (from KiCad field PI_LOAD "1000mA" on U1)' in note
     assert (board.read_bytes(), os.stat(board).st_mtime_ns) == before          # only read
     assert project.read_bytes() == project_bytes                               # never saved
 
 
-def test_a_project_rail_replaces_the_fields_rail_entirely(board, tmp_path):
-    own = Rail("VCC", sources=[Source("J1", 1.0)], loads=[Load("U1", 0.5)])     # no limit
-    [rail] = Session(out_dir=tmp_path / "out").solve_project(project_file(tmp_path, [own]))["rails"]
-    assert rail["from_board_fields"] is False
-    assert rail["loads"][0]["drop_mv"] == pytest.approx(DROP_MV_PER_A / 2, rel=1e-5)
-    assert rail["limits"] == {} and rail["verdict"] == "not_judged"            # PI_LIMIT_DROP unused
-    assert any("from the project file; the KiCad footprint fields on this net (J1, U1) are not used"
-               in a for a in rail["assumptions"])
-
-
-def test_fields_are_off_unless_asked(board, tmp_path):
+def test_use_board_fields_false_turns_them_off(board, tmp_path):
     session = Session(out_dir=tmp_path / "out")
-    with pytest.raises(ServiceError) as e:
-        session.solve_project(project_file(tmp_path, use=False))
-    assert "No rails to solve" in e.value.message and "use_board_fields: true" in e.value.hint
-    doc = session.solve_project(project_file(tmp_path, use=False), use_board_fields=True, rails=["VCC"])
-    assert doc["rails"][0]["from_board_fields"] is True
+    off = project_file(tmp_path, use_board_fields=False)
+    assert "use_board_fields: false" in off.read_text(encoding="utf-8")
+    with pytest.raises(ServiceError, match="No rails to solve"):
+        session.solve_project(off)
+    with pytest.raises(ServiceError, match="No rails to solve"):
+        session.solve_project(project_file(tmp_path), use_board_fields=False)
+    assert "use_board_fields" not in project_file(tmp_path).read_text(encoding="utf-8")
 
 
-def test_missing_voltage_and_other_formats_are_errors(tmp_path):
+def test_an_ignored_project_rail_warns_everywhere(board, tmp_path, capsys, monkeypatch):
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 3.0)])
+    project = project_file(tmp_path, [own])
+    [rail] = Session(out_dir=tmp_path / "out").solve_project(project)["rails"]
+    assert rail["from_board_fields"] is True
+    assert rail["loads"][0]["current_a"] == pytest.approx(1.0)
+    [warning] = rail["board_fields_warnings"]
+    assert "project file rail VCC ignored" in warning and warning in rail["warnings"]
+    assert main(["solve", str(project), "--no-maps", "--out", str(tmp_path / "o")]) == EXIT_LIMIT
+    assert "warning: project file rail VCC ignored" in capsys.readouterr().out
+    monkeypatch.chdir(tmp_path)
+    index = ci.solve_all(["fields.coppernicus.yml"], Path("results"), html=False)
+    assert "project file rail VCC ignored" in ci.summary_markdown(index)
+
+
+def test_an_overriding_project_rail_is_used_and_reported(board, tmp_path):
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 0.5)], override_board_fields=True)
+    [rail] = Session(out_dir=tmp_path / "out").solve_project(project_file(tmp_path, [own]))["rails"]
+    assert rail["from_board_fields"] is False and rail["overrides_board_fields"] is True
+    assert rail["loads"][0]["drop_mv"] == pytest.approx(DROP_MV_PER_A / 2, rel=1e-5)
+    assert rail["board_fields_overridden"]["loads"][0]["current_a"] == 1.0
+    assert rail["limits"] == {} and rail["verdict"] == "not_judged"
+    assert any("override_board_fields" in a for a in rail["assumptions"])
+
+
+def test_errors_name_the_off_switch_and_other_formats_have_no_fields(tmp_path):
     session = Session(out_dir=tmp_path / "out")
     write_strip_board(tmp_path / "strip.kicad_pcb", {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}})
     with pytest.raises(ServiceError) as e:
         session.solve_project(project_file(tmp_path))
     assert e.value.code == "invalid_board_field" and "PI_SOURCE" in e.value.message
+    assert "use_board_fields: false" in e.value.hint
     save_snapshot(strip_board(), tmp_path / "strip.kipi.json.gz")
-    snap = Project(board="strip.kipi.json.gz", use_board_fields=True).save(tmp_path / "snap.coppernicus.yml")
-    with pytest.raises(ServiceError) as e:
-        session.solve_project(snap)
-    assert e.value.code == "invalid_input" and ".kicad_pcb" in e.value.message
-
-
-def test_the_project_key_round_trips(tmp_path):
-    path = Project(board="b.kicad_pcb", use_board_fields=True).save(tmp_path / "p.coppernicus.yml")
-    assert "use_board_fields: true" in path.read_text(encoding="utf-8")
-    assert Project.load(path).use_board_fields is True
-    off = Project(board="b.kicad_pcb").save(tmp_path / "q.coppernicus.yml")
-    assert "use_board_fields" not in off.read_text(encoding="utf-8")
-    path.write_text("board: b.kicad_pcb\nuse_board_fields: yes please\n", encoding="utf-8")
-    with pytest.raises(Exception, match="use_board_fields must be true or false"):
-        Project.load(path)
-
-
-# ---------------------------------------------------------------------- CLI, MCP, CI
-
-def test_cli_fields_and_solve_with_board_fields(board, tmp_path, capsys):
-    project = project_file(tmp_path, use=False)
-    assert main(["solve", str(project), "--no-maps", "--out", str(tmp_path / "o"), "--json",
-                 "--board-fields"]) == EXIT_LIMIT
-    doc = json.loads(capsys.readouterr().out)
-    assert doc["rails"][0]["from_board_fields"] is True
-    assert main(["solve", str(project), "--no-maps", "--out", str(tmp_path / "o"), "--html",
-                 "--board-fields"]) == EXIT_LIMIT
-    out = capsys.readouterr().out
-    assert "assumption: Rail VCC from KiCad footprint fields" in out
-    report = (tmp_path / "o" / "fields.coppernicus_report.html").read_text(encoding="utf-8")
-    assert "from KiCad field PI_LIMIT_DROP" in report
-    assert main(["fields", str(board), "--json"]) == EXIT_OK
-    listed = json.loads(capsys.readouterr().out)
-    assert [p["ref"] for p in listed["fields"]] == ["J1", "U1"]
-    [rail] = listed["rails"]
-    assert rail["complete"] and rail["loads"][0]["from"] == 'from KiCad field PI_LOAD "1000mA" on U1'
-    assert main(["fields", str(board)]) == EXIT_OK
-    assert "Rail VCC" in capsys.readouterr().out
-    assert main(["solve", str(project), "--tree", "--board-fields"]) == EXIT_ERROR
-    assert "--board-fields does not apply to --tree" in capsys.readouterr().err
-
-
-def test_mcp_board_fields_and_solve_project(board, tmp_path):
-    project = project_file(tmp_path, use=False)
-
-    async def scenario():
-        async with Client(build_server(Session(out_dir=tmp_path / "out")), raise_exceptions=True) as c:
-            bid = (await c.call_tool("open_board", {"path": str(board)})).structured_content["board_id"]
-            listed = await c.call_tool("board_fields", {"board_id": bid})
-            solved = await c.call_tool("solve_project", {"project_path": str(project),
-                                                         "use_board_fields": True})
-            return listed.structured_content, solved.structured_content
-    listed, solved = anyio.run(scenario)
-    assert listed["rails"][0]["sources"][0]["from"] == 'from KiCad field PI_SOURCE "1V" on J1'
-    assert solved["rails"][0]["from_board_fields"] is True and solved["verdict"] == "fail"
-
-
-def test_the_action_needs_only_the_project_key(board, tmp_path, monkeypatch):
-    project_file(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    index = ci.solve_all(["fields.coppernicus.yml"], Path("results"), html=False)
-    assert index["exit_code"] == 1 and index["verdict"] == "fail"
-    md = ci.summary_markdown(index)
-    assert "| VCC |" in md and "from KiCad field PI_SOURCE" in md
-
-
-def test_solve_tree_takes_the_fields_too(board, tmp_path):
-    doc = Session(out_dir=tmp_path / "out").solve_tree(project_file(tmp_path))
-    assert [g["group"] for g in doc["groups"]] == ["VCC"]
-    assert any(a.startswith("Rail VCC from KiCad footprint fields") for a in doc["assumptions"])
+    snap = Project(board="strip.kipi.json.gz", rails=[Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0)])])
+    [rail] = session.solve_project(snap.save(tmp_path / "snap.coppernicus.yml"))["rails"]
+    assert rail["from_board_fields"] is False and rail["verdict"] == "not_judged"
 
 
 @pytest.mark.parametrize("fields, extra, code, words", [
@@ -241,8 +327,7 @@ def test_solve_tree_takes_the_fields_too(board, tmp_path):
     ({"U2": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}}, [("U2", 20.0, 3.0, "GND")], "part_not_on_net",
      "U2 has no pads on net VCC"),
     ({"J9": {"PI_RAIL": "NOPE", "PI_SOURCE": "1V"}, "U9": {"PI_RAIL": "NOPE", "PI_LOAD": "1A"}},
-     [("J9", 10.0, 3.0, "VCC"), ("U9", 30.0, 3.0, "VCC")],
-     "net_not_found", "NOPE")])
+     [("J9", 10.0, 3.0, "VCC"), ("U9", 30.0, 3.0, "VCC")], "net_not_found", "NOPE")])
 def test_errors_found_while_solving_a_field_rail_say_where_it_came_from(tmp_path, fields, extra, code,
                                                                         words):
     write_strip_board(tmp_path / "strip.kicad_pcb", {**FIELDS, **fields}, extra_parts=extra)
@@ -252,15 +337,68 @@ def test_errors_found_while_solving_a_field_rail_say_where_it_came_from(tmp_path
     assert "from KiCad footprint fields: check PI_RAIL and PI_PINS on" in e.value.message
 
 
-def test_a_missing_current_and_a_lower_case_name_are_errors(tmp_path):
-    session = Session(out_dir=tmp_path / "out")
-    write_strip_board(tmp_path / "strip.kicad_pcb", {"J1": FIELDS["J1"]})
-    with pytest.raises(ServiceError) as e:
-        session.solve_project(project_file(tmp_path))
-    assert e.value.code == "invalid_board_field" and "PI_LOAD" in e.value.message
-    lower = {"J1": FIELDS["J1"], "U1": {"PI_RAIL": "VCC", "pi_load": "1A"}}
-    write_strip_board(tmp_path / "strip.kicad_pcb", lower)
-    assert read_part_fields(tmp_path / "strip.kicad_pcb")["U1"] == lower["U1"]
-    with pytest.raises(ServiceError) as e:
-        session.solve_project(project_file(tmp_path))
-    assert "unknown field pi_load" in e.value.message and "upper case" in e.value.message
+# ---------------------------------------------------------------------- CLI, MCP, tree
+
+def test_cli_fields_no_board_fields_and_the_report(board, tmp_path, capsys):
+    project = project_file(tmp_path)
+    assert main(["solve", str(project), "--no-maps", "--out", str(tmp_path / "o"), "--html"]) == EXIT_LIMIT
+    assert "assumption: Rail VCC from KiCad footprint fields" in capsys.readouterr().out
+    report = (tmp_path / "o" / "fields.coppernicus_report.html").read_text(encoding="utf-8")
+    assert "from KiCad field PI_LIMIT_DROP" in report
+    assert main(["solve", str(project), "--no-maps", "--json", "--no-board-fields"]) == 2
+    assert json.loads(capsys.readouterr().out)["error"]["message"].startswith("No rails to solve")
+    assert main(["fields", str(board), "--json"]) == EXIT_OK
+    listed = json.loads(capsys.readouterr().out)
+    [rail] = listed["rails"]
+    assert rail["complete"] and rail["loads"][0]["from"] == 'from KiCad field PI_LOAD "1000mA" on U1'
+
+
+def test_solve_tree_reads_the_fields_in_the_cli_and_the_tool(board, tmp_path, capsys):
+    project = project_file(tmp_path)
+    assert main(["solve", str(project), "--tree", "--json", "--out", str(tmp_path / "cli")]) == EXIT_LIMIT
+    cli_doc = json.loads(capsys.readouterr().out)
+    cli_doc.pop("summary_file")
+    tool_doc = Session(out_dir=tmp_path / "out").solve_tree(project)
+    assert tool_doc == cli_doc and [g["group"] for g in tool_doc["groups"]] == ["VCC"]
+    assert any(a.startswith("Rail VCC from KiCad footprint fields") for a in tool_doc["assumptions"])
+    assert main(["solve", str(project), "--tree", "--json", "--no-board-fields",
+                 "--out", str(tmp_path / "cli")]) == 2
+    capsys.readouterr()
+
+
+def test_mcp_board_fields_and_solve_project(board, tmp_path):
+    project = project_file(tmp_path)
+
+    async def scenario():
+        async with Client(build_server(Session(out_dir=tmp_path / "out")), raise_exceptions=True) as c:
+            bid = (await c.call_tool("open_board", {"path": str(board)})).structured_content["board_id"]
+            listed = await c.call_tool("board_fields", {"board_id": bid})
+            solved = await c.call_tool("solve_project", {"project_path": str(project)})
+            off = await c.call_tool("solve_project", {"project_path": str(project),
+                                                      "use_board_fields": False})
+            return listed.structured_content, solved.structured_content, off
+    listed, solved, off = anyio.run(scenario)
+    assert listed["rails"][0]["sources"][0]["from"] == 'from KiCad field PI_SOURCE "1V" on J1'
+    assert solved["rails"][0]["from_board_fields"] is True and solved["verdict"] == "fail"
+    assert off.is_error and off.structured_content["error"]["code"] == "invalid_input"
+
+
+def test_the_action_reads_the_fields_with_no_setting(board, tmp_path, monkeypatch):
+    project_file(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    index = ci.solve_all(["fields.coppernicus.yml"], Path("results"), html=False)
+    assert index["exit_code"] == 1 and index["verdict"] == "fail"
+    md = ci.summary_markdown(index)
+    assert "| VCC |" in md and "from KiCad field PI_SOURCE" in md
+
+
+def test_project_keys_round_trip(tmp_path):
+    rail = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0)], override_board_fields=True)
+    path = Project(board="b.kicad_pcb", rails=[rail], use_board_fields=False).save(
+        tmp_path / "p.coppernicus.yml")
+    text = path.read_text(encoding="utf-8")
+    assert "use_board_fields: false" in text and "override_board_fields: true" in text
+    loaded = Project.load(path)
+    assert loaded.use_board_fields is False and loaded.rails[0].override_board_fields is True
+    plain = Project(board="b.kicad_pcb", rails=[Rail("VCC")]).save(tmp_path / "q.coppernicus.yml")
+    assert "board_fields" not in plain.read_text(encoding="utf-8")

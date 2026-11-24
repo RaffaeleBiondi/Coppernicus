@@ -101,9 +101,12 @@ def _cmd_fields(args) -> int:
     for part in doc["fields"]:
         print(f"  {part['ref']:8s} " + "  ".join(f"{k}={v}" for k, v in part["fields"].items()))
     for rail in doc["rails"]:
-        print(f"Rail {rail['net']}" + ("" if rail["complete"] else f": not a rail yet: {rail['missing']}"))
+        print(f"Rail {rail['net']}" + ("" if rail["complete"] else f": {rail['missing']}"))
         if rail["note"]:
             print(f"  {rail['note']}")
+    for link in doc["links"]:
+        print(f"Link {link['ref']} {link['resistance_ohm']:g} Ω between {link['net_a']} and "
+              f"{link['net_b']} ({link['from']})")
     return EXIT_OK
 
 
@@ -201,7 +204,7 @@ def _cmd_solve(args) -> int:
                                     maps_dir=None if args.no_maps else out_dir, stop_on_error=True,
                                     progress=progress if args.verbose else None,
                                     on_rail=on_rail, on_board=on_board,
-                                    use_board_fields=True if args.board_fields else None)
+                                    use_board_fields=False if args.no_board_fields else None)
     except ServiceError as e:
         if quiet:
             _print_json({"error": e.to_dict()})
@@ -241,11 +244,14 @@ def _cmd_solve_tree(args) -> int:
     currents, ground return). Prints the VRM, load and group tables, or with ``--json`` the
     :func:`coppernicus.power_tree.tree_summary` document, which is also written to
     ``<project>_tree_summary.json``. Exit codes as ``solve``."""
+    from coppernicus import board_fields
     from coppernicus.engine import Board, EngineError
+    from coppernicus.engine.kicad_fields import read_board_fields
     from coppernicus.engine.tree import solve_project_tree
     from coppernicus.maps import safe_name
     from coppernicus.power_tree import tree_summary, tree_text
     from coppernicus.project import Project, ProjectError
+    from coppernicus.service.session import FIELD_HINT
 
     quiet = args.json
 
@@ -266,12 +272,19 @@ def _cmd_solve_tree(args) -> int:
         return fail("invalid_project", str(e))
     except EngineError as e:
         return fail("board_unreadable", str(e))
+    try:                                  # the KiCad footprint fields, as Session.solve_tree
+        merged = board_fields.apply(project, lambda: read_board_fields(board.path),
+                                    False if args.no_board_fields else None)
+    except (board_fields.FieldError, EngineError) as e:
+        return fail("invalid_board_field", str(e), FIELD_HINT)
+    project = merged.project
     stream = sys.stderr if quiet else sys.stdout
     try:
         tree = solve_project_tree(board, project, progress=(
             (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None))
     except EngineError as e:
         return fail("solve_failed", str(e), "fix the project file, then solve again")
+    merged.annotate(tree)
     doc = tree_summary(tree, top=args.top)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -375,9 +388,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--html", nargs="?", const="", default=None, metavar="PATH",
                    help="also write an offline HTML report (default path: <out>/<project>_report.html)")
     p.add_argument("--open", action="store_true", help="open the HTML report in the browser (implies --html)")
-    p.add_argument("--board-fields", action="store_true",
-                   help="also take rails from the board's KiCad footprint fields (PI_RAIL, PI_SOURCE, "
-                        "PI_LOAD, ...), as use_board_fields: true in the project file does")
+    p.add_argument("--no-board-fields", action="store_true",
+                   help="ignore the board's KiCad footprint fields (PI_RAIL, PI_SOURCE, PI_LOAD, ...), "
+                        "as use_board_fields: false in the project file does")
     p.set_defaults(func=_cmd_solve)
     # Power tree (Task 7): every rail and ground solved together; replaces the command run.
     p.add_argument("--tree", action="store_const", dest="func", const=_cmd_solve_tree,
@@ -418,9 +431,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         _utf8_output()
     from coppernicus.engine import EngineError
     from coppernicus.project import ProjectError
-    if args.func is _cmd_solve_tree and args.board_fields:
-        return _fail(args, "invalid_input", "--board-fields does not apply to --tree yet",
-                     "solve the rails one by one (without --tree), or define them in the project file")
     try:
         return args.func(args)
     except (EngineError, ProjectError, FileNotFoundError) as e:
