@@ -157,6 +157,18 @@ def test_locator_finds_points_held_only_by_long_thin_triangles():
     assert loc.locate(0.0, 0.0) in slivers                   # the single-point API too
 
 
+def test_locator_points_off_the_mesh_skip_the_exact_pass():
+    """Far from every triangle (beyond the largest centroid-to-vertex distance) or outside
+    the mesh's bounding box, a point is answered -1 without building the box grid."""
+    pts = np.array([[0, 0], [1, 0], [0, 1], [1, 1]], float)
+    loc = TriangleLocator(pts, np.array([[0, 1, 2], [1, 3, 2]]))
+    assert loc.locate(50.0, 50.0) == -1 and loc.locate(-0.2, 0.5) == -1
+    assert loc._grid is None
+    before = loc.nbytes
+    loc._boxes()
+    assert loc.nbytes > before                               # the grid, once built, is counted
+
+
 def test_locator_finds_every_node_of_a_random_mesh_of_thin_triangles():
     """Delaunay of random points on 50 horizontal lines: ~400k triangles, median aspect
     ratio ~120 and a long tail of slivers (the case the GUI review found misses in). Every

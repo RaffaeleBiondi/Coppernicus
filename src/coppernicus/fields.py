@@ -165,15 +165,21 @@ class TriangleLocator:
             inv = 1.0 / np.where(self._ok, det, 1.0)
             self._inv = np.stack([d * inv, -b * inv, -c * inv, a * inv], axis=1)   # (M, 4)
             self._origin = p[:, 2, :].copy()                  # a copy: a view would pin all of p
+            # No triangle holds a point farther than this from every centroid: the largest
+            # centroid-to-vertex distance. Points beyond it skip the fallback passes.
+            self._reach = float(np.sqrt(((p - self.centroids[:, None, :]) ** 2).sum(axis=2)).max())
 
     @property
     def nbytes(self) -> int:
-        """Memory held by the locator (its arrays and KD-tree), roughly."""
+        """Memory held by the locator (its arrays, KD-tree and, once built, its box grid),
+        roughly."""
         if self.tree is None:
             return 0
         tree = self.tree.data.nbytes + self.tree.indices.nbytes
+        grid = 0 if self._grid is None else sum(
+            a.nbytes for a in self._grid if isinstance(a, np.ndarray))
         return int(self.centroids.nbytes + self._inv.nbytes + self._origin.nbytes
-                   + self._ok.nbytes + 2 * tree)
+                   + self._ok.nbytes + 2 * tree + grid)
 
     def weights(self, k: int, x: float, y: float) -> np.ndarray:
         """Barycentric weights of (x, y) in triangle ``k`` (they sum to 1). Raises
@@ -199,19 +205,22 @@ class TriangleLocator:
         out = np.full(len(pts), -1, dtype=np.int64)
         if self.tree is None or not len(pts):
             return out
-        self._nearest_pass(pts, out, np.arange(len(pts)), self.k, tol)
-        todo = np.flatnonzero(out < 0)
+        nearest = self._nearest_pass(pts, out, np.arange(len(pts)), self.k, tol)
+        # Unresolved points within reach of some triangle: off the copper, or in a sliver.
+        todo = np.flatnonzero((out < 0) & (nearest <= self._reach * (1 + 1e-9)))
         if todo.size and len(self.tris) > self.k:            # long thin triangles: look wider
             self._nearest_pass(pts, out, todo, min(self.WIDE, len(self.tris)), tol)
-            todo = np.flatnonzero(out < 0)
+            todo = todo[out[todo] < 0]
         if todo.size:                                        # exact: every box that holds it
             self._box_pass(pts, out, todo, tol)
         return out
 
-    def _nearest_pass(self, pts, out, todo, k, tol):
-        """Test the ``k`` triangles with the nearest centroids, nearest first."""
-        _, idx = self.tree.query(pts[todo], k=k)
+    def _nearest_pass(self, pts, out, todo, k, tol) -> np.ndarray:
+        """Test the ``k`` triangles with the nearest centroids, nearest first. Returns the
+        distance from each point to its nearest centroid."""
+        dist, idx = self.tree.query(pts[todo], k=k)
         idx = idx.reshape(len(todo), -1)
+        dist = np.asarray(dist).reshape(len(todo), -1)[:, 0]
         rows = np.arange(len(todo))
         for col in range(idx.shape[1]):
             if not rows.size:
@@ -223,6 +232,7 @@ class TriangleLocator:
             hit = self._ok[ks] & (w.min(axis=1) >= -tol)
             out[todo[rows[hit]]] = ks[hit]
             rows = rows[~hit]
+        return dist
 
     def _boxes(self):
         """A uniform grid over the mesh: per cell, the triangles whose bounding box overlaps
@@ -252,6 +262,14 @@ class TriangleLocator:
         return self._grid
 
     def _box_pass(self, pts, out, todo, tol):
+        # Points outside the mesh's bounding box cannot be in a triangle: decide that before
+        # building the grid, so a probe off the board never pays for it.
+        lo_all, hi_all = self.points.min(axis=0), self.points.max(axis=0)
+        span = float(max(*(hi_all - lo_all), 1.0))
+        inside_all = np.all((pts[todo] >= lo_all - 1e-9 * span) & (pts[todo] <= hi_all + 1e-9 * span), axis=1)
+        todo = todo[inside_all]
+        if not todo.size:
+            return out
         x0, y0, x1, y1, cw, ch, g, starts, ids, big, lo, hi = self._boxes()
         eps = 1e-9 * max(x1 - x0, y1 - y0, 1.0)
         for i in todo:
