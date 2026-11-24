@@ -840,6 +840,22 @@ def run_power_tree(window, check: Checks, args, out: Path):
     i_in = next(v.i_in_a for v in tree.vrms if v.name == "U1") if tree else None
     check("power tree: a lower efficiency draws more input current", i_in is not None and i_in > i_in_before,
           f"{i_in_before:.4f} → {i_in}")
+    window.nets.select("GND")                             # a ground-rise limit on GND
+    QApplication.processEvents()
+    window.rail_panel.max_rise.setText("10")
+    window.rail_panel.max_rise.editingFinished.emit()
+    QApplication.processEvents()
+    gnd_rail = window.project.rail("GND")
+    check("power tree: a ground-rise limit is set on GND",
+          gnd_rail is not None and gnd_rail.limits.max_ground_rise_mv == 10.0)
+    tree = solve_tree_and_wait(window, args.timeout)
+    window.show_group("GND")
+    QApplication.processEvents()
+    top = window.problems.tree.topLevelItem(0)
+    check("... and judges the ground group: the worst return pin fails",
+          "limit(s) exceeded" in window.tree_panel.summary.text() and top is not None
+          and top.text(0).upper().startswith("FAIL"),
+          f"{window.tree_panel.summary.text()} | {top.text(0) if top else ''} {top.text(1) if top else ''}")
     path = out / "power_tree_edited.coppernicus.yml"
     window._save(path)
     saved = Project.load(path)

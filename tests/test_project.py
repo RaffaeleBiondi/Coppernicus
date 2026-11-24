@@ -242,3 +242,12 @@ def test_loader_edge_values():
     with pytest.raises(ProjectError, match="FB1.*ref"):
         Project.from_dict({"links": [{"name": "FB1", "ref": "FB1", "a": {"ref": "R5", "net": "A"},
                                       "b": {"net": "B"}, "resistance_ohm": 0.1}]})
+
+
+def test_ground_rise_limit_round_trip_and_omitted_when_unset(tmp_path):
+    p = Project(board="b.kicad_pcb", rails=[Rail("GND", limits=Limits(max_ground_rise_mv=10.0))])
+    path = p.save(tmp_path / "g.coppernicus.yml")
+    assert "max_ground_rise_mv: 10.0" in path.read_text()
+    assert Project.load(path).rails[0].limits.max_ground_rise_mv == 10.0
+    plain = Project(board="b.kicad_pcb", rails=[Rail("VCC", limits=Limits(max_drop_pct=1.0))]).to_dict()
+    assert plain["rails"][0]["limits"] == {"max_drop_pct": 1.0}

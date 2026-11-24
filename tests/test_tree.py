@@ -299,3 +299,41 @@ def test_a_regulator_input_on_a_tied_net_is_estimated():
     res = solve_rail(board, project.rail("+5V"), project.settings, project=project)
     [est] = [t for t in res.loads if t.name == "U1 (input, estimated)"]
     assert est.current == pytest.approx(3.3 * 1.0 / (0.9 * 5.0), rel=1e-12)
+
+
+def test_ground_rise_limit_judges_ground_groups(board):
+    from coppernicus.power_tree import tree_summary
+    from coppernicus.problems import limits_dict
+    from coppernicus.project import Rail
+    project = power_chain_project()
+    project.rails.append(Rail("GND", limits=Limits(max_ground_rise_mv=10.0)))
+    tree = solve_project_tree(board, project)
+    probs = find_tree_problems(tree, "GND", tree.limits["GND"])
+    worst = next(p for p in probs if p.kind == "return")
+    assert worst.severity == FAIL and worst.data["rise_mv"] == pytest.approx(38.47, abs=0.02)
+    assert any(p.kind == "rise" and p.severity == FAIL for p in probs)
+    doc = tree_summary(tree)
+    gnd = next(gr for gr in doc["groups"] if gr["group"] == "GND")
+    assert gnd["verdict"] == "fail" and gnd["limits"] == {"max_ground_rise_mv": 10.0}
+    assert doc["verdict"] == "fail" and "GND: max_ground_rise_mv = 10" in doc["verdict_note"]
+    project.rail("GND").limits = Limits(max_ground_rise_mv=50.0)
+    doc = tree_summary(solve_project_tree(board, project))
+    assert next(gr for gr in doc["groups"] if gr["group"] == "GND")["verdict"] == "pass"
+    # Not a limit of a supply rail, and a drop limit is not one of a ground.
+    both = Limits(max_drop_pct=1.0, max_ground_rise_mv=5.0)
+    assert limits_dict(both, "rail") == {"max_drop_pct": 1.0}
+    assert limits_dict(both, "ground") == {"max_ground_rise_mv": 5.0}
+
+
+def test_ground_rise_limit_judges_a_ground_net_solved_alone():
+    from coppernicus.engine.synthetic import Strip, strip_board
+    from coppernicus.problems import find_problems
+    from coppernicus.project import Rail
+    rail = Rail(Strip.NET, sources=[Source("J1", 0.0)], loads=[Load("U1", 1.0)])
+    res = solve_rail(Board(strip_board()), rail)
+    rise_mv = RHO * Strip.length() / (Strip.W * OZ1) * 1e3
+    [rise] = [p for p in find_problems(res, Limits(max_ground_rise_mv=10.0)) if p.kind == "rise"]
+    assert rise.severity == FAIL and rise.data["rise_mv"] == pytest.approx(rise_mv, rel=5e-3)
+    [rise] = [p for p in find_problems(res, Limits(max_ground_rise_mv=50.0)) if p.kind == "rise"]
+    assert rise.severity != FAIL
+    assert not [p for p in find_problems(res, Limits()) if p.kind == "rise"]

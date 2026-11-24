@@ -48,8 +48,9 @@ def find_problems(result: RailResult, limits: Optional[Limits] = None,
     """Every load, then at most ``top`` current-crowding spots and ``top`` vias (more when
     they exceed a limit). Fails first."""
     limits = limits or Limits()
-    out = _loads(result, limits) + _hotspots(result, limits, top) + _vias(result, limits, top)
-    order = {"load": 0, "hotspot": 1, "via": 2}
+    out = (_rise(result, limits) + _loads(result, limits) + _hotspots(result, limits, top)
+           + _vias(result, limits, top))
+    order = {"rise": 0, "load": 0, "hotspot": 1, "via": 2}
     return sorted(out, key=lambda p: (p.severity != FAIL, order[p.kind], -p.value))
 
 
@@ -160,7 +161,7 @@ def _vias(result: RailResult, limits: Limits, top: int) -> List[Problem]:
 
 # Limit keys as the agent interface names them (units in the key).
 LIMIT_KEYS = {"max_drop_pct": "max_drop_pct", "max_current_density_a_mm2": "max_current_density",
-              "max_via_current_a": "max_via_current"}
+              "max_via_current_a": "max_via_current", "max_ground_rise_mv": "max_ground_rise_mv"}
 
 
 def limits_dict(limits: Optional[Limits], kind: str = "rail") -> Dict[str, float]:
@@ -169,8 +170,8 @@ def limits_dict(limits: Optional[Limits], kind: str = "rail") -> Dict[str, float
     limits = limits or Limits()
     out = {key: getattr(limits, attr) for key, attr in LIMIT_KEYS.items()
            if getattr(limits, attr) is not None}
-    if kind == "ground":
-        out.pop("max_drop_pct", None)
+    # A ground has no nominal voltage for a drop limit; a supply rail of a tree has no rise.
+    out.pop("max_drop_pct" if kind == "ground" else "max_ground_rise_mv", None)
     return out
 
 
@@ -182,9 +183,12 @@ def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = 
     ground). Then current-crowding spots and vias, as on a single rail."""
     res = tree.groups[group]
     limits = limits or Limits()
-    first = _returns(res) if res.kind == "ground" else _tree_loads(tree, group, res, limits)
+    if res.kind == "ground":
+        first = _rise(res, limits) + _returns(res, limits)
+    else:
+        first = _tree_loads(tree, group, res, limits)
     out = first + _hotspots(res, limits, top) + _vias(res, limits, top)
-    order = {"load": 0, "return": 0, "hotspot": 1, "via": 2}
+    order = {"rise": 0, "load": 0, "return": 0, "hotspot": 1, "via": 2}
     return sorted(out, key=lambda p: (p.severity != FAIL, order[p.kind], -p.value))
 
 
@@ -216,18 +220,44 @@ def _tree_loads(tree: TreeResult, group: str, res: RailResult, limits: Limits) -
     return out
 
 
-def _returns(res: RailResult) -> List[Problem]:
-    """Ground pins ranked by rise: where the return current lifts the ground most. Not
-    judged: a ground has no nominal voltage to take a drop limit from."""
+def _returns(res: RailResult, limits: Optional[Limits] = None) -> List[Problem]:
+    """Ground pins ranked by rise: where the return current lifts the ground most, judged
+    only against the user's ``max_ground_rise_mv`` (a drop limit does not apply)."""
+    limit = (limits or Limits()).max_ground_rise_mv
     out = []
     for t in res.loads:
         rise = t.v_max - res.v_ref
         if not np.isfinite(rise):
             continue
         x, y = t.positions[0] if t.positions else (np.nan, np.nan)
+        fail = limit is not None and rise * 1e3 > limit
+        note = f"limit {limit:g} mV" if limit is not None else "no ground-rise limit set"
         out.append(Problem(
-            INFO, "return", f"{t.name}: ground {rise * 1e3:.2f} mV above 0 V",
-            f"{t.ref}, {len(t.pad_ids)} pin(s), {abs(t.current):g} A; not judged (no ground limit).",
+            FAIL if fail else INFO, "return", f"{t.name}: ground {rise * 1e3:.2f} mV above 0 V",
+            f"{t.ref}, {len(t.pad_ids)} pin(s), {abs(t.current):g} A; {note}.",
             rise * 1e3, float(x), float(y),
             data={"name": t.name, "ref": t.ref, "rise_mv": rise * 1e3, "current_a": t.current}))
     return out
+
+
+def _rise(res: RailResult, limits: Limits) -> List[Problem]:
+    """With a ``max_ground_rise_mv`` limit: the largest deviation of the net's copper from
+    its reference (a ground group's rise above 0 V; a net solved alone, its distance from the
+    source voltage), and where it is."""
+    limit = limits.max_ground_rise_mv
+    if limit is None:
+        return []
+    best = (0.0, np.nan, np.nan, None)
+    for lf in res.layers:
+        dev = np.abs(lf.voltage - res.v_ref)
+        if not np.any(np.isfinite(dev)):
+            continue
+        i = int(np.nanargmax(dev))
+        if dev[i] > best[0]:
+            best = (float(dev[i]), float(lf.points[i, 0]), float(lf.points[i, 1]), lf.name)
+    mv, x, y, layer = best[0] * 1e3, best[1], best[2], best[3]
+    return [Problem(
+        FAIL if mv > limit else INFO, "rise",
+        f"{res.net}: largest ground rise {mv:.2f} mV" + (f" on {layer}" if layer else ""),
+        f"Copper furthest from the {res.v_ref:g} V reference; limit {limit:g} mV.",
+        mv, x, y, layer, data={"rise_mv": mv, "limit_mv": limit})]

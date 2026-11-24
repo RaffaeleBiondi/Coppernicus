@@ -507,12 +507,16 @@ class RailPanel(QWidget):
         self.max_drop = QLineEdit(placeholderText="e.g. 3")
         self.max_j = QLineEdit(placeholderText="A/mm²")
         self.max_via = QLineEdit(placeholderText="A")
-        for e in (self.max_drop, self.max_j, self.max_via):
+        self.max_rise = QLineEdit(placeholderText="mV, for a ground net")
+        self.max_rise.setToolTip("For a ground net: the largest rise above its 0 V reference. Judged "
+                                 "on its group in Solve power tree, and when this net is solved alone.")
+        for e in (self.max_drop, self.max_j, self.max_via, self.max_rise):
             e.setValidator(DecimalValidator(0.0, 1e9, 6))
         form = QFormLayout(limits)
         form.addRow("Max drop (%)", self.max_drop)
         form.addRow("Max current density (A/mm²)", self.max_j)
         form.addRow("Max via current (A)", self.max_via)
+        form.addRow("Max ground rise (mV)", self.max_rise)
 
         settings = QGroupBox("Solve settings (whole project)")
         self.max_edge = DecimalSpinBox(decimals=3, minimum=0.02, maximum=5.0, singleStep=0.1, suffix=" mm")
@@ -545,7 +549,7 @@ class RailPanel(QWidget):
         self.sources.pick_toggled.connect(lambda on: self._pick_toggled("source", on))
         self.loads.pick_toggled.connect(lambda on: self._pick_toggled("load", on))
         self.follow_ties.toggled.connect(self._write_rail)
-        for e in (self.max_drop, self.max_j, self.max_via):
+        for e in (self.max_drop, self.max_j, self.max_via, self.max_rise):
             e.editingFinished.connect(self._write_limits)
         self.max_edge.valueChanged.connect(self._write_settings)
         self.temp.valueChanged.connect(self._write_settings)
@@ -603,7 +607,7 @@ class RailPanel(QWidget):
         self.follow_ties.setChecked(rail.follow_net_ties)
         lim = rail.limits
         for edit, value in ((self.max_drop, lim.max_drop_pct), (self.max_j, lim.max_current_density),
-                            (self.max_via, lim.max_via_current)):
+                            (self.max_via, lim.max_via_current), (self.max_rise, lim.max_ground_rise_mv)):
             edit.setText("" if value is None else f"{value:g}")
         self._loading = False
         # The first row of each table is the current one, so the boxes below edit it.
@@ -675,7 +679,7 @@ class RailPanel(QWidget):
         self.title.setText("<i>Pick a net</i>")
         self.sources.set_rows([])
         self.loads.set_rows([])
-        for edit in (self.max_drop, self.max_j, self.max_via):
+        for edit in (self.max_drop, self.max_j, self.max_via, self.max_rise):
             edit.clear()
         self.ties.setVisible(False)
         self.follow_ties.setVisible(False)
@@ -703,7 +707,7 @@ class RailPanel(QWidget):
         if self._loading or self._rail is None:
             return
         limits = Limits(_optional_float(self.max_drop), _optional_float(self.max_j),
-                        _optional_float(self.max_via))
+                        _optional_float(self.max_via), _optional_float(self.max_rise))
         if limits != self._rail.limits:
             self._rail.limits = limits
             self.limits_changed.emit()

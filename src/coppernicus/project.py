@@ -181,6 +181,9 @@ class Limits:
     max_drop_pct: Optional[float] = None
     max_current_density: Optional[float] = None    # A/mm^2
     max_via_current: Optional[float] = None         # A
+    # For a ground net: the largest rise above its 0 V reference, mV (power-tree ground
+    # groups, and the net solved alone: the largest deviation from its source voltage).
+    max_ground_rise_mv: Optional[float] = None
 
 
 @dataclass

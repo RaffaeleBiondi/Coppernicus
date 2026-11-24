@@ -244,9 +244,18 @@ KiPI's own `SolveError`s become `EngineError` too.
   `drop_pct`; `max_current_density` and `max_via_current` on its copper and vias, as in the
   per-rail solve).
 - A ground group uses the limits of a project rail with the ground's net, if the user set
-  limits on it (selecting `GND` in the net list and typing a limit). `max_drop_pct` does not
-  apply to a ground, which has no nominal voltage: it is reported as not judged. The other two
-  limits apply as on a rail.
+  limits on it (select `GND` in the net list and type a limit).
+  - `max_drop_pct` does not apply to a ground, which has no nominal voltage: it is reported
+    as not judged.
+  - `max_ground_rise_mv` (Raffaele's request) judges each return pin's rise and the copper's
+    largest rise above 0 V.
+  - The other two limits apply as on a rail.
+  - `max_ground_rise_mv` set on a supply rail does not apply in the tree.
+- A net solved on its own with `max_ground_rise_mv` set gets one "rise" problem: the copper
+  furthest from its source voltage, in mV, against the limit. It is meant for a ground net
+  solved alone.
+- The field is omitted from the project file while it is unset, so older files round-trip
+  unchanged.
 - The Problems list of a tree group ranks its loads by `drop_pct` (supply minus ground), not by
   supply drop alone. On a ground group it ranks return pins by rise. Hotspots and vias are
   ranked the same way on both.
