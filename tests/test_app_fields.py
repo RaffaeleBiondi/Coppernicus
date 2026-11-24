@@ -9,7 +9,7 @@ import pytest
 from kicad_fixture import write_strip_board
 
 from coppernicus.cli import EXIT_LIMIT, main
-from coppernicus.project import Load, Project, Rail, Source
+from coppernicus.project import Limits, Load, Project, Rail, Source
 
 FIELDS = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "1V"},
           "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1000mA", "PI_PINS": "1", "PI_LIMIT_DROP": "2%"}}
@@ -85,6 +85,11 @@ def solve(window):
 def cli_rails(project, tmp_path, capsys, *extra):
     code = main(["solve", str(project), "--json", "--no-maps", "--out", str(tmp_path / "cli"), *extra])
     return code, json.loads(capsys.readouterr().out)
+
+
+def QtCore():
+    from PySide6 import QtCore as core
+    return core
 
 
 def net_item(window, net):
@@ -201,3 +206,79 @@ def test_a_field_error_refuses_f5_and_ctrl_t_with_the_cli_text(window, dialogs, 
     assert refusal in window.problems.notes.toPlainText()
     window.nets.select("GND" if "GND" in window.board.nets() else "VCC")     # survives a net change
     assert refusal in window.problems.notes.toPlainText()
+
+
+# ---------------------------------------------------------------------- the rail panel
+
+READ_ONLY = "VCC comes from KiCad fields: Override in project to edit it"
+
+
+def test_a_kicad_rail_is_shown_read_only_each_value_naming_its_field(window, tmp_path):
+    open_net(window, strip(tmp_path))
+    assert not window.dirty                              # showing it read-only edits nothing
+    rp = window.rail_panel
+    assert rp.banner.text.text() == "From KiCad footprint fields (parts J1, U1) — read-only"
+    assert rp.banner.button.text() == "Override in project" and not rp.banner.button.isHidden()
+    assert "Rail VCC from KiCad footprint fields" in rp.banner.text.toolTip()     # the notes
+    assert rp.sources.rows() == [("", "J1", None, 1.0)] and rp.loads.rows() == [("", "U1", ["1"], 1.0)]
+    for table in (rp.sources, rp.loads):
+        assert not table.add_button.isEnabled() and not table.remove_button.isEnabled()
+        part, pins, value = (table.table.cellWidget(0, c) for c in (1, 2, 3))
+        assert not part.isEnabled() and pins.isReadOnly() and value.isReadOnly()
+        assert not table.table.item(0, 0).flags() & QtCore().Qt.ItemIsEditable
+    assert 'PI_SOURCE "1V"' in rp.sources.table.cellWidget(0, 3).toolTip()
+    tip = rp.loads.table.cellWidget(0, 2).toolTip()
+    assert 'PI_LOAD "1000mA"' in tip and 'PI_PINS "1"' in tip and "U1" in tip
+    assert not rp.source_box.isEnabled() and not rp.load_box.isEnabled()
+    assert rp.max_drop.text() == "2" and rp.max_drop.isReadOnly()
+    assert "PI_LIMIT_DROP" in rp.max_drop.toolTip() and "U1" in rp.max_drop.toolTip()
+    assert not rp.max_j.isReadOnly() and not rp.max_via.isReadOnly()
+    rp.set_pick("load")                                  # a click on a pad picks nothing
+    assert window.pick_pad(40.0, 0.0) == READ_ONLY and window.project.rails == []
+
+
+def test_a_limit_typed_on_a_kicad_rail_saves_as_a_limits_only_project_rail(window, tmp_path):
+    open_net(window, strip(tmp_path))
+    rp = window.rail_panel
+    rp.max_via.setText("2")
+    rp.max_via.editingFinished.emit()
+    rp.max_drop.setText("5")                  # read-only on screen: a script typing it changes nothing
+    rp.max_drop.editingFinished.emit()
+    assert window.project.rails == [Rail("VCC", limits=Limits(max_via_current=2.0))]
+    merged = window.merged.project.rail("VCC")
+    assert merged.limits == Limits(max_drop_pct=2.0, max_via_current=2.0) and merged.loads[0].ref == "U1"
+    assert window.merged.warnings == [] and window.dirty
+    window._save(tmp_path / "saved.coppernicus.yml")
+    [saved] = Project.load(tmp_path / "saved.coppernicus.yml").rails
+    assert saved == Rail("VCC", limits=Limits(max_via_current=2.0))
+
+
+def test_without_pi_limit_drop_the_drop_limit_of_a_kicad_rail_is_the_projects(window, tmp_path):
+    fields = {"J1": FIELDS["J1"], "U1": {k: v for k, v in FIELDS["U1"].items() if k != "PI_LIMIT_DROP"}}
+    open_net(window, strip(tmp_path, fields))
+    rp = window.rail_panel
+    assert rp.max_drop.text() == "" and not rp.max_drop.isReadOnly()
+    rp.max_drop.setText("3")
+    rp.max_drop.editingFinished.emit()
+    assert window.project.rails == [Rail("VCC", limits=Limits(max_drop_pct=3.0))]
+    assert window.merged.project.rail("VCC").limits.max_drop_pct == 3.0
+
+
+def test_an_ignored_project_rail_is_shown_with_its_warning_and_the_kicad_values(window, tmp_path):
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 3.0)])
+    open_net(window, strip(tmp_path, rails=[own]))
+    rp = window.rail_panel
+    assert rp.loads.rows() == [("", "U1", ["1"], 1.0)]               # KiCad's, not the project's 3 A
+    assert not rp.banner.warnings.isHidden()
+    assert "project file rail VCC ignored" in rp.banner.warnings.text()
+    assert "KiCad U1 1 A pins 1, project U1 3 A" in rp.banner.warnings.text()
+
+
+def test_the_net_tie_option_of_a_kicad_rail_is_saved_on_its_own(window, tmp_path):
+    open_net(window, strip(tmp_path))
+    window.rail_panel.follow_ties.setChecked(False)        # shown only with net ties; edited here
+    assert window.project.rails == [Rail("VCC", follow_net_ties=False)]
+    assert window.merged.project.rail("VCC").follow_net_ties is False
+    assert window.merged.project.rail("VCC").loads[0].ref == "U1"
+    window._save(tmp_path / "saved.coppernicus.yml")
+    assert Project.load(tmp_path / "saved.coppernicus.yml").rails == [Rail("VCC", follow_net_ties=False)]

@@ -8,6 +8,7 @@ top), the rail setup on the right, problems and notes at the bottom.
 from __future__ import annotations
 
 import copy
+import dataclasses
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from coppernicus import __version__
 from coppernicus import board_fields as BF
+from coppernicus.app import fields_view
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel, TreePanel
@@ -138,6 +140,7 @@ class MainWindow(QMainWindow):
         self._revision = 0            # +1 per edit of the setup: a tree solved before is stale
         self.tree_worker: Optional[TreeWorker] = None
         self._rail_draft: Optional[Rail] = None       # the shown net's rail while it is set up
+        self._kicad_shown = False                     # the panel shows a rail from KiCad fields
         # The board's KiCad footprint fields (read at open) and the project merged with them,
         # as the CLI merges them: what is solved, drawn and judged. self.project stays the
         # user's own project, the only thing saved.
@@ -465,9 +468,11 @@ class MainWindow(QMainWindow):
 
     def _save(self, path: Path):
         # Rails picked but never set up are not saved; a rail with only limits (a ground
-        # net's ground-rise limit) is.
+        # net's ground-rise limit) is, and so is the net-tie option of a KiCad fields' rail.
+        kicad = set(self.merged.from_fields)
         self.project.rails = [r for r in self.project.rails if r.sources or r.loads
-                              or any(v is not None for v in vars(r.limits).values())]
+                              or any(v is not None for v in vars(r.limits).values())
+                              or (r.net in kicad and not r.follow_net_ties)]
         try:
             self.project.save(path)
         except (OSError, ProjectError) as e:
@@ -559,10 +564,7 @@ class MainWindow(QMainWindow):
         self.rail_panel.set_pick("")
         self.net = net
         self._set_group(None)                    # a net picked in the list: the rail solved alone
-        rail = self.project.rail(net) or Rail(net)
-        _, ties = tied_nets(self.board, net)
-        self.rail_panel.set_rail(self.board, rail, ties)
-        self._rail_draft = rail
+        rail = self._show_rail(net)
         self.rail_panel.set_net_kind(self._net_at_0v(rail))
         self.layer_box.blockSignals(True)
         self.layer_box.clear()
@@ -577,17 +579,74 @@ class MainWindow(QMainWindow):
         self._refresh_results()
         self.refresh_view(fit=True)
 
+    def _show_rail(self, net: str) -> Rail:
+        """Fill the rail panel for ``net`` as its origin says: a rail from the KiCad fields is
+        shown read-only (a copy of the merged rail: its limits and net-tie option are written
+        to the project's own rail of the net); any other is the project's rail, edited in
+        place. Returns the rail the panel edits."""
+        origin = self.merged.origins.get(net)
+        self._kicad_shown = origin is not None and origin.source == "fields"
+        rail = (copy.deepcopy(self.merged.project.rail(net)) if self._kicad_shown
+                else self.project.rail(net) or Rail(net))
+        _, ties = tied_nets(self.board, net)
+        self.rail_panel.set_rail(self.board, rail, ties)
+        self._rail_draft = rail
+        if self._kicad_shown:
+            listing = origin.board_fields or {}
+            limit = listing.get("limits", {})
+            self.rail_panel.set_read_only(
+                fields_view.read_only_reason(net),
+                [fields_view.row_tip(e) for e in listing.get("sources", [])],
+                [fields_view.row_tip(e) for e in listing.get("loads", [])],
+                (f"Max drop {limit['max_drop_pct']:g} % {limit['from']}: change it in KiCad, or "
+                 "Override in project" if limit else ""))
+        self._show_banner(net)
+        return rail
+
+    def _show_banner(self, net: Optional[str]):
+        """The banner of the rail panel: where the shown rail comes from, its warnings."""
+        if not net:
+            self.rail_panel.banner.show_banner(fields_view.Banner())
+            return
+        origin = self.merged.origins.get(net)
+        values = ""
+        if origin is not None and origin.source == "overridden" and self.board_fields is not None:
+            values = BF.field_rails(self.board_fields.fields)[net].values_text()
+        self.rail_panel.banner.show_banner(
+            fields_view.describe(origin, values, self._rail_warnings(net)[1]))
+
     def _adopt_draft(self):
         rail = self._rail_draft
-        has_content = rail.sources or rail.loads or any(v is not None for v in vars(rail.limits).values())
-        if self.project.rail(rail.net) is None and has_content:
-            self.project.rails.append(rail)
+        if self._kicad_shown:
+            self._adopt_kicad_limits(rail)
+        else:
+            has_content = rail.sources or rail.loads or any(v is not None for v in vars(rail.limits).values())
+            if self.project.rail(rail.net) is None and has_content:
+                self.project.rails.append(rail)
         self._remerge()
         self._show_fields_error()
         self.nets.mark_configured(self._configured_nets(), self._kicad_nets())
+        self._show_banner(rail.net)
         self.dirty = True
         self._update_title()
         return rail
+
+    def _adopt_kicad_limits(self, shown: Rail):
+        """The limits and net-tie option edited on a rail from the KiCad fields go to the
+        project's own rail of that net, a limits-only one when it has none (merge takes them
+        from there, silently). A drop limit a KiCad field gives is not copied."""
+        own = self.project.rail(shown.net)
+        origin = self.merged.origins.get(shown.net)
+        locked = bool(origin is not None and (origin.board_fields or {}).get("limits"))
+        mine = own.limits.max_drop_pct if own is not None else None
+        limits = dataclasses.replace(shown.limits, max_drop_pct=mine) if locked else copy.copy(shown.limits)
+        if own is None:
+            if all(v is None for v in vars(limits).values()) and shown.follow_net_ties:
+                return                            # nothing of the project's own to keep
+            own = Rail(shown.net)
+            self.project.rails.append(own)
+        own.limits = limits
+        own.follow_net_ties = shown.follow_net_ties
 
     def _net_at_0v(self, rail: Rail) -> Optional[bool]:
         """True for a net at 0 V (named as a ground, or driven at 0 V), False for one with a
@@ -754,6 +813,10 @@ class MainWindow(QMainWindow):
         kind = self.rail_panel.pick_kind
         if self.board is None or not self.net or not kind:
             return ""
+        if self._kicad_shown:                     # read-only: say how to edit it
+            msg = fields_view.read_only_reason(self.net)
+            self.statusBar().showMessage(msg)
+            return msg
         lid = self.layer_box.currentData()
         hit = (self.board.pad_at(x, y, lid) if lid is not None else None) or self.board.pad_at(x, y)
         rail = self.project.rail(self.net) or self._rail_draft

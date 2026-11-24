@@ -227,6 +227,8 @@ class TerminalTable(QWidget):
     changed = Signal()
     pick_toggled = Signal(bool)
     row_selected = Signal(int)        # the current row (-1: none)
+    PICK_TIP = ("Click pads in the view to add them here; a pin joins the row of its part. Esc or "
+                "a second press stops picking.")
 
     def __init__(self, title: str, value_label: str, unit: str, parent=None):
         super().__init__(parent)
@@ -238,20 +240,19 @@ class TerminalTable(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setMinimumHeight(110)
-        add, remove = QPushButton("Add"), QPushButton("Remove")
-        add.clicked.connect(self.add_row)
-        remove.clicked.connect(self.remove_row)
+        self.add_button, self.remove_button = QPushButton("Add"), QPushButton("Remove")
+        self.add_button.clicked.connect(self.add_row)
+        self.remove_button.clicked.connect(self.remove_row)
         self.pick = QPushButton("Pick on board")
         self.pick.setCheckable(True)
-        self.pick.setToolTip("Click pads in the view to add them here; a pin joins the row of its "
-                             "part. Esc or a second press stops picking.")
+        self.pick.setToolTip(self.PICK_TIP)
         self.pick.toggled.connect(self.pick_toggled.emit)
         buttons = QHBoxLayout()
         buttons.addWidget(QLabel(f"<b>{title}</b>"))
         buttons.addStretch(1)
         buttons.addWidget(self.pick)
-        buttons.addWidget(add)
-        buttons.addWidget(remove)
+        buttons.addWidget(self.add_button)
+        buttons.addWidget(self.remove_button)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addLayout(buttons)
@@ -270,6 +271,40 @@ class TerminalTable(QWidget):
         for i, row in enumerate(rows):
             self._append(*row, origin=i)
         self.table.blockSignals(False)
+
+    def set_read_only(self, why: str = "", tips: List[str] = ()):
+        """Rows that cannot be edited (``why``: the reason, "" to edit again), each with its
+        tooltip from ``tips``. Picking stays on, so a click on a pad can say why."""
+        for button in (self.add_button, self.remove_button):
+            button.setEnabled(not why)
+            button.setToolTip(why)
+        self.pick.setToolTip(why or self.PICK_TIP)
+        blocked = self.table.blockSignals(True)      # flags and tooltips are not an edit
+        try:
+            self._set_rows_read_only(why, tips)
+        finally:
+            self.table.blockSignals(blocked)
+
+    def _set_rows_read_only(self, why: str, tips: List[str]):
+        for r in range(self.table.rowCount()):
+            tip = tips[r] if r < len(tips) else why
+            item = self.table.item(r, 0)
+            part, pins, spin = (self.table.cellWidget(r, c) for c in (1, 2, 3))
+            if item is not None:
+                flags = item.flags()
+                item.setFlags(flags & ~Qt.ItemIsEditable if why else flags | Qt.ItemIsEditable)
+                item.setToolTip(tip)
+            if part is not None:
+                part.setEnabled(not why)
+                part.setToolTip(tip)
+            if pins is not None:
+                pins.setReadOnly(bool(why))
+                if why:
+                    pins.setToolTip(tip)
+            if spin is not None:
+                spin.setReadOnly(bool(why))
+                spin.setButtonSymbols(QDoubleSpinBox.NoButtons if why else QDoubleSpinBox.UpDownArrows)
+                spin.setToolTip(tip)
 
     def part_flags(self) -> List[bool]:
         """For every table row, whether it is complete and names a part (is in the rail)."""
@@ -517,6 +552,8 @@ class RailPanel(QWidget):
         self._rail: Optional[Rail] = None
         self._loaded = ([], [])        # the rail's sources and loads as set_rail got them
         self._loading = False
+        self._read_only = False         # a rail from the KiCad fields: only limits are edited
+        self._drop_tip = ""             # set: max_drop comes from a KiCad field (PI_LIMIT_DROP)
         self.title = QLabel("<i>Open a board and pick a net</i>")
         self.banner = FieldsBanner()           # where the rail comes from (KiCad fields)
         self.sources = TerminalTable("Sources (regulator outputs)", "Voltage", "V")
@@ -653,12 +690,34 @@ class RailPanel(QWidget):
                             (self.max_via, lim.max_via_current), (self.max_rise, lim.max_ground_rise_mv)):
             edit.setText("" if value is None else f"{value:g}")
         self._loading = False
+        self.set_read_only()
         # The first row of each table is the current one, so the boxes below edit it.
         for table, items in ((self.sources, rail.sources), (self.loads, rail.loads)):
             if items:
                 table.table.setCurrentCell(0, 0)
         self._show_source(0 if rail.sources else -1)
         self._show_load(0 if rail.loads else -1)
+
+    @property
+    def read_only(self) -> bool:
+        return self._read_only
+
+    def set_read_only(self, why: str = "", source_tips: List[str] = (), load_tips: List[str] = (),
+                      drop_tip: str = ""):
+        """Show the rail read-only (``why``: the reason; "" to edit it again): sources, loads
+        and their regulator and ground pins; the limits and the net-tie option stay editable,
+        except the drop limit when ``drop_tip`` says which KiCad field gives it. Call it
+        after :meth:`set_rail`, which makes everything editable again."""
+        self._read_only = bool(why)
+        self.sources.set_read_only(why, source_tips)
+        self.loads.set_read_only(why, load_tips)
+        for box in (self.source_box, self.load_box):
+            box.setToolTip(why)
+            if why:
+                box.setEnabled(False)
+        self._drop_tip = drop_tip
+        self.max_drop.setReadOnly(bool(drop_tip))
+        self.max_drop.setToolTip(drop_tip or self._tips[self.max_drop])
 
     def set_net_kind(self, at_0v: Optional[bool]):
         """Disable the limit that does not apply to the shown net (one rule, by its reference
@@ -673,6 +732,8 @@ class RailPanel(QWidget):
         for edit in (self.max_drop, self.max_rise):
             edit.setEnabled(edit is not off or bool(edit.text().strip()))
             edit.setToolTip(why if edit is off else self._tips[edit])
+        if self._drop_tip:                        # given by a KiCad field: say which
+            self.max_drop.setToolTip(self._drop_tip)
 
     # ------------------------------------------------------------------ power-tree fields
     def select_source(self, row: int):
@@ -693,10 +754,12 @@ class RailPanel(QWidget):
         s = self._terminal(self.sources, self._rail.sources, row) if self._rail else None
         nets = self._board.part_nets(s.ref) if s is not None and self._board is not None else []
         self.source_box.show_source(s, nets)
+        if self._read_only:
+            self.source_box.setEnabled(False)
 
     def _show_load(self, row: int):
         ld = self._terminal(self.loads, self._rail.loads, row) if self._rail else None
-        self.load_box.setEnabled(ld is not None)
+        self.load_box.setEnabled(ld is not None and not self._read_only)
         nets = self._board.part_nets(ld.ref) if ld is not None and self._board is not None else []
         self.load_ground.set_nets(nets)
         self.load_ground.set(*((ld.ground_ref, ld.ground_pins, ld.ground_net) if ld else ("", None, "")))
@@ -740,12 +803,17 @@ class RailPanel(QWidget):
             edit.clear()
         self.ties.setVisible(False)
         self.follow_ties.setVisible(False)
+        self.set_read_only()
         self.setEnabled(False)
         self._loading = False
 
     # ------------------------------------------------------------------ write back
     def _write_rail(self, *_):
         if self._loading or self._rail is None:
+            return
+        if self._read_only:                       # a KiCad rail: only the net-tie option
+            self._rail.follow_net_ties = self.follow_ties.isChecked()
+            self.rail_changed.emit()
             return
         # The tables show name, part, pins and value; every other field (a regulator's kind,
         # input, ground and sense pins, a load's ground pins) is kept from the row's part.
