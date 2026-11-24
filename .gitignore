@@ -94,6 +94,8 @@ boards_local/
 !tests/boards/*.kicad_pro
 
 # ---------------------------------------------------------------------------
-# Claude Code local settings
+# Claude Code local settings and parallel work trees
 # ---------------------------------------------------------------------------
 .claude/settings.local.json
+.claude/worktrees/
+.worktrees/
