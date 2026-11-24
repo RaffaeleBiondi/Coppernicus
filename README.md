@@ -125,12 +125,11 @@ hand-drawn test boards.
 
 ## Prior art and acknowledgements
 
-Coppernicus builds on ideas from these open-source projects:
-
 - **[KiPI](https://github.com/drewsum/KiPI)** by Drew Maatman (GPL-3.0): DC, AC and coupled-noise
-  power-integrity analysis for KiCad, as a plugin or standalone.
+  power-integrity analysis for KiCad, as a plugin or standalone. It is the reference
+  implementation studied in stage 1 ([analysis](docs/kipi-analysis.md)).
 - **[padne](https://github.com/atx/padne)** by Josef Gajdusek (GPL-3.0): KiCad-native 2.5D FEM
-  DC voltage-drop solver.
+  DC voltage-drop solver. Prior art.
 
 ## License
 
