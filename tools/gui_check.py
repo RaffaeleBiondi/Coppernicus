@@ -474,8 +474,24 @@ def run_compare(window, check: Checks, args, out: Path):
     title = window.view.colorbar._title
     check("the difference map is exact on the same mesh",
           window.field_box.currentData() == "difference" and "exact" in title, title)
+    window.show_isolines.setChecked(True)
+    QApplication.processEvents()
+    title = window.view.colorbar._title
+    check("on the Δ map the isolines say they are the current drop", "current drop" in title, title)
+    probed = []
+    window.view.probed.connect(probed.append)
+    window.view._on_double_click((50.0, -10.0, 0.0))         # U1, display frame (x, −y)
+    window.view.probed.disconnect(probed.append)
+    check("on the Δ map the probe reads the change of drop", bool(probed) and "Δ drop" in probed[-1],
+          str(probed))
     if args.window:
         window.view.screenshot(out / "t5_difference_view.png")
+    # Re-pinning while the Δ map is shown: the shown result is now the baseline.
+    window.pin_baseline()
+    QApplication.processEvents()
+    check("re-pinning while the Δ map is shown makes it fall back to the drop",
+          window.field_box.currentData() == "drop" and window.view.colorbar._title.startswith("mV below"),
+          window.view.colorbar._title)
 
     window.rail_panel.max_edge.setValue(0.4)                 # another mesh
     QApplication.processEvents()
@@ -485,6 +501,8 @@ def run_compare(window, check: Checks, args, out: Path):
     title = window.view.colorbar._title
     check("on another mesh the map says it is interpolated", "interpolated" in title, title)
     check("the changed setting is listed", "max_edge_mm" in window.compare.notes.toPlainText())
+    window._rail_edited()                                    # the result no longer applies
+    check("the Δ cache is dropped when the runs change", not window._diff_cache)
     window.rail_panel.max_edge.setValue(0.5)
 
     copy = out / "demo_edited.kipi.json.gz"                  # the board "edited": another file
@@ -501,15 +519,20 @@ def run_compare(window, check: Checks, args, out: Path):
     r.sources[0].voltage, r.loads[0].current = 3.3, 2.0
     window.rail_panel.set_rail(window.board, r, [])
     window._rail_edited()
+    window.field_box.setCurrentIndex(window.field_box.findData("difference"))   # chosen before solving
     solve_and_wait(window, args.timeout)
     check("after the board changed the loads are still compared",
           any(row[0].startswith("U1") for row in window.compare.rows())
           and "board file changed" in window.compare.notes.toPlainText())
-    window.field_box.setCurrentIndex(window.field_box.findData("difference"))
-    QApplication.processEvents()
     status = window.statusBar().currentMessage()
-    check("... but the difference map is refused",
+    check("... but the difference map is refused, and the solve message keeps the reason",
           window.field_box.currentData() == "drop" and "board file changed" in status, status)
+    # 1a: a board with no rails leaves nothing of the comparison on screen.
+    window.open_board(out / "pins.kipi.json.gz")
+    QApplication.processEvents()
+    check("opening a board without rails clears Compare and the loss chart",
+          window.compare.rows() == [] and window.losses.series == [] and not window.compare.pin.isEnabled(),
+          f"rows {len(window.compare.rows())}, series {window.losses.series}")
     window.clear_baseline()
     check("clearing the baseline", window.baseline is None and "No baseline" in window.compare.info.text())
     window.dirty = False

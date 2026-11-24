@@ -66,7 +66,8 @@ class MainWindow(QMainWindow):
         self.runs: Dict[str, Run] = {}            # the latest solve per net, with its inputs
         self.baseline: Optional[Run] = None       # pinned "before"; survives opening a board
         self._board_stamp = ""                    # which board file, and which version of it
-        self._diff_cache: Tuple = ((), None)
+        self._diff_cache: Optional[Tuple] = None      # (baseline, run, layer, (Δ mV, note))
+        self._fallback_reason = ""                     # why the Δ map was not shown, last draw
 
         # Centre: pickers + view.
         self.view = BoardView()
@@ -224,6 +225,7 @@ class MainWindow(QMainWindow):
         self._board_stamp = f"{resolved.name} (file modified {modified})"
         self.results.clear()
         self.runs.clear()
+        self._diff_cache = None
         self._candidates.clear()
         self.rail_panel.set_pick("")
         self.measure.setChecked(False)
@@ -236,6 +238,7 @@ class MainWindow(QMainWindow):
         self.layer_box.blockSignals(True)
         self.layer_box.clear()
         self.layer_box.blockSignals(False)
+        self._refresh_results()                       # no net yet: nothing of the old board shown
         self.rail_panel.set_settings(self.project.settings)
         self.nets.set_board(board, [r.net for r in self.project.rails if r.sources or r.loads],
                             self.project.marked_rails)
@@ -338,6 +341,7 @@ class MainWindow(QMainWindow):
     def _rail_edited(self):
         rail = self._adopt_draft()
         self.runs.pop(rail.net, None)
+        self._diff_cache = None
         if self.results.pop(rail.net, None) is not None:          # the old result no longer applies
             self.problems.clear(f"<b>{rail.net}</b>: setup changed since the last solve — press Solve (F5)")
             self._refresh_results()
@@ -360,6 +364,7 @@ class MainWindow(QMainWindow):
         if self.results:                                           # every result used the old settings
             self.results.clear()
             self.runs.clear()
+            self._diff_cache = None
             self.problems.clear("Solve settings changed — press Solve (F5) to recompute")
             self._refresh_results()
             self.refresh_view()
@@ -372,6 +377,7 @@ class MainWindow(QMainWindow):
         res = self.results.get(self.net)
         rail = self.project.rail(self.net) or getattr(self, "_rail_draft", None)
         t0 = time.perf_counter()
+        self._fallback_reason = ""
         if res is not None and res.layer(layer_name) is not None:
             pads = [("source", [i for t in res.sources for i in t.pad_ids]),
                     ("load", [i for t in res.loads for i in t.pad_ids])]
@@ -379,6 +385,7 @@ class MainWindow(QMainWindow):
             if field == "difference":
                 diff_mv, diff_note, why = self._difference(res, layer_name)
                 if diff_mv is None:                  # not available: say why, show the drop
+                    self._fallback_reason = why
                     self.statusBar().showMessage(why)
                     field = "drop"
                     self.field_box.blockSignals(True)
@@ -533,9 +540,10 @@ class MainWindow(QMainWindow):
                 self.layer_box.setCurrentIndex(i)
                 self.layer_box.blockSignals(False)
             self.refresh_view(fit=True)
+        reason = f" · {self._fallback_reason}" if res.net == self.net and self._fallback_reason else ""
         self.statusBar().showMessage(
             f"{res.net} solved in {res.stats['seconds']:.1f} s · {int(res.stats['triangles']):,} triangles · "
-            f"drawn in {self.last_render_s:.2f} s")
+            f"drawn in {self.last_render_s:.2f} s{reason}")
 
     # ------------------------------------------------------------------ before / after
     def pin_baseline(self):
@@ -545,12 +553,15 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Solve the rail first, then pin its result as the baseline")
             return
         self.baseline = run
+        self._diff_cache = None
         self._refresh_results()
+        self.refresh_view()                          # a Δ map against the old baseline is stale
         self.statusBar().showMessage(f"Baseline: {self.net} on {run.board}. Change something and solve again "
                                      "to compare (Compare tab, 'Δ drop vs baseline' map)")
 
     def clear_baseline(self):
         self.baseline = None
+        self._diff_cache = None
         if self.field_box.currentData() == "difference":
             self.field_box.setCurrentIndex(self.field_box.findData("drop"))
         self._refresh_results()
@@ -603,15 +614,15 @@ class MainWindow(QMainWindow):
         base_layer, layer = base.result.layer(layer_name), res.layer(layer_name)
         if base_layer is None or layer is None:
             return None, "", f"The baseline has no copper of {self.net} on {layer_name}"
-        key = (id(base), id(run), layer_name)
-        if self._diff_cache[0] != key:
+        c = self._diff_cache
+        if not (c and c[0] is base and c[1] is run and c[2] == layer_name):
             diff = difference_layer(layer, base_layer)          # V_base − V_current per node
             # Δ drop = (V_ref − V)_current − (V_ref − V)_baseline
             mv = (diff.voltage + (res.v_ref - base.result.v_ref)) * 1e3
             note = ("exact: same mesh" if same_mesh(layer, base_layer)
                     else "interpolated: the two solves have different meshes")
-            self._diff_cache = (key, (mv, note))
-        mv, note = self._diff_cache[1]
+            self._diff_cache = (base, run, layer_name, (mv, note))
+        mv, note = self._diff_cache[3]
         return mv, note, ""
 
     def _solve_failed(self, message: str):

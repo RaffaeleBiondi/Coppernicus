@@ -172,6 +172,7 @@ class BoardView(QWidget):
         self._finder = None
         self._has_camera = False
         self._measure: List[Tuple[str, float, float, float]] = []    # (layer, x, y, V): A, then B
+        self._difference_mv: Optional[np.ndarray] = None             # per node, on the Δ map
         self._measure_result: Optional[RailResult] = None
 
     # ------------------------------------------------------------------ scene
@@ -212,6 +213,7 @@ class BoardView(QWidget):
         if result is not self._measure_result:          # a measurement belongs to one result
             self._measure, self._measure_result = [], result
         self._result, self._layer = result, layer
+        self._difference_mv = np.asarray(difference_mv, float) if field == "difference" else None
         title, cmap = FIELDS[field]
         faces = np.column_stack([np.full(len(layer.tris), 3), layer.tris]).ravel()
         mesh = pv.PolyData(_xyz(layer.points), faces=faces)
@@ -244,7 +246,8 @@ class BoardView(QWidget):
             note += "\n" + difference_note
         if isolines:
             step = self._add_isolines(result, layer, ISOLINE_COLOR[field])
-            note += f"\nisolines every {step:.3g} mV" if step else ""
+            what = "isolines: current drop" if field == "difference" else "isolines"
+            note += f"\n{what} every {step:.3g} mV" if step else ""
         if arrows:
             self._add_arrows(layer)
         self.colorbar.set_scale(cmap, clim[0], clim[1], units + note)
@@ -453,9 +456,15 @@ class BoardView(QWidget):
             self.probed.emit(f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: copper not connected "
                              "to a source")
         else:
+            delta = ""
+            if self._difference_mv is not None:          # the Δ map is shown: read Δ too
+                nodes = self._layer.tris[p.triangle]
+                d = float(self._finder.weights(p.triangle, x, y) @ self._difference_mv[nodes])
+                delta = (f", Δ drop vs baseline = {d:+.3f} mV" if np.isfinite(d)
+                         else ", Δ drop vs baseline: no baseline copper here")
             self.probed.emit(f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: V = {p.voltage_v:.5f} V, "
                              f"drop = {(self._result.v_ref - p.voltage_v) * 1e3:.3f} mV, "
-                             f"|J| = {p.current_density_a_mm2:.2f} A/mm²")
+                             f"|J| = {p.current_density_a_mm2:.2f} A/mm²{delta}")
 
     def closeEvent(self, event):
         self.plotter.close()
