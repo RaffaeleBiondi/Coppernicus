@@ -182,7 +182,10 @@ def verdict(problems: List[Problem], limits: Limits) -> Dict[str, Any]:
 
 def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems: List[Problem],
                  settings: Settings, thickness: Mapping[str, float],
-                 layer_thickness: Mapping[str, float], top_problems: int = 8) -> Dict[str, Any]:
+                 layer_thickness: Mapping[str, float], top: int = 5) -> Dict[str, Any]:
+    """The compact summary of a solved rail. ``problems`` are listed in full: every load,
+    then the ``top`` current-crowding spots and the ``top`` vias (more when they exceed a
+    limit), as :func:`coppernicus.problems.find_problems` ranked them."""
     v_ref = res.v_ref
     pct = (lambda volts: 100.0 * volts / v_ref) if v_ref else (lambda volts: float("nan"))
     limits = rail.limits
@@ -221,8 +224,10 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         "via_count": len(res.vias), "via_current_max_a": max((v.current for v in res.vias), default=0.0),
         "j_point_max_a_mm2": res.j_max,
         **verdict(problems, limits),
-        "problems": [problem_dict(p) for p in problems[:top_problems]],
+        "problems": [problem_dict(p) for p in problems],
         "problems_total": len(problems),
+        "problems_note": f"Every load, then the top {top} current-crowding spots and the top {top} "
+                         "vias by current (more when they exceed a limit you set).",
         "settings": settings_to_dict(settings, thickness),
         "energy_balance_rel_error": res.energy_balance_error,
         "stats": {"triangles": int(res.stats.get("triangles", 0)),

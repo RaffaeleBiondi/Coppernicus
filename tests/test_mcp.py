@@ -16,7 +16,7 @@ from coppernicus.service import Session
 DEMO_BOARD = Path(__file__).resolve().parents[1] / "examples" / "demo" / "demo.kipi.json.gz"
 PNG = b"\x89PNG\r\n\x1a\n"
 TOOLS = {"open_board", "list_nets", "net_parts", "solve_rail", "get_problems", "render_map", "probe",
-         "cut_current", "compare_results", "solve_project"}
+         "cut_current", "compare_results", "solve_project", "report"}
 
 
 def run_with_client(tmp_path, scenario):
@@ -176,3 +176,25 @@ def test_stdio_subprocess_round_trip(tmp_path):
     assert map_path.parent.name.startswith("session-")             # one folder per server run
     assert "MCP server on stdio" in log.read_text()
     assert progress                     # delivered beside the response; may still be arriving
+
+
+def test_report_tool_writes_one_offline_page(tmp_path):
+    async def scenario(client):
+        board = await call(client, "open_board", path=str(DEMO_BOARD))
+        args = {"board_id": board["board_id"], "net": "+3V3", "sources": [{"ref": "J1", "voltage_v": 3.3}],
+                "loads": [{"ref": "U1", "current_a": 2.0}], "limits": {"max_drop_pct": 0.25}}
+        a = await call(client, "solve_rail", **args)
+        b = await call(client, "solve_rail", **args, settings={"copper_thickness_mm": {"B.Cu": 0.07}})
+        both = await call(client, "report")
+        one = await call(client, "report", result_ids=[b["result_id"]], path=str(tmp_path / "b.html"))
+        gone = await client.call_tool("report", {"result_ids": ["r9"]})
+        return a, b, both, one, gone
+
+    a, b, both, one, gone = run_with_client(tmp_path, scenario)
+    assert [r["result_id"] for r in both["rails"]] == [a["result_id"], b["result_id"]]
+    page = Path(both["path"])
+    assert page.parent == tmp_path / "maps" and page.suffix == ".html"
+    text = page.read_text(encoding="utf-8")
+    assert "copper_thickness_mm" in text and "https://" not in text
+    assert Path(one["path"]) == tmp_path / "b.html" and one["size_mb"] > 0
+    assert json.loads(gone.content[0].text)["error"]["code"] == "result_not_found"

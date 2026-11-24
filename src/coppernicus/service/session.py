@@ -35,7 +35,7 @@ from coppernicus.engine.board import board_file_filter
 from coppernicus.fields import TriangleLocator, current_vectors
 from coppernicus.maps import FIELDS, render_layer_map, safe_name, save_layer_maps
 from coppernicus.problems import Problem, find_problems
-from coppernicus.project import Project, ProjectError, Rail, Settings
+from coppernicus.project import Limits, Project, ProjectError, Rail, Settings
 from coppernicus.results import LayerField, RailResult
 from coppernicus.service import convert as C
 from coppernicus.service import errors as E
@@ -346,7 +346,7 @@ class Session:
             self._n_results += 1
             rid = f"r{self._n_results}"
         summary = C.rail_summary(rid, entry.id, res, rail, problems, settings, thickness,
-                                 layer_thickness)
+                                 layer_thickness, top=max(1, int(top)))
         summary["warnings"] = entry.warnings() + summary["warnings"]
         rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
                             layer_thickness, res, problems, summary, _result_nbytes(res))
@@ -377,22 +377,30 @@ class Session:
     def solve_project(self, project_path, rails: Optional[Sequence[str]] = None, top: int = 5,
                       maps_dir=None, stop_on_error: bool = False, progress: Progress = None,
                       cancelled: Cancel = None,
-                      on_rail: Optional[Callable[[str, Dict[str, Any]], None]] = None
+                      on_rail: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+                      on_board: Optional[Callable[[Dict[str, Any], int], None]] = None
                       ) -> Dict[str, Any]:
         """Solve the rails of a project file (all, or those named in ``rails``) with the
         project's settings and limits. With ``maps_dir``, write drop and current PNGs per
         layer there. A rail that fails to solve is reported in place unless
-        ``stop_on_error``. ``on_rail(result_id, summary)`` is called after each rail, while
-        its full result is still in memory."""
+        ``stop_on_error``. ``on_board(board_info, n_rails)`` is called once the board is open
+        and the rails are chosen; ``on_rail(result_id, summary)`` after each rail, while its
+        full result is still in memory."""
         path = Path(str(project_path)).expanduser()
         try:
             project = Project.load(path)
         except FileNotFoundError:
             raise ServiceError(E.FILE_NOT_FOUND, f"No such project file: {project_path}",
                                "give an absolute path to a *.coppernicus.yml file") from None
-        except (ProjectError, OSError, yaml.YAMLError) as e:
+        except yaml.YAMLError as e:
+            mark = getattr(e, "problem_mark", None)
+            where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+            raise ServiceError(E.INVALID_PROJECT,
+                               f"{path.name} is not valid YAML{where}: {getattr(e, 'problem', None) or e}",
+                               "fix the project file; its format is in the README") from None
+        except (ProjectError, OSError) as e:
             raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
-                               "fix the project file (YAML; see the README for its format)") from None
+                               "fix the project file; its format is in the README") from None
         board_info = self.open_board(project.board_path())
         entry = self._entry(board_info["board_id"])
         wanted = list(rails or [])
@@ -402,6 +410,8 @@ class Session:
             raise ServiceError(E.INVALID_INPUT,
                                "No rails to solve" + (f" matching {wanted}" if wanted else ""),
                                f"rails in the project: {names}")
+        if on_board is not None:
+            on_board(board_info, len(selected))
         out_rails, verdicts = [], []
         for i, rail in enumerate(selected, start=1):
             if progress is not None:
@@ -460,6 +470,56 @@ class Session:
 
     def rail_problems(self, result_id: str) -> List[Problem]:
         return list(self._record(result_id).problems)
+
+    def rail_limits(self, result_id: str) -> Limits:
+        """The user's limits the result was judged against."""
+        return self._record(result_id, heavy=False).rail.limits
+
+    def board_outline(self, board_id: str) -> list:
+        """Board outline rings (mm), for in-process callers such as the report."""
+        return self._entry(board_id).outline()
+
+    def report(self, result_ids: Optional[Sequence[str]] = None, path=None,
+               title: str = "") -> Dict[str, Any]:
+        """Write an offline HTML report of results (default: every result whose fields are
+        still in memory, oldest first) and return its path, size and cell sizes."""
+        from coppernicus.report import ReportBuilder
+        with self._lock:
+            ids = [str(r) for r in result_ids] if result_ids else [
+                r.id for r in self._results.values() if r.result is not None]
+        if not ids:
+            raise ServiceError(E.RESULT_NOT_FOUND, "No solved result to report",
+                               "solve a rail first (solve_rail or solve_project)")
+        lives = [self._live(rid) for rid in ids]
+        boards = list(dict.fromkeys(lv.rec.board_id for lv in lives))
+        warnings = ([] if len(boards) == 1 else
+                    [f"These results come from {len(boards)} boards ({', '.join(boards)}); the outline "
+                     f"drawn is that of {boards[0]}."])
+        board_name = lives[0].board.name if lives[0].board is not None else ""
+        builder = ReportBuilder(title=title or f"Coppernicus report: {board_name or 'rails'}",
+                                board_name=board_name, outline=lives[0].outline,
+                                expected_layers=sum(len(lv.res.layers) for lv in lives))
+        for lv in lives:
+            used = C.settings_to_dict(lv.rec.settings, lv.rec.thickness)
+            note = "Settings of this result: " + ", ".join(
+                f"{k} = {'engine default' if v is None else v}" for k, v in used.items()) + "."
+            builder.add_rail(lv.res, lv.rec.rail.limits, label=f"{lv.res.net} ({lv.rec.id})",
+                             notes=[note])
+        if path:
+            target = Path(str(path)).expanduser().resolve()
+        else:
+            target = self.out_dir() / f"report-{time.strftime('%Y%m%d-%H%M%S')}.html"
+        builder.write(target)
+        return C.jsonable({
+            "path": target, "size_mb": target.stat().st_size / 1e6,
+            "rails": [{"result_id": lv.rec.id, "net": lv.res.net, "cell_mm": r["cell_mm"]}
+                      for lv, r in zip(lives, builder.rails)],
+            "generation_s": builder.seconds,
+            "assumptions": ["The maps are sampled on square cells; the page's readout gives the values "
+                            "at the centre of the cell under the pointer, from the full-resolution "
+                            "solution. Summary numbers and problems use the full mesh."],
+            "warnings": warnings,
+        })
 
     def _layer(self, res: RailResult, layer: Optional[str]) -> LayerField:
         if layer is None or layer == "":

@@ -237,7 +237,8 @@ class ReportBuilder:
     def __init__(self, *, title: str = "", board_name: str = "",
                  outline: Sequence[np.ndarray] = (), project: str = "",
                  settings: Optional[Mapping[str, Any]] = None,
-                 budget_mb: float = DEFAULT_BUDGET_MB, expected_layers: Optional[int] = None):
+                 budget_mb: float = DEFAULT_BUDGET_MB, expected_layers: Optional[int] = None,
+                 top: int = 10):
         self.title = title or "Coppernicus report"
         self.board_name = board_name
         self.outline = [np.asarray(r, dtype=float) for r in outline]
@@ -245,6 +246,7 @@ class ReportBuilder:
         self.settings = dict(settings or {})
         self.budget_mb = float(budget_mb)
         self.expected_layers = expected_layers
+        self.top = max(1, int(top))           # hotspots and vias ranked per rail
         self.rails: List[Dict[str, Any]] = []
         self.blocks: Dict[str, str] = {}
         self.cells_used = 0
@@ -274,7 +276,7 @@ class ReportBuilder:
         from coppernicus.service.convert import RAIL_CAVEATS, problem_dict, verdict
         t0 = time.perf_counter()
         limits = limits or Limits()
-        problems = problems if problems is not None else find_problems(result, limits, top=10)
+        problems = problems if problems is not None else find_problems(result, limits, top=self.top)
         index = len(self.rails)
         cell = self._cell_for(result)
         finite = [lf.voltage[np.isfinite(lf.voltage)] for lf in result.layers]

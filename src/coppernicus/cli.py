@@ -4,11 +4,14 @@
     coppernicus gui [BOARD|PROJECT] [--solve NET] [--field drop|voltage|current]
     coppernicus nets BOARD [--all] [--json]   power and ground nets (all nets with --all)
     coppernicus parts BOARD NET [--json]      parts and pins on a net (to write sources and loads)
-    coppernicus solve PROJECT [--out DIR] [--rail NET ...] [--no-maps] [--json]
+    coppernicus solve PROJECT [--out DIR] [--rail NET ...] [--no-maps] [--top N] [--json]
+                              [--html [PATH]] [--open]
     coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
 
 ``solve`` exits with 0 when every rail solved and no user limit was exceeded, 1 when a
-limit was exceeded, 2 on an error (missing file, part not on the net, no copper path...).
+limit was exceeded, 2 on an error (missing file, invalid project file, part not on the net,
+no copper path...). It writes ``<project>_summary.json`` into the output folder: the same
+document ``--json`` prints. ``--html`` also writes an offline, interactive HTML report.
 
 With ``--json`` a command prints one JSON document on stdout (the data the MCP tools
 return, units in every key name) and nothing else; an error is printed as
@@ -72,31 +75,6 @@ def _json_parts(args) -> int:
     return _run_json(run)
 
 
-def _json_solve(args) -> int:
-    from coppernicus.maps import safe_name
-    from coppernicus.service import Session
-
-    def run():
-        out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
-        session = Session(out_dir=out_dir, max_results=1)    # one rail's arrays at a time
-        legacy = []                                           # the *_summary.json file, as before
-
-        def on_rail(rid, summary):
-            legacy.append(_rail_summary(session.rail_result(rid), session.rail_problems(rid),
-                                        summary.get("maps", [])))
-
-        progress = (lambda m: print(f"    … {m}", file=sys.stderr)) if args.verbose else None
-        doc = session.solve_project(args.project, rails=args.rail,
-                                    maps_dir=None if args.no_maps else out_dir, stop_on_error=True,
-                                    progress=progress, on_rail=on_rail)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"{safe_name(Path(args.project).stem)}_summary.json"
-        path.write_text(json.dumps({"board": doc["board"]["name"], "rails": legacy}, indent=1),
-                        encoding="utf-8")
-        doc["summary_file"] = str(path)
-        return doc, EXIT_LIMIT if doc["verdict"] == "fail" else EXIT_OK
-    return _run_json(run)
-
 
 def _cmd_nets(args) -> int:
     if args.json:
@@ -138,38 +116,79 @@ def _print_board_warnings(board):
 
 
 def _cmd_solve(args) -> int:
-    if args.json:
-        return _json_solve(args)
-    from coppernicus.engine import Board, solve_rail
-    from coppernicus.maps import safe_name, save_layer_maps
-    from coppernicus.problems import FAIL, find_problems
-    from coppernicus.project import Project
+    """Solve a project through the service layer. The human report (or, with ``--json``, the
+    JSON document) goes to stdout; the same document is written to ``*_summary.json``; with
+    ``--html`` an offline report is written too, rail by rail, so only one rail's full result
+    is in memory at a time."""
+    from coppernicus.maps import safe_name
+    from coppernicus.problems import find_problems
+    from coppernicus.service import ServiceError, Session
 
-    project = Project.load(args.project)
-    board = Board.open(project.board_path())
-    print(f"Board: {board.name} ({len(board.layers())} copper layers)")
-    _print_board_warnings(board)
-    rails = [r for r in project.rails if not args.rail or r.net in args.rail]
-    if not rails:
-        print("No rails to solve" + (f" matching {args.rail}" if args.rail else ""), file=sys.stderr)
-        return EXIT_ERROR
+    quiet = args.json
+    stem = safe_name(Path(args.project).stem)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
-    summary, any_fail = [], False
-    for rail in rails:
-        res = solve_rail(board, rail, project.settings,
-                         progress=(lambda m: print(f"    … {m}")) if args.verbose else None)
-        problems = find_problems(res, rail.limits)
-        any_fail |= any(p.severity == FAIL for p in problems)
-        _print_rail(res, problems)
-        maps = [] if args.no_maps else save_layer_maps(res, board.outline(), out_dir, problems)
-        for m in maps:
-            print(f"    map: {m}")
-        summary.append(_rail_summary(res, problems, maps))
+    html_path = None
+    if args.html is not None or args.open:
+        html_path = Path(args.html) if args.html else out_dir / f"{stem}_report.html"
+    session = Session(out_dir=out_dir, max_results=1)        # one rail's arrays at a time
+    report = {}
+
+    def on_board(info, n_rails):
+        if not quiet:
+            print(f"Board: {info['name']} ({len(info['layers'])} copper layers)")
+            for w in info["warnings"]:
+                print(f"  board warning: {w}")
+        if html_path is not None:
+            from coppernicus.report import ReportBuilder
+            report["builder"] = ReportBuilder(
+                title=f"Coppernicus report: {Path(args.project).name}", board_name=info["name"],
+                outline=session.board_outline(info["board_id"]), project=Path(args.project).name,
+                expected_layers=n_rails * len(info["layers"]), top=max(args.top, 10))
+
+    def on_rail(rid, summary):
+        res, problems = session.rail_result(rid), session.rail_problems(rid)
+        if not quiet:
+            _print_rail(res, problems)
+            for m in summary.get("maps", []):
+                print(f"    map: {m}")
+        builder = report.get("builder")
+        if builder is not None:
+            if not builder.settings:
+                builder.settings = dict(summary.get("settings", {}))
+            limits = session.rail_limits(rid)
+            builder.add_rail(res, limits, find_problems(res, limits, top=builder.top))
+
+    stream = sys.stderr if quiet else sys.stdout       # with --json, stdout is only the document
+
+    def progress(message):
+        print(f"    … {message}", file=stream)
+    try:
+        doc = session.solve_project(args.project, rails=args.rail, top=args.top,
+                                    maps_dir=None if args.no_maps else out_dir, stop_on_error=True,
+                                    progress=progress if args.verbose else None,
+                                    on_rail=on_rail, on_board=on_board)
+    except ServiceError as e:
+        if quiet:
+            _print_json({"error": e.to_dict()})
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_ERROR
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{safe_name(Path(args.project).stem)}_summary.json"
-    path.write_text(json.dumps({"board": board.name, "rails": summary}, indent=1), encoding="utf-8")
-    print(f"Summary: {path}")
-    return EXIT_LIMIT if any_fail else EXIT_OK
+    summary_path = out_dir / f"{stem}_summary.json"
+    doc["summary_file"] = str(summary_path)
+    if "builder" in report:
+        doc["report_file"] = str(report["builder"].write(html_path))
+    summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
+                            encoding="utf-8")
+    if quiet:
+        _print_json(doc)
+    else:
+        print(f"Summary: {summary_path}")
+        if "report_file" in doc:
+            print(f"Report: {doc['report_file']}")
+    if args.open and "report_file" in doc:
+        import webbrowser
+        webbrowser.open(Path(doc["report_file"]).resolve().as_uri())
+    return EXIT_LIMIT if doc["verdict"] == "fail" else EXIT_OK
 
 
 def _print_rail(res, problems):
@@ -189,7 +208,7 @@ def _print_rail(res, problems):
                       if v / total >= 0.01)
     print(f"  max drop {res.max_drop * 1e3:.2f} mV · copper loss {res.power_loss * 1e3:.3g} mW ({split})")
     print("  problems (fails first, then ranked):")
-    for p in problems[:12]:
+    for p in problems:
         tag = "FAIL" if p.severity == FAIL else "    "
         where = f" [{p.layer}]" if p.layer else ""
         print(f"    {tag} {p.title}{where} @ ({p.x:.2f}, {p.y:.2f}) mm")
@@ -197,23 +216,6 @@ def _print_rail(res, problems):
         print(f"  assumption: {a}")
     for w in res.warnings:
         print(f"  warning: {w}")
-
-
-def _rail_summary(res, problems, maps) -> dict:
-    return {
-        "net": res.net, "nets": res.nets, "v_ref": res.v_ref,
-        "max_drop_v": res.max_drop, "j_max_a_mm2": res.j_max, "power_loss_w": res.power_loss,
-        "energy_balance_error": res.energy_balance_error, "loss_breakdown_w": res.loss_breakdown(),
-        "sources": [{"name": t.name, "ref": t.ref, "current_a": t.current, "v": t.v_max}
-                    for t in res.sources],
-        "loads": [{"name": t.name, "ref": t.ref, "current_a": t.current, "v_min": t.v_min,
-                   "v_max": t.v_max, "drop_v": res.drop(t), "drop_pct": res.drop_pct(t)}
-                  for t in res.loads],
-        "problems": [{"severity": p.severity, "kind": p.kind, "title": p.title, "detail": p.detail,
-                      "value": p.value, "x_mm": p.x, "y_mm": p.y, "layer": p.layer} for p in problems],
-        "assumptions": res.assumptions, "warnings": res.warnings, "stats": res.stats,
-        "maps": [str(m) for m in maps],
-    }
 
 
 def _cmd_mcp(args) -> int:
@@ -262,6 +264,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="show the engine's progress")
     p.add_argument("--json", action="store_true",
                    help="print a JSON summary on stdout instead of the report (for scripts and agents)")
+    p.add_argument("--top", type=int, default=5, metavar="N",
+                   help="current-crowding spots and vias listed per rail, each (default: 5; every "
+                        "load is always listed)")
+    p.add_argument("--html", nargs="?", const="", default=None, metavar="PATH",
+                   help="also write an offline HTML report (default path: <out>/<project>_report.html)")
+    p.add_argument("--open", action="store_true", help="open the HTML report in the browser (implies --html)")
     p.set_defaults(func=_cmd_solve)
 
     p = sub.add_parser("mcp", help="run the MCP server for AI agents (stdio; see README)")

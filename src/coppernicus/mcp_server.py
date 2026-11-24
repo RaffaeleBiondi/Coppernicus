@@ -249,6 +249,18 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         return _call("solve_project", session.solve_project, project_path, rails, top,
                      progress=bridge.progress, cancelled=bridge.cancelled)
 
+    @mcp.tool(annotations=WRITES_FILE)
+    def report(result_ids: Annotated[Optional[list[str]], Field(
+                   description="Results to include; default: every result still in memory.")] = None,
+               path: Annotated[Optional[str], Field(
+                   description="Absolute path of the .html file; default: the server's maps folder.")] = None
+               ) -> dict[str, Any]:
+        """Write an offline, interactive HTML report of solved results for a person to open
+        in a browser: every layer's drop, voltage and current-density map with zoom, pan and
+        a hover readout, the problems, worst values, assumptions and warnings. Returns its
+        path and size; the file needs no network."""
+        return _call("report", session.report, result_ids, path)
+
     return mcp
 
 
