@@ -148,6 +148,17 @@ The owner's goal (2026-11-24): every feature can be tried from the local launche
   - for WS1 Phase 3, defining sources and loads inside KiCad;
   - anything about packaging, efficiency or Triangle.
 
+**Final task, after T11 (owner's request, 2026-11-24): documentation refresh.** Before the
+project is called complete, bring every user-facing document up to date with everything that
+was built, in one pass:
+- the README guide and its screenshots (all regenerated from synthetic boards), the status table;
+- per-feature user documentation in `docs/` (how to use each analysis: power tree, KiCad
+  fields, thermal, AC impedance, ripple, tolerance), with screenshots;
+- `docs/agents.md` and the MCP tools: every feature reachable by an agent, as the owner scopes it;
+- the skill in `skills/` (and its installed copy): what Coppernicus can do with Claude and how;
+- `docs/technical.md`, `docs/ci.md`, the examples' descriptions.
+The owner is asked first what the MCP and the skill must include.
+
 ## Coordination rules
 
 - WS1 owns: `src/coppernicus/service*`, `src/coppernicus/mcp*`, `src/coppernicus/report*`,
