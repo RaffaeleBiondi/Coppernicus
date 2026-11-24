@@ -285,7 +285,8 @@ def _cmd_solve_tree(args) -> int:
         tree = solve_project_tree(board, project, progress=(
             (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None))
     except EngineError as e:
-        return fail("solve_failed", str(e), "fix the project file, then solve again")
+        return fail("solve_failed", str(e), "fix the project file or the KiCad fields (PI_GND, "
+                    "PI_INPUT, PI_LINK...), then solve again")
     merged.annotate(tree)
     doc = tree_summary(tree, top=args.top)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"

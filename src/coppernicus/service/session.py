@@ -618,7 +618,8 @@ class Session:
             except EngineError as e:
                 raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}",
                                    "fix the project file (sources, loads, their ground pins, "
-                                   "links), then solve again") from None
+                                   "links) or the KiCad fields (PI_GND, PI_INPUT, PI_LINK...), "
+                                   "then solve again") from None
         merged.annotate(tree)
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
         return json.loads(json.dumps(tree_summary(tree, top=max(1, int(top))), allow_nan=False))
