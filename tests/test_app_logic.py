@@ -43,3 +43,18 @@ def test_rail_filter_joins_heuristic_marked_and_configured_nets():
     out = rail_nets(nets, heuristic=["+3V3", "GND"], marked=["VBUS_X"], configured=["VIN_SNS"])
     assert out == ["+3V3", "GND", "VBUS_X", "VIN_SNS"]          # board order kept, SDA left out
     assert rail_nets(nets, [], ["NOT_ON_BOARD"], []) == []
+
+
+def test_macos_app_name_is_written_to_the_main_bundle():
+    import sys
+
+    import pytest
+
+    from coppernicus.app import set_macos_app_name
+    if sys.platform != "darwin":
+        assert set_macos_app_name("Coppernicus") is False
+        return
+    pytest.importorskip("Foundation")
+    from Foundation import NSBundle
+    assert set_macos_app_name("Coppernicus") is True
+    assert NSBundle.mainBundle().infoDictionary()["CFBundleName"] == "Coppernicus"
