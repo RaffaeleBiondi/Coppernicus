@@ -189,3 +189,18 @@ def test_carry_over_keeps_fields_an_editor_does_not_show():
     # A row deleted above it does not shift the fields onto another part.
     u5 = Load("U5", 0.1)
     assert carry_over([u5, u4], [Load("U4", 0.5, ["1"])]) == [u4]
+
+
+def test_carry_over_by_row_keeps_each_rows_own_fields():
+    """With the row each terminal came from (``origins``), a row keeps its own hidden
+    fields whatever happens to its pins, and gets them back when its part is picked again."""
+    loaded = [Load("U1", 0.1, ["1"], ground_net="GND"), Load("U1", 0.2, ["2"], ground_net="AGND")]
+    # Row 0's pins edited to "2": no swap with row 1.
+    edited = carry_over(loaded, [Load("U1", 0.1, ["2"]), Load("U1", 0.2, ["2"])], [0, 1])
+    assert [ld.ground_net for ld in edited] == ["GND", "AGND"]
+    # Row 0 switched to another part: defaults; switched back: its fields again.
+    assert carry_over(loaded, [Load("U9", 0.1, ["1"])], [0]) == [Load("U9", 0.1, ["1"])]
+    assert carry_over(loaded, [Load("U1", 0.1, ["1"])], [0]) == [loaded[0]]
+    # A new row (no origin) starts from the defaults; a deleted row shifts nothing.
+    assert carry_over(loaded, [Load("U1", 0.2, ["2"]), Load("U1", 0.3)], [1, None]) == [
+        loaded[1], Load("U1", 0.3)]

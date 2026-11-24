@@ -4,6 +4,7 @@ engine directly; the main window wires them together."""
 
 from __future__ import annotations
 
+import copy
 from typing import Iterable, List, Optional
 
 from PySide6.QtCore import Qt, Signal
@@ -222,12 +223,25 @@ class TerminalTable(QWidget):
         self._parts = parts
 
     def set_rows(self, rows):
-        """``rows``: (name, ref, pins, value) tuples."""
+        """``rows``: (name, ref, pins, value) tuples. Each row remembers its position in
+        ``rows`` (see :meth:`origins`)."""
         self.table.blockSignals(True)
         self.table.setRowCount(0)
-        for row in rows:
-            self._append(*row)
+        for i, row in enumerate(rows):
+            self._append(*row, origin=i)
         self.table.blockSignals(False)
+
+    def origins(self) -> List[Optional[int]]:
+        """For each row :meth:`rows` returns, its position in the last :meth:`set_rows`
+        (``None`` for a row added since)."""
+        out = []
+        for r in range(self.table.rowCount()):
+            if any(self.table.cellWidget(r, c) is None for c in (1, 2, 3)):
+                continue
+            item = self.table.item(r, 0)
+            origin = item.data(Qt.UserRole) if item is not None else None
+            out.append(origin if isinstance(origin, int) else None)
+        return out
 
     def rows(self):
         out = []
@@ -254,17 +268,19 @@ class TerminalTable(QWidget):
             self.table.removeRow(r)
         self.changed.emit()
 
-    def _append(self, name, ref, pins, value):
+    def _append(self, name, ref, pins, value, origin: Optional[int] = None):
         blocked = self.table.blockSignals(True)     # no itemChanged before the row is complete
         try:
-            self._build_row(name, ref, pins, value)
+            self._build_row(name, ref, pins, value, origin)
         finally:
             self.table.blockSignals(blocked)
 
-    def _build_row(self, name, ref, pins, value):
+    def _build_row(self, name, ref, pins, value, origin: Optional[int] = None):
         r = self.table.rowCount()
         self.table.insertRow(r)
-        self.table.setItem(r, 0, QTableWidgetItem(name))
+        item = QTableWidgetItem(name)
+        item.setData(Qt.UserRole, origin)
+        self.table.setItem(r, 0, item)
         part = QComboBox()
         for p in self._parts:
             part.addItem(f"{p.ref}  {p.value}".strip(), p.ref)
@@ -304,6 +320,7 @@ class RailPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rail: Optional[Rail] = None
+        self._loaded = ([], [])        # the rail's sources and loads as set_rail got them
         self._loading = False
         self.title = QLabel("<i>Open a board and pick a net</i>")
         self.sources = TerminalTable("Sources (regulator outputs)", "Voltage", "V")
@@ -391,6 +408,9 @@ class RailPanel(QWidget):
     def set_rail(self, board: Board, rail: Rail, ties: List[NetTie]):
         self._loading = True
         self._rail = rail
+        # The terminals as loaded: each table row takes the fields the table does not show
+        # from its own row here (carry_over), so they survive any edit of the row.
+        self._loaded = (copy.deepcopy(rail.sources), copy.deepcopy(rail.loads))
         self.setEnabled(True)
         parts = board.parts_on_net(rail.net)
         self.title.setText(f"<h3>{rail.net}</h3>{len(parts)} parts on this net")
@@ -413,6 +433,7 @@ class RailPanel(QWidget):
         """No net selected (a new board was opened)."""
         self._loading = True
         self._rail = None
+        self._loaded = ([], [])
         self.title.setText("<i>Pick a net</i>")
         self.sources.set_rows([])
         self.loads.set_rows([])
@@ -429,10 +450,12 @@ class RailPanel(QWidget):
             return
         # The tables show name, part, pins and value; every other field (a regulator's kind,
         # input, ground and sense pins, a load's ground pins) is kept from the row's part.
-        self._rail.sources = carry_over(self._rail.sources, [
-            Source(ref, value, pins, name) for name, ref, pins, value in self.sources.rows() if ref])
-        self._rail.loads = carry_over(self._rail.loads, [
-            Load(ref, value, pins, name) for name, ref, pins, value in self.loads.rows() if ref])
+        for table, attr, kind, loaded in ((self.sources, "sources", Source, self._loaded[0]),
+                                          (self.loads, "loads", Load, self._loaded[1])):
+            rows = [(row, origin) for row, origin in zip(table.rows(), table.origins()) if row[1]]
+            setattr(self._rail, attr, carry_over(
+                loaded, [kind(ref, value, pins, name) for (name, ref, pins, value), _ in rows],
+                [origin for _, origin in rows]))
         self._rail.follow_net_ties = self.follow_ties.isChecked()
         self.rail_changed.emit()
 

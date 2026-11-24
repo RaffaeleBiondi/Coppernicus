@@ -695,6 +695,15 @@ def run_power_chain(window, check: Checks, args, out: Path):
           (src.kind, src.efficiency, src.input_net, src.ground_net) == ("smps", 0.9, "VIN", "GND"),
           repr(src))
     check("... and U4's ground pins", rail.loads[0].ground_net == "GND", repr(rail.loads[0]))
+    part = window.rail_panel.loads.table.cellWidget(0, 1)
+    u4 = part.currentIndex()
+    part.setCurrentIndex(part.findData("U1"))           # picked another part by mistake…
+    QApplication.processEvents()
+    part.setCurrentIndex(u4)                              # … and back
+    QApplication.processEvents()
+    load = window.project.rail("+3V3").loads[0]
+    check("... another part picked and back: U4 keeps its ground pins",
+          (load.ref, load.ground_net, load.ground_pins) == ("U4", "GND", ["2"]), repr(load))
     window.nets.select("+1V8")
     QApplication.processEvents()
     window.rail_panel.sources.table.item(0, 0).setText("LDO")

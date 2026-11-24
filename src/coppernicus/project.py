@@ -142,20 +142,31 @@ def pin_ref(terminal, what: str) -> Optional[Tuple[str, PinSpec, str]]:
 T = TypeVar("T", Source, Load)
 
 
-def carry_over(old: Sequence[T], new: Sequence[T]) -> List[T]:
+def carry_over(old: Sequence[T], new: Sequence[T],
+               origins: Optional[Sequence[Optional[int]]] = None) -> List[T]:
     """``new`` terminals, from an editor that shows only name, ref, pins and the value, with
     every other field (a regulator's kind, input, ground and sense pins…) taken from the
-    matching ``old`` terminal: the same part with the same pins, else the same part. A row
-    whose part changed starts from the defaults."""
+    matching ``old`` terminal.
+
+    With ``origins`` (for each new terminal, the index in ``old`` of the row it was edited
+    from, ``None`` for a new row) the match is that row, as long as it is still the same
+    part: a row keeps its own fields whatever happens to its pins, and gets them back when
+    its part is picked again. Without it: the same part with the same pins, else the same
+    part. A terminal with no match keeps the defaults."""
     unused = list(old)
     out = []
-    for n in new:
-        match = (next((o for o in unused if o.ref == n.ref and o.pins == n.pins), None)
-                 or next((o for o in unused if o.ref == n.ref), None))
+    for i, n in enumerate(new):
+        if origins is not None:
+            k = origins[i] if i < len(origins) else None
+            match = old[k] if k is not None and 0 <= k < len(old) and old[k].ref == n.ref else None
+        else:
+            match = (next((o for o in unused if o.ref == n.ref and o.pins == n.pins), None)
+                     or next((o for o in unused if o.ref == n.ref), None))
+            if match is not None:
+                unused.remove(match)
         if match is None:
             out.append(n)
             continue
-        unused.remove(match)
         value = "voltage" if isinstance(n, Source) else "current"
         out.append(dataclasses.replace(match, ref=n.ref, pins=n.pins, name=n.name,
                                        **{value: getattr(n, value)}))
