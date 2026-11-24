@@ -1,5 +1,8 @@
+/* White text needs at least 4.5:1: --selected, --badge-fail and --badge-pass are kept dark
+   enough for it (about 5.2, 5.6 and 5.1 to 1) in both themes. */
 :root { --bg:#ffffff; --fg:#1d2125; --muted:#5f6b76; --line:#d9dee3; --panel:#f5f7f9;
-  --map:#eef1f4; --accent:#2f6fb2; --fail:#c62828; --pass:#2e7d32; --warn:#9a6700; }
+  --map:#eef1f4; --accent:#2f6fb2; --fail:#c62828; --pass:#2e7d32; --warn:#9a6700;
+  --selected:#2f6fb2; --badge-fail:#c62828; --badge-pass:#2e7d32; }
 @media (prefers-color-scheme: dark) { :root { --bg:#16191c; --fg:#e6e9ec; --muted:#9aa5b0;
   --line:#2c3238; --panel:#1e2226; --map:#202428; --accent:#6aa5e8; --fail:#ef6b6b;
   --pass:#6cc070; --warn:#d9a545; } }
@@ -13,12 +16,16 @@ h2 { font-size:15px; margin:18px 0 8px; }
 nav { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
 nav button, .seg button, #fit { font:inherit; padding:5px 11px; border:1px solid var(--line);
   border-radius:6px; background:var(--panel); color:var(--fg); cursor:pointer; }
-nav button[aria-selected="true"], .seg button[aria-pressed="true"] { background:var(--accent);
-  border-color:var(--accent); color:#fff; }
+nav button[aria-selected="true"], .seg button[aria-pressed="true"] { background:var(--selected);
+  border-color:var(--selected); color:#fff; }
 .badge { display:inline-block; font-size:11px; font-weight:600; padding:1px 6px; border-radius:4px;
   margin-left:6px; vertical-align:1px; }
-.badge.fail { background:var(--fail); color:#fff; } .badge.pass { background:var(--pass); color:#fff; }
+.badge.fail { background:var(--badge-fail); color:#fff; }
+.badge.pass { background:var(--badge-pass); color:#fff; }
 .badge.nj { border:1px solid var(--line); color:var(--muted); }
+/* On the selected (blue) tab: a white outline around every badge, and "not judged" in white. */
+nav button[aria-selected="true"] .badge { box-shadow:0 0 0 1px rgba(255,255,255,0.9); }
+nav button[aria-selected="true"] .badge.nj { color:#fff; border-color:rgba(255,255,255,0.9); }
 #verdict { margin-top:14px; padding:10px 12px; border-radius:8px; border:1px solid var(--line);
   background:var(--panel); }
 #verdict.fail { border-color:var(--fail); } #verdict.pass { border-color:var(--pass); }
