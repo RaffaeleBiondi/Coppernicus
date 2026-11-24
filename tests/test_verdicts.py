@@ -194,3 +194,15 @@ def test_solve_tree_exits_3_when_a_set_limit_could_not_judge(tmp_path, capsys):
     assert main(["solve", str(path), "--tree", "--json", "--out", str(tmp_path / "o")]) == EXIT_NOT_JUDGED
     doc = json.loads(capsys.readouterr().out)
     assert doc["verdict"] == "not_judged" and doc["not_judged"]
+
+
+@pytest.mark.parametrize("volts, words", [(1.0, "mV below 1 V"), (-3.3, "mV above -3.3 V (toward 0 V)"),
+                                          (0.0, "mV above 0 V (ground rise)")])
+def test_the_ci_table_says_which_way_the_copper_moves(strip, tmp_path, volts, words):
+    p = Project(board="boards/strip.kipi.json.gz", rails=[
+        Rail(Strip.NET, sources=[Source("J1", volts)], loads=[Load("U1", 1.0)])])
+    doc = Session(out_dir=tmp_path / "out").solve_project(p.save(tmp_path / "p.coppernicus.yml"))
+    assert doc["rails"][0]["drop_unit"] == words
+    md = ci.summary_markdown({"verdict": doc["verdict"], "projects": [
+        {"project": "p.coppernicus.yml", "exit_code": 0, "doc": doc}]})
+    assert "| Worst of the copper |" in md and f" {words} |" in md

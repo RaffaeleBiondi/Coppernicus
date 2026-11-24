@@ -325,7 +325,8 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
     busiest = max(res.layers, key=lambda lf: lf.power).name if res.layers else None
     out = {
         "result_id": result_id, "board_id": board_id, "net": res.net, "nets_solved": res.nets,
-        "v_ref_v": v_ref, "drop_sign": int(res.sign), "sources": sources, "loads": loads,
+        "v_ref_v": v_ref, "drop_sign": int(res.sign), "drop_unit": res.drop_unit(),
+        "sources": sources, "loads": loads,
         "max_drop_mv": res.max_drop * 1e3, "max_drop_pct": pct(res.max_drop),
         "worst_load": max(loads, key=lambda d: d["drop_mv"])["name"] if loads else None,
         "power_loss_w": res.power_loss, "loss_breakdown_w": res.loss_breakdown(),

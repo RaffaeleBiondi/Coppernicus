@@ -260,7 +260,8 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
                                          "items a limit could not judge (listed below).",
                 "error": "**Error**: a project could not be solved."}.get(verdict, verdict)
     lines += [headline, "",
-              "| Project | Rail | Worst load | Max drop (mV) | Max drop (%) | Copper loss (mW) | Verdict |",
+              "| Project | Rail | Worst load | Worst of the copper | Max drop (%) | Copper loss (mW) "
+              "| Verdict |",
               "|---|---|---|---:|---:|---:|---|"]
     assumptions: List[str] = []
     details: List[str] = []
@@ -294,8 +295,13 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
                           if worst else "–")
             loss = rail.get("power_loss_w")
             loss_mw = _num(loss * 1e3 if loss is not None else None, ".3g")
+            # Which way the copper moves: below the set point, toward 0 V on a negative rail,
+            # or a ground rise on a net at 0 V.
+            worst_copper = _num(rail.get("max_drop_mv"), ".3g")
+            if rail.get("drop_unit") and rail.get("max_drop_mv") is not None:
+                worst_copper += f" {rail['drop_unit']}"
             lines.append(f"| {project} | {_cell(rail['net'])} | {worst_text} | "
-                         f"{_num(rail.get('max_drop_mv'), '.3g')} | "
+                         f"{_cell(worst_copper)} | "
                          f"{_num(rail.get('max_drop_pct'), '.3g')} | {loss_mw} | {_verdict_cell(rail)} |")
             problems = rail.get("problems", [])
             shown = [p for p in problems if p.get("severity") == "fail"]

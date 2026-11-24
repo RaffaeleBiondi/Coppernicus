@@ -44,8 +44,9 @@ def test_solve_all_aggregates_exit_codes_and_keeps_files_away_from_the_board(rep
 
     md = ci.summary_markdown(index, "https://example.invalid/artifacts/1")
     assert md.startswith("## Coppernicus: DC power integrity")
-    assert "| Project | Rail | Worst load | Max drop (mV) | Max drop (%) | Copper loss (mW) | Verdict |" in md
-    numbers = "| +3V3 | U1: 9.6 mV | 9.6 | 0.291 | 34.3 |"
+    assert ("| Project | Rail | Worst load | Worst of the copper | Max drop (%) | Copper loss (mW) "
+            "| Verdict |") in md
+    numbers = "| +3V3 | U1: 9.6 mV | 9.6 mV below 3.3 V | 0.291 | 34.3 |"
     assert f"| `hw/demo.coppernicus.yml` {numbers} **FAIL** (drop ≤ 0.25 %) |" in md
     assert f"| `hw/demo-relaxed.coppernicus.yml` {numbers} PASS (drop ≤ 1 %) |" in md
     assert "**FAIL** U1: 3.2904 V" in md and "<details><summary>Assumptions</summary>" in md
