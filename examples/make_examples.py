@@ -18,7 +18,8 @@ HERE = Path(__file__).resolve().parent / "demo"
 
 def main():
     HERE.mkdir(exist_ok=True)
-    save_snapshot(demo_board(), HERE / "demo.kipi.json.gz")
+    # With LED_A, a net the power heuristic misses: right-click it to mark it as a rail.
+    save_snapshot(demo_board(led_net=True), HERE / "demo.kipi.json.gz")
     project = Project(board="demo.kipi.json.gz", rails=[Rail(
         "+3V3",
         sources=[Source("J1", 3.3, name="Supply")],

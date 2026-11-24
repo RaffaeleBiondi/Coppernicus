@@ -175,11 +175,15 @@ def net_tie_board() -> BoardSnapshot:
     return b.snapshot()
 
 
-def demo_board() -> BoardSnapshot:
+def demo_board(led_net: bool = False) -> BoardSnapshot:
     """A 60 × 40 mm two-layer demo: a supply connector on F.Cu stitched to a B.Cu plane that
     a slot squeezes into a neck along the bottom edge (KiCad y points down), three loads,
     one fed by a thin F.Cu track. Made to show voltage drop, current crowding and via
-    currents at a glance."""
+    currents at a glance.
+
+    ``led_net`` adds LED_A, a short F.Cu feed from R1 to an LED (D1) whose name the power
+    heuristic does not take for a rail, away from the +3V3 copper: the committed example
+    has it, to show marking a net as a rail by hand. It does not change the +3V3 results."""
     b = SyntheticBoard("demo", two_layer_stackup())
     plane = box(2, 2, 58, 38).difference(box(28, 2, 31, 31))     # slot from the top edge
     b.zone("+3V3", B, plane)
@@ -196,6 +200,10 @@ def demo_board() -> BoardSnapshot:
     b.square_pad("U3", "1", "+3V3", 18.0, 33.0, 1.5, value="LOAD")
     b.via("+3V3", 18.0, 26.0)
     b.track("+3V3", F, 0.25, (18.0, 26.0), (18.0, 33.0))
+    if led_net:
+        b.square_pad("R1", "2", "LED_A", 36.0, 36.0, 1.0, value="330R")
+        b.square_pad("D1", "1", "LED_A", 46.0, 36.0, 1.0, value="LED")
+        b.track("LED_A", F, 0.3, (36.0, 36.0), (46.0, 36.0))
     return b.snapshot(outline=box(0, 0, 60, 40))
 
 

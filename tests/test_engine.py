@@ -151,3 +151,22 @@ def test_pad_rings_are_plain_arrays_on_the_layer():
     assert ring[:, 0].min() == pytest.approx(11.5) and ring[:, 0].max() == pytest.approx(12.5)
     assert board.pad_rings(["u1_2"], B) == []
     assert board.pad_rings(["nope"], F) == []
+
+
+def test_demo_led_net_is_a_signal_net_and_leaves_3v3_unchanged():
+    """The committed demo adds LED_A (for "Mark as rail"): not a rail by the heuristic, and
+    the +3V3 results are exactly those of the board without it."""
+    import numpy as np
+
+    from coppernicus.engine.synthetic import demo_board
+    plain, led = Board(demo_board()), Board(demo_board(led_net=True))
+    assert "LED_A" in led.nets() and led.net_kind("LED_A") == "signal"
+    assert "LED_A" not in led.power_nets() and plain.nets() == ["+3V3"]
+    rail = Rail("+3V3", sources=[Source("J1", 3.3)],
+                loads=[Load("U1", 2.0), Load("U2", 1.5), Load("U3", 0.3)])
+    a, b = solve_rail(plain, rail), solve_rail(led, rail)
+    assert [t.v_min for t in b.loads] == [t.v_min for t in a.loads]
+    assert b.max_drop == a.max_drop and b.power_loss == a.power_loss
+    for la, lb in zip(a.layers, b.layers):
+        assert np.array_equal(la.points, lb.points) and np.array_equal(la.voltage, lb.voltage)
+    assert [p.ref for p in led.parts_on_net("LED_A")] == ["D1", "R1"]
