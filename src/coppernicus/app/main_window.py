@@ -948,6 +948,10 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self.worker is not None and self.worker.isRunning():
+            # Cancelled, it reports "Solve cancelled": no box or drawing after the window has gone.
+            for signal in (self.worker.message, self.worker.succeeded, self.worker.failed,
+                           self.worker.finished):
+                signal.disconnect()
             self.worker.cancel()
             self.worker.wait(5000)
         if self.tree_worker is not None and self.tree_worker.isRunning():
