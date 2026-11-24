@@ -80,10 +80,11 @@ def test_html_report_and_open(demo_project, tmp_path, capsys, monkeypatch):
     assert main(["solve", str(demo_project), "--no-maps", "--out", str(out_dir), "--html", str(custom),
                  "--open", "--json"]) == EXIT_OK
     doc = json.loads(capsys.readouterr().out)
-    assert doc["report_file"] == str(custom) and custom.exists()
+    assert Path(doc["report_file"]) == custom and custom.exists()
+    assert "\\" not in doc["report_file"] and "\\" not in doc["summary_file"]   # "/" in documents
     assert opened == [custom.resolve().as_uri()]
     summary = json.loads((out_dir / "demo.coppernicus_summary.json").read_text(encoding="utf-8"))
-    assert summary["report_file"] == str(custom)
+    assert Path(summary["report_file"]) == custom
     # Without --out, everything goes to results/ next to the project, never next to a board
     # elsewhere.
     assert main(["solve", str(demo_project), "--no-maps", "--html"]) == EXIT_OK

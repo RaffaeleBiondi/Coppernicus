@@ -459,7 +459,7 @@ class Session:
                 continue
             summary = dict(live.rec.summary)
             if maps_dir is not None:
-                summary["maps"] = [str(p) for p in save_layer_maps(
+                summary["maps"] = [p.as_posix() for p in save_layer_maps(
                     live.res, live.outline, Path(maps_dir), live.rec.problems)]
             if on_rail is not None:
                 on_rail(live.rec.id, summary)

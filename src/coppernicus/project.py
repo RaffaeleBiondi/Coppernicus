@@ -27,7 +27,7 @@ from __future__ import annotations
 import dataclasses
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional, Sequence, Tuple, TypeVar
 
 import yaml
@@ -217,7 +217,7 @@ class Project:
 
     # ------------------------------------------------------------------ queries
     def board_path(self) -> Path:
-        p = Path(self.board).expanduser()
+        p = _portable_path(self.board).expanduser()
         if not p.is_absolute() and self.path is not None:
             p = Path(self.path).parent / p
         return p
@@ -315,14 +315,15 @@ class Project:
         if path is None:
             raise ProjectError("no path to save the project to")
         if self.board:                    # keep the board relative to the project file
-            board = Path(self.board).expanduser()
+            board = _portable_path(self.board).expanduser()
             if not board.is_absolute():   # relative to where the project was, or will be
                 board = (Path(self.path).parent if self.path else Path(path).parent) / board
             board = board.resolve()
+            # Always "/" in the file, so a project saved on Windows opens on macOS and Linux.
             try:
-                self.board = os.path.relpath(board, Path(path).resolve().parent)
+                self.board = Path(os.path.relpath(board, Path(path).resolve().parent)).as_posix()
             except ValueError:            # another drive (Windows): keep it absolute
-                self.board = str(board)
+                self.board = board.as_posix()
         self.path = path
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self.to_dict(), f, sort_keys=False, allow_unicode=True)
@@ -330,6 +331,14 @@ class Project:
 
 
 # ---------------------------------------------------------------------- file helpers
+
+def _portable_path(text: str) -> Path:
+    """A path written in a project file, with "/" or "\\" as separators (a file saved on
+    Windows by an older version has backslashes), as a Path of this system."""
+    if "\\" in text and os.sep == "/":
+        return Path(PureWindowsPath(text).as_posix())
+    return Path(text)
+
 
 def _pins_out(pins: PinSpec):
     return "all" if pins is None else list(pins)

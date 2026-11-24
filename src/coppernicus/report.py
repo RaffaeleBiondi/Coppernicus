@@ -476,7 +476,7 @@ def _plain(obj: Any) -> Any:
     if isinstance(obj, (float, np.floating)):
         return float(obj) if math.isfinite(obj) else None
     if isinstance(obj, Path):
-        return str(obj)
+        return obj.as_posix()
     return obj
 
 

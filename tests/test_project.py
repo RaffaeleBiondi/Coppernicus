@@ -1,6 +1,6 @@
 """Project files: YAML round trip, pin parsing, relative board paths."""
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 import yaml
@@ -48,6 +48,25 @@ def test_round_trip_keeps_everything(tmp_path):
     assert q.board_path().resolve() == board.resolve()
     assert q.settings == p.settings
     assert q.rails == p.rails
+
+
+def test_board_path_is_portable_between_windows_and_posix(tmp_path):
+    """A project written on Windows by an older version has backslashes in its board path:
+    it must open on any system, and saving writes "/" whatever the system."""
+    (tmp_path / "boards").mkdir()
+    board = tmp_path / "boards" / "b.kicad_pcb"
+    board.write_text("")
+    (tmp_path / "proj").mkdir()
+    windows_style = str(PureWindowsPath("..", "boards", "b.kicad_pcb"))      # "..\\boards\\b.kicad_pcb"
+    assert "\\" in windows_style
+    path = tmp_path / "proj" / "x.coppernicus.yml"
+    path.write_text(f"board: '{windows_style}'\nrails: []\n", encoding="utf-8")
+    p = Project.load(path)
+    assert p.board_path().resolve() == board.resolve()
+    p.save()
+    text = path.read_text(encoding="utf-8")
+    assert "board: ../boards/b.kicad_pcb" in text and "\\" not in text
+    assert Project.load(path).board_path().resolve() == board.resolve()
 
 
 def test_new_project_with_relative_board_saves_relative_to_its_own_folder(tmp_path):

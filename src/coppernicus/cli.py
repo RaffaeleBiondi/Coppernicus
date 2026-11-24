@@ -174,10 +174,10 @@ def _cmd_solve(args) -> int:
         return EXIT_ERROR
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / f"{stem}_summary.json"
-    doc["summary_file"] = str(summary_path)
+    doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
     size_warning = None
     if "builder" in report:
-        doc["report_file"] = str(report["builder"].write(html_path))
+        doc["report_file"] = report["builder"].write(html_path).as_posix()
         size_warning = report["builder"].size_warning(html_path)
         if size_warning:
             doc["warnings"].append(size_warning)
