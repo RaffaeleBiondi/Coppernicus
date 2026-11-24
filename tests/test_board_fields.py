@@ -221,6 +221,18 @@ def test_a_source_only_rail_that_feeds_something_is_complete(how):
         merge(Project(), {"J1": {"PI_RAIL": "VIN", "PI_SOURCE": "12V"}})
 
 
+def test_a_source_only_rail_feeds_through_a_net_tie():
+    """A net tie joins nets as the solve does: a regulator whose input is on the tied net is
+    fed by the rail, so the rail is complete."""
+    project = Project(rails=[Rail("OUT", [Source("U2", 3.3, kind="ldo", input_net="VIN_T")],
+                                  [Load("U4", 1.0)])])
+    fields = {"J1": {"PI_RAIL": "VIN", "PI_SOURCE": "12V"}}
+    merged = merge(project, fields, ties=[("VIN", "VIN_T")])
+    assert "VIN" in [r.net for r in merged.project.rails]
+    with pytest.raises(FieldError, match="feeds no regulator input or link"):
+        merge(project, fields)
+
+
 def test_a_project_link_on_a_field_link_part_is_replaced_with_a_warning():
     project = Project.load(CHAIN)
     project.links[0].resistance_ohm = 0.1

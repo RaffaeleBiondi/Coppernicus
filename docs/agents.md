@@ -155,7 +155,8 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
   error found while solving a field rail (a `PI_RAIL` net not on the board, a part with no pad
   on it, a `PI_PINS` that matches nothing) says the rail came from the fields.
 - **Rails.** A net with a `PI_SOURCE` and a `PI_LOAD` is a rail. So is a net with a source and
-  no load that feeds a regulator's input or a link: it draws their estimated current.
+  no load that feeds a regulator's input or a link (through net ties too): it draws their
+  estimated current.
 - **KiCad wins.** For a net the fields define, the fields give the design data: sources,
   loads, pins and converter data. A project-file rail of the same net is **ignored**, with a
   warning that lists the differences ("project file rail +3V3 ignored: KiCad fields define it

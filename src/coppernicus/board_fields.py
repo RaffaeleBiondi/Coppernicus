@@ -414,19 +414,22 @@ class Merged:
         result.warnings.extend(w for w in self.warnings if w not in result.warnings)
 
 
-def apply(project: Project, read: Callable[[], BoardFields], use: Optional[bool] = None) -> Merged:
+def apply(project: Project, read: Callable[[], BoardFields], use: Optional[bool] = None,
+          ties: Sequence[Tuple[str, str]] = ()) -> Merged:
     """The project merged with the board's fields, read by ``read()`` only when they are
-    on: ``use`` (None: the project's ``use_board_fields``, on by default)."""
+    on: ``use`` (None: the project's ``use_board_fields``, on by default). ``ties``: the
+    board's net-tie pairs (see :func:`merge`)."""
     if not (project.use_board_fields if use is None else use):
         return Merged(project)
     found = read()
     if not found.fields:
         return Merged(project)
-    return merge(project, found.fields, found.pad_nets)
+    return merge(project, found.fields, found.pad_nets, ties)
 
 
 def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
-          pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None) -> Merged:
+          pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None,
+          ties: Sequence[Tuple[str, str]] = ()) -> Merged:
     """The project with the KiCad fields merged in, as the owner decided:
 
     * a net the fields define completely takes its sources, loads, pins and converter data
@@ -436,7 +439,8 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
       when they differ); its other limits and ``follow_net_ties`` come from the project rail;
       remote sense pins are carried over from it by part;
     * a rail with a source and no load is complete when it feeds a regulator's input or a
-      link (it draws their estimated current); a net the fields leave incomplete keeps the
+      link (it draws their estimated current), through the board's net ties (``ties``: pairs
+      of nets a net-tie footprint joins) as the solve does; a net the fields leave incomplete keeps the
       project's rail (a warning) or, with none, is an error naming the missing field;
     * ``PI_LINK`` parts replace project links on the same part (a warning when they differ).
     """
@@ -467,7 +471,7 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
     for net, fr in rails.items():             # see what a source-only rail feeds
         if fr.sources and not (net in own and own[net].override_board_fields):
             trial.rails = [r for r in trial.rails if r.net != net] + [fr.rail()]
-    missing = {net: (None if fr.sources and (fr.loads or _feeds(trial, net)) else fr.missing())
+    missing = {net: (None if fr.sources and (fr.loads or _feeds(trial, net, ties)) else fr.missing())
                for net, fr in rails.items()}
 
     new_rails: List[Rail] = []
@@ -511,13 +515,21 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
     return merged
 
 
-def _feeds(project: Project, net: str) -> bool:
-    """Whether a rail on ``net`` delivers current to a regulator input or a link (at nominal
-    voltages, as the per-rail solve estimates it). An estimate that cannot be made counts as
-    yes: the solve reports it."""
+def _feeds(project: Project, net: str, ties: Sequence[Tuple[str, str]] = ()) -> bool:
+    """Whether a rail on ``net`` (and the nets tied to it) delivers current to a regulator
+    input or a link, at nominal voltages, as the per-rail solve estimates it. An estimate
+    that cannot be made counts as yes: the solve reports it."""
     from coppernicus.power_tree import EstimateError, estimated_draws
+    nets, todo = {net}, [net]
+    while todo:
+        n = todo.pop()
+        for a, b in ties:
+            for x, y in ((a, b), (b, a)):
+                if x == n and y not in nets:
+                    nets.add(y)
+                    todo.append(y)
     try:
-        return bool(estimated_draws(project, [net]))
+        return bool(estimated_draws(project, sorted(nets), list(ties)))
     except EstimateError:
         return True
 

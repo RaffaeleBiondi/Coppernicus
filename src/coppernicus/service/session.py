@@ -549,7 +549,8 @@ class Session:
         None follows the project's ``use_board_fields``). A board with no fields, or of
         another format than .kicad_pcb, leaves the project as it is."""
         try:
-            return BF.apply(project, lambda: self._board_fields(entry), use)
+            return BF.apply(project, lambda: self._board_fields(entry), use,
+                            ties=[(t.net_a, t.net_b) for t in entry.board.net_ties()])
         except BF.FieldError as e:
             raise ServiceError(E.INVALID_BOARD_FIELD, f"{path.name}: {e}", FIELD_HINT) from None
 

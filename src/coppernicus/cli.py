@@ -276,7 +276,8 @@ def _cmd_solve_tree(args) -> int:
         return fail("board_unreadable", str(e))
     try:                                  # the KiCad footprint fields, as Session.solve_tree
         merged = board_fields.apply(project, lambda: read_board_fields(board.path),
-                                    False if args.no_board_fields else None)
+                                    False if args.no_board_fields else None,
+                                    ties=[(t.net_a, t.net_b) for t in board.net_ties()])
     except (board_fields.FieldError, EngineError) as e:
         return fail("invalid_board_field", str(e), FIELD_HINT)
     project = merged.project
