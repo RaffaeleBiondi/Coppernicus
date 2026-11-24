@@ -99,3 +99,30 @@ def test_locator_many_points_degenerate_triangles_and_nearest():
     assert loc.nbytes > 0
     empty = TriangleLocator(np.zeros((0, 2)), np.zeros((0, 3), dtype=int))
     assert empty.locate(0, 0) == -1 and empty.nearest(0, 0)[0] == -1
+
+
+def test_probe_interpolates_and_skips_nan_and_outside(strip):
+    from coppernicus.fields import TriangleLocator, probe
+    _, res, layer = strip
+    loc = TriangleLocator(layer.points, layer.tris)
+    a, b = probe(layer, loc, 10.0, 0.0), probe(layer, loc, 30.0, 0.0)
+    assert res.v_ref > a.voltage_v > b.voltage_v > res.loads[0].v_min
+    # Linear along the track: the midpoint reads the mean of its neighbours.
+    mid = probe(layer, loc, 20.0, 0.0)
+    assert mid.voltage_v == pytest.approx((a.voltage_v + b.voltage_v) / 2, rel=1e-4)
+    assert mid.current_density_a_mm2 == pytest.approx(1.0 / (Strip.W * OZ1), rel=0.05)
+    assert probe(layer, loc, 20.0, 5.0) is None                  # off the copper
+    v = layer.voltage.copy()
+    v[layer.points[:, 0] > 20.0] = np.nan
+    half = dataclasses.replace(layer, voltage=v)
+    p = probe(half, TriangleLocator(half.points, half.tris), 30.0, 0.0)
+    assert p is not None and np.isnan(p.voltage_v)               # copper, but no path to a source
+
+
+def test_drop_levels_are_evenly_spaced_and_bounded():
+    from coppernicus.fields import drop_levels
+    levels = drop_levels(9.6)
+    assert len(levels) == 10 and 0 < levels[0] < levels[-1] < 9.6
+    assert np.allclose(np.diff(levels), levels[0])
+    assert len(drop_levels(9.6, 50)) == 20
+    assert drop_levels(0.0) == [] and drop_levels(float("nan")) == []

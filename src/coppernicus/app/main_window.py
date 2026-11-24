@@ -63,6 +63,13 @@ class MainWindow(QMainWindow):
             self.field_box.addItem(label, key)
         self.show_vias = QCheckBox("Vias")
         self.show_vias.setChecked(True)
+        self.show_isolines = QCheckBox("Isolines")
+        self.show_isolines.setToolTip("Lines of equal voltage drop, the same levels on every layer")
+        self.show_arrows = QCheckBox("Arrows")
+        self.show_arrows.setToolTip("Direction of the current; arrow length grows with √|J|")
+        self.measure = QPushButton("Measure ΔV")
+        self.measure.setCheckable(True)
+        self.measure.setToolTip("Click A, then B: ΔV A→B = V(A) − V(B). Esc stops measuring.")
         fit = QPushButton("Fit")
         fit.clicked.connect(self.view.reset_view)
         bar = QHBoxLayout()
@@ -72,6 +79,10 @@ class MainWindow(QMainWindow):
         bar.addWidget(QLabel("Show"))
         bar.addWidget(self.field_box)
         bar.addWidget(self.show_vias)
+        bar.addWidget(self.show_isolines)
+        bar.addWidget(self.show_arrows)
+        bar.addSpacing(12)
+        bar.addWidget(self.measure)
         bar.addStretch(1)
         bar.addWidget(QLabel("<small>drag: pan · wheel: zoom · double-click: read values</small>"))
         bar.addWidget(fit)
@@ -103,10 +114,13 @@ class MainWindow(QMainWindow):
         self.layer_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.field_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.show_vias.toggled.connect(lambda *_: self.refresh_view())
+        self.show_isolines.toggled.connect(lambda *_: self.refresh_view())
+        self.show_arrows.toggled.connect(lambda *_: self.refresh_view())
+        self.measure.toggled.connect(self._measure_toggled)
         self.view.probed.connect(lambda text: self.statusBar().showMessage(text))
         self.view.pad_picked.connect(self.pick_pad)
         self.rail_panel.pick_changed.connect(self._pick_mode_changed)
-        QShortcut(QKeySequence(Qt.Key_Escape), self, activated=lambda: self.rail_panel.set_pick(""))
+        QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self.stop_clicking)
 
     def _dock(self, title, widget, area):
         dock = QDockWidget(title, self)
@@ -296,7 +310,9 @@ class MainWindow(QMainWindow):
                     ("load", [i for t in res.loads for i in t.pad_ids])]
             self.view.show_field(res, res.layer(layer_name), self.field_box.currentData(),
                                  self.board.outline(), self.show_vias.isChecked(), fit=fit,
-                                 pad_outlines=self._pad_outlines(rail, pads, lid))
+                                 pad_outlines=self._pad_outlines(rail, pads, lid),
+                                 isolines=self.show_isolines.isChecked(),
+                                 arrows=self.show_arrows.isChecked())
         else:
             rings = copper_rings(self.board.copper(self.net, lid)) if lid is not None else []
             src, lds = self._terminal_pads(rail)
@@ -344,11 +360,29 @@ class MainWindow(QMainWindow):
                                      for p in self.board.pads(net, part.ref)]
         return self._candidates[key]
 
-    # ------------------------------------------------------------------ picking pads
+    # ------------------------------------------------------------------ clicks on the view
+    def stop_clicking(self):
+        """Esc: leave pick and measure modes."""
+        self.rail_panel.set_pick("")
+        self.measure.setChecked(False)
+
+    def _measure_toggled(self, on: bool):
+        if on:
+            self.rail_panel.set_pick("")                  # one click mode at a time
+            self.view.set_click_mode("measure")
+            self.statusBar().showMessage("Click point A, then point B · Esc to stop")
+        elif self.view.click_mode == "measure":
+            self.view.set_click_mode(None)
+
     def _pick_mode_changed(self, kind: str):
-        self.view.set_click_mode("pick" if kind else None)
         if kind:
+            self.measure.blockSignals(True)
+            self.measure.setChecked(False)
+            self.measure.blockSignals(False)
+            self.view.set_click_mode("pick")
             self.statusBar().showMessage(f"Click pads to add them to the {kind}s · Esc to stop")
+        elif self.view.click_mode == "pick":
+            self.view.set_click_mode(None)
         self.refresh_view()
 
     def pick_pad(self, x: float, y: float) -> str:

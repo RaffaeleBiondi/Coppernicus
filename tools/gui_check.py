@@ -1,12 +1,14 @@
 """Scripted check of the desktop app: drives MainWindow from code on the synthetic demo board.
 
-    uv run python tools/gui_check.py                  # offscreen: logic only, no window
+    uv run python tools/gui_check.py --out DIR        # offscreen: no window on screen
     uv run python tools/gui_check.py --window --out DIR   # a real window (closes itself):
-                                                      # also simulated mouse clicks and screenshots
+                                                      # also simulated mouse clicks
+    uv run python tools/gui_check.py --local PROJECT --rail NET --out DIR   # + time a real rail
 
-Offscreen, Qt has no OpenGL context, so the board view draws nothing: the check covers the
-app logic (pads picked, rows, solve). With ``--window`` it also sends mouse presses and
-releases to the view and saves screenshots in ``--out``. It never saves a project and never
+Offscreen, Qt has no OpenGL context, so the app's own view draws nothing: the check covers
+the app logic (pads picked, rows, solve, ΔV, arrow geometry) and renders the view's scene
+with a separate off-screen VTK window into ``--out`` (``*_scene.png``). With ``--window`` it
+also sends mouse presses and releases to the view. It never saves a project and never
 writes next to a board. Exit code 0 when every check passes, 1 otherwise.
 """
 
@@ -134,6 +136,122 @@ def run_demo(window, check: Checks, args, out: Path):
     return res
 
 
+def render_scene(view, path: Path, size=(1100, 800)) -> float:
+    """Render the view's current scene (its actors and camera) in an off-screen VTK window
+    and save it; returns the render time in seconds. Needs no window on screen."""
+    import time
+
+    import pyvista as pv
+    off = pv.Plotter(off_screen=True, window_size=size)
+    off.set_background("white")
+    off.enable_parallel_projection()
+    for name, actor in view.plotter.renderer.actors.items():
+        off.add_actor(actor, name=name, reset_camera=False)
+    off.view_xy()
+    off.reset_camera()
+    t0 = time.perf_counter()
+    off.screenshot(str(path))         # the first render (geometry upload) plus a pixel read-back
+    seconds = time.perf_counter() - t0
+    off.close()
+    return seconds
+
+
+def timed_refresh(window) -> float:
+    import time
+    t0 = time.perf_counter()
+    window.refresh_view()
+    return time.perf_counter() - t0
+
+
+def run_flow_demo(window, check: Checks, args, out: Path):
+    """Task 3 on the demo project: isolines, arrows, ΔV between J1 and U1."""
+    from PySide6.QtWidgets import QApplication
+    window.open_project(ROOT / "examples" / "demo" / "demo.coppernicus.yml")
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    res = solve_and_wait(window, args.timeout)
+    check("solve the demo project", res is not None)
+    if res is None:
+        return
+    window.show_isolines.setChecked(True)
+    window.show_arrows.setChecked(True)
+    for name in ("B.Cu", "F.Cu"):
+        window.layer_box.setCurrentIndex(window.layer_box.findText(name))
+        QApplication.processEvents()
+        actors = window.view.plotter.renderer.actors
+        check(f"isolines and arrows drawn on {name}", "isolines" in actors and "arrows" in actors)
+        print(f"  redraw {name} with isolines + arrows: {timed_refresh(window):.3f} s "
+              f"(scene build; offscreen Qt does not rasterise)", flush=True)
+        for field in ("drop", "current"):
+            window.field_box.setCurrentIndex(window.field_box.findData(field))
+            QApplication.processEvents()
+            secs = render_scene(window.view, out / f"t3_{name.replace('.', '')}_{field}_scene.png")
+            print(f"  off-screen VTK render {name} {field}: {secs:.3f} s", flush=True)
+    window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+
+    # Arrows on U3's feeder track (F.Cu, via at y=26 → pad at y=33) point toward U3. The view
+    # plots (x, −y), so toward U3 is toward smaller display y.
+    import numpy as np
+    window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
+    QApplication.processEvents()
+    pts = np.asarray(window.view.plotter.renderer.actors["arrows"].mapper.dataset.points)[:, :2]
+    shafts = pts.reshape(-1, 3, 2, 2)[:, 0]                 # every arrow: shaft, head, head
+    on_track = (np.abs(shafts[:, :, 0].mean(axis=1) - 18.0) < 0.3) & \
+               (shafts[:, :, 1].mean(axis=1) < -27) & (shafts[:, :, 1].mean(axis=1) > -32)
+    toward_u3 = shafts[on_track, 1, 1] < shafts[on_track, 0, 1]
+    check("arrows on U3's track point toward U3", on_track.any() and toward_u3.all(),
+          f"{toward_u3.sum()}/{on_track.sum()} arrows")
+
+    # ΔV between J1 and U1 on F.Cu equals the drop at U1 (single-pad load) within 0.5 mV.
+    window.measure.setChecked(True)
+    check("measure mode on the view", window.view.click_mode == "measure")
+    msg_a = window.view.measure_at(6.0, 20.0)
+    msg_b = window.view.measure_at(50.0, 10.0)
+    u1 = next(t for t in res.loads if t.ref == "U1")
+    try:
+        dv = float(msg_b.split("=")[1].split("mV")[0]) / 1e3
+    except (IndexError, ValueError):
+        dv = float("nan")
+    check("ΔV J1→U1 within 0.5 mV of drop(U1)", abs(dv - res.drop(u1)) < 0.5e-3,
+          f"{msg_b}; drop(U1) = {res.drop(u1) * 1e3:.3f} mV")
+    check("A is reported first", msg_a.startswith("A: "), msg_a)
+    msg = window.view.measure_at(30.0, 1.0)
+    check("a point off this net's copper says so", "no copper of this net here" in msg, msg)
+    render_scene(window.view, out / "t3_FCu_measure_scene.png")
+    window.stop_clicking()
+    check("Esc leaves measure mode", window.view.click_mode is None and not window.measure.isChecked())
+    window.grab().save(str(out / "t3_window.png"))
+    if args.window:
+        window.view.screenshot(out / "t3_view.png")
+
+
+def run_local(window, check: Checks, args, out: Path):
+    """Time the redraw on a local project rail (read-only: nothing is saved)."""
+    from PySide6.QtWidgets import QApplication
+    window.open_project(args.local)
+    window.nets.select(args.rail)
+    QApplication.processEvents()
+    res = solve_and_wait(window, args.timeout)
+    check(f"solve {args.rail} of the local project", res is not None)
+    if res is None:
+        return
+    window.show_isolines.setChecked(True)
+    window.show_arrows.setChecked(True)
+    for lf in sorted(res.layers, key=lambda lf: -len(lf.tris))[:2]:
+        window.layer_box.setCurrentIndex(window.layer_box.findText(lf.name))
+        QApplication.processEvents()
+        for field in ("drop", "current"):
+            window.field_box.setCurrentIndex(window.field_box.findData(field))
+            QApplication.processEvents()
+            build = timed_refresh(window)
+            arrows = window.view.plotter.renderer.actors.get("arrows")
+            n_arrows = arrows.mapper.dataset.n_lines // 3 if arrows is not None else 0
+            secs = render_scene(window.view, out / f"local_{lf.name.replace('.', '')}_{field}_scene.png")
+            check(f"{lf.name} {field} ({len(lf.tris):,} triangles): redraw under 1 s",
+                  build + secs < 1.0, f"scene {build:.3f} s + render {secs:.3f} s, {n_arrows} arrows")
+            check(f"{lf.name} {field}: at most 2000 arrows", n_arrows <= 2000)
+
+
 def run_other_net(window, check: Checks, out: Path):
     """A click on a pad of another net says so and adds nothing (synthetic pins board)."""
     from PySide6.QtWidgets import QApplication
@@ -157,7 +275,9 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
     ap.add_argument("--out", help="folder for screenshots (default: a new temporary folder)")
-    ap.add_argument("--timeout", type=float, default=120.0, help="hard limit for the whole run, s")
+    ap.add_argument("--timeout", type=float, default=300.0, help="hard limit for the whole run, s")
+    ap.add_argument("--local", help="a local project to time (read-only)")
+    ap.add_argument("--rail", help="with --local: the rail to solve and time")
     args = ap.parse_args(argv)
     if not args.window:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -177,12 +297,15 @@ def main(argv=None) -> int:
     try:
         run_other_net(window, check, out)
         run_demo(window, check, args, out)
+        run_flow_demo(window, check, args, out)
+        if args.local and args.rail:
+            run_local(window, check, args, out)
     finally:
         window.dirty = False              # never ask to save
         window.close()
         app.processEvents()
     print(f"{'all checks passed' if not check.failed else f'{check.failed} check(s) failed'}"
-          + (f"; screenshots in {out}" if args.window else ""), flush=True)
+          + f"; images in {out}", flush=True)
     return 1 if check.failed else 0
 
 
