@@ -195,11 +195,25 @@ def apply_limits(tree, project: Project) -> None:
     judge_loads(tree)
 
 
-def unsolved_limits(tree) -> List[str]:
-    """The nets with a limit set that the power tree did not solve (excluded, or not set up),
-    as not-judged items."""
-    return [f"{net}: not solved in the power tree" for net, lim in tree.limits.items()
-            if tree.group_of(net) is None and any(v is not None for v in vars(lim).values())]
+def unjudged(item: str, net: str, limit: str, reason: str) -> Dict[str, str]:
+    """A not-judged entry: what (a load, a regulator input ``"U2 (input)"``, a return pin, or
+    the net itself), on which net, which limit (keyed with its unit) and why."""
+    return {"item": item, "net": net, "limit": limit, "reason": reason}
+
+
+def not_judged_text(items: Sequence[Dict[str, str]]) -> str:
+    """The entries as one line: "U3 on +1V8 (max_drop_pct): VRM OUT OF REGULATION; …"."""
+    return "; ".join((u["item"] if u["item"] == u["net"] else f"{u['item']} on {u['net']}")
+                     + f" ({u['limit']}): {u['reason']}" for u in items)
+
+
+def unsolved_limits(tree) -> List[Dict[str, str]]:
+    """Each limit set on a net the power tree did not solve (excluded, or not set up), as a
+    not-judged entry."""
+    from coppernicus.problems import LIMIT_KEYS
+    return [unjudged(net, net, key, "not solved in the power tree")
+            for net, lim in tree.limits.items() if tree.group_of(net) is None
+            for key, attr in LIMIT_KEYS.items() if getattr(lim, attr) is not None]
 
 
 def judge_loads(tree) -> None:
@@ -223,7 +237,7 @@ def judge_loads(tree) -> None:
 def _why_not(status: str, nominal: Optional[float]) -> str:
     if status:
         return status
-    return "0 V nominal: no drop percentage" if not nominal else "not solved"
+    return "0 V nominal: a % drop limit does not apply" if not nominal else "not solved"
 
 
 @dataclass
@@ -235,7 +249,7 @@ class GroupVerdict:
     failed: int
     limits: Dict[str, float]               # the strictest of each kind, keyed with units
     origin: Dict[str, str]                 # limit key -> the net it came from
-    not_judged: List[str] = field(default_factory=list)
+    not_judged: List[Dict[str, str]] = field(default_factory=list)   # see unjudged()
     problems: list = field(default_factory=list)
 
 
@@ -249,7 +263,7 @@ def group_verdict(tree, key: str, top: int = 5) -> GroupVerdict:
     origin = {k: gorigin[a] for k, a in LIMIT_KEYS.items() if k in checked}
     missing, judged = [], 0
     if checked and not res.converged:
-        missing.append(f"{key}: its iteration did not converge")
+        missing += [unjudged(key, key, k, "its iteration did not converge") for k in checked]
     elif checked:
         if "max_drop_pct" in checked:
             items = [(ld.name, ld.net or key, ld.passed, ld.status, ld.nominal_v)
@@ -259,14 +273,14 @@ def group_verdict(tree, key: str, top: int = 5) -> GroupVerdict:
             applies = [it for it in items if net_limits(tree, it[1], key)[0].max_drop_pct is not None]
             for name, net, passed, status, nominal in applies:
                 if passed is None:
-                    missing.append(f"{name} on {net}: {_why_not(status, nominal)}")
+                    missing.append(unjudged(name, net, "max_drop_pct", _why_not(status, nominal)))
             judged += sum(it[2] is not None for it in applies)
             if not applies:
-                missing.append(f"{key}: max_drop_pct judges no load or regulator input")
+                missing.append(unjudged(key, key, "max_drop_pct", "no load or regulator input to judge"))
         if res.kind == "ground" and "max_ground_rise_mv" in checked:
             for t in res.loads:
                 if not (math.isfinite(t.v_max) and math.isfinite(t.v_min)):
-                    missing.append(f"{t.name} on {t.net or key}: not solved")
+                    missing.append(unjudged(t.name, t.net or key, "max_ground_rise_mv", "not solved"))
         judged += any(k != "max_drop_pct" for k in checked)       # the copper is judged
     verdict = "fail" if failed else "not_judged" if missing or not judged else "pass"
     return GroupVerdict(verdict, failed, checked, origin, missing, problems)
@@ -309,7 +323,7 @@ def verdict_note(tree, groups: Dict[str, GroupVerdict]) -> str:
         f"{net}: {k} = {v:g}" for net, d in own.items() for k, v in d.items())
     missing = [x for v in groups.values() for x in v.not_judged] + unsolved_limits(tree)
     if missing:
-        note += ". Not judged: " + "; ".join(missing)
+        note += ". Not judged: " + not_judged_text(missing)
     return note
 
 

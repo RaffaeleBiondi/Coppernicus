@@ -39,7 +39,13 @@ from coppernicus.app.worker import ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
-from coppernicus.power_tree import apply_limits, group_verdict, tree_verdicts, unsolved_limits
+from coppernicus.power_tree import (
+    apply_limits,
+    group_verdict,
+    not_judged_text,
+    tree_verdicts,
+    unsolved_limits,
+)
 from coppernicus.problems import FAIL, find_problems, from_0v
 from coppernicus.project import Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
@@ -50,7 +56,7 @@ PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 def verdict_html(verdict: str, fails: int, not_judged, has_limits: bool) -> str:
     """A power-tree verdict for the summary lines: what failed, and what a limit set could not
     judge (a group passes only when everything was judged)."""
-    missing = (f"<span style='color:#b9770e'><b>not judged</b>: {'; '.join(not_judged)}</span>"
+    missing = (f"<span style='color:#b9770e'><b>not judged</b>: {not_judged_text(not_judged)}</span>"
                if not_judged else "")
     if verdict == "fail":
         text = f"<span style='color:#c0392b'><b>{fails} limit(s) exceeded</b></span>"

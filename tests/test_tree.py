@@ -467,17 +467,19 @@ def test_a_limit_with_an_item_it_cannot_judge_is_not_a_pass(board):
     project.rail("+1V8").limits = Limits(max_drop_pct=1.0)
     doc = tree_summary(solve_project_tree(board, project))
     row = _group_doc(doc, "+1V8")
-    assert row["verdict"] == "not_judged" and any("U3" in x for x in row["not_judged"])
+    assert row["verdict"] == "not_judged"
+    assert {"item": "U3", "net": "+1V8", "limit": "max_drop_pct",
+            "reason": "VRM OUT OF REGULATION"} in row["not_judged"]
     assert doc["verdict"] == "not_judged" and "U3" in doc["verdict_note"]
-    assert any("U3" in x for x in doc["not_judged"])
+    assert row["not_judged"][0] in doc["not_judged"]
 
     project = power_chain_project()
     project.rail("+3V3").loads = [Load("U9", 0.1, ["1"], ground_pins=["2"], ground_net="GND")]
     project.rail("+3V3").limits = Limits(max_drop_pct=50.0)
     doc = tree_summary(solve_project_tree(Board(power_chain_board(island=True)), project))
     row = _group_doc(doc, "+3V3")
-    assert row["verdict"] == "not_judged" and any("U9" in x and "DISCONNECTED" in x
-                                                    for x in row["not_judged"])
+    assert row["verdict"] == "not_judged" and {"item": "U9", "net": "+3V3", "limit": "max_drop_pct",
+                                                "reason": "DISCONNECTED"} in row["not_judged"]
     assert doc["verdict"] == "not_judged"
 
 
@@ -598,7 +600,8 @@ def test_a_group_that_did_not_converge_is_not_judged():
         net="VCC")], limits={"VCC": Limits(max_drop_pct=1.0, max_via_current=1.0)})
     gv = group_verdict(tree, "VCC")
     assert gv.verdict == "not_judged" and gv.failed == 0
-    assert any("did not converge" in x for x in gv.not_judged)
+    assert any(x["item"] == "VCC" and x["net"] == "VCC" and "did not converge" in x["reason"]
+               for x in gv.not_judged)
     res.converged = True
     assert group_verdict(tree, "VCC").verdict == "fail"          # the via over 1 A
 
@@ -610,7 +613,9 @@ def test_a_limit_on_a_net_the_tree_does_not_solve_is_not_judged(board):
     project.rail("+1V8").limits = Limits(max_drop_pct=50.0)
     project.rails.append(Rail("+5V", limits=Limits(max_drop_pct=1.0)))     # picked, not set up
     doc = tree_summary(solve_project_tree(board, project))
-    assert doc["verdict"] == "not_judged" and any("+5V" in x for x in doc["not_judged"])
+    assert doc["verdict"] == "not_judged"
+    assert {"item": "+5V", "net": "+5V", "limit": "max_drop_pct",
+            "reason": "not solved in the power tree"} in doc["not_judged"]
     assert "+5V" in doc["verdict_note"]
     project.rails.pop()
     assert tree_summary(solve_project_tree(board, project))["verdict"] == "pass"
@@ -656,7 +661,8 @@ def test_a_drop_limit_on_a_rail_at_0_v_is_not_judged():
     from coppernicus.power_tree import group_verdict
     tree = solve_project_tree(Board(strip_board()), _strip_project(0.0, limits=Limits(max_drop_pct=1.0)))
     gv = group_verdict(tree, Strip.NET)
-    assert gv.verdict == "not_judged" and any("0 V nominal" in x for x in gv.not_judged)
+    assert gv.verdict == "not_judged"
+    assert any(x["limit"] == "max_drop_pct" and "0 V" in x["reason"] for x in gv.not_judged)
 
 
 # ------------------------------------------------------------------ T7.1
