@@ -132,3 +132,11 @@ def test_summary_of_a_power_tree_with_a_skipped_rail(tmp_path, monkeypatch):
     rails = index["projects"][0]["doc"]["rails"]
     lines = {a for r in rails if "assumptions" in r for a in r["assumptions"]}
     assert all(md.count(ci._cell(a)) == 1 for a in lines)        # each assumption listed once
+
+
+def test_the_helper_itself_crashing_exits_2(monkeypatch, capsys):
+    def boom(*args, **kwargs):
+        raise ZeroDivisionError("forced for the test")
+    monkeypatch.setattr(ci, "solve_all", boom)
+    assert ci.main(["solve", "--out", "out", "x.coppernicus.yml"]) == 2
+    assert capsys.readouterr().err == "error: internal error: ZeroDivisionError: forced for the test\n"

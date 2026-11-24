@@ -289,7 +289,7 @@ Exit codes:
 |---|---|
 | 0 | Done, and no limit you set was exceeded. |
 | 1 | `solve` only: a limit you set was exceeded on some rail. |
-| 2 | Error. stdout holds `{"error": {"code", "message", "hint"}}` and stderr a one-line message. |
+| 2 | Error, including a crash (a bug: code `internal_error`). stdout holds `{"error": {"code", "message", "hint"}}` with `--json`, and stderr a one-line message. A crash never exits 1. |
 
 `solve` writes the PNG maps and `<project>_summary.json` to `--out`, with or without `--json`.
 The summary file **is** the document that `--json` prints, unit-keyed like the MCP tools. Its

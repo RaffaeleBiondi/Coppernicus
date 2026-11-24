@@ -73,7 +73,7 @@ setting out to check the board as designed.
 | Output | Meaning |
 |---|---|
 | `verdict` | `pass`, `fail`, `not_judged`, `pass_partially_judged` or `error`, over every project |
-| `exit-code` | `0` no limit exceeded, `1` a limit exceeded, `2` an error |
+| `exit-code` | `0` no limit exceeded, `1` a limit exceeded, `2` an error (a crash included: it never exits 1) |
 | `results-dir` | Absolute path of the results folder |
 | `artifact-url` | Download URL of the uploaded results |
 

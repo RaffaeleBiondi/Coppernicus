@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from pathlib import Path
 from typing import List, Optional
 
@@ -377,5 +378,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         return args.func(args)
     except (EngineError, ProjectError, FileNotFoundError) as e:
-        print(f"error: {e}", file=sys.stderr)
-        return EXIT_ERROR
+        code = ("invalid_project" if isinstance(e, ProjectError) else
+                "file_not_found" if isinstance(e, FileNotFoundError) else "solve_failed")
+        return _fail(args, code, str(e))
+    except Exception as e:
+        # A bug. Never let it exit 1, which means "a limit was exceeded" (CI reads the code).
+        if getattr(args, "verbose", False):
+            traceback.print_exc(file=sys.stderr)
+        return _fail(args, "internal_error", f"{type(e).__name__}: {e}",
+                     "this is a bug in Coppernicus: please report it with the command you ran",
+                     prefix="internal error: ")
+
+
+def _fail(args, code: str, message: str, hint: str = "", prefix: str = "") -> int:
+    """Exit 2 with a one-line error on stderr and, under --json, the error document on stdout."""
+    if getattr(args, "json", False):
+        _print_json({"error": {"code": code, "message": message, "hint": hint}})
+    print(f"error: {prefix}{message}".replace("\n", " "), file=sys.stderr)
+    return EXIT_ERROR

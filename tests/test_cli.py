@@ -198,3 +198,26 @@ def test_project_copper_thickness_in_text_json_and_report(demo_project, tmp_path
     p.save()
     assert main(["solve", str(demo_project), "--no-maps", "--out", str(out_dir)]) == EXIT_ERROR
     assert "copper layers: F.Cu, B.Cu" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("tree", [False, True], ids=["solve", "solve --tree"])
+def test_a_crash_exits_2_never_1(demo_project, tmp_path, capsys, monkeypatch, tree):
+    """An exception nothing handles must not exit 1, which means "limit exceeded" (CI would
+    read a crash as a failed check): it exits 2 with a one-line error, and with --json the
+    usual error document on stdout."""
+    def boom(*args, **kwargs):
+        raise ZeroDivisionError("forced for the test")
+    if tree:
+        monkeypatch.setattr("coppernicus.engine.tree.solve_project_tree", boom)
+    else:
+        monkeypatch.setattr("coppernicus.service.Session.solve_project", boom)
+    args = ["solve", str(demo_project), "--no-maps", "--out", str(tmp_path)] + (["--tree"] if tree else [])
+    assert main(args) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert err == "error: internal error: ZeroDivisionError: forced for the test\n"
+    assert main(args + ["--json"]) == EXIT_ERROR
+    out = capsys.readouterr()
+    assert json.loads(out.out)["error"] == {
+        "code": "internal_error", "message": "ZeroDivisionError: forced for the test",
+        "hint": "this is a bug in Coppernicus: please report it with the command you ran"}
+    assert out.err.count("\n") == 1

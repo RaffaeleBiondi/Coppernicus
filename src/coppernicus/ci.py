@@ -270,6 +270,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):          # the summary holds ≤, µ, Ω...
         if hasattr(stream, "reconfigure") and (stream.encoding or "").lower().replace("-", "") != "utf8":
             stream.reconfigure(encoding="utf-8", errors="replace")
+    try:
+        return _run(args)
+    except Exception as e:      # a bug: never exit 1, which reads as "a limit was exceeded"
+        print(f"error: internal error: {type(e).__name__}: {e}".replace("\n", " "), file=sys.stderr)
+        return EXIT_ERROR
+
+
+def _run(args) -> int:
     if args.command == "solve":
         index = solve_all(args.patterns, Path(args.out), top=args.top, html=not args.no_html)
         if "error" in index:
