@@ -160,7 +160,8 @@ def _cmd_solve(args) -> int:
             if not builder.settings:
                 builder.settings = dict(summary.get("settings", {}))
             limits = session.rail_limits(rid)
-            builder.add_rail(res, limits, find_problems(res, limits, top=builder.top))
+            builder.add_rail(res, limits, find_problems(res, limits, top=builder.top),
+                             estimated=session.rail_estimated(rid))
 
     stream = sys.stderr if quiet else sys.stdout       # with --json, stdout is only the document
 

@@ -34,6 +34,7 @@ from coppernicus.engine import Board, Cancelled, EngineError, solve_rail, tied_n
 from coppernicus.engine.board import board_file_filter
 from coppernicus.fields import TriangleLocator, current_vectors
 from coppernicus.maps import FIELDS, render_layer_map, safe_name, save_layer_maps
+from coppernicus.power_tree import EstimateError, estimated_draws
 from coppernicus.problems import Problem, find_problems
 from coppernicus.project import Limits, Project, ProjectError, Rail, Settings
 from coppernicus.results import LayerField, RailResult
@@ -309,12 +310,12 @@ class Session:
         live = self._solve(entry, rail, solve_settings, top, progress, cancelled)
         return C.jsonable(live.rec.summary)
 
-    def _validate_rail(self, board: Board, rail: Rail) -> None:
+    def _validate_rail(self, board: Board, rail: Rail, project: Optional[Project] = None) -> None:
         self._check_net(board, rail.net)
         if not rail.sources:
             raise ServiceError(E.MISSING_SOURCE, f"{rail.net}: add a source (the regulator output) "
                                "before solving", "a source is {ref, voltage_v, pins?}")
-        if not rail.loads:
+        if not rail.loads and project is None:     # with the project, its draws can be the loads
             raise ServiceError(E.MISSING_LOAD, f"{rail.net}: add at least one load before solving",
                                "a load is {ref, current_a, pins?}")
         nets = tied_nets(board, rail.net)[0] if rail.follow_net_ties else [rail.net]
@@ -334,31 +335,35 @@ class Session:
                                        f"pins of {t.ref} on this net: {_limited(available, 64)}")
 
     def _solve(self, entry: _BoardEntry, rail: Rail, settings: Settings, top: int,
-               progress: Progress, cancelled: Cancel) -> _Live:
+               progress: Progress, cancelled: Cancel, project: Optional[Project] = None) -> _Live:
+        """Solve one rail. With ``project`` (a project rail), it also draws the regulator
+        inputs and links it feeds, estimated at nominal voltages, as the app solves it."""
         # The what-if thickness is in the settings; the engine applies it (to the variant
         # here, already that thickness, it is a no-op) and writes the assumption.
         thickness = dict(settings.copper_thickness_mm)
         board = entry.variant(thickness)
-        self._validate_rail(board, rail)
+        self._validate_rail(board, rail, project)
         with self._solve_lock:
             if progress is not None:
                 progress(f"solving {rail.net}")
             try:
                 res = solve_rail(board, rail, settings, progress=progress,
-                                 cancelled=cancelled or (lambda: False))
+                                 cancelled=cancelled or (lambda: False), project=project)
             except Cancelled:
                 raise ServiceError(E.CANCELLED, f"{rail.net}: solve cancelled") from None
             except EngineError as e:
                 raise ServiceError(E.SOLVE_FAILED, f"{rail.net}: {e}",
                                    "check that the sources and loads are connected by copper of "
-                                   "this net") from None
+                                   "this net" + (", and the regulators and links it feeds"
+                                                 if project is not None else "")) from None
         layer_thickness = {lay.name: lay.thickness_mm for lay in board.layers()}
         problems = find_problems(res, rail.limits, top=max(1, int(top)))
         with self._lock:
             self._n_results += 1
             rid = f"r{self._n_results}"
         summary = C.rail_summary(rid, entry.id, res, rail, problems, settings, thickness,
-                                 layer_thickness, top=max(1, int(top)))
+                                 layer_thickness, top=max(1, int(top)),
+                                 pin_numbers=lambda pid: board.pad(pid).number)
         summary["warnings"] = entry.warnings() + summary["warnings"]
         rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
                             layer_thickness, res, problems, summary, _result_nbytes(res))
@@ -440,17 +445,19 @@ class Session:
         for i, rail in enumerate(selected, start=1):
             if progress is not None:
                 progress(f"rail {i}/{len(selected)}: {rail.net}")
-            if not rail.loads:
-                # In a power tree a rail can feed only a regulator's input: it has no load of
-                # its own yet (a later version estimates one). Skip it with a note; this is not
-                # an error and does not stop the other rails.
+            if not rail.loads and not (rail.sources and _feeds(entry.board, project, rail)):
+                # Nothing to draw: no load of its own, and no regulator input or link it feeds
+                # (or not set up at all). Skip it with a note; this is not an error and does
+                # not stop the other rails.
+                message = (f"{rail.net}: no loads, and it feeds no regulator input or link"
+                           if rail.sources else f"{rail.net}: no source and no loads, so not solved")
                 out_rails.append({"net": rail.net, "skipped": {
-                    "code": E.MISSING_LOAD, "message": f"{rail.net}: no loads, so not solved",
-                    "hint": "add a load to solve it now; if it only feeds a regulator's input, "
-                            "an estimated input load will come in a later version"}})
+                    "code": E.MISSING_LOAD, "message": message,
+                    "hint": "add a load, or the regulator or link it feeds, to solve it"}})
                 continue
             try:
-                live = self._solve(entry, rail, project.settings, top, progress, cancelled)
+                live = self._solve(entry, rail, project.settings, top, progress, cancelled,
+                                   project=project)
             except ServiceError as e:
                 if stop_on_error or e.code == E.CANCELLED:
                     raise
@@ -516,6 +523,12 @@ class Session:
         """The user's limits the result was judged against."""
         return self._record(result_id, heavy=False).rail.limits
 
+    def rail_estimated(self, result_id: str) -> List[str]:
+        """The names of the result's estimated draws (regulator inputs and links its rail
+        feeds), which the engine lists after the rail's own loads."""
+        rec = self._record(result_id, heavy=False)
+        return [d["name"] for d in rec.summary["loads"] if d.get("estimated")]
+
     def board_outline(self, board_id: str) -> list:
         """Board outline rings (mm), for in-process callers such as the report."""
         return self._entry(board_id).outline()
@@ -548,7 +561,8 @@ class Session:
                 return f"{v:g}" if isinstance(v, float) else str(v)
             note = "Settings of this result: " + "; ".join(
                 f"{k} = {shown(v)}" for k, v in used.items()) + "."
-            items.append(RailReport(lv.res, lv.rec.rail.limits, label=f"{lv.res.net} ({lv.rec.id})",
+            items.append(RailReport(lv.res, lv.rec.rail.limits, estimated=self.rail_estimated(lv.rec.id),
+                                    label=f"{lv.res.net} ({lv.rec.id})",
                                     notes=[note]))
         builder, text = build_report(items, title=title or f"Coppernicus report: {board_name or 'rails'}",
                                      board_name=board_name, outline=lives[0].outline)
@@ -611,7 +625,7 @@ class Session:
         problems = find_problems(live.res, lim, top=max(1, int(top)))
         return C.jsonable({
             "result_id": rec.id, "net": live.res.net, **C.verdict(problems, lim, live.res),
-            "problems": [C.problem_dict(p) for p in problems],
+            "problems": [C.problem_dict(p, self.rail_estimated(rec.id)) for p in problems],
             "assumptions": [
                 "Loads are ranked by drop at their worst pin; hotspots are connected regions in the "
                 "top 1 % of a layer's copper area by |J| (or above max_current_density_a_mm2 when "
@@ -781,17 +795,29 @@ def compare_summaries(summary_a: Dict[str, Any], summary_b: Dict[str, Any]) -> D
         warnings.append(f"Different board ids: {sa['board_id']} vs {sb['board_id']}.")
     la = {d["name"]: d for d in sa["loads"]}
     lb = {d["name"]: d for d in sb["loads"]}
-    loads = []
+    loads, differ = [], []
     for name in [*la, *[n for n in lb if n not in la]]:
         da, db = la.get(name), lb.get(name)
-        row = {"name": name, "drop_mv_a": da and da["drop_mv"], "drop_mv_b": db and db["drop_mv"],
+        estimated = bool((da or {}).get("estimated") or (db or {}).get("estimated"))
+        row = {"name": name, "estimated": estimated,
+               "drop_mv_a": da and da["drop_mv"], "drop_mv_b": db and db["drop_mv"],
                "drop_pct_a": da and da["drop_pct"], "drop_pct_b": db and db["drop_pct"]}
         if da and db:
             row["delta_drop_mv"] = _delta(db["drop_mv"], da["drop_mv"])
             row["delta_drop_pct"] = _delta(db["drop_pct"], da["drop_pct"])
+            if estimated and not math.isclose(da["current_a"], db["current_a"], rel_tol=1e-6):
+                differ.append(f"{name} ({da['current_a']:.4g} A vs {db['current_a']:.4g} A)")
         else:
             warnings.append(f"Load {name} is only in result {'a' if da else 'b'}.")
+            if estimated:
+                differ.append(f"{name} (only in {'a' if da else 'b'})")
         loads.append(row)
+    if differ:
+        warnings.append("The estimated draws differ: " + ", ".join(differ) + ". A project solve "
+                        "(solve_project, the CLI, the app) draws the regulator inputs and links a "
+                        "rail feeds, estimated at nominal voltages; solve_rail has no project and "
+                        "draws only the loads given. The deltas mix copper and current: compare "
+                        "two solves of the same kind, e.g. a project with its settings changed.")
     pa, pb = sa["loss_breakdown_w"], sb["loss_breakdown_w"]
     losses = [{"name": k, "power_w_a": pa.get(k), "power_w_b": pb.get(k),
                "delta_power_w": _delta(pb.get(k), pa.get(k))}
@@ -811,6 +837,19 @@ def compare_summaries(summary_a: Dict[str, Any], summary_b: Dict[str, Any]) -> D
         "assumptions": ["Deltas are b − a. Loads are matched by name, losses by layer name."],
         "warnings": warnings,
     })
+
+
+def _feeds(board: Board, project: Project, rail: Rail) -> bool:
+    """Whether the rail, solved with its project, draws something for the regulator inputs
+    or links it feeds (the same nets and ties the engine uses). An estimate that cannot be
+    made counts as yes, so the solve reports it as that rail's error."""
+    if rail.net not in board.nets():
+        return True                      # the solve says the net is not on the board
+    nets = tied_nets(board, rail.net)[0] if rail.follow_net_ties else [rail.net]
+    try:
+        return bool(estimated_draws(project, nets, [(t.net_a, t.net_b) for t in board.net_ties()]))
+    except EstimateError:
+        return True
 
 
 def _delta(b, a):

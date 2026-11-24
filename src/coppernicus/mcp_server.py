@@ -184,7 +184,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         voltage_v on their pins; loads draw current_a split equally across their pins.
         Returns result_id and a summary: load voltages and drops, max drop, loss per layer,
         busiest layer, top problems, verdict (only against the limits given), assumptions
-        and warnings."""
+        and warnings. No project: only the loads given are drawn (solve_project also draws
+        the regulator inputs and links a rail feeds, estimated)."""
         bridge = _Bridge(ctx)
         return _call("solve_rail", session.solve_rail, board_id, net,
                      [s.model_dump() for s in sources], [ld.model_dump() for ld in loads],
@@ -249,8 +250,10 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                       top: Annotated[int, Field(ge=1, le=50)] = 5) -> dict[str, Any]:
         """Solve the rails of a project file with its sources, loads, limits and settings
         (including its optional what-if copper_thickness_mm, named in each rail's
-        assumptions). Returns one solve_rail summary (with result_id) per rail, a rail that
-        fails reported in place, and an overall verdict."""
+        assumptions). Each rail also draws the regulator inputs and links it feeds, estimated
+        at nominal voltages: loads with "estimated": true. Returns one solve_rail summary
+        (with result_id) per rail, a rail that fails reported in place, a rail with nothing
+        to draw as skipped, and an overall verdict."""
         bridge = _Bridge(ctx)
         return _call("solve_project", session.solve_project, project_path, rails, top,
                      progress=bridge.progress, cancelled=bridge.cancelled)

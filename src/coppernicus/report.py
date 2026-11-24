@@ -207,6 +207,9 @@ class RailReport:
     problems: Optional[List[Problem]] = None
     label: str = ""
     notes: Sequence[str] = ()
+    # The names of its estimated draws (regulator inputs and links a project rail feeds);
+    # None: told by the engine's name suffix ", estimated)".
+    estimated: Optional[Sequence[str]] = None
 
 
 def _median_edge_mm(result: RailResult) -> float:
@@ -276,9 +279,11 @@ class ReportBuilder:
 
     def add_rail(self, result: RailResult, limits: Optional[Limits] = None,
                  problems: Optional[List[Problem]] = None, label: str = "",
-                 notes: Sequence[str] = ()) -> None:
+                 notes: Sequence[str] = (), estimated: Optional[Sequence[str]] = None) -> None:
         """Sample and add one solved rail. ``limits`` are the user's (judged only against
-        them); ``problems`` default to :func:`find_problems` with those limits."""
+        them); ``problems`` default to :func:`find_problems` with those limits. ``estimated``
+        names the loads that are estimated draws; without it, the engine's name suffix
+        ", estimated)" tells them (results from the app, which has no list)."""
         from coppernicus.service.convert import RAIL_CAVEATS, problem_dict, verdict
         t0 = time.perf_counter()
         limits = limits or Limits()
@@ -312,7 +317,10 @@ class ReportBuilder:
                 "v": vid, "j": jid,
             })
         self.layers_added += len(result.layers)
+        est = (set(estimated) if estimated is not None else
+               {t.name for t in result.loads if t.name.endswith(", estimated)")})
         loads = [{"name": t.name, "ref": t.ref, "pins": len(t.pad_ids), "current_a": t.current,
+                  "estimated": t.name in est,
                   "v_min_v": t.v_min, "drop_mv": result.drop(t) * 1e3, "drop_pct": result.drop_pct(t),
                   "exceeds": (None if limits.max_drop_pct is None
                               or not math.isfinite(result.drop_pct(t))
@@ -443,7 +451,8 @@ def build_report(items: Sequence[RailReport], *, title: str = "", board_name: st
                           settings=settings, budget_mb=budget_mb, cell_scale=scale,
                           expected_layers=sum(len(i.result.layers) for i in items))
         for item in items:
-            b.add_rail(item.result, item.limits, item.problems, item.label, item.notes)
+            b.add_rail(item.result, item.limits, item.problems, item.label, item.notes,
+                       item.estimated)
         return b
 
     scale, seconds = 1.0, 0.0

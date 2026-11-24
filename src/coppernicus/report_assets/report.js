@@ -239,7 +239,7 @@ function panels() {
       S.mark = [p.x_mm, p.y_mm]; zoomTo(p.x_mm, p.y_mm, 8); $("map").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
   const lim = rail.limits.max_drop_pct;
   table("loads", [["Load", ""], ["Ref", ""], ["Pins", "num"], ["Current (A)", "num"], ["V min (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"], [lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""]],
-    rail.loads.map((t) => [[t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"], [sig(t.v_min_v, 7), "num"], [sig(t.drop_mv, 4), "num"],
+    rail.loads.map((t) => [[t.estimated ? el("span", { title: "estimated at nominal voltages, without copper losses" }, t.name, " ", el("span", { class: "muted small" }, "estimated draw")) : t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"], [sig(t.v_min_v, 7), "num"], [sig(t.drop_mv, 4), "num"],
       [sig(t.drop_pct, 3), "num"], [t.exceeds === null ? "no limit set" : (t.exceeds ? el("span", { class: "badge fail" }, "FAIL") : "within"), ""]]));
   table("sources", [["Source", ""], ["Ref", ""], ["Pins", "num"], ["Voltage (V)", "num"], ["Current (A)", "num"]],
     rail.sources.map((t) => [[t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.v_v, 6), "num"], [sig(t.current_a, 4), "num"]]));

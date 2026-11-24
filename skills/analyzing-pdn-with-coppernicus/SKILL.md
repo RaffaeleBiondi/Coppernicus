@@ -69,9 +69,12 @@ follow the hint. `result_evicted` means you must solve again.
 - Write the YAML and the outputs outside the board's folder.
 - stdout and the file named by `summary_file` hold the same document. Its `problems` lists every
   load plus the top N spots and vias (`--top N`, default 5).
-- A rail with no loads comes back as `skipped`, both here and from the MCP `solve_project`.
-  In a power tree it only feeds a regulator's input. Say that it was not solved; do not invent
-  an input current for it.
+- A project rail also draws the regulator inputs and links it feeds, estimated at nominal
+  voltages: loads named "U1 (input, estimated)" / "FB1 (link, estimated)", with
+  `"estimated": true`. Say that these currents are estimates, not the user's numbers. A rail
+  with no loads that feeds nothing comes back as `skipped`: say it was not solved; do not
+  invent a current for it. MCP `solve_rail` has no project and draws only the loads given, so
+  for a what-if on a project rail, change the project's settings and solve the project again.
 - `--html` also writes an offline report for the user; its path is in `report_file`. It lets the
   user zoom and read values by hovering, but you cannot read it.
 - The CLI has no cut, probe, zoomed map or compare for you. Say that widths and point values

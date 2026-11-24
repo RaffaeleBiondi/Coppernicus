@@ -7,7 +7,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -212,10 +212,14 @@ def rail_from_dicts(net: str, sources: Sequence[Mapping[str, Any]], loads: Seque
 
 # ---------------------------------------------------------------------- outputs
 
-def problem_dict(p: Problem) -> Dict[str, Any]:
+def problem_dict(p: Problem, estimated: Sequence[str] = ()) -> Dict[str, Any]:
+    """A problem as plain data. A load problem of one of the ``estimated`` draws (by name;
+    names are unique within a result) gets ``"estimated": true``."""
     out: Dict[str, Any] = {"severity": p.severity, "kind": p.kind, "title": p.title,
                            "detail": p.detail, "layer": p.layer, "x_mm": p.x, "y_mm": p.y}
     out.update(p.data)
+    if p.kind == "load" and p.data.get("name") in estimated:
+        out["estimated"] = True
     return out
 
 
@@ -273,21 +277,34 @@ def verdict(problems: List[Problem], limits: Limits, result: Optional[RailResult
 
 def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems: List[Problem],
                  settings: Settings, thickness: Mapping[str, float],
-                 layer_thickness: Mapping[str, float], top: int = 5) -> Dict[str, Any]:
+                 layer_thickness: Mapping[str, float], top: int = 5,
+                 pin_numbers: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
     """The compact summary of a solved rail. ``problems`` are listed in full: every load,
     then the ``top`` current-crowding spots and the ``top`` vias (more when they exceed a
-    limit), as :func:`coppernicus.problems.find_problems` ranked them."""
+    limit), as :func:`coppernicus.problems.find_problems` ranked them.
+
+    ``loads`` lists the rail's own loads, then (``"estimated": true``) what a project rail
+    draws for the regulator inputs and links it feeds, which the engine appends after them;
+    their ``pins`` are the pad numbers (``pin_numbers``: pad id → number)."""
     v_ref = res.v_ref
     # Of |v_ref|, so a negative rail's percentages are positive, as its drops are.
     pct = (lambda volts: 100.0 * volts / abs(v_ref)) if v_ref else (lambda volts: float("nan"))
     limits = rail.limits
     loads = []
-    for t, spec in zip(res.loads, rail.loads):
+    own = len(rail.loads)
+    estimated = [t.name for t in res.loads[own:]]
+    for i, t in enumerate(res.loads):
+        spec = rail.loads[i] if i < own else None
+        if spec is not None:
+            pins = pins_text(spec.pins)
+        else:
+            pins = (pins_text(sorted({pin_numbers(p) for p in t.pad_ids}, key=lambda s: (len(s), s)))
+                    if pin_numbers is not None else None)
         drop = res.drop(t)
         exceeds = (None if limits.max_drop_pct is None or not math.isfinite(res.drop_pct(t))
                    else bool(res.drop_pct(t) > limits.max_drop_pct))
         x, y = t.positions[0] if t.positions else (float("nan"), float("nan"))
-        loads.append({"name": t.name, "ref": t.ref, "pins": pins_text(spec.pins),
+        loads.append({"name": t.name, "ref": t.ref, "pins": pins, "estimated": spec is None,
                       "pin_count": len(t.pad_ids), "current_a": t.current, "v_min_v": t.v_min,
                       "v_max_v": t.v_max, "drop_mv": drop * 1e3, "drop_pct": res.drop_pct(t),
                       "exceeds_drop_limit": exceeds, "x_mm": x, "y_mm": y})
@@ -316,7 +333,7 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         "via_count": len(res.vias), "via_current_max_a": max((v.current for v in res.vias), default=0.0),
         "j_point_max_a_mm2": res.j_max,
         **verdict(problems, limits, res),
-        "problems": [problem_dict(p) for p in problems],
+        "problems": [problem_dict(p, estimated) for p in problems],
         "problems_total": len(problems),
         "problems_note": f"Every load, then the top {top} current-crowding spots and the top {top} "
                          "vias by current (more when they exceed a limit you set). Vias carrying "

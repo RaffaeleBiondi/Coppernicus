@@ -119,16 +119,21 @@ def test_a_crash_is_an_error_not_an_exceeded_limit(repo, monkeypatch):
     assert index["projects"][0]["exit_code"] == 2
 
 
-def test_summary_of_a_power_tree_with_a_skipped_rail(tmp_path, monkeypatch):
-    """The v2 example: its VIN rail has no load, so it is skipped (not an error), and its
-    rails carry the power-tree assumption line, which the summary lists once."""
+def test_summary_of_a_power_tree_project(tmp_path, monkeypatch):
+    """The v2 example: its VIN rail has no load of its own but feeds U1's input, so it is
+    solved with U1's estimated input current as its load; the rails carry the power-tree
+    assumption lines, which the summary lists once. A rail with nothing to draw is skipped."""
     chain = Path(__file__).resolve().parents[1] / "examples" / "power_chain"
     shutil.copytree(chain, tmp_path / "chain")
     monkeypatch.chdir(tmp_path)
     index = ci.solve_all(["chain/*.coppernicus.yml"], Path("out"), html=False)
     assert index["exit_code"] == 0 and index["verdict"] != "error"
     md = ci.summary_markdown(index)
-    assert "| VIN | – | – | – | – | skipped: no loads |" in md
+    assert "| VIN | U1 (input, estimated):" in md
+    skipped = {"verdict": "not_judged", "projects": [{"project": "p.coppernicus.yml", "exit_code": 0, "doc": {
+        "verdict": "not_judged", "rails": [{"net": "VX", "skipped": {"code": "missing_load", "message": "m",
+                                                                    "hint": "h"}}]}}]}
+    assert "| VX | – | – | – | – | skipped: nothing to draw |" in ci.summary_markdown(skipped)
     rails = index["projects"][0]["doc"]["rails"]
     lines = {a for r in rails if "assumptions" in r for a in r["assumptions"]}
     assert all(md.count(ci._cell(a)) == 1 for a in lines)        # each assumption listed once

@@ -74,7 +74,7 @@ input.
 | `probe` | `result_id`, `layer`, `x_mm`, `y_mm` | Voltage, drop and current density (magnitude and vector) at a point. Off copper, it says which layers have copper there and where the nearest copper is. |
 | `cut_current` | `result_id`, `layer`, `x1_mm`, `y1_mm`, `x2_mm`, `y2_mm` | A cross-section along a segment: the copper width crossed, the current through it (∫ J·n t ds, signed along `normal`), and the mean and max \|J\|. Use it to measure a neck. |
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
-| `solve_project` | `project_path`, `rails`?, `top`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings. Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. A rail with no loads, such as one that only feeds a regulator's input in a power tree, is reported as `skipped`; that is not an error, and it is left out of the verdict. |
+| `solve_project` | `project_path`, `rails`?, `top`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings. Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. |
 | `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
 
 A summary's `problems` list is complete: every load, then the `top` current-crowding spots and
@@ -109,6 +109,24 @@ positive like the drops.
   thickens (shorter when it thins). Even a net with no copper on the changed layer then moves
   slightly through its vias. The result's assumptions say which layers were overridden, with
   the board file's value next to each.
+
+### Estimated draws
+
+A rail solved from a project (`solve_project`, the CLI, the GitHub Action, the app) also
+delivers the current of the regulator inputs and links (`links:`) it feeds, estimated at
+nominal voltages without copper losses: an LDO's input is its output current plus I_q, a
+switcher's is |V_out|·I_out / (η·|V_in|) + I_q, a link carries what its far side draws. Each is
+a load named `"U1 (input, estimated)"` or `"FB1 (link, estimated)"` on those pins, listed in
+`loads` with `"estimated": true` (and `pins` as pad numbers). Its load problem carries
+`"estimated": true` too. One assumption line names them; the power-tree solve computes the
+same currents exactly. A rail with no loads now solves when it feeds something, which is how a
+regulator's input rail is checked.
+
+The MCP `solve_rail` tool has no project, so it draws only the loads you give it, and every
+load it lists has `"estimated": false`. `compare_results` warns when two results' estimated
+draws differ (for example a `solve_project` result against a `solve_rail` what-if of the same
+rail): the deltas then mix copper and current. For a what-if on a project rail, change the
+project's settings and solve the project again.
 
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;

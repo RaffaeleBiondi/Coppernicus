@@ -49,8 +49,11 @@ limit on a 0 V net, a load with no voltage at its pins, or `max_via_current` on 
 vias. The summary lists each such item with its reason. This does not fail the check (exit
 code 0, as for a pass); a limit exceeded elsewhere on the rail still fails it.
 
-A rail with no loads is shown as "skipped: no loads". In a power tree this is a rail that only
-feeds a regulator's input. It is not an error and does not fail the check.
+A rail that feeds a regulator's input or a link (`links:`) also draws that current,
+estimated at nominal voltages without copper losses, as the desktop app does. It is listed as
+a load named "U1 (input, estimated)" or "FB1 (link, estimated)", and the assumptions say so. A
+rail with no loads that feeds nothing is shown as "skipped: nothing to draw". It is not an
+error and does not fail the check.
 
 A project file can set an optional what-if copper thickness per layer, in mm, under
 `settings: copper_thickness_mm:` (for example `B.Cu: 0.07`; 1 oz is 0.035). The check then
