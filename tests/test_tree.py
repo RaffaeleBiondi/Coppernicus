@@ -337,3 +337,19 @@ def test_ground_rise_limit_judges_a_ground_net_solved_alone():
     [rise] = [p for p in find_problems(res, Limits(max_ground_rise_mv=50.0)) if p.kind == "rise"]
     assert rise.severity != FAIL
     assert not [p for p in find_problems(res, Limits()) if p.kind == "rise"]
+
+
+def test_a_ground_net_set_up_as_a_rail_is_solved_as_a_ground_in_the_tree(board):
+    """GND set up as a rail (a 0 V source and its return pins as loads, to solve it alone)
+    does not stop the tree: there GND is solved as a ground, from the ground pins."""
+    from coppernicus.engine.pisetup import to_pisetup
+    from coppernicus.project import Rail
+    project = power_chain_project()
+    project.rails.append(Rail("GND", sources=[Source("J1", 0.0, ["2"])], loads=[Load("U3", 2.0, ["2"])],
+                              limits=Limits(max_ground_rise_mv=50.0)))
+    assert all(v.output.net != "GND" for v in to_pisetup(board, project).vrms)
+    tree = solve_project_tree(board, project)
+    assert tree.groups["GND"].kind == "ground"
+    assert tree.groups["GND"].max_drop == pytest.approx(_hand()["U3.gnd"], abs=2e-5)
+    assert any("GND" in w and "solved alone" in w for w in tree.warnings)
+    assert tree.limits["GND"].max_ground_rise_mv == 50.0

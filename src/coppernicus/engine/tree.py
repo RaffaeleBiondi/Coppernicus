@@ -22,7 +22,7 @@ from kipi.dc.solver import SolveError
 from kipi.dc.solver.setup import REF_TEMP_C
 
 from coppernicus.engine.board import Board, EngineError
-from coppernicus.engine.pisetup import terminal_names, to_pisetup
+from coppernicus.engine.pisetup import ground_nets, ground_rails, terminal_names, to_pisetup
 from coppernicus.engine.solve import Cancelled, _Progress, engine_settings, mesh_fields
 from coppernicus.power_tree import judge_loads
 from coppernicus.project import Project, pin_ref, pins_text
@@ -37,27 +37,17 @@ from coppernicus.results import (
 REGULATING = ("ldo", "smps")
 
 
-def _ground_nets(project: Project) -> List[str]:
-    """Ground nets the project names, in order (sources' ground and ground-sense pins, then
-    loads' ground pins)."""
-    out: List[str] = []
-    for r in project.rails:
-        for s in r.sources:
-            out += [n for n in (s.ground_net, s.ground_sense_net) if n]
-        out += [ld.ground_net for ld in r.loads if ld.ground_net]
-    return list(dict.fromkeys(out))
-
-
 def check_grounds(project: Project) -> None:
     """Once a ground net is solved, every load and regulator needs ground pins: otherwise its
     return current would not flow in the ground copper. Plain sources may go without."""
     excluded = set(project.engine_options.get("excluded_nets", []) or [])
-    solved = [n for n in _ground_nets(project) if n not in excluded]
+    grounds = ground_nets(project)
+    solved = [n for n in grounds if n not in excluded]
     if not solved:
         return
     missing = []
     for r in project.rails:
-        if r.net in excluded or not (r.sources or r.loads):
+        if r.net in excluded or r.net in grounds or not (r.sources or r.loads):
             continue
         missing += [f"source {s.label} ({s.kind}) on {r.net}" for s in r.sources
                     if s.kind in REGULATING and not s.ground_net]
@@ -157,7 +147,7 @@ def solve_project_tree(board: Board, project: Project,
 
     names = terminal_names(project)
     rail_of_vrm = {name: net for (what, net, _i), name in names.items() if what == "source"}
-    grounds = _ground_nets(project)
+    grounds = ground_nets(project)
     key_of: Dict[str, str] = {}
     for label, g in kt.groups.items():
         if g.kind == "rail":
@@ -166,7 +156,10 @@ def solve_project_tree(board: Board, project: Project,
             key_of[label] = next((n for n in grounds if n in g.nets), sorted(g.nets)[0])
 
     assumptions = _assumptions(project, setup)
-    out = TreeResult(assumptions=assumptions, warnings=list(kt.warnings),
+    notes = [f"Rail {r.net} is solved as a ground in the power tree (from the ground pins); its "
+             f"own sources and loads are used only when {r.net} is solved alone."
+             for r in ground_rails(project)]
+    out = TreeResult(assumptions=assumptions, warnings=notes + list(kt.warnings),
                      stats={"seconds": seconds, "groups": float(len(kt.groups))})
     for label, g in kt.groups.items():
         out.groups[key_of[label]] = _group(board, key_of[label], g, assumptions)

@@ -132,6 +132,9 @@ spread over several tied nets raise `EngineError`: pick the pins on one net.
 - **Several sources.** KiPI drives each net group from one VRM, so a rail with two or more
   sources raises `EngineError`. The per-rail solve still accepts several sources.
 - **Ground nets** need no rail entry: they come from the `ground` and `ground_sense` fields.
+  A rail on a net the project uses as a ground (set up with a 0 V source and its return
+  pins as loads, to solve that ground on its own) is not mapped as a rail: the tree solves
+  the net as a ground and says so in a warning. Its limits still judge the ground group.
 - **Names.** KiPI wants every VRM, load and link name to be unique.
   - A label used once is kept as it is.
   - A source or load label used more than once becomes `"<label> (<net>)"`. A typical case
