@@ -285,7 +285,7 @@ rails:
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
 | Standalone `.app` / `.exe` that needs no uv | ⏳ later |
 
-Tested on macOS. The test suite also runs on Ubuntu in CI, and on Windows as an informative job; the desktop app has not been tried on Windows yet. The engine also reads ODB++
+Tested on macOS. The test suite also passes in CI on Ubuntu and on Windows (an informative job); the desktop app itself has not been tried on Windows yet. The engine also reads ODB++
 and HyperLynx files, which have not been tried through Coppernicus yet.
 
 ## More documentation
