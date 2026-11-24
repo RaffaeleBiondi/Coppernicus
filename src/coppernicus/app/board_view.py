@@ -162,6 +162,7 @@ class BoardView(QWidget):
         self.plotter.track_click_position(self._on_double_click, side="left", double=True)
         self._click_mode: Optional[str] = None
         self._press_at: Optional[Tuple[int, int]] = None
+        self._press_is_double = False
         self.plotter.iren.add_observer("LeftButtonPressEvent", self._on_press)
         self.plotter.iren.add_observer("LeftButtonReleaseEvent", self._on_release)
         self._layer: Optional[LayerField] = None
@@ -172,6 +173,11 @@ class BoardView(QWidget):
         self._measure_result: Optional[RailResult] = None
 
     # ------------------------------------------------------------------ scene
+    def reset(self):
+        """A new board: an empty scene, no measurement and no reference to an old result."""
+        self.clear()
+        self._measure, self._measure_result = [], None
+
     def clear(self):
         self.plotter.clear()
         self.colorbar.set_scale(None)
@@ -349,10 +355,13 @@ class BoardView(QWidget):
 
     def _on_press(self, *_):
         self._press_at = self._event_xy()
+        # Qt delivers the second press of a double-click with VTK's repeat count set: that
+        # click belongs to the double-click probe, not to picking or measuring.
+        self._press_is_double = self.plotter.iren.interactor.GetRepeatCount() > 0
 
     def _on_release(self, *_):
         start, self._press_at = self._press_at, None
-        if self._click_mode is None or start is None:
+        if self._click_mode is None or start is None or self._press_is_double:
             return
         x, y = self._event_xy()
         if abs(x - start[0]) > CLICK_SLOP_PX or abs(y - start[1]) > CLICK_SLOP_PX:

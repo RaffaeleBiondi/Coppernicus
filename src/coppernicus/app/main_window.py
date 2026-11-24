@@ -58,6 +58,7 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self.last_render_s = 0.0
         self._candidates: Dict[Tuple, List[str]] = {}      # pickable pad ids per set of nets
+        self._generation = 0          # +1 per opened board: a solve started before is stale
 
         # Centre: pickers + view.
         self.view = BoardView()
@@ -185,8 +186,16 @@ class MainWindow(QMainWindow):
         self.results.clear()
         self._candidates.clear()
         self.rail_panel.set_pick("")
+        self.measure.setChecked(False)
         self.net, self._rail_draft = None, None          # nothing of the previous board survives
+        self._generation += 1
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.cancel()                         # and _solved ignores it if it ends
         self.rail_panel.clear_rail()
+        self.view.reset()
+        self.layer_box.blockSignals(True)
+        self.layer_box.clear()
+        self.layer_box.blockSignals(False)
         self.rail_panel.set_settings(self.project.settings)
         self.nets.set_board(board, [r.net for r in self.project.rails if r.sources or r.loads],
                             self.project.marked_rails)
@@ -435,13 +444,20 @@ class MainWindow(QMainWindow):
         self.rail_panel.solve.setEnabled(False)
         self.problems.clear(f"<b>{self.net}</b>: solving…")
         self.worker = SolveWorker(self.board, rail, self.project.settings, self)
+        self.worker.generation = self._generation
         self.worker.message.connect(lambda m: self.statusBar().showMessage(m))
         self.worker.succeeded.connect(self._solved)
         self.worker.failed.connect(self._solve_failed)
         self.worker.finished.connect(lambda: self.rail_panel.solve.setEnabled(True))
         self.worker.start()
 
+    def _is_stale(self) -> bool:
+        """True in a solve slot when the solve was started on a board that is closed now."""
+        return getattr(self.sender(), "generation", self._generation) != self._generation
+
     def _solved(self, res: RailResult):
+        if self._is_stale():
+            return
         self.results[res.net] = res
         if res.net == self.net:
             self._show_problems(res)
@@ -458,6 +474,8 @@ class MainWindow(QMainWindow):
             f"drawn in {self.last_render_s:.2f} s")
 
     def _solve_failed(self, message: str):
+        if self._is_stale():
+            return
         self.problems.clear(f"<b>{self.net}</b>: cannot solve")
         self.problems.notes.setPlainText(message)
         QMessageBox.warning(self, "Cannot solve", message)
@@ -491,7 +509,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ closing
     def closeEvent(self, event):
-        if self.dirty and (self.project.rails or self.project.path):
+        if self.dirty and (self.project.rails or self.project.path or self.project.marked_rails):
             answer = QMessageBox.question(self, "Unsaved changes", "Save the project before closing?",
                                           QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
             if answer == QMessageBox.Cancel:

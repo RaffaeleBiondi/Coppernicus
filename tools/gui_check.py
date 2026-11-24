@@ -35,13 +35,17 @@ class Checks:
         print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f": {detail}" if detail else ""), flush=True)
 
 
+DIALOGS = []                                  # (kind, title) of every message box shown
+
+
 def _quiet_dialogs():
-    """Modal boxes would block a scripted run: print them instead."""
+    """Modal boxes would block a scripted run: print and record them instead."""
     from PySide6.QtWidgets import QMessageBox
 
     def say(kind):
         def box(_parent, title, text, *_a, **_k):
             print(f"{kind}: {title}: {text}", flush=True)
+            DIALOGS.append((kind, title))
             return QMessageBox.Discard
         return staticmethod(box)
     for kind in ("critical", "warning", "information", "question"):
@@ -308,6 +312,113 @@ def run_local(window, check: Checks, args, out: Path):
             check(f"{lf.name} {field}: at most 2000 arrows", n_arrows <= 2000)
 
 
+def run_review_fixes(window, check: Checks, args, out: Path):
+    """Findings of the Part A review: comma input, a stale solve, state left by open_board,
+    a double-click while measuring."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    demo = ROOT / "examples" / "demo" / "demo.coppernicus.yml"
+
+    # A comma typed as the decimal sign is read as one, never as a thousands separator.
+    window.open_project(demo)
+    QApplication.processEvents()
+    spin = window.rail_panel.sources.table.cellWidget(0, 3)
+    spin.lineEdit().selectAll()
+    QTest.keyClicks(spin, "3,3")
+    QTest.keyClick(spin, Qt.Key_Return)
+    rail = window.project.rail("+3V3")
+    check("typing 3,3 in a voltage gives 3.3 V", abs(spin.value() - 3.3) < 1e-9
+          and abs(rail.sources[0].voltage - 3.3) < 1e-9, f"{spin.text()!r} -> {rail.sources[0].voltage}")
+    edit = window.rail_panel.max_drop
+    edit.selectAll()
+    QTest.keyClicks(edit, "1,5")
+    QTest.keyClick(edit, Qt.Key_Return)
+    check("typing 1,5 in a limit gives 1.5 %", rail.limits.max_drop_pct == 1.5,
+          f"{edit.text()!r} -> {rail.limits.max_drop_pct}")
+    edge = window.rail_panel.max_edge
+    edge.lineEdit().selectAll()
+    QTest.keyClicks(edge, "0,3")
+    QTest.keyClick(edge, Qt.Key_Return)
+    check("typing 0,3 in the mesh edge gives 0.3 mm", abs(window.project.settings.max_edge_mm - 0.3) < 1e-9,
+          f"{edge.text()!r} -> {window.project.settings.max_edge_mm}")
+
+    # A solve still running when another board is opened does not land on it.
+    window.open_project(demo)
+    QApplication.processEvents()
+    window.solve()
+    old = window.worker
+    window.open_board(DEMO_BOARD)                       # a fresh project: +3V3 has no rail
+    window.nets.select("+3V3")
+    if old is not None:
+        old.wait(int(args.timeout * 1000))
+    QApplication.processEvents()
+    QApplication.processEvents()
+    check("a solve of the previous board is dropped", "+3V3" not in window.results
+          and "worst load" not in window.problems.summary.text(), window.problems.summary.text())
+
+    # open_board leaves nothing of the previous board: measure mode, layers, limits.
+    window.open_project(demo)
+    QApplication.processEvents()
+    solve_and_wait(window, args.timeout)
+    window.measure.setChecked(True)
+    window.view.measure_at(6.0, 20.0)
+    window.open_board(out / "pins.kipi.json.gz")        # no rails: nothing selected
+    QApplication.processEvents()
+    check("open_board leaves measure mode", not window.measure.isChecked() and window.view.click_mode is None)
+    check("... and drops the old result held by the view",
+          window.view._measure_result is None and not window.view._measure)
+    check("... and empties the layer box", window.layer_box.count() == 0,
+          str([window.layer_box.itemText(i) for i in range(window.layer_box.count())]))
+    left = window.rail_panel.max_drop.text()
+    check("... and the limit fields", left == "", left)
+
+    if args.window:
+        # A double-click while measuring reads the value and keeps point A.
+        window.open_project(demo)
+        QApplication.processEvents()
+        solve_and_wait(window, args.timeout)
+        window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
+        window.view.reset_view()
+        QApplication.processEvents()
+        window.measure.setChecked(True)
+        window.view.measure_at(6.0, 20.0)
+        messages = []
+        window.view.probed.connect(messages.append)
+        widget = window.view.plotter.interactor
+        ren = window.view.plotter.renderer
+        ren.SetWorldPoint(50.0, -10.0, 0.0, 1.0)
+        ren.WorldToDisplay()
+        dx, dy, _ = ren.GetDisplayPoint()
+        dpr = widget.devicePixelRatioF()
+        from PySide6.QtCore import QPoint
+        pos = QPoint(round(dx / dpr), round((window.view.plotter.ren_win.GetSize()[1] - 1 - dy) / dpr))
+        # What a real mouse sends for a double-click: press, release, double-click press,
+        # release. (QTest.mouseDClick alone sends only the double-click event.)
+        QTest.mouseClick(widget, Qt.LeftButton, Qt.NoModifier, pos)
+        QTest.mouseDClick(widget, Qt.LeftButton, Qt.NoModifier, pos)
+        QTest.mouseRelease(widget, Qt.LeftButton, Qt.NoModifier, pos)
+        QApplication.processEvents()
+        a = window.view._measure[0][1:3] if window.view._measure else None
+        last = messages[-1] if messages else ""
+        check("a double-click while measuring keeps A and does not read 0 mV",
+              a == (6.0, 20.0) and "= 0.000 mV" not in last, f"A {a}; messages {messages}")
+        window.measure.setChecked(False)
+
+
+def run_close_asks(window, check: Checks, out: Path):
+    """Closing with only hand-marked rails asks to save (the dialog answers Discard)."""
+    from PySide6.QtWidgets import QApplication
+    window.open_board(out / "pins.kipi.json.gz")
+    QApplication.processEvents()
+    window.nets.set_marked("OTHER", True)
+    before = len(DIALOGS)
+    window.close()
+    QApplication.processEvents()
+    check("closing with marked rails asks to save", any(k == "question" for k, _ in DIALOGS[before:]),
+          str(DIALOGS[before:]))
+
+
 def run_other_net(window, check: Checks, out: Path):
     """A click on a pad of another net says so and adds nothing (synthetic pins board)."""
     from PySide6.QtWidgets import QApplication
@@ -379,9 +490,12 @@ def main(argv=None) -> int:
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:
             run_local(window, check, args, out)
+        run_review_fixes(window, check, args, out)
+        run_close_asks(window, check, out)
     finally:
-        window.dirty = False              # never ask to save
-        window.close()
+        if window.isVisible():
+            window.dirty = False          # never ask to save
+            window.close()
         app.processEvents()
     print(f"{'all checks passed' if not check.failed else f'{check.failed} check(s) failed'}"
           + f"; images in {out}", flush=True)

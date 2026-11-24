@@ -35,6 +35,29 @@ from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.problems import FAIL, Problem
 from coppernicus.project import Limits, Load, Rail, Settings, Source, parse_pins, pins_text
 
+# ---------------------------------------------------------------------- numbers
+
+
+class DecimalSpinBox(QDoubleSpinBox):
+    """A spin box that reads a typed comma as the decimal sign. Numbers are shown with a dot
+    (the app uses the C locale), where a comma would otherwise be taken as a thousands
+    separator and dropped, turning 3,3 into 33."""
+
+    def validate(self, text, pos):
+        return super().validate(text.replace(",", "."), pos)
+
+    def valueFromText(self, text):
+        return super().valueFromText(text.replace(",", "."))
+
+
+class DecimalValidator(QDoubleValidator):
+    """A validator for decimal fields that reads a typed comma as the decimal sign (see
+    :class:`DecimalSpinBox`)."""
+
+    def validate(self, text, pos):
+        return super().validate(text.replace(",", "."), pos)
+
+
 # ---------------------------------------------------------------------- nets
 
 
@@ -256,7 +279,7 @@ class TerminalTable(QWidget):
                              "of the part on this net")
         pins_edit.editingFinished.connect(self.changed.emit)
         self.table.setCellWidget(r, 2, pins_edit)
-        spin = QDoubleSpinBox()
+        spin = DecimalSpinBox()
         spin.setDecimals(4)
         spin.setRange(0.0, 1e4)
         spin.setValue(float(value))
@@ -294,19 +317,19 @@ class RailPanel(QWidget):
         self.max_j = QLineEdit(placeholderText="A/mm²")
         self.max_via = QLineEdit(placeholderText="A")
         for e in (self.max_drop, self.max_j, self.max_via):
-            e.setValidator(QDoubleValidator(0.0, 1e9, 6))
+            e.setValidator(DecimalValidator(0.0, 1e9, 6))
         form = QFormLayout(limits)
         form.addRow("Max drop (%)", self.max_drop)
         form.addRow("Max current density (A/mm²)", self.max_j)
         form.addRow("Max via current (A)", self.max_via)
 
         settings = QGroupBox("Solve settings (whole project)")
-        self.max_edge = QDoubleSpinBox(decimals=3, minimum=0.02, maximum=5.0, singleStep=0.1, suffix=" mm")
+        self.max_edge = DecimalSpinBox(decimals=3, minimum=0.02, maximum=5.0, singleStep=0.1, suffix=" mm")
         self.plating = QLineEdit(placeholderText="engine defaults (IPC-6012 Class 2)")
-        self.plating.setValidator(QDoubleValidator(0.1, 1000.0, 3))
+        self.plating.setValidator(DecimalValidator(0.1, 1000.0, 3))
         self.plating.setToolTip("Via barrel plating in µm for every plated hole. Empty: the engine's "
                                 "table (micro 12, buried 13, others 20 µm). Ask your fabricator.")
-        self.temp = QDoubleSpinBox(decimals=1, minimum=-55.0, maximum=250.0, suffix=" °C")
+        self.temp = DecimalSpinBox(decimals=1, minimum=-55.0, maximum=250.0, suffix=" °C")
         self.temp.setToolTip("Copper temperature; resistivity is referenced to 20 °C")
         sform = QFormLayout(settings)
         sform.addRow("Largest mesh edge", self.max_edge)
@@ -393,6 +416,8 @@ class RailPanel(QWidget):
         self.title.setText("<i>Pick a net</i>")
         self.sources.set_rows([])
         self.loads.set_rows([])
+        for edit in (self.max_drop, self.max_j, self.max_via):
+            edit.clear()
         self.ties.setVisible(False)
         self.follow_ties.setVisible(False)
         self.setEnabled(False)
