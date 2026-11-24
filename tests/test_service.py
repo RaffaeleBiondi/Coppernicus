@@ -21,7 +21,6 @@ from coppernicus.engine.synthetic import (
 )
 from coppernicus.project import Limits, Load, Project, Rail, Source
 from coppernicus.service import ServiceError, Session
-from coppernicus.service.fields import TriangleLocator
 
 RHO = 1.724e-5      # Ω·mm, annealed copper at 20 °C (the engine's constant, as in test_engine)
 W, T = Strip.W, OZ1
@@ -318,15 +317,3 @@ def test_solve_project_reports_each_rail(tmp_path, boards, session):
     with pytest.raises(ServiceError) as e:
         session.solve_project(path, rails=["GND"])
     assert e.value.code == "invalid_input" and "+3V3" in e.value.hint
-
-
-def test_locator_handles_separate_pieces_with_coincident_points():
-    """Same cases as the GUI's locator (tests/test_app_logic.py), on the non-GUI copy."""
-    pts = np.array([[0, 0], [1, 0], [0, 1], [1, 1], [1, 0], [2, 0]], float)   # (1, 0) twice
-    tris = np.array([[0, 1, 2], [1, 3, 2], [4, 5, 3]])
-    loc = TriangleLocator(pts, tris)
-    found = [loc.locate(0.2, 0.2), loc.locate(0.8, 0.8), loc.locate(1.2, 0.1), loc.locate(5, 5)]
-    assert found == [0, 1, 2, -1]
-    assert list(loc.locate_many(np.array([[0.2, 0.2], [0.8, 0.8], [1.2, 0.1], [5, 5]]))) == found
-    w = loc.weights(0, 0.25, 0.25)
-    assert np.allclose(w.sum(), 1.0) and np.allclose(w @ pts[tris[0]], [0.25, 0.25])

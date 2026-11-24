@@ -32,6 +32,7 @@ from shapely.ops import unary_union
 
 from coppernicus.engine import Board, Cancelled, EngineError, solve_rail, tied_nets
 from coppernicus.engine.board import board_file_filter
+from coppernicus.fields import TriangleLocator, current_vectors
 from coppernicus.maps import FIELDS, render_layer_map, safe_name, save_layer_maps
 from coppernicus.problems import Problem, find_problems
 from coppernicus.project import Project, ProjectError, Rail, Settings
@@ -477,7 +478,7 @@ class Session:
             q = rec.queries.get(lf.name)
         if q is not None:
             return q
-        built = {"locator": F.TriangleLocator(lf.points, lf.tris), "j": F.current_vectors(lf)}
+        built = {"locator": TriangleLocator(lf.points, lf.tris), "j": current_vectors(lf)}
         with self._lock:
             q = rec.queries.get(lf.name)
             if q is None:

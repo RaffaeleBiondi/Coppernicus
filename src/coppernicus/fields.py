@@ -98,26 +98,81 @@ class TriangleLocator:
     """Which triangle contains a point. A KD-tree on centroids narrows the search to nearby
     triangles, then a barycentric test picks the one containing the point. Unlike
     matplotlib's trapezoid map it accepts meshes made of separate pieces with coincident
-    points, as a layer of real copper is."""
+    points, as a layer of real copper is.
+
+    Vectorised: the barycentric maps of all triangles are computed once, so
+    :meth:`locate_many` places thousands of points (a cross-section cut) in one pass.
+    Degenerate (zero-area) triangles never match."""
 
     def __init__(self, points: np.ndarray, tris: np.ndarray, candidates: int = 24):
-        self.points, self.tris, self.k = points, tris, min(candidates, len(tris))
-        self.tree = cKDTree(points[tris].mean(axis=1)) if len(tris) else None
+        self.points = np.asarray(points, dtype=float)
+        self.tris = np.asarray(tris, dtype=np.int64)
+        self.k = min(candidates, len(self.tris))
+        self.centroids = self.points[self.tris].mean(axis=1) if len(self.tris) else np.zeros((0, 2))
+        self.tree = cKDTree(self.centroids) if len(self.tris) else None
+        if len(self.tris):
+            p = self.points[self.tris]                       # (M, 3, 2)
+            # Barycentric map: lam = inv([[x0-x2, x1-x2], [y0-y2, y1-y2]]) @ (q - p2).
+            a, b = p[:, 0, 0] - p[:, 2, 0], p[:, 1, 0] - p[:, 2, 0]
+            c, d = p[:, 0, 1] - p[:, 2, 1], p[:, 1, 1] - p[:, 2, 1]
+            det = a * d - b * c
+            scale = np.maximum(np.abs(p.reshape(len(p), -1)).max(axis=1), 1.0) ** 2
+            self._ok = np.abs(det) > 1e-14 * scale            # degenerate triangles never match
+            inv = 1.0 / np.where(self._ok, det, 1.0)
+            self._inv = np.stack([d * inv, -b * inv, -c * inv, a * inv], axis=1)   # (M, 4)
+            self._origin = p[:, 2, :].copy()                  # a copy: a view would pin all of p
+
+    @property
+    def nbytes(self) -> int:
+        """Memory held by the locator (its arrays and KD-tree), roughly."""
+        if self.tree is None:
+            return 0
+        tree = self.tree.data.nbytes + self.tree.indices.nbytes
+        return int(self.centroids.nbytes + self._inv.nbytes + self._origin.nbytes
+                   + self._ok.nbytes + 2 * tree)
 
     def weights(self, k: int, x: float, y: float) -> np.ndarray:
-        p = self.points[self.tris[k]]
-        t = np.array([[p[0, 0] - p[2, 0], p[1, 0] - p[2, 0]], [p[0, 1] - p[2, 1], p[1, 1] - p[2, 1]]])
-        lam = np.linalg.solve(t, [x - p[2, 0], y - p[2, 1]])
-        return np.array([lam[0], lam[1], 1.0 - lam.sum()])
+        """Barycentric weights of (x, y) in triangle ``k`` (they sum to 1). Raises
+        ``numpy.linalg.LinAlgError`` for a degenerate triangle."""
+        if not self._ok[k]:
+            raise np.linalg.LinAlgError(f"triangle {k} is degenerate")
+        return self._weights(np.array([k]), np.array([[x, y]], dtype=float))[0]
+
+    def _weights(self, ks: np.ndarray, pts: np.ndarray) -> np.ndarray:
+        inv, o = self._inv[ks], self._origin[ks]
+        dx, dy = pts[:, 0] - o[:, 0], pts[:, 1] - o[:, 1]
+        l0 = inv[:, 0] * dx + inv[:, 1] * dy
+        l1 = inv[:, 2] * dx + inv[:, 3] * dy
+        return np.stack([l0, l1, 1.0 - l0 - l1], axis=1)
 
     def locate(self, x: float, y: float, tol: float = 1e-9) -> int:
+        """Index of the triangle holding (x, y), or -1."""
+        return int(self.locate_many(np.array([[x, y]], dtype=float), tol)[0])
+
+    def locate_many(self, pts: np.ndarray, tol: float = 1e-9) -> np.ndarray:
+        """Triangle index per point, shape (N,); -1 where no triangle holds it."""
+        pts = np.atleast_2d(np.asarray(pts, dtype=float))
+        out = np.full(len(pts), -1, dtype=np.int64)
+        if self.tree is None or not len(pts):
+            return out
+        _, idx = self.tree.query(pts, k=self.k)
+        idx = idx.reshape(len(pts), -1)
+        for col in range(idx.shape[1]):                      # nearest centroid first
+            todo = np.flatnonzero(out < 0)
+            if not todo.size:
+                break
+            ks = idx[todo, col]
+            valid = ks < len(self.tris)                      # cKDTree pads with n when k > n
+            todo, ks = todo[valid], ks[valid]
+            w = self._weights(ks, pts[todo])
+            hit = self._ok[ks] & (w.min(axis=1) >= -tol)
+            out[todo[hit]] = ks[hit]
+        return out
+
+    def nearest(self, x: float, y: float) -> Tuple[int, float]:
+        """The triangle whose centroid is nearest (x, y), and that distance in mm; (-1, inf)
+        for an empty mesh."""
         if self.tree is None:
-            return -1
-        _, idx = self.tree.query([x, y], k=self.k)
-        for k in np.atleast_1d(idx):
-            try:
-                if self.weights(int(k), x, y).min() >= -tol:
-                    return int(k)
-            except np.linalg.LinAlgError:         # degenerate triangle
-                continue
-        return -1
+            return -1, float("inf")
+        dist, k = self.tree.query([x, y], k=1)
+        return int(k), float(dist)

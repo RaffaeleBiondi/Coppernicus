@@ -8,7 +8,7 @@ from shapely.geometry import Point
 
 from coppernicus.engine import Board, solve_rail
 from coppernicus.engine.synthetic import OZ1, F, Strip, strip_board
-from coppernicus.fields import current_vectors, isolines, sample_flow
+from coppernicus.fields import TriangleLocator, current_vectors, isolines, sample_flow
 from coppernicus.project import Load, Rail, Source
 
 
@@ -78,3 +78,24 @@ def test_nan_voltages_are_skipped(strip):
     assert pts.size and not any(tuple(p) in nan_cents for p in pts)
     lines = isolines(half, (res.v_ref - v) * 1e3, [5.0, 20.0])
     assert all(np.isfinite(line).all() for line in lines)
+
+
+def test_locator_many_points_degenerate_triangles_and_nearest():
+    """The vectorised locator: one point or many, separate pieces with coincident points,
+    a zero-area triangle that never matches, and the nearest triangle off the mesh."""
+    pts = np.array([[0, 0], [1, 0], [0, 1], [1, 1], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0]], float)
+    tris = np.array([[0, 1, 2], [1, 3, 2], [4, 5, 3], [6, 7, 8]])        # the last is a line
+    loc = TriangleLocator(pts, tris)
+    queries = np.array([[0.2, 0.2], [0.8, 0.8], [1.2, 0.1], [4.0, 0.0], [5, 5]])
+    found = [loc.locate(x, y) for x, y in queries]
+    assert found == [0, 1, 2, -1, -1]
+    assert list(loc.locate_many(queries)) == found
+    w = loc.weights(0, 0.25, 0.25)
+    assert np.allclose(w.sum(), 1.0) and np.allclose(w @ pts[tris[0]], [0.25, 0.25])
+    with pytest.raises(np.linalg.LinAlgError):
+        loc.weights(3, 4.0, 0.0)
+    k, dist = loc.nearest(0.3, -1.0)
+    assert k == 0 and dist == pytest.approx(np.hypot(0.3 - 1 / 3, -1.0 - 1 / 3))
+    assert loc.nbytes > 0
+    empty = TriangleLocator(np.zeros((0, 2)), np.zeros((0, 3), dtype=int))
+    assert empty.locate(0, 0) == -1 and empty.nearest(0, 0)[0] == -1
