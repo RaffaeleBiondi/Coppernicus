@@ -363,3 +363,57 @@ def test_override_over_an_identical_project_rail_asks_nothing(window, tmp_path, 
     window.rail_panel.banner.button.click()
     assert window.project.rail("VCC").override_board_fields
     assert window.merged.origins["VCC"].source == "overridden"
+
+
+# ---------------------------------------------------------------------- menus
+
+def test_use_kicad_fields_off_takes_every_rail_from_the_project_and_is_saved(window, tmp_path):
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 3.0)])
+    open_net(window, strip(tmp_path, rails=[own]))
+    action = window.use_fields_action
+    assert action.isCheckable() and action.isChecked() and action.text() == "Use KiCad footprint fields"
+    assert action in window.project_menu.actions()
+    action.trigger()                                          # off
+    assert window.project.use_board_fields is False and window.dirty
+    assert window.merged.origins == {} and net_item(window, "VCC").text() == "VCC"
+    rp = window.rail_panel
+    assert not rp.read_only and rp.loads.rows() == [("", "U1", None, 3.0)]
+    assert rp.banner.text.isHidden() and rp.banner.warnings.isHidden()
+    res = solve(window)
+    assert res.loads[0].current == pytest.approx(3.0)
+    assert not any("ignored" in w for w in res.warnings)
+    window._save(tmp_path / "off.coppernicus.yml")
+    assert "use_board_fields: false" in (tmp_path / "off.coppernicus.yml").read_text(encoding="utf-8")
+    action.trigger()                                          # on again
+    assert window.project.use_board_fields and rp.read_only and "VCC" not in window.results
+    assert "KiCad" in net_item(window, "VCC").text()
+    window.open_project(tmp_path / "off.coppernicus.yml")
+    assert not window.use_fields_action.isChecked() and window.merged.origins == {}
+
+
+def test_turning_the_fields_off_lifts_a_field_error(window, tmp_path):
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0)])
+    open_net(window, strip(tmp_path, {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A", "PI_LIMIT_DROP": "0%"}},
+                           rails=[own]))
+    assert window.fields_error and not window.rail_panel.banner.error.isHidden()
+    window.use_fields_action.trigger()
+    assert window.fields_error is None and window.rail_panel.banner.error.isHidden()
+    assert "KiCad footprint fields" not in window.problems.notes.toPlainText()
+    assert solve(window) is not None
+
+
+def test_reload_board_rereads_the_fields_and_keeps_the_project(window, tmp_path):
+    project = strip(tmp_path)
+    open_net(window, project)
+    assert solve(window) is not None
+    window.rail_panel.max_via.setText("2")                  # an unsaved edit
+    window.rail_panel.max_via.editingFinished.emit()
+    changed = dict(FIELDS, U1=dict(FIELDS["U1"], PI_LOAD="500mA"))
+    write_strip_board(tmp_path / "strip.kicad_pcb", changed)
+    assert window.reload_action.shortcut().toString() == "Ctrl+Shift+R"
+    assert window.reload_action in window.file_menu.actions()
+    window.reload_action.trigger()
+    assert window.results == {} and window.dirty and window.net == "VCC"
+    assert window.project.rails == [Rail("VCC", limits=Limits(max_via_current=2.0))]
+    assert window.merged.project.rail("VCC").loads[0].current == pytest.approx(0.5)
+    assert window.rail_panel.loads.rows() == [("", "U1", ["1"], 0.5)]

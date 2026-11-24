@@ -265,6 +265,7 @@ class MainWindow(QMainWindow):
         tb = self.addToolBar("Main")
         tb.setObjectName("Main")
         tb.setMovable(False)
+        file_actions = []
         for text, shortcut, slot in (("Open board…", QKeySequence.Open, self.open_board_dialog),
                                      ("Open project…", "Ctrl+Shift+O", self.open_project_dialog),
                                      ("Save project", QKeySequence.Save, self.save_project),
@@ -282,6 +283,27 @@ class MainWindow(QMainWindow):
             act.setShortcut(QKeySequence(shortcut))
             act.triggered.connect(slot)
             tb.addAction(act)
+            if text.startswith(("Open", "Save")):
+                file_actions.append(act)
+        # Menus: the toolbar's file actions (the same actions, so one shortcut each), and the
+        # KiCad footprint fields.
+        self.file_menu = self.menuBar().addMenu("&File")
+        self.file_menu.addActions(file_actions)
+        self.file_menu.addSeparator()
+        self.reload_action = QAction("Reload board", self)
+        self.reload_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
+        self.reload_action.setToolTip("Read the board file again (and its KiCad footprint fields), "
+                                      "keeping the project; results are dropped")
+        self.reload_action.triggered.connect(self.reload_board)
+        self.file_menu.addAction(self.reload_action)
+        self.project_menu = self.menuBar().addMenu("&Project")
+        self.use_fields_action = QAction("Use KiCad footprint fields", self)
+        self.use_fields_action.setCheckable(True)
+        self.use_fields_action.setChecked(True)
+        self.use_fields_action.setToolTip("Take rails from the board's PI_* footprint fields "
+                                          "(use_board_fields in the project file)")
+        self.use_fields_action.toggled.connect(self._use_fields_toggled)
+        self.project_menu.addAction(self.use_fields_action)
 
     # ------------------------------------------------------------------ files
     def open_path(self, path):
@@ -333,6 +355,9 @@ class MainWindow(QMainWindow):
         self._read_board_fields(board)
         self._remerge()
         self._show_fields_error()
+        self.use_fields_action.blockSignals(True)
+        self.use_fields_action.setChecked(self.project.use_board_fields)
+        self.use_fields_action.blockSignals(False)
         resolved = Path(path).resolve()
         modified = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(resolved.stat().st_mtime))
         self._board_stamp = f"{resolved.name} (file modified {modified})"
@@ -371,6 +396,49 @@ class MainWindow(QMainWindow):
         else:
             self.view.show_board(board.outline(), fit=True)
         return True
+
+    def reload_board(self) -> bool:
+        """Read the board file again, and its KiCad footprint fields, keeping the project as it
+        is (unsaved edits too) and the shown net; what was solved is dropped."""
+        if self.board is None or self.board.path is None:
+            return False
+        net, dirty = self.net, self.dirty
+        if not self.open_board(self.board.path, self.project):
+            return False
+        self.dirty = dirty
+        self._update_title()
+        if net and net in self.board.nets():
+            self.nets.select(net)
+        self.statusBar().showMessage(f"Reloaded {self.board.name}" + (
+            " — a KiCad footprint field cannot be used, see Problems" if self.fields_error else ""))
+        return True
+
+    def _use_fields_toggled(self, on: bool):
+        """Project → Use KiCad footprint fields (``use_board_fields``): off, every rail comes
+        from the project file. What was solved is dropped."""
+        if self.project.use_board_fields == on:
+            return
+        self.project.use_board_fields = on
+        self._remerge()
+        self._show_fields_error()
+        self.dirty = True
+        self._update_title()
+        if self.board is None:
+            return
+        self.nets.mark_configured(self._configured_nets(), self._kicad_nets())
+        self._revision += 1
+        self._drop_tree("KiCad footprint fields turned " + ("on" if on else "off")
+                        + ": solve the power tree again (Ctrl+T)")
+        self.results.clear()
+        self.runs.clear()
+        self._diff_cache = None
+        if self.net:
+            rail = self._show_rail(self.net)
+            self.rail_panel.set_net_kind(self._net_at_0v(rail))
+            self.problems.clear(f"<b>{self.net}</b>: KiCad footprint fields turned "
+                                f"{'on' if on else 'off'} — press Solve (F5)")
+            self._refresh_results()
+            self.refresh_view()
 
     def open_project(self, path) -> bool:
         try:
