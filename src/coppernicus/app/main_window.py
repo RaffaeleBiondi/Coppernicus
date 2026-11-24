@@ -951,7 +951,7 @@ class MainWindow(QMainWindow):
             self.worker.cancel()
             self.worker.wait(5000)
         if self.tree_worker is not None and self.tree_worker.isRunning():
-            for signal in (self.tree_worker.succeeded, self.tree_worker.failed):
+            for signal in (self.tree_worker.message, self.tree_worker.succeeded, self.tree_worker.failed):
                 signal.disconnect()
             self.tree_worker.cancel()
             self.tree_worker.wait(5000)
