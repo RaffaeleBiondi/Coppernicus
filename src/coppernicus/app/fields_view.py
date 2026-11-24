@@ -1,6 +1,10 @@
 """Where the shown rail comes from, when the board's parts carry KiCad footprint fields: the
-banner of the rail panel (and its red line when a field cannot be used), and the texts the
-read-only rows show. The origins are those of ``coppernicus.board_fields.merge``."""
+banner of the rail panel (and its red line when a field cannot be used), the texts the
+read-only rows show, and the two questions of an override (which rail to keep, going back
+to the fields). The origins are those of ``coppernicus.board_fields.merge``.
+
+The questions are module functions, so a scripted run can answer them instead of a person.
+"""
 
 from __future__ import annotations
 
@@ -8,12 +12,13 @@ from dataclasses import dataclass, field
 from typing import Any, List, Mapping, Optional
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 ERROR_STYLE = "color: #c0392b;"
 WARNING_STYLE = ("color: #6e4a07; background: #fdf2e0; border: 1px solid #b9770e; "
                  "border-radius: 3px; padding: 4px;")
 OVERRIDE, USE_FIELDS = "override", "use_fields"          # what the banner's button asks for
+USE_MINE, START_FROM_KICAD = "project", "kicad"          # the answers of ask_override
 
 
 def read_only_reason(net: str) -> str:
@@ -107,3 +112,31 @@ class FieldsBanner(QWidget):
         self.button.setVisible(bool(banner.action))
         self.warnings.setText("\n".join(banner.warnings))
         self.warnings.setVisible(bool(banner.warnings))
+
+
+def ask_override(parent, net: str, differences: List[str]) -> Optional[str]:
+    """The project has its own rail on ``net``, which the KiCad fields replace and which
+    differs from them (``differences``: the merge's warnings): keep it (``USE_MINE``), or
+    start from the KiCad values (``START_FROM_KICAD``)? None: cancelled."""
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Question)
+    box.setWindowTitle("Override in project")
+    box.setText(f"The project file has its own rail on {net}, ignored so far because the KiCad "
+                "footprint fields define it. They differ:")
+    box.setInformativeText("\n".join(f"• {d}" for d in differences))
+    mine = box.addButton("Use my project rail", QMessageBox.AcceptRole)
+    kicad = box.addButton("Start from the KiCad values", QMessageBox.AcceptRole)
+    box.addButton(QMessageBox.Cancel)
+    box.exec()
+    clicked = box.clickedButton()
+    return USE_MINE if clicked is mine else START_FROM_KICAD if clicked is kicad else None
+
+
+def confirm_use_fields(parent, net: str) -> bool:
+    """Go back to the KiCad fields on ``net``: its project rail loses its sources and loads."""
+    answer = QMessageBox.question(
+        parent, "Use KiCad fields",
+        f"Use the KiCad footprint fields for {net} again? The project rail's sources and loads "
+        "are removed; its limits and net-tie option are kept.",
+        QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+    return answer == QMessageBox.Yes

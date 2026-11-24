@@ -282,3 +282,84 @@ def test_the_net_tie_option_of_a_kicad_rail_is_saved_on_its_own(window, tmp_path
     assert window.merged.project.rail("VCC").loads[0].ref == "U1"
     window._save(tmp_path / "saved.coppernicus.yml")
     assert Project.load(tmp_path / "saved.coppernicus.yml").rails == [Rail("VCC", follow_net_ties=False)]
+
+
+# ---------------------------------------------------------------------- override, and back
+
+def test_override_copies_the_kicad_rail_into_the_project_and_the_way_back_keeps_its_limits(
+        window, tmp_path, monkeypatch):
+    from coppernicus.app import fields_view
+    open_net(window, strip(tmp_path))
+    rp = window.rail_panel
+    rp.max_via.setText("2")                                   # a limits-only rail to start with
+    rp.max_via.editingFinished.emit()
+    assert solve(window) is not None and "VCC" in window.results
+    rp.banner.button.click()                                  # Override in project
+    own = window.project.rail("VCC")
+    assert own.override_board_fields
+    assert [(s.ref, s.voltage, s.pins) for s in own.sources] == [("J1", 1.0, None)]
+    assert [(ld.ref, ld.current, ld.pins) for ld in own.loads] == [("U1", 1.0, ["1"])]
+    assert own.limits == Limits(max_via_current=2.0)          # its own limits, kept
+    assert window.merged.origins["VCC"].source == "overridden" and "VCC" not in window.results
+    assert not rp.read_only and rp.loads.add_button.isEnabled() and not rp.max_drop.isReadOnly()
+    assert rp.banner.text.text().startswith(
+        'Project rail overrides the KiCad fields (KiCad: source J1 1 V (from KiCad field PI_SOURCE "1V"')
+    assert rp.banner.button.text() == "Use KiCad fields"
+    assert net_item(window, "VCC").text() == "VCC"            # no longer marked [KiCad]
+    rp.loads.table.cellWidget(0, 3).setValue(0.5)             # now editable
+    assert window.project.rail("VCC").loads[0].current == 0.5
+    res = solve(window)
+    assert res.loads[0].current == pytest.approx(0.5)
+    assert any("override_board_fields is set" in a for a in res.assumptions)
+    window._save(tmp_path / "saved.coppernicus.yml")
+    saved = (tmp_path / "saved.coppernicus.yml").read_text(encoding="utf-8")
+    assert "override_board_fields: true" in saved and "current: 0.5" in saved
+
+    asked = []
+    monkeypatch.setattr(fields_view, "confirm_use_fields", lambda _w, net: asked.append(net) or True)
+    rp.banner.button.click()                                  # Use KiCad fields
+    assert asked == ["VCC"]
+    assert window.project.rails == [Rail("VCC", limits=Limits(max_via_current=2.0))]
+    assert window.merged.origins["VCC"].source == "fields" and window.merged.warnings == []
+    assert rp.read_only and rp.loads.rows() == [("", "U1", ["1"], 1.0)]
+    assert "KiCad" in net_item(window, "VCC").text() and "VCC" not in window.results
+
+
+def test_the_way_back_declined_changes_nothing(window, tmp_path, monkeypatch):
+    from coppernicus.app import fields_view
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 0.5)], override_board_fields=True)
+    open_net(window, strip(tmp_path, rails=[own]))
+    monkeypatch.setattr(fields_view, "confirm_use_fields", lambda _w, _net: False)
+    window.rail_panel.banner.button.click()
+    assert window.project.rails == [own] and not window.dirty
+
+
+@pytest.mark.parametrize("choice, current", [("project", 3.0), ("kicad", 1.0), (None, None)])
+def test_override_over_an_ignored_project_rail_asks_which_to_keep(window, tmp_path, monkeypatch,
+                                                                 choice, current):
+    from coppernicus.app import fields_view
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 3.0)], limits=Limits(max_via_current=2.0))
+    open_net(window, strip(tmp_path, rails=[own]))
+    asked = []
+    monkeypatch.setattr(fields_view, "ask_override",
+                        lambda _w, net, differences: asked.append((net, differences)) or choice)
+    window.rail_panel.banner.button.click()
+    [(net, differences)] = asked
+    assert net == "VCC" and any("KiCad U1 1 A pins 1, project U1 3 A" in d for d in differences)
+    rail = window.project.rail("VCC")
+    if choice is None:
+        assert rail == own and window.merged.origins["VCC"].source == "fields"
+        return
+    assert rail.override_board_fields and rail.loads[0].current == current
+    assert rail.limits == Limits(max_via_current=2.0)
+    assert window.merged.origins["VCC"].source == "overridden" and window.merged.warnings == []
+
+
+def test_override_over_an_identical_project_rail_asks_nothing(window, tmp_path, monkeypatch):
+    from coppernicus.app import fields_view
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0, ["1"])])
+    open_net(window, strip(tmp_path, rails=[own]))
+    monkeypatch.setattr(fields_view, "ask_override", lambda *_: pytest.fail("asked"))
+    window.rail_panel.banner.button.click()
+    assert window.project.rail("VCC").override_board_fields
+    assert window.merged.origins["VCC"].source == "overridden"

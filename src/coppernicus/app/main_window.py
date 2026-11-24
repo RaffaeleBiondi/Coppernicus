@@ -250,6 +250,7 @@ class MainWindow(QMainWindow):
         self.compare.pin_requested.connect(self.pin_baseline)
         self.compare.clear_requested.connect(self.clear_baseline)
         self.rail_panel.pick_changed.connect(self._pick_mode_changed)
+        self.rail_panel.banner.action_requested.connect(self._banner_action)
         QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self.stop_clicking)
 
     def _dock(self, title, widget, area):
@@ -615,6 +616,64 @@ class MainWindow(QMainWindow):
         self.rail_panel.banner.show_banner(
             fields_view.describe(origin, values, self._rail_warnings(net)[1]))
 
+    def _banner_action(self, action: str):
+        if self.net and action == fields_view.OVERRIDE:
+            self.override_fields(self.net)
+        elif self.net and action == fields_view.USE_FIELDS:
+            self.use_fields(self.net)
+
+    def override_fields(self, net: str) -> bool:
+        """Override in project: the project's rail of ``net`` replaces the KiCad fields'
+        (``override_board_fields``). With no sources or loads of its own, it takes the KiCad
+        rail's (keeping its limits), so the same values are shown, now editable; its own
+        rail, when it differs, is kept or replaced as the user chooses. False: nothing done."""
+        origin = self.merged.origins.get(net)
+        kicad = self.merged.project.rail(net)
+        if origin is None or origin.source != "fields" or kicad is None:
+            return False
+        own = self.project.rail(net)
+        if own is not None and (own.sources or own.loads):
+            choice = fields_view.USE_MINE
+            if origin.warnings:                     # it differs from the KiCad rail: ask
+                choice = fields_view.ask_override(self, net, list(origin.warnings))
+                if choice is None:
+                    return False
+        else:
+            choice = fields_view.START_FROM_KICAD
+            if own is None:
+                own = Rail(net)
+                self.project.rails.append(own)
+        if choice == fields_view.START_FROM_KICAD:   # the merged rail's: with any sense pins
+            own.sources, own.loads = copy.deepcopy(kicad.sources), copy.deepcopy(kicad.loads)
+        own.override_board_fields = True
+        self._origin_changed(net)
+        return True
+
+    def use_fields(self, net: str) -> bool:
+        """Use KiCad fields (the way back from an override), once confirmed: the project's
+        rail of ``net`` keeps its limits and net-tie option and loses its sources and loads,
+        so it is not an ignored rail. False: nothing done."""
+        own = self.project.rail(net)
+        if own is None or not own.override_board_fields or not fields_view.confirm_use_fields(self, net):
+            return False
+        own.override_board_fields = False
+        own.sources, own.loads = [], []
+        self._origin_changed(net)
+        return True
+
+    def _origin_changed(self, net: str):
+        """The project now says otherwise where the rail of ``net`` comes from: merge again,
+        show the rail anew, and drop what was solved with the old one."""
+        self._remerge()
+        self._show_fields_error()
+        self.nets.mark_configured(self._configured_nets(), self._kicad_nets())
+        self.dirty = True
+        self._update_title()
+        if net == self.net:
+            rail = self._show_rail(net)
+            self.rail_panel.set_net_kind(self._net_at_0v(rail))
+        self._setup_changed(net)
+
     def _adopt_draft(self):
         rail = self._rail_draft
         if self._kicad_shown:
@@ -658,17 +717,21 @@ class MainWindow(QMainWindow):
     def _rail_edited(self):
         rail = self._adopt_draft()
         self.rail_panel.set_net_kind(self._net_at_0v(rail))
+        self._setup_changed(rail.net)
+
+    def _setup_changed(self, changed: str):
+        """The rail of net ``changed`` is not what was solved any more."""
         self._revision += 1
         self._drop_tree("The setup changed: solve the power tree again (Ctrl+T)")
         # Rails solved alone that drew an estimate from the project may depend on this rail.
         for net, res in list(self.results.items()):
-            if net != rail.net and any(t.name.endswith("estimated)") for t in res.loads):
+            if net != changed and any(t.name.endswith("estimated)") for t in res.loads):
                 self.results.pop(net)
                 self.runs.pop(net, None)
-        self.runs.pop(rail.net, None)
+        self.runs.pop(changed, None)
         self._diff_cache = None
-        if self.results.pop(rail.net, None) is not None:          # the old result no longer applies
-            self.problems.clear(f"<b>{rail.net}</b>: setup changed since the last solve — press Solve (F5)")
+        if self.results.pop(changed, None) is not None:          # the old result no longer applies
+            self.problems.clear(f"<b>{changed}</b>: setup changed since the last solve — press Solve (F5)")
             self._refresh_results()
         self.refresh_view()
 
