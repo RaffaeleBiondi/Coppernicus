@@ -14,9 +14,19 @@ Status and split of the work as of 2026-11-24, agreed with the owner. Update it 
   Packaging later needs either B (permission from the author) or C (gmsh, GPLv2+, needs a
   patched or vendored mesher plus re-validation). Not decided yet.
 
+## Roles
+
+- **Coordinator:** the original planning session. It reviews, merges to `main`, pushes, and
+  dispatches the WS1 phases.
+- **WS1:** a background subagent of the coordinator, branch `feat/mcp`, worktree under
+  `.claude/worktrees/`.
+- **WS2, then WS3:** a second interactive Claude session on this folder (`coppernicus-17`), in
+  its own worktree `.worktrees/gui` (branch `feat/gui`, then one branch per WS3 step). It
+  reports milestones to the coordinator and does not push or merge.
+
 ## WS1: agent interface and automation
 
-Delegated to a background agent on branch `feat/mcp`. The main session reviews and merges.
+Delegated to a background agent on branch `feat/mcp`. The coordinator reviews and merges.
 
 1. **Phase 1:** service layer, CLI `--json`, MCP server (`coppernicus mcp`), tests, and how to
    register the server in Claude Code / Claude Desktop.
@@ -30,7 +40,7 @@ Delegated to a background agent on branch `feat/mcp`. The main session reviews a
    - an option defined in KiCad itself (footprint fields or text directives, as padne does),
      to be proposed and agreed with the owner first.
 
-## WS2: GUI (main session)
+## WS2: GUI (peer session, branch `feat/gui`)
 
 - Pick sources and loads by clicking pads on the board.
 - Drop isolines, current-flow arrows, ΔV between two picked points, hover readout.
@@ -40,7 +50,7 @@ Delegated to a background agent on branch `feat/mcp`. The main session reviews a
 - Report export, reusing the WS1 HTML report.
 - Default load names, cosmetics (the macOS menu shows "Python").
 
-## WS3: expose KiPI's other analyses (after WS1 phase 1 merges)
+## WS3: expose KiPI's other analyses (peer session, after WS2 merges)
 
 The project model must grow first: VRMs and loads with ground pins, series links, AC probes,
 capacitor models and noise aggressors, mapped to KiPI's `PISetup` inside `engine/`.
