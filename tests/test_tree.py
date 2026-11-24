@@ -722,3 +722,14 @@ def test_a_ground_rise_limit_on_a_supply_rail_solved_alone_is_not_judged(tmp_pat
     out = session.solve_rail(bid, Strip.NET, [{"ref": "J1", "voltage_v": 3.3}],
                              [{"ref": "U1", "current_a": 1.0}], limits={"max_ground_rise_mv": 0.001})
     assert out["verdict"] == "not_judged" and out["not_judged"][0]["limit"] == "max_ground_rise_mv"
+
+
+def test_the_note_names_a_wrong_kind_limit_when_it_is_the_only_one(board):
+    from coppernicus.power_tree import tree_summary, tree_text
+    project = power_chain_project()
+    project.rail("+3V3").limits = Limits(max_ground_rise_mv=0.001)
+    doc = tree_summary(solve_project_tree(board, project))
+    assert doc["verdict"] == "not_judged" and "No limits set" not in doc["verdict_note"]
+    assert "+3V3 (max_ground_rise_mv)" in doc["verdict_note"]
+    verdict = next(line for line in tree_text(doc) if line.startswith("Verdict:"))
+    assert "max_ground_rise_mv" in verdict

@@ -326,11 +326,12 @@ def own_limits(tree) -> Dict[str, Dict[str, float]]:
 def verdict_note(tree, groups: Dict[str, GroupVerdict]) -> str:
     """One line on what was judged against what, and what was not."""
     own = own_limits(tree)
-    if not own:
-        return "No limits set: nothing is judged, problems are ranked only."
-    note = "Judged only against the limits you set: " + ", ".join(
-        f"{net}: {k} = {v:g}" for net, d in own.items() for k, v in d.items())
     missing = [x for v in groups.values() for x in v.not_judged] + unsolved_limits(tree)
+    if not own and not missing:
+        return "No limits set: nothing is judged, problems are ranked only."
+    note = ("Judged only against the limits you set: " + ", ".join(
+        f"{net}: {k} = {v:g}" for net, d in own.items() for k, v in d.items())
+        if own else "No limit you set applies to what it is set on")
     if missing:
         note += ". Not judged: " + not_judged_text(missing)
     return note
