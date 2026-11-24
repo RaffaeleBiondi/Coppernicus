@@ -136,7 +136,8 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
 
     nets, ties = tied_nets(board, rail.net) if rail.follow_net_ties else ([rail.net], [])
     try:
-        draws = estimated_draws(project, nets) if project is not None else []
+        ties_all = [(t.net_a, t.net_b) for t in board.net_ties()] if project is not None else []
+        draws = estimated_draws(project, nets, ties_all) if project is not None else []
     except EstimateError as e:
         raise EngineError(str(e)) from None
     if not rail.loads and not draws:

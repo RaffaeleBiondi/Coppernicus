@@ -124,7 +124,9 @@ def _group(board: Board, key: str, g, assumptions: List[str]) -> RailResult:
     return RailResult(
         net=key, nets=[key] + sorted(n for n in g.nets if n != key), v_ref=float(fields.v_ref),
         layers=layers, sources=sources, loads=loads, vias=vias,
-        max_drop=float(sm["max_boost"] if g.kind == "ground" else sm["max_drop"]),
+        # A ground's rise, and on a negative rail the voltage lost toward 0 V, are above
+        # its reference: KiPI's "boost".
+        max_drop=float(sm["max_boost"] if g.kind == "ground" or fields.v_ref < 0 else sm["max_drop"]),
         j_max=float(sm["j_max"]), power_loss=float(sm["power_loss"]),
         energy_balance_error=float(sm["energy_balance_error"]),
         loss_vias=float(sum(v.power for v in fields.vias)),
@@ -188,8 +190,12 @@ def solve_project_tree(board: Board, project: Project,
 
     for ld in kt.loads:
         key = key_of.get(ld.group, ld.group)
-        v_worst = ld.v_low if ld.v_low is not None else ld.v_worst
-        drop = ld.nominal - v_worst
+        # The pin that has lost the most toward 0 V: the lowest on a positive rail, the
+        # highest on a negative one (#220).
+        sign = -1.0 if ld.nominal < 0 else 1.0
+        side = ld.v_high if sign < 0 else ld.v_low
+        v_worst = side if side is not None else ld.v_worst
+        drop = sign * (ld.nominal - v_worst)
         pct = 100.0 * drop / abs(ld.nominal) if ld.nominal else math.nan
         across = ld.v_effective
         out.loads.append(LoadReport(

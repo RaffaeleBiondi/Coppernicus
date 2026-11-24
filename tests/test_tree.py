@@ -225,3 +225,77 @@ def test_tree_summary_is_plain_json_with_units_and_verdicts(board):
     doc = tree_summary(solve_project_tree(board, project))
     assert doc["verdict"] == "fail" and "+3V3: max_drop_pct = 0.01" in doc["verdict_note"]
     assert next(ld for ld in doc["loads"] if ld["name"] == "U4")["exceeds_drop_limit"] is True
+
+
+# ------------------------------------------------------------------ review fixes
+
+def test_a_disconnected_load_is_reported_without_crashing(tmp_path):
+    import json
+
+    from coppernicus.cli import EXIT_OK, main
+    from coppernicus.engine.synthetic import save_snapshot
+    from coppernicus.power_tree import tree_summary
+    board = Board(power_chain_board(island=True))
+    project = power_chain_project()
+    project.rail("+3V3").loads.append(Load("U9", 0.1, ["1"], ground_pins=["2"], ground_net="GND"))
+    tree = solve_project_tree(board, project)
+    u9 = _load(tree, "U9")
+    assert u9.status == "DISCONNECTED" and u9.passed is None
+    json.dumps(tree_summary(tree), allow_nan=False)
+    save_snapshot(power_chain_board(island=True), tmp_path / "power_chain.kipi.json.gz")
+    path = project.save(tmp_path / "chain.coppernicus.yml")
+    assert main(["solve", str(path), "--tree", "--json", "--out", str(tmp_path / "o")]) == EXIT_OK
+
+
+def test_a_negative_rail_drop_counts_against_its_limit():
+    from coppernicus.engine.synthetic import Strip, strip_board
+    from coppernicus.project import Project, Rail
+    board = Board(strip_board())
+    project = Project(rails=[Rail(Strip.NET, sources=[Source("J1", -3.3)], loads=[Load("U1", 1.0)],
+                                  limits=Limits(max_drop_pct=0.001))])
+    tree = solve_project_tree(board, project)
+    u1 = _load(tree, "U1")
+    r = RHO * Strip.length() / (Strip.W * OZ1)
+    assert u1.drop_v == pytest.approx(r * 1.0, rel=5e-3)              # magnitude lost
+    assert u1.drop_pct == pytest.approx(100 * r / 3.3, rel=5e-3) and u1.passed is False
+    assert tree.groups[Strip.NET].max_drop == pytest.approx(r, rel=5e-3)
+
+
+def test_loads_behind_a_regulator_out_of_regulation_are_not_judged(board):
+    project = power_chain_project()
+    project.rail("+1V8").sources[0].voltage = 3.4                       # an LDO cannot boost
+    project.rail("+1V8").limits = Limits(max_drop_pct=1.0)
+    u3 = _load(solve_project_tree(board, project), "U3")
+    assert u3.status == "VRM OUT OF REGULATION" and u3.passed is None
+
+
+def test_parallel_links_share_the_estimated_current(board):
+    from coppernicus.project import Link
+    project = power_chain_project()
+    project.links.append(Link("FB2", "FB1", ["1"], "+3V3", ["2"], "+3V3_F", 0.05))
+    res = solve_rail(board, project.rail("+3V3"), project.settings, project=project)
+    est = [t for t in res.loads if "(link, estimated)" in t.name]
+    assert sum(t.current for t in est) == pytest.approx(g.I_U3 + g.IQ_LDO, rel=1e-12)
+
+
+def test_a_regulator_input_on_a_tied_net_is_estimated():
+    from coppernicus.engine.synthetic import SyntheticBoard, two_layer_stackup
+    from coppernicus.project import Project, Rail
+    b = SyntheticBoard("tie_input", two_layer_stackup())
+    b.square_pad("J1", "1", "+5V", 0.0, 0.0, 1.5)
+    b.square_pad("NT1", "1", "+5V", 9.5, 0.0, 0.5, value="NetTie_2", lib_id="NetTie:NetTie-2")
+    b.square_pad("NT1", "2", "+5V_B", 10.5, 0.0, 0.5, value="NetTie_2", lib_id="NetTie:NetTie-2")
+    b.square_pad("U1", "1", "+5V_B", 20.0, 0.0, 1.0)
+    b.square_pad("U1", "2", "+3V3", 20.0, 5.0, 1.0)
+    b.square_pad("U2", "1", "+3V3", 30.0, 5.0, 1.0)
+    for net, a, z in (("+5V", (0.0, 0.0), (9.5, 0.0)), ("+5V_B", (10.5, 0.0), (20.0, 0.0)),
+                      ("+3V3", (20.0, 5.0), (30.0, 5.0))):
+        b.track(net, 3, 0.5, a, z)
+    board = Board(b.snapshot())
+    project = Project(rails=[
+        Rail("+5V", sources=[Source("J1", 5.0)]),
+        Rail("+3V3", sources=[Source("U1", 3.3, ["2"], kind="smps", efficiency=0.9,
+                                     input_pins=["1"], input_net="+5V_B")], loads=[Load("U2", 1.0)])])
+    res = solve_rail(board, project.rail("+5V"), project.settings, project=project)
+    [est] = [t for t in res.loads if t.name == "U1 (input, estimated)"]
+    assert est.current == pytest.approx(3.3 * 1.0 / (0.9 * 5.0), rel=1e-12)

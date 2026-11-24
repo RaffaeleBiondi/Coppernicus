@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from coppernicus.project import PinSpec, Project, Source
 
@@ -40,8 +40,9 @@ class _Tree:
     """The project's power tree at nominal voltages: nets joined by links, their sources,
     loads and regulators."""
 
-    def __init__(self, project: Project):
+    def __init__(self, project: Project, ties: Sequence[Tuple[str, str]] = ()):
         self.project = project
+        self.ties = list(ties)            # nets joined by net ties: one net, at nominal voltages
         rails = [r for r in project.rails if r.sources or r.loads]
         self.loads = {r.net: sum(ld.current for ld in r.loads) for r in rails}
         self.sources = {r.net: r.sources[0] for r in rails if r.sources}
@@ -54,10 +55,9 @@ class _Tree:
         seen, todo = {start}, [start]
         while todo:
             n = todo.pop()
-            for k in self.project.links:
-                if k is skip_link:
-                    continue
-                for a, b in ((k.net_a, k.net_b), (k.net_b, k.net_a)):
+            pairs = [(k.net_a, k.net_b) for k in self.project.links if k is not skip_link]
+            for x, y in pairs + self.ties:
+                for a, b in ((x, y), (y, x)):
                     if a == n and b not in seen and b not in stop:
                         seen.add(b)
                         todo.append(b)
@@ -89,11 +89,14 @@ class _Tree:
         return abs(v.voltage) * i_out / (v.efficiency * abs(v_in)) + v.quiescent_a
 
 
-def estimated_draws(project: Project, nets: Sequence[str]) -> List[Draw]:
+def estimated_draws(project: Project, nets: Sequence[str],
+                    ties: Sequence[Tuple[str, str]] = ()) -> List[Draw]:
     """The regulator inputs and links that a rail solved on its own, on ``nets`` (its net
-    and the nets tied to it), feeds, each with the current estimated at nominal voltages. A
-    link to nets that another source drives carries an unknown current and is left out."""
-    tree, nets = _Tree(project), list(nets)
+    and the nets tied to it), feeds, each with the current estimated at nominal voltages.
+    ``ties``: the board's net-tie pairs, which join nets as links do. A link to nets that
+    another source drives carries an unknown current and is left out; links in parallel to
+    the same nets share the current in proportion to their conductance."""
+    tree, nets = _Tree(project, ties), list(nets)
     out = []
     for v in tree.regulators:
         if v.input_net in nets:
@@ -102,15 +105,23 @@ def estimated_draws(project: Project, nets: Sequence[str]) -> List[Draw]:
             eff = f"η {v.efficiency:g}, " if v.kind in SWITCHING else ""
             out.append(Draw(f"{v.label} (input, estimated)", v.input_ref or v.ref, v.input_pins,
                             v.input_net, amps, f"{v.label} input ({kind}, {eff}I_q {v.quiescent_a:g} A)"))
+    crossing = []                          # (link, near pins, near net, far side)
     for k in project.links:
         for near, pins, far in ((k.net_a, k.pins_a, k.net_b), (k.net_b, k.pins_b, k.net_a)):
-            if near not in nets or far in nets:
-                continue
-            side = tree.reach(far, skip_link=k, stop=nets)
-            if any(n in tree.sources for n in side):
-                continue                   # both sides driven: the current is not known here
+            if near in nets and far not in nets:
+                crossing.append((k, pins, near, frozenset(tree.reach(far, stop=nets))))
+    for side in dict.fromkeys(c[3] for c in crossing):
+        if any(n in tree.sources for n in side):
+            continue                       # both sides driven: the current is not known here
+        links = [c for c in crossing if c[3] == side]
+        amps = tree.drawn(set(side), frozenset())
+        shorts = [c for c in links if c[0].resistance_ohm <= 0]
+        weights = ([1.0 if c in shorts else 0.0 for c in links] if shorts
+                   else [1.0 / c[0].resistance_ohm for c in links])
+        for (k, pins, near, _), w in zip(links, weights):
+            far = k.net_b if near == k.net_a else k.net_a
             out.append(Draw(f"{k.name} (link, estimated)", k.ref, pins, near,
-                            tree.drawn(side, frozenset()), f"{k.name} (link to {far})"))
+                            amps * w / sum(weights), f"{k.name} (link to {far})"))
     return out
 
 
@@ -129,14 +140,28 @@ def judge_loads(tree) -> None:
     for ld in tree.loads:
         limits = tree.limits.get(ld.group)
         limit = getattr(limits, "max_drop_pct", None)
-        ok = ld.status not in ("DISCONNECTED", "NOT CONVERGED") and math.isfinite(ld.drop_pct)
+        # A load behind a regulator that cannot hold its voltage has no physical voltage to
+        # judge (the engine still holds that output at its set point).
+        ok = (ld.status not in ("DISCONNECTED", "NOT CONVERGED", "VRM OUT OF REGULATION")
+              and math.isfinite(ld.drop_pct))
         ld.passed = None if limit is None or not ok else bool(ld.drop_pct <= limit)
 
 
 # ---------------------------------------------------------------------- summary
 
 def _num(x: Optional[float]) -> Optional[float]:
-    return None if x is None or (isinstance(x, float) and math.isnan(x)) else float(x)
+    return None if x is None or (isinstance(x, float) and not math.isfinite(x)) else float(x)
+
+
+def _clean(obj):
+    """``obj`` with every NaN or infinite number (nothing solved there) as None, for JSON."""
+    if isinstance(obj, dict):
+        return {k: _clean(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean(v) for v in obj]
+    if isinstance(obj, float):
+        return _num(obj)
+    return obj
 
 
 def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
@@ -169,7 +194,7 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
     verdict = "fail" if failed else ("pass" if judged else "not_judged")
     note = ("Judged only against the limits you set: " + ", ".join(f"{k} = {v:g}" for k, v in judged.items())
             if judged else "No limits set: nothing is judged, problems are ranked only.")
-    return {
+    return _clean({
         "kind": "power_tree",
         "verdict": verdict, "verdict_note": note, "failed": failed,
         "vrms": [{"name": v.name, "kind": v.kind, "group": v.group, "v_set_v": v.v_set_v,
@@ -189,7 +214,7 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         "links": [dict(k) for k in tree.links],
         "groups": groups,
         "assumptions": list(tree.assumptions), "warnings": list(tree.warnings),
-    }
+    })
 
 
 def _fmt(x: Optional[float], width: int, spec: str, unit: str, scale: float = 1.0) -> str:
