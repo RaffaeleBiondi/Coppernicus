@@ -812,8 +812,9 @@ class RailPanel(QWidget):
         if self._loading or self._rail is None:
             return
         if self._read_only:                       # a KiCad rail: only the net-tie option
-            self._rail.follow_net_ties = self.follow_ties.isChecked()
-            self.rail_changed.emit()
+            if self._rail.follow_net_ties != self.follow_ties.isChecked():
+                self._rail.follow_net_ties = self.follow_ties.isChecked()
+                self.rail_changed.emit()
             return
         # The tables show name, part, pins and value; every other field (a regulator's kind,
         # input, ground and sense pins, a load's ground pins) is kept from the row's part.

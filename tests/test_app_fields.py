@@ -237,6 +237,13 @@ def test_a_kicad_rail_is_shown_read_only_each_value_naming_its_field(window, tmp
     assert window.pick_pad(40.0, 0.0) == READ_ONLY and window.project.rails == []
 
 
+def test_leaving_a_read_only_cell_is_not_an_edit(window, tmp_path):
+    open_net(window, strip(tmp_path))
+    assert solve(window) is not None
+    window.rail_panel.loads.table.cellWidget(0, 2).editingFinished.emit()     # focus left the pins
+    assert "VCC" in window.results and not window.dirty and window.project.rails == []
+
+
 def test_a_limit_typed_on_a_kicad_rail_saves_as_a_limits_only_project_rail(window, tmp_path):
     open_net(window, strip(tmp_path))
     rp = window.rail_panel
