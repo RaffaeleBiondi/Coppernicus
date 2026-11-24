@@ -75,6 +75,27 @@ def click_view(window, x_mm: float, y_mm: float, drag_px: int = 0):
     QApplication.processEvents()
 
 
+def qt_click_view(window, x_mm: float, y_mm: float):
+    """A left click sent to the view widget as a Qt mouse event, so it goes through
+    pyvistaqt's Qt → VTK translation with the screen's device-pixel ratio (Retina) — the path
+    a real mouse takes. Real window only. Returns (dpr, logical x, logical y)."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    view = window.view
+    ren = view.plotter.renderer
+    ren.SetWorldPoint(x_mm, -y_mm, 0.0, 1.0)
+    ren.WorldToDisplay()
+    dx, dy, _ = ren.GetDisplayPoint()                     # device pixels, origin bottom-left
+    widget = view.plotter.interactor
+    dpr = widget.devicePixelRatioF()
+    height_px = view.plotter.ren_win.GetSize()[1]
+    qx, qy = dx / dpr, (height_px - 1 - dy) / dpr
+    QTest.mouseClick(widget, Qt.LeftButton, Qt.NoModifier, QPoint(round(qx), round(qy)))
+    QApplication.processEvents()
+    return dpr, qx, qy
+
+
 def run_demo(window, check: Checks, args, out: Path):
     from PySide6.QtWidgets import QApplication
     ok = window.open_board(DEMO_BOARD)
@@ -114,6 +135,13 @@ def run_demo(window, check: Checks, args, out: Path):
         n = len(window._rail_draft.loads)
         click_view(window, 50.0, 28.0, drag_px=12)
         check("a drag is not a click", len(window._rail_draft.loads) == n)
+        window._rail_draft.loads = [ld for ld in window._rail_draft.loads if ld.ref != "U2"]
+        window.refresh_view()
+        QApplication.processEvents()
+        dpr, qx, qy = qt_click_view(window, 50.0, 28.0)
+        refs = [ld.ref for ld in window._rail_draft.loads]
+        check("a Qt mouse click on U2 picks it (device-pixel ratio path)", "U2" in refs,
+              f"dpr {dpr:g}, widget point ({qx:.0f}, {qy:.0f}); loads {refs}")
         window.grab().save(str(out / "t1_picked_window.png"))
         window.view.screenshot(out / "t1_picked_view.png")
         window._rail_draft.loads = [ld for ld in window._rail_draft.loads if ld.ref != "U2"]
@@ -156,10 +184,15 @@ def render_scene(view, path: Path, size=(1100, 800)) -> float:
     return seconds
 
 
-def timed_refresh(window) -> float:
+def timed_refresh(window, on_screen: bool = False) -> float:
+    """Seconds to redraw the view. pyvistaqt defers render() to the event loop on macOS, so
+    on screen the draw is forced synchronously (``_render``) inside the timing; offscreen Qt
+    has no GL context and only the scene build is timed."""
     import time
     t0 = time.perf_counter()
     window.refresh_view()
+    if on_screen:
+        window.view.plotter._render()
     return time.perf_counter() - t0
 
 
@@ -167,8 +200,12 @@ def run_flow_demo(window, check: Checks, args, out: Path):
     """Task 3 on the demo project: isolines, arrows, ΔV between J1 and U1."""
     from PySide6.QtWidgets import QApplication
     window.open_project(ROOT / "examples" / "demo" / "demo.coppernicus.yml")
-    window.nets.select("+3V3")
     QApplication.processEvents()
+    # The demo board was open with +3V3 selected: the project's own +3V3 rail must replace it.
+    shown = [(r[1], r[2]) for r in window.rail_panel.loads.rows()]
+    check("opening a project shows its rail, not the previous one",
+          shown == [("U1", None), ("U2", None), ("U3", None)]
+          and window._rail_draft is window.project.rail("+3V3"), str(shown))
     res = solve_and_wait(window, args.timeout)
     check("solve the demo project", res is not None)
     if res is None:
@@ -180,8 +217,9 @@ def run_flow_demo(window, check: Checks, args, out: Path):
         QApplication.processEvents()
         actors = window.view.plotter.renderer.actors
         check(f"isolines and arrows drawn on {name}", "isolines" in actors and "arrows" in actors)
-        print(f"  redraw {name} with isolines + arrows: {timed_refresh(window):.3f} s "
-              f"(scene build; offscreen Qt does not rasterise)", flush=True)
+        what = "scene build and on-screen draw" if args.window else "scene build only, offscreen Qt"
+        print(f"  redraw {name} with isolines + arrows: {timed_refresh(window, args.window):.3f} s "
+              f"({what})", flush=True)
         for field in ("drop", "current"):
             window.field_box.setCurrentIndex(window.field_box.findData(field))
             QApplication.processEvents()
@@ -243,12 +281,21 @@ def run_local(window, check: Checks, args, out: Path):
         for field in ("drop", "current"):
             window.field_box.setCurrentIndex(window.field_box.findData(field))
             QApplication.processEvents()
-            build = timed_refresh(window)
+            arrows = None
+            name = f"local_{lf.name.replace('.', '')}_{field}"
+            if args.window:
+                total = timed_refresh(window, on_screen=True)
+                window.view.screenshot(out / f"{name}_view.png")
+                detail = f"{total:.3f} s in the window"
+            else:
+                build = timed_refresh(window)
+                secs = render_scene(window.view, out / f"{name}_scene.png")
+                total = build + secs
+                detail = f"scene {build:.3f} s + off-screen render {secs:.3f} s"
             arrows = window.view.plotter.renderer.actors.get("arrows")
             n_arrows = arrows.mapper.dataset.n_lines // 3 if arrows is not None else 0
-            secs = render_scene(window.view, out / f"local_{lf.name.replace('.', '')}_{field}_scene.png")
             check(f"{lf.name} {field} ({len(lf.tris):,} triangles): redraw under 1 s",
-                  build + secs < 1.0, f"scene {build:.3f} s + render {secs:.3f} s, {n_arrows} arrows")
+                  total < 1.0, f"{detail}, {n_arrows} arrows")
             check(f"{lf.name} {field}: at most 2000 arrows", n_arrows <= 2000)
 
 

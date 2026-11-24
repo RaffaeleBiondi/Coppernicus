@@ -181,6 +181,8 @@ class MainWindow(QMainWindow):
         self.results.clear()
         self._candidates.clear()
         self.rail_panel.set_pick("")
+        self.net, self._rail_draft = None, None          # nothing of the previous board survives
+        self.rail_panel.clear_rail()
         self.rail_panel.set_settings(self.project.settings)
         self.nets.set_board(board, [r.net for r in self.project.rails if r.sources or r.loads],
                             self.project.marked_rails)

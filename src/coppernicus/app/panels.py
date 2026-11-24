@@ -73,10 +73,12 @@ class NetPanel(QWidget):
         self.list.currentTextChanged.connect(self._emit)
 
     def set_board(self, board: Optional[Board], configured: List[str] = (), marked: List[str] = ()):
+        """A new board: nothing is selected, so selecting any net afterwards (even one with
+        the same name as before) emits :attr:`net_selected`."""
         self._board = board
         self._configured = set(configured)
         self._marked = list(marked)
-        self._refill()
+        self._refill(keep=False)
 
     @property
     def marked(self) -> List[str]:
@@ -382,6 +384,18 @@ class RailPanel(QWidget):
         for edit, value in ((self.max_drop, lim.max_drop_pct), (self.max_j, lim.max_current_density),
                             (self.max_via, lim.max_via_current)):
             edit.setText("" if value is None else f"{value:g}")
+        self._loading = False
+
+    def clear_rail(self):
+        """No net selected (a new board was opened)."""
+        self._loading = True
+        self._rail = None
+        self.title.setText("<i>Pick a net</i>")
+        self.sources.set_rows([])
+        self.loads.set_rows([])
+        self.ties.setVisible(False)
+        self.follow_ties.setVisible(False)
+        self.setEnabled(False)
         self._loading = False
 
     # ------------------------------------------------------------------ write back
