@@ -171,3 +171,29 @@ def test_hover_net_names_every_net_of_the_result():
     from coppernicus.app.hover import hover_text, hover_values
     tied = _rail(3.3, net="VCC", nets=["VCC", "VCC_A"])
     assert hover_text(hover_values(tied, "F.Cu", _probe(3.3)), ["net"]) == "VCC + VCC_A"
+
+
+def test_hover_label_sits_14_px_from_the_cursor_and_flips_inside_the_viewport():
+    from coppernicus.app.hover import label_position
+    size, viewport = (80, 40), (800, 600)
+    assert label_position((100, 100), size, viewport) == (114, 114)
+    assert label_position((790, 100), size, viewport) == (696, 114)      # right edge: left of it
+    assert label_position((100, 590), size, viewport) == (114, 536)      # bottom edge: above it
+    assert label_position((790, 590), size, viewport) == (696, 536)
+    assert label_position((10, 10), size, (50, 30)) == (0, 0)            # bigger than the view: clamped
+    for cx in range(0, 800, 37):                                         # never under the cursor
+        for cy in range(0, 600, 29):
+            x, y = label_position((cx, cy), size, viewport)
+            assert 0 <= x <= 720 and 0 <= y <= 560
+            assert not (x <= cx < x + 80 and y <= cy < y + 40), (cx, cy, x, y)
+
+
+def test_hover_choice_round_trips_through_its_setting():
+    from coppernicus.app.hover import HOVER_DEFAULT, HOVER_VALUES, chosen_from_setting, setting_from_chosen
+    assert [label for _key, label in HOVER_VALUES] == ["V", "drop", "|J| (A/mm²)", "layer", "net"]
+    assert HOVER_DEFAULT == ("v", "drop", "layer")
+    assert chosen_from_setting(None) == HOVER_DEFAULT                    # never set: the defaults
+    assert chosen_from_setting("") == ()                                 # none checked: readout off
+    assert chosen_from_setting(setting_from_chosen([])) == ()
+    assert chosen_from_setting("net,v,old_key") == ("v", "net")          # known keys, menu order
+    assert setting_from_chosen(["layer", "j"]) == "j,layer"
