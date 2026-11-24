@@ -24,6 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_BOARD = ROOT / "examples" / "demo" / "demo.kipi.json.gz"
+CHAIN_PROJECT = ROOT / "examples" / "power_chain" / "power_chain.coppernicus.yml"
 
 
 class Checks:
@@ -663,6 +664,56 @@ def run_marked(window, check: Checks, out: Path):
     check("unmarking hides it again", "OTHER" not in listed() and window.project.marked_rails == [])
 
 
+def run_power_chain(window, check: Checks, args, out: Path):
+    """Task 6: the power-chain example (project model v2) opens, its rails solve one at a
+    time, and editing rows then saving (into ``out``) keeps every field the rail editor does
+    not show: a regulator's kind, efficiency, input, ground and sense pins, a load's ground
+    pins, the ferrite link."""
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.engine.synthetic import power_chain_project
+    from coppernicus.project import Project
+    ok = window.open_project(CHAIN_PROJECT)
+    QApplication.processEvents()
+    check("power chain: the v2 example opens", ok and window.board is not None)
+    for net in ("+3V3", "+1V8"):
+        window.nets.select(net)
+        QApplication.processEvents()
+        res = solve_and_wait(window, args.timeout)
+        check(f"power chain: {net} solves on its own", res is not None and len(res.loads) == 1,
+              "" if res is None else f"drop {res.drop(res.loads[0]) * 1e3:.2f} mV")
+
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    window.rail_panel.loads.table.cellWidget(0, 3).setValue(0.7)
+    QApplication.processEvents()
+    rail = window.project.rail("+3V3")
+    src = rail.sources[0]
+    check("power chain: editing U4's current changes it", rail.loads[0].current == 0.7,
+          repr(rail.loads[0]))
+    check("... and keeps U1's kind, efficiency, input and ground",
+          (src.kind, src.efficiency, src.input_net, src.ground_net) == ("smps", 0.9, "VIN", "GND"),
+          repr(src))
+    check("... and U4's ground pins", rail.loads[0].ground_net == "GND", repr(rail.loads[0]))
+    window.nets.select("+1V8")
+    QApplication.processEvents()
+    window.rail_panel.sources.table.item(0, 0).setText("LDO")
+    QApplication.processEvents()
+    u2 = window.project.rail("+1V8").sources[0]
+    check("power chain: renaming U2 keeps its sense and ground-sense pins",
+          u2.name == "LDO" and (u2.sense_ref, u2.ground_sense_net) == ("U3", "GND"), repr(u2))
+
+    path = out / "power_chain_edited.coppernicus.yml"
+    window._save(path)
+    saved = Project.load(path)
+    expected = power_chain_project()
+    expected.rail("+3V3").loads[0].current = 0.7
+    expected.rail("+1V8").sources[0].name = "LDO"
+    check("power chain: saved and reopened, every v2 field and the link survive",
+          saved.rails == expected.rails and saved.links == expected.links,
+          f"{saved.rails!r} {saved.links!r}" if saved.rails != expected.rails else "")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
@@ -689,6 +740,7 @@ def main(argv=None) -> int:
     try:
         run_other_net(window, check, out)
         run_marked(window, check, out)
+        run_power_chain(window, check, args, out)
         run_demo(window, check, args, out)
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:

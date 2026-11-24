@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.problems import FAIL, Problem
-from coppernicus.project import Limits, Load, Rail, Settings, Source, parse_pins, pins_text
+from coppernicus.project import Limits, Load, Rail, Settings, Source, carry_over, parse_pins, pins_text
 
 # ---------------------------------------------------------------------- numbers
 
@@ -427,10 +427,12 @@ class RailPanel(QWidget):
     def _write_rail(self, *_):
         if self._loading or self._rail is None:
             return
-        self._rail.sources = [Source(ref, value, pins, name)
-                              for name, ref, pins, value in self.sources.rows() if ref]
-        self._rail.loads = [Load(ref, value, pins, name)
-                            for name, ref, pins, value in self.loads.rows() if ref]
+        # The tables show name, part, pins and value; every other field (a regulator's kind,
+        # input, ground and sense pins, a load's ground pins) is kept from the row's part.
+        self._rail.sources = carry_over(self._rail.sources, [
+            Source(ref, value, pins, name) for name, ref, pins, value in self.sources.rows() if ref])
+        self._rail.loads = carry_over(self._rail.loads, [
+            Load(ref, value, pins, name) for name, ref, pins, value in self.loads.rows() if ref])
         self._rail.follow_net_ties = self.follow_ties.isChecked()
         self.rail_changed.emit()
 
