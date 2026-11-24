@@ -1,19 +1,26 @@
-"""Write the committed example: a synthetic two-layer board and its project file.
+"""Write the committed examples: synthetic boards and their project files.
 
     uv run python examples/make_examples.py
 
-then try it:
+then try them:
 
     uv run coppernicus solve examples/demo/demo.coppernicus.yml --out results/demo
     uv run coppernicus gui examples/demo/demo.coppernicus.yml
+    uv run coppernicus gui examples/power_chain/power_chain.coppernicus.yml
+
+``demo``: one rail, three loads, a tight drop budget. ``power_chain``: a whole power tree
+(12 V input, switcher, ferrite, remote-sensed LDO, ground pins), copied from KiPI's
+power-chain validation board.
 """
 
 from pathlib import Path
 
-from coppernicus.engine.synthetic import demo_board, save_snapshot
+from coppernicus.engine.synthetic import demo_board, power_chain_board, power_chain_project, save_snapshot
 from coppernicus.project import Limits, Load, Project, Rail, Source
 
-HERE = Path(__file__).resolve().parent / "demo"
+ROOT = Path(__file__).resolve().parent
+HERE = ROOT / "demo"
+CHAIN = ROOT / "power_chain"
 
 
 def main():
@@ -29,6 +36,11 @@ def main():
     )])
     project.save(HERE / "demo.coppernicus.yml")
     print(f"Wrote {HERE}")
+
+    CHAIN.mkdir(exist_ok=True)
+    save_snapshot(power_chain_board(), CHAIN / "power_chain.kipi.json.gz")
+    power_chain_project("power_chain.kipi.json.gz").save(CHAIN / "power_chain.coppernicus.yml")
+    print(f"Wrote {CHAIN}")
 
 
 if __name__ == "__main__":

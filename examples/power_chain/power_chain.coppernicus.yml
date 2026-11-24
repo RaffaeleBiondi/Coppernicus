@@ -1,0 +1,90 @@
+board: power_chain.kipi.json.gz
+settings:
+  max_edge_mm: 0.5
+  via_plating_um: null
+  copper_temp_c: 20.0
+rails:
+- net: VIN
+  sources:
+  - ref: J1
+    pins:
+    - '1'
+    voltage: 12.0
+    ground:
+      net: GND
+      pins:
+      - '2'
+  loads: []
+- net: +3V3
+  sources:
+  - ref: U1
+    pins:
+    - '2'
+    voltage: 3.3
+    kind: smps
+    efficiency: 0.9
+    quiescent_a: 0.005
+    input:
+      net: VIN
+      pins:
+      - '1'
+    ground:
+      net: GND
+      pins:
+      - '3'
+  loads:
+  - ref: U4
+    pins:
+    - '1'
+    current: 0.5
+    ground:
+      net: GND
+      pins:
+      - '2'
+- net: +1V8
+  sources:
+  - ref: U2
+    pins:
+    - '2'
+    voltage: 1.8
+    kind: ldo
+    quiescent_a: 0.002
+    input:
+      net: +3V3_F
+      pins:
+      - '1'
+    ground:
+      net: GND
+      pins:
+      - '3'
+    sense:
+      ref: U3
+      net: +1V8
+      pins:
+      - '1'
+    ground_sense:
+      ref: U3
+      net: GND
+      pins:
+      - '2'
+  loads:
+  - ref: U3
+    pins:
+    - '1'
+    current: 2.0
+    ground:
+      net: GND
+      pins:
+      - '2'
+links:
+- name: FB1
+  ref: FB1
+  a:
+    net: +3V3
+    pins:
+    - '1'
+  b:
+    net: +3V3_F
+    pins:
+    - '2'
+  resistance_ohm: 0.05
