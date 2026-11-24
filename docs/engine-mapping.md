@@ -247,7 +247,7 @@ KiPI's own `SolveError`s become `EngineError` too.
   limits on it (select `GND` in the net list and type a limit).
   - `max_drop_pct` does not apply to a ground, which has no nominal voltage: it is reported
     as not judged.
-  - `max_ground_rise_mv` (Raffaele's request) judges each return pin's rise and the copper's
+  - `max_ground_rise_mv` judges each return pin's rise and the copper's
     largest rise above 0 V.
   - The other two limits apply as on a rail.
   - `max_ground_rise_mv` set on a supply rail does not apply in the tree.
