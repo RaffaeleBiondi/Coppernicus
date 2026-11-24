@@ -67,7 +67,9 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
    19.7 MB for a synthetic 3.07 M-triangle board; about 6 MB for a local 10-layer, 4-rail board,
    checked in Chromium. Safari and Firefox not tried. Assets in `src/coppernicus/report_assets/`
    must be packaged as data files (WS4).
-3. **Phase 3:** automation, i.e. a GitHub Action (or workflow template) usable from a KiCad
+3. **Phase 3 (merged 2026-11-24, `bd156f6`):** root `action.yml`, self-test and test workflows
+   (Ubuntu, macOS; Windows informative), `docs/ci.md`, `docs/kicad-fields-proposal.md`. Original scope:
+   automation, i.e. a GitHub Action (or workflow template) usable from a KiCad
    repository, which solves with limits, uploads PNG/HTML artifacts and fails on an exceeded
    limit. Also a way to define sources and loads:
    - a text file (today's YAML project);

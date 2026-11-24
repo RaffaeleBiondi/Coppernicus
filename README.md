@@ -202,6 +202,14 @@ uv run coppernicus solve project.coppernicus.yml --html --open
   <img src="docs/images/report-demo.png" alt="The offline HTML report of the demo board: summary cards, the drop map with sources, loads and hotspots, and the hover readout" width="800">
 </p>
 
+## Use it in CI
+
+Coppernicus is also a GitHub Action. Add a workflow to your KiCad repository with
+`uses: RaffaeleBiondi/Coppernicus@main` and `project: hardware/*.coppernicus.yml`. On every push
+it solves the rails of your project files and writes a summary on the run's page: worst load,
+drop, loss and verdict per rail. It attaches the maps and the interactive HTML report, and fails
+the check when a limit you wrote in a project file is exceeded. See [docs/ci.md](docs/ci.md).
+
 ## Use it from an AI agent
 
 `coppernicus mcp` is an [MCP](https://modelcontextprotocol.io) server over stdio. With it,
@@ -265,7 +273,8 @@ rails:
 | Command line with exit codes for scripts and CI | ✅ |
 | AI-agent interface: MCP server and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
 | Offline interactive HTML report (`solve --html`, MCP `report` tool) | ✅ (tested in Chromium and Chrome; Safari and Firefox not yet) |
-| GitHub Action for KiCad repositories | ⏳ next |
+| GitHub Action for KiCad repositories (`uses: RaffaeleBiondi/Coppernicus@main`), job summary, artifacts | ✅ |
+| Sources and loads defined in KiCad footprint fields | ⏳ proposal in [docs/kicad-fields-proposal.md](docs/kicad-fields-proposal.md) |
 | Before/after comparison: "Pin as baseline", Compare tab (per-load, total and per-layer deltas, settings that changed), "Δ drop vs baseline" map | ✅ |
 | Copper loss by layer as a chart (baseline beside current) | ✅ |
 | Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
@@ -276,7 +285,7 @@ rails:
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
 | Standalone `.app` / `.exe` that needs no uv | ⏳ later |
 
-Tested on macOS. Windows is a target but has not been tried yet. The engine also reads ODB++
+Tested on macOS. The test suite also runs on Ubuntu in CI, and on Windows as an informative job; the desktop app has not been tried on Windows yet. The engine also reads ODB++
 and HyperLynx files, which have not been tried through Coppernicus yet.
 
 ## More documentation
