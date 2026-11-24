@@ -70,3 +70,26 @@ def _result(net, v_ref, max_drop, **kw):
 def test_the_worst_drop_reads_above_or_below_its_reference_and_rise_on_a_ground(res, text):
     from coppernicus.problems import max_drop_text
     assert max_drop_text(res) == text
+
+
+def _demo_loads(voltage):
+    """The demo rail's loads declared out of order (neither by drop nor its reverse)."""
+    rail = Rail("+3V3", sources=[Source("J1", voltage)],
+                loads=[Load("U3", 0.3), Load("U1", 2.0), Load("U2", 1.5)])
+    res = solve_rail(Board(demo_board()), rail)
+    return [p for p in find_problems(res) if p.kind == "load"]
+
+
+def test_loads_on_a_rail_at_0_v_are_ranked_by_their_drop_in_mv():
+    """At 0 V there is no %: the loads are ranked by |mV|, largest first, never by NaN."""
+    loads = _demo_loads(0.0)
+    assert [p.data["name"] for p in loads] == ["U1", "U2", "U3"]
+    mv = [abs(p.data["drop_mv"]) for p in loads]
+    assert mv == sorted(mv, reverse=True)
+
+
+@pytest.mark.parametrize("voltage", [3.3, -3.3])
+def test_loads_on_a_rail_with_a_nominal_keep_their_ranking_by_percent(voltage):
+    loads = _demo_loads(voltage)
+    assert [p.data["name"] for p in loads] == ["U1", "U2", "U3"]
+    assert [p.value for p in loads] == [p.data["drop_pct"] for p in loads]

@@ -34,7 +34,7 @@ class Problem:
     kind: str                     # "load", "hotspot" or "via"
     title: str
     detail: str
-    value: float                  # drop %, mean A/mm^2 or A, by kind
+    value: float                  # the ranking: drop % (|mV| at 0 V nominal), mean A/mm^2, A or mV, by kind
     x: float
     y: float
     layer: Optional[str] = None
@@ -68,7 +68,7 @@ def _loads(result: RailResult, limits: Limits) -> List[Problem]:
             f"{t.name}: {result.worst_v(t):.4f} V at its worst pin ({mv:.2f} mV{share} {word} "
             f"{result.v_ref:g} V)",
             f"{t.ref}, {len(t.pad_ids)} pin(s), {t.current:g} A; {limit}.",
-            pct, float(x), float(y),
+            _rank(pct, mv), float(x), float(y),
             data={"name": t.name, "ref": t.ref, "drop_mv": mv, "drop_pct": pct,
                   "v_min_v": t.v_min, "v_worst_v": result.worst_v(t), "current_a": t.current}))
     return out
@@ -266,6 +266,11 @@ def _share(pct: float) -> str:
     return f", {abs(pct):.2f} %" if np.isfinite(pct) else ""
 
 
+def _rank(pct: float, mv: float) -> float:
+    """A load's ranking value: its drop %, or at 0 V nominal (no %) its |drop| in mV."""
+    return pct if np.isfinite(pct) else abs(mv)
+
+
 def _word(drop: float, nominal: float) -> str:
     """Which side of the nominal a pin that lost ``drop`` toward 0 V sits on."""
     return "below" if (drop >= 0) == (nominal >= 0) else "above"
@@ -285,7 +290,7 @@ def _tree_loads(tree: TreeResult, group: str, res: RailResult, per_net: NetLimit
             title = (f"{ld.name}: {ld.v_worst_v:.4f} V across its supply and ground pins "
                      f"({abs(ld.drop_v) * 1e3:.2f} mV{_share(ld.drop_pct)} "
                      f"{_word(ld.drop_v, ld.nominal_v)} {ld.nominal_v:g} V)")
-            value = ld.drop_pct
+            value = _rank(ld.drop_pct, ld.drop_v * 1e3)
         ground = ("no ground pins" if ld.v_ground_v is None
                   else f"ground at {ld.v_ground_v * 1e3:.2f} mV")
         status = f" {ld.status}." if ld.status and ld.status not in title else ""
@@ -316,7 +321,7 @@ def _tree_inputs(tree: TreeResult, group: str, res: RailResult, per_net: NetLimi
             title = (f"{name}: {v.v_in_worst_v:.4f} V across its input and ground pins "
                      f"({abs(v.input_drop_v) * 1e3:.2f} mV{_share(pct)} "
                      f"{_word(v.input_drop_v, v.input_nominal_v or 0.0)} {v.input_nominal_v:g} V)")
-            value = pct
+            value = _rank(pct, v.input_drop_v * 1e3)
         status = f" {v.input_status}." if v.input_status and v.input_status not in title else ""
         amps = f"{v.i_in_a:g} A in" if v.i_in_a is not None else "input current not known"
         out.append(Problem(

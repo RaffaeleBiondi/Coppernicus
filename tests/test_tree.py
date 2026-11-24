@@ -442,6 +442,32 @@ def test_a_regulator_input_on_a_rail_at_0_v_in_the_tree_has_no_nan_percentage():
     assert _mv_in(inp.title, "below 0 V") == pytest.approx(0.5 * RHO * 38.5 / (0.5 * OZ1) * 1e3, rel=2e-2)
 
 
+def test_loads_and_regulator_inputs_on_a_rail_at_0_v_in_the_tree_are_ranked_by_mv():
+    """A 0 V rail has no %: its loads and the regulator inputs it feeds are ranked together
+    by |mV|, largest first. Along one track from J1: U3 at 20 mm, U1's input at 40 mm, U2 at
+    60 mm, so the drop grows U3 < U1 (input) < U2."""
+    from coppernicus.engine.synthetic import F, SyntheticBoard, two_layer_stackup
+    from coppernicus.project import Project, Rail
+    b = SyntheticBoard("zero_rank", two_layer_stackup())
+    b.square_pad("J1", "1", "VZ", 0.0, 0.0, 1.5)
+    b.square_pad("U3", "1", "VZ", 20.0, 0.0, 1.5)
+    b.square_pad("U1", "1", "VZ", 40.0, 0.0, 1.5)
+    b.square_pad("U2", "1", "VZ", 60.0, 0.0, 1.5)
+    b.square_pad("U1", "2", "VO", 40.0, 5.0, 1.5)
+    b.square_pad("U4", "1", "VO", 60.0, 5.0, 1.5)
+    b.track("VZ", F, 0.5, (0.0, 0.0), (60.0, 0.0))
+    b.track("VO", F, 0.5, (40.0, 5.0), (60.0, 5.0))
+    project = Project(rails=[
+        Rail("VZ", sources=[Source("J1", 0.0)], loads=[Load("U3", 0.5), Load("U2", 0.5)]),
+        Rail("VO", sources=[Source("U1", 1.0, ["2"], kind="ldo", input_pins=["1"], input_net="VZ")],
+             loads=[Load("U4", 0.5)])])
+    tree = solve_project_tree(Board(b.snapshot()), project)
+    loads = [p for p in find_tree_problems(tree, "VZ") if p.kind == "load"]
+    assert [p.data["name"] for p in loads] == ["U2", "U1 (input)", "U3"]
+    mv = [abs(p.data["drop_mv"]) for p in loads]
+    assert mv == sorted(mv, reverse=True)
+
+
 def test_an_excluded_ground_rail_is_not_said_to_be_solved_as_a_ground(board):
     from coppernicus.project import Rail
     project = power_chain_project()
