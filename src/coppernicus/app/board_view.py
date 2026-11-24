@@ -3,7 +3,9 @@
 Shows one copper layer at a time: the board outline, the net's copper outline, and after a
 solve a colour map (voltage drop, voltage or current density) with the sources, loads and
 vias on top. Left-drag pans, the wheel zooms, a double-click reads the values under the
-pointer. KiCad's y axis points down; the view plots (x, −y) so the board reads as in KiCad.
+pointer. In pick mode a single click (a press and release less than 3 px apart, so a pan
+is never a click) reports the board point under it. KiCad's y axis points down; the view
+plots (x, −y) so the board reads as in KiCad.
 """
 
 from __future__ import annotations
@@ -31,6 +33,9 @@ FIELDS = {
 }
 J_CLIP_PERCENTILE = 99.5
 SOURCE_COLOR, LOAD_COLOR, OUTLINE_COLOR, COPPER_COLOR = "#1a9850", "#d73027", "#555555", "#b87333"
+CANDIDATE_COLOR = "#7a4a1d"       # outlines of the pads that can be picked
+PAD_STYLE = {"source": (SOURCE_COLOR, 3.0), "load": (LOAD_COLOR, 3.0), "candidate": (CANDIDATE_COLOR, 1.0)}
+CLICK_SLOP_PX = 3                 # a press and release closer than this is a click, not a pan
 
 
 def _xyz(points: np.ndarray, z: float = 0.0) -> np.ndarray:
@@ -90,6 +95,7 @@ class ColorBar(QWidget):
 
 class BoardView(QWidget):
     probed = Signal(str)            # a readout of the values under a double-click
+    pad_picked = Signal(float, float)   # pick mode: board point (mm, KiCad frame) under a click
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -105,6 +111,10 @@ class BoardView(QWidget):
         self.plotter.enable_parallel_projection()
         self.plotter.enable_2d_style()
         self.plotter.track_click_position(self._on_double_click, side="left", double=True)
+        self._click_mode: Optional[str] = None
+        self._press_at: Optional[Tuple[int, int]] = None
+        self.plotter.iren.add_observer("LeftButtonPressEvent", self._on_press)
+        self.plotter.iren.add_observer("LeftButtonReleaseEvent", self._on_release)
         self._layer: Optional[LayerField] = None
         self._result: Optional[RailResult] = None
         self._finder = None
@@ -118,18 +128,21 @@ class BoardView(QWidget):
 
     def show_board(self, outline: Sequence[np.ndarray], copper_rings: Sequence[np.ndarray] = (),
                    sources: Sequence[Tuple[str, Sequence]] = (), loads: Sequence[Tuple[str, Sequence]] = (),
-                   fit: bool = False):
-        """Outline, the net's copper outline on the shown layer, and terminal markers."""
+                   fit: bool = False, pad_outlines: Sequence[Tuple[str, Sequence[np.ndarray]]] = ()):
+        """Outline, the net's copper outline on the shown layer, and terminal markers.
+        ``pad_outlines``: (role, rings) with role 'source', 'load' or 'candidate'."""
         self.clear()
         self._add_outline(outline)
         copper = _polyline_mesh(copper_rings, 0.0)
         if copper is not None:
             self.plotter.add_mesh(copper, color=COPPER_COLOR, line_width=1.2, name="copper")
+        self._add_pad_outlines(pad_outlines)
         self._add_terminals(sources, loads)
         self._finish(fit)
 
     def show_field(self, result: RailResult, layer: LayerField, field: str,
-                   outline: Sequence[np.ndarray], show_vias: bool = True, fit: bool = False):
+                   outline: Sequence[np.ndarray], show_vias: bool = True, fit: bool = False,
+                   pad_outlines: Sequence[Tuple[str, Sequence[np.ndarray]]] = ()):
         """A colour map of ``field`` ('drop', 'voltage' or 'current') on ``layer``."""
         self.clear()
         self._result, self._layer = result, layer
@@ -158,6 +171,7 @@ class BoardView(QWidget):
         self._add_outline(outline)
         if show_vias and result.vias:
             self._add_vias(result)
+        self._add_pad_outlines(pad_outlines)
         self._add_terminals([(t.name, t.positions) for t in result.sources],
                             [(t.name, t.positions) for t in result.loads])
         self._finder = TriangleLocator(layer.points, layer.tris)
@@ -167,6 +181,13 @@ class BoardView(QWidget):
         mesh = _polyline_mesh(outline, 0.01)
         if mesh is not None:
             self.plotter.add_mesh(mesh, color=OUTLINE_COLOR, line_width=1.5, name="outline")
+
+    def _add_pad_outlines(self, pad_outlines):
+        for role, rings in pad_outlines:
+            mesh = _polyline_mesh(rings, 0.025)
+            if mesh is not None:
+                color, width = PAD_STYLE[role]
+                self.plotter.add_mesh(mesh, color=color, line_width=width, name=f"pads_{role}")
 
     def _add_vias(self, result: RailResult):
         vias = [v for v in result.vias if v.current > 0]
@@ -214,6 +235,45 @@ class BoardView(QWidget):
 
     def screenshot(self, path) -> None:
         self.plotter.screenshot(str(path))
+
+    # ------------------------------------------------------------------ single click
+    def set_click_mode(self, mode: Optional[str]):
+        """``'pick'``: a single click emits :attr:`pad_picked`; ``None``: clicks do nothing
+        (the double-click probe works in every mode)."""
+        self._click_mode = mode
+        self.plotter.interactor.setCursor(Qt.CrossCursor if mode else Qt.ArrowCursor)
+
+    @property
+    def click_mode(self) -> Optional[str]:
+        return self._click_mode
+
+    def _event_xy(self) -> Tuple[int, int]:
+        x, y = self.plotter.iren.interactor.GetEventPosition()
+        return int(x), int(y)
+
+    def _on_press(self, *_):
+        self._press_at = self._event_xy()
+
+    def _on_release(self, *_):
+        start, self._press_at = self._press_at, None
+        if self._click_mode is None or start is None:
+            return
+        x, y = self._event_xy()
+        if abs(x - start[0]) > CLICK_SLOP_PX or abs(y - start[1]) > CLICK_SLOP_PX:
+            return                                   # a pan, not a click
+        bx, by = self.display_to_board(x, y)
+        if self._click_mode == "pick":
+            self.pad_picked.emit(bx, by)
+
+    def display_to_board(self, x: float, y: float) -> Tuple[float, float]:
+        """Board point (mm, KiCad frame, y down) under display pixel (x, y). The view looks
+        straight down with a parallel projection, so depth does not matter."""
+        ren = self.plotter.renderer
+        ren.SetDisplayPoint(float(x), float(y), 0.0)
+        ren.DisplayToWorld()
+        wx, wy, _wz, w = ren.GetWorldPoint()
+        w = w or 1.0
+        return wx / w, -wy / w
 
     # ------------------------------------------------------------------ probe
     def _on_double_click(self, point):

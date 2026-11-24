@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from coppernicus import __version__
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.panels import NetPanel, ProblemsPanel, RailPanel
+from coppernicus.app.picking import add_picked_pin, pick_nets
 from coppernicus.app.worker import SolveWorker
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow):
         self.worker: Optional[SolveWorker] = None
         self.dirty = False
         self.last_render_s = 0.0
+        self._candidates: Dict[Tuple, List[str]] = {}      # pickable pad ids per set of nets
 
         # Centre: pickers + view.
         self.view = BoardView()
@@ -102,6 +104,9 @@ class MainWindow(QMainWindow):
         self.field_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.show_vias.toggled.connect(lambda *_: self.refresh_view())
         self.view.probed.connect(lambda text: self.statusBar().showMessage(text))
+        self.view.pad_picked.connect(self.pick_pad)
+        self.rail_panel.pick_changed.connect(self._pick_mode_changed)
+        QShortcut(QKeySequence(Qt.Key_Escape), self, activated=lambda: self.rail_panel.set_pick(""))
 
     def _dock(self, title, widget, area):
         dock = QDockWidget(title, self)
@@ -159,6 +164,8 @@ class MainWindow(QMainWindow):
         self.board = board
         self.project = project or Project(board=str(Path(path).resolve()))
         self.results.clear()
+        self._candidates.clear()
+        self.rail_panel.set_pick("")
         self.rail_panel.set_settings(self.project.settings)
         self.nets.set_board(board, [r.net for r in self.project.rails if r.sources or r.loads])
         self.problems.clear()
@@ -228,6 +235,7 @@ class MainWindow(QMainWindow):
     def select_net(self, net: str):
         if self.board is None:
             return
+        self.rail_panel.set_pick("")
         self.net = net
         rail = self.project.rail(net) or Rail(net)
         _, ties = tied_nets(self.board, net)
@@ -279,29 +287,95 @@ class MainWindow(QMainWindow):
         if self.board is None or not self.net:
             return
         layer_name = self.layer_box.currentText()
+        lid = self.layer_box.currentData()
         res = self.results.get(self.net)
+        rail = self.project.rail(self.net) or getattr(self, "_rail_draft", None)
         t0 = time.perf_counter()
         if res is not None and res.layer(layer_name) is not None:
+            pads = [("source", [i for t in res.sources for i in t.pad_ids]),
+                    ("load", [i for t in res.loads for i in t.pad_ids])]
             self.view.show_field(res, res.layer(layer_name), self.field_box.currentData(),
-                                 self.board.outline(), self.show_vias.isChecked(), fit=fit)
+                                 self.board.outline(), self.show_vias.isChecked(), fit=fit,
+                                 pad_outlines=self._pad_outlines(rail, pads, lid))
         else:
-            lid = self.layer_box.currentData()
             rings = copper_rings(self.board.copper(self.net, lid)) if lid is not None else []
-            rail = self.project.rail(self.net) or getattr(self, "_rail_draft", None)
-            src, lds = self._terminal_markers(rail)
-            self.view.show_board(self.board.outline(), rings, src, lds, fit=fit)
+            src, lds = self._terminal_pads(rail)
+            pads = [("source", [p.id for _, ps in src for p in ps]),
+                    ("load", [p.id for _, ps in lds for p in ps])]
+            self.view.show_board(self.board.outline(), rings,
+                                 [(name, [tuple(p.position) for p in ps]) for name, ps in src],
+                                 [(name, [tuple(p.position) for p in ps]) for name, ps in lds],
+                                 fit=fit, pad_outlines=self._pad_outlines(rail, pads, lid))
         self.last_render_s = time.perf_counter() - t0
 
-    def _terminal_markers(self, rail: Optional[Rail]):
+    def _rail_nets(self, rail: Rail) -> List[str]:
+        """The rail's net plus, when it follows them, the nets joined by net ties."""
+        return sorted(pick_nets(rail, tied_nets(self.board, rail.net)[0]))
+
+    def _terminal_pads(self, rail: Optional[Rail]):
+        """(label, pads) of the rail's sources and loads; a terminal that does not resolve
+        (a part not on the net, a wrong pin) has no pads."""
         if rail is None or self.board is None:
             return [], []
+        nets = self._rail_nets(rail)
 
-        def where(t):
+        def pads(t):
             try:
-                return [tuple(p.position) for p in self.board.pads(rail.net, t.ref, t.pins)]
+                return self.board.pads(nets, t.ref, t.pins)
             except EngineError:
                 return []
-        return ([(s.label, where(s)) for s in rail.sources], [(ld.label, where(ld)) for ld in rail.loads])
+        return ([(s.label, pads(s)) for s in rail.sources], [(ld.label, pads(ld)) for ld in rail.loads])
+
+    def _pad_outlines(self, rail: Optional[Rail], terminal_ids, layer_id):
+        """Pad rings on the shown layer: every pickable pad while picking, and the pads of
+        the sources and loads (drawn on top)."""
+        if layer_id is None or self.board is None:
+            return []
+        out = []
+        if self.rail_panel.pick_kind and rail is not None:
+            out.append(("candidate", self.board.pad_rings(self._pickable_pads(rail), layer_id)))
+        out.extend((role, self.board.pad_rings(ids, layer_id)) for role, ids in terminal_ids)
+        return out
+
+    def _pickable_pads(self, rail: Rail) -> List[str]:
+        key = tuple(self._rail_nets(rail))
+        if key not in self._candidates:
+            self._candidates[key] = [p.id for net in key for part in self.board.parts_on_net(net)
+                                     for p in self.board.pads(net, part.ref)]
+        return self._candidates[key]
+
+    # ------------------------------------------------------------------ picking pads
+    def _pick_mode_changed(self, kind: str):
+        self.view.set_click_mode("pick" if kind else None)
+        if kind:
+            self.statusBar().showMessage(f"Click pads to add them to the {kind}s · Esc to stop")
+        self.refresh_view()
+
+    def pick_pad(self, x: float, y: float) -> str:
+        """Add the pad at board point (x, y) mm to the sources or loads being picked. A pad
+        on the shown layer is preferred; one on another layer is used when none is there.
+        Returns the status-bar message."""
+        kind = self.rail_panel.pick_kind
+        if self.board is None or not self.net or not kind:
+            return ""
+        lid = self.layer_box.currentData()
+        hit = (self.board.pad_at(x, y, lid) if lid is not None else None) or self.board.pad_at(x, y)
+        rail = self.project.rail(self.net) or self._rail_draft
+        if hit is None:
+            msg = f"No pad at ({x:.2f}, {y:.2f}) mm"
+        elif hit.net not in self._rail_nets(rail):
+            msg = f"{hit.ref or 'pad'}.{hit.pin} is on {hit.net or 'no net'}, not on {rail.net}"
+        elif not hit.ref:
+            msg = f"The pad at ({x:.2f}, {y:.2f}) mm belongs to no part"
+        else:
+            msg = add_picked_pin(rail, kind, hit.ref, hit.pin)
+            if hit.layer_id != lid:
+                msg += f" (pad on {self.board.layer_name(hit.layer_id)})"
+            _, ties = tied_nets(self.board, rail.net)
+            self.rail_panel.set_rail(self.board, rail, ties)
+            self._rail_edited()
+        self.statusBar().showMessage(msg)
+        return msg
 
     # ------------------------------------------------------------------ solve
     def solve(self):

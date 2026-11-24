@@ -107,8 +107,10 @@ class NetPanel(QWidget):
 
 
 class TerminalTable(QWidget):
-    """Sources or loads of a rail: name, part (picked from the parts on the net), pins, value."""
+    """Sources or loads of a rail: name, part (picked from the parts on the net), pins, value.
+    The "Pick on board" toggle asks the main window to add pads clicked in the view."""
     changed = Signal()
+    pick_toggled = Signal(bool)
 
     def __init__(self, title: str, value_label: str, unit: str, parent=None):
         super().__init__(parent)
@@ -123,9 +125,15 @@ class TerminalTable(QWidget):
         add, remove = QPushButton("Add"), QPushButton("Remove")
         add.clicked.connect(self.add_row)
         remove.clicked.connect(self.remove_row)
+        self.pick = QPushButton("Pick on board")
+        self.pick.setCheckable(True)
+        self.pick.setToolTip("Click pads in the view to add them here; a pin joins the row of its "
+                             "part. Esc or a second press stops picking.")
+        self.pick.toggled.connect(self.pick_toggled.emit)
         buttons = QHBoxLayout()
         buttons.addWidget(QLabel(f"<b>{title}</b>"))
         buttons.addStretch(1)
+        buttons.addWidget(self.pick)
         buttons.addWidget(add)
         buttons.addWidget(remove)
         layout = QVBoxLayout(self)
@@ -215,6 +223,7 @@ class RailPanel(QWidget):
     limits_changed = Signal()        # limits only: re-rank the problems, no solve needed
     settings_changed = Signal()
     solve_requested = Signal()
+    pick_changed = Signal(str)       # "source", "load" or "" (no picking)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -262,6 +271,8 @@ class RailPanel(QWidget):
 
         self.sources.changed.connect(self._write_rail)
         self.loads.changed.connect(self._write_rail)
+        self.sources.pick_toggled.connect(lambda on: self._pick_toggled("source", on))
+        self.loads.pick_toggled.connect(lambda on: self._pick_toggled("load", on))
         self.follow_ties.toggled.connect(self._write_rail)
         for e in (self.max_drop, self.max_j, self.max_via):
             e.editingFinished.connect(self._write_limits)
@@ -271,6 +282,26 @@ class RailPanel(QWidget):
         self.solve.clicked.connect(self.solve_requested.emit)
         self._settings: Optional[Settings] = None
         self.setEnabled(False)
+
+    # ------------------------------------------------------------------ picking
+    @property
+    def pick_kind(self) -> str:
+        """"source", "load" or "" — which table the pads clicked in the view go to."""
+        return "source" if self.sources.pick.isChecked() else "load" if self.loads.pick.isChecked() else ""
+
+    def set_pick(self, kind: str):
+        """Turn picking on for "source" or "load", or off with ""."""
+        for k, table in (("source", self.sources), ("load", self.loads)):
+            if table.pick.isChecked() != (k == kind):
+                table.pick.setChecked(k == kind)
+
+    def _pick_toggled(self, kind: str, on: bool):
+        other = self.loads if kind == "source" else self.sources
+        if on and other.pick.isChecked():
+            other.pick.blockSignals(True)              # one table at a time
+            other.pick.setChecked(False)
+            other.pick.blockSignals(False)
+        self.pick_changed.emit(self.pick_kind)
 
     # ------------------------------------------------------------------ fill
     def set_settings(self, settings: Settings):

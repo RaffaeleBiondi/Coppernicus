@@ -10,13 +10,15 @@ import fnmatch
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from kipi.core.geometry.copper import net_layer_copper
 from kipi.core.model.board import BoardSnapshot, Pad
 from kipi.core.model.nets import classify_nets
 from kipi.sources import registry
+from shapely import STRtree
+from shapely.geometry import Point, Polygon
 
 from coppernicus.project import PinSpec
 
@@ -38,6 +40,17 @@ class PartPins:
     value: str
     footprint: str
     pins: List[str]
+
+
+@dataclass(frozen=True)
+class PadHit:
+    """A pad found under a point on the board (see :meth:`Board.pad_at`)."""
+    ref: str
+    pin: str
+    pad_id: str
+    net: str
+    position: Tuple[float, float]     # pad centre, mm
+    layer_id: int                     # the copper layer of the shape that was hit
 
 
 @dataclass(frozen=True)
@@ -72,6 +85,7 @@ class Board:
         self.warnings: List[str] = list(dict.fromkeys([*warnings, *snapshot.assumed]))
         self._pads_by_id: Dict[str, Pad] = {p.id: p for p in snapshot.pads}
         self._kinds: Optional[Dict[str, str]] = None
+        self._pad_index: Dict[Optional[int], tuple] = {}
 
     @classmethod
     def open(cls, path) -> "Board":
@@ -158,6 +172,57 @@ class Board:
 
     def pad(self, pad_id: str) -> Pad:
         return self._pads_by_id[pad_id]
+
+    def pad_at(self, x: float, y: float, layer_id: Optional[int] = None,
+               tolerance_mm: float = 0.3) -> Optional[PadHit]:
+        """The pad under (x, y) mm: among pads whose copper on ``layer_id`` (any layer if
+        ``None``) contains the point or lies within ``tolerance_mm`` of it, a pad containing
+        the point wins over one that is only near, then the nearest centre. ``None`` if no
+        pad is that close. Pads of every net are found; the caller checks the net."""
+        tree, entries = self._pad_tree(layer_id)
+        if tree is None:
+            return None
+        point = Point(x, y)
+        best, best_key = None, None
+        for i in tree.query(point, predicate="dwithin", distance=tolerance_mm):
+            pad, lid, geom, order = entries[int(i)]
+            cx, cy = pad.position
+            key = (geom.distance(point) > 0.0, (cx - x) ** 2 + (cy - y) ** 2, order)
+            if best_key is None or key < best_key:
+                best, best_key = (pad, lid), key
+        if best is None:
+            return None
+        pad, lid = best
+        return PadHit(pad.footprint, pad.number, pad.id, pad.net,
+                      (float(pad.position[0]), float(pad.position[1])), lid)
+
+    def pad_rings(self, pad_ids: Sequence[str], layer_id: int) -> List[np.ndarray]:
+        """Outline and hole rings, (N, 2) arrays in mm, of the given pads' copper on a
+        layer. Unknown pads and pads without copper there are skipped."""
+        rings = []
+        for pid in pad_ids:
+            pad = self._pads_by_id.get(pid)
+            for poly in (pad.shapes.get(layer_id, []) if pad is not None else []):
+                rings.append(np.asarray(poly.outline, dtype=float))
+                rings.extend(np.asarray(h, dtype=float) for h in poly.holes)
+        return rings
+
+    def _pad_tree(self, layer_id: Optional[int]):
+        """A spatial index of pad copper on one layer (or all), built on first use."""
+        if layer_id not in self._pad_index:
+            stack = {c.id: c.index for c in self._snap.stackup.copper}
+            entries = []
+            for pad in self._snap.pads:
+                for lid, polys in pad.shapes.items():
+                    if layer_id is not None and lid != layer_id:
+                        continue
+                    for poly in polys:
+                        geom = Polygon(poly.outline, poly.holes)
+                        if not geom.is_empty:
+                            entries.append((pad, lid, geom, stack.get(lid, 0)))
+            tree = STRtree([e[2] for e in entries]) if entries else None
+            self._pad_index[layer_id] = (tree, entries)
+        return self._pad_index[layer_id]
 
     # ------------------------------------------------------------------ net ties
     def net_ties(self) -> List[NetTie]:

@@ -108,3 +108,46 @@ def test_missing_source_or_load_is_a_clear_error():
         solve_rail(board, Rail(Strip.NET, loads=[Load("U1", 1.0)]))
     with pytest.raises(EngineError, match="at least one load"):
         solve_rail(board, Rail(Strip.NET, sources=[Source("J1", 1.0)]))
+
+
+def test_pad_at_finds_pad_on_layer_and_nearest():
+    from coppernicus.engine.synthetic import B, F
+    board = Board(pins_board())
+    hit = board.pad_at(12.0, 0.0, F)
+    assert (hit.ref, hit.pin, hit.net, hit.layer_id) == ("U1", "2", "VCC", F)
+    assert hit.position == pytest.approx((12.0, 0.0))
+    assert board.pad_at(100, 100) is None
+    # Within the tolerance of pad 2's edge (12.5) and far from pad 3's (13.5): pad 2.
+    assert board.pad_at(12.0, 0.6, F).pin == "2"
+    # These SMD pads are on F.Cu only: nothing on B.Cu, found with any layer.
+    assert board.pad_at(12.0, 0.0, B) is None
+    assert board.pad_at(12.0, 0.0).pin == "2"
+
+
+def test_pad_at_reports_other_net():
+    from coppernicus.engine.synthetic import F
+    hit = Board(pins_board()).pad_at(16.0, 0.0, F)
+    assert (hit.ref, hit.pin, hit.net) == ("U1", "4", "OTHER")
+
+
+def test_pad_at_prefers_the_nearest_centre_where_pads_overlap():
+    from shapely.geometry import box
+
+    from coppernicus.engine.synthetic import B, F, SyntheticBoard, two_layer_stackup
+    b = SyntheticBoard("overlap", two_layer_stackup())
+    b.pad("J1", "1", "VCC", box(0, 0, 4, 2), layers=(F, B), drill=0.8)    # PTH, both layers
+    b.pad("U1", "1", "GND", box(3, 0, 5, 2), layers=(F,))                  # overlaps J1 on F.Cu
+    board = Board(b.snapshot())
+    assert board.pad_at(3.5, 1.0, F).ref == "U1"       # centre (4, 1) is nearer than (2, 1)
+    assert board.pad_at(2.5, 1.0, F).ref == "J1"
+    assert board.pad_at(3.5, 1.0, B).ref == "J1"       # only J1 has copper on B.Cu
+
+
+def test_pad_rings_are_plain_arrays_on_the_layer():
+    from coppernicus.engine.synthetic import B, F
+    board = Board(pins_board())
+    [ring] = board.pad_rings(["u1_2"], F)
+    assert ring.shape[1] == 2
+    assert ring[:, 0].min() == pytest.approx(11.5) and ring[:, 0].max() == pytest.approx(12.5)
+    assert board.pad_rings(["u1_2"], B) == []
+    assert board.pad_rings(["nope"], F) == []
