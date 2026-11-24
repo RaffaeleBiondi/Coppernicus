@@ -1,0 +1,15 @@
+board: fields.kicad_pcb
+settings:
+  max_edge_mm: 0.5
+  via_plating_um: null
+  copper_temp_c: 20.0
+rails:
+- net: VCC
+  sources:
+  - ref: J1
+    pins: all
+    voltage: 3.3
+  loads:
+  - ref: U1
+    pins: all
+    current: 1.5

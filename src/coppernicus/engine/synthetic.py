@@ -6,7 +6,9 @@ All dimensions in mm. Builder modelled on KiPI's ``examples/validation/make_boar
 
 from __future__ import annotations
 
-from typing import Dict, List, Sequence
+import itertools
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence
 
 from kipi.core.model.board import (
     BoardSnapshot,
@@ -139,6 +141,44 @@ def strip_board() -> BoardSnapshot:
     b.square_pad("U1", "1", g.NET, g.X1, g.Y, g.PAD, value="LOAD")
     b.track(g.NET, F, g.W, (g.X0, g.Y), (g.X1, g.Y))
     return b.snapshot()
+
+
+def _q(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def write_strip_kicad_pcb(path, fields: Optional[Dict[str, Dict[str, str]]] = None, net: str = Strip.NET,
+                          extra_parts: Sequence[tuple] = ()) -> Path:
+    """Write the strip as a small ``.kicad_pcb`` at ``path``, with footprint fields: J1 at
+    x=0 and U1 at x=40 joined by the track, and any ``extra_parts`` given as (ref, x, y, net),
+    each with the fields ``fields`` gives for its reference, e.g. ``{"J1": {"PI_RAIL": "VCC",
+    "PI_SOURCE": "1V"}}``. Synthetic numbers only."""
+    g, path, fields = Strip, Path(path), fields or {}
+    ids = (f"00000000-0000-4000-8000-{n:012d}" for n in itertools.count(1))
+    parts = [("J1", g.X0, g.Y, net), ("U1", g.X1, g.Y, net), *extra_parts]
+    nets = sorted({p[3] for p in parts} | {net})
+    lines = ['(kicad_pcb (version 20240108) (generator "pcbnew") (generator_version "8.0")',
+             "  (general (thickness 1.6))",
+             '  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))',
+             '  (net 0 "")']
+    lines += [f"  (net {i} {_q(n)})" for i, n in enumerate(nets, start=1)]
+    code = {n: i for i, n in enumerate(nets, start=1)}
+    for ref, x, y, pnet in parts:
+        props = [("Reference", ref), ("Value", "PART"), *fields.get(ref, {}).items()]
+        lines.append(f'  (footprint "Synthetic:Pad" (layer "F.Cu") (uuid "{next(ids)}") (at {x} {y})')
+        for name, text in props:
+            lines.append(f'    (property {_q(name)} {_q(text)} (at 0 0 0) (layer "F.Fab") '
+                         f'(uuid "{next(ids)}"))')
+        lines.append(f'    (pad "1" smd rect (at 0 0) (size {g.PAD} {g.PAD}) (layers "F.Cu") '
+                     f'(net {code[pnet]} {_q(pnet)}) (uuid "{next(ids)}"))')
+        lines.append("  )")
+    lines.append(f'  (segment (start {g.X0} {g.Y}) (end {g.X1} {g.Y}) (width {g.W}) (layer "F.Cu") '
+                 f'(net {code[net]}) (uuid "{next(ids)}"))')
+    lines.append(f'  (gr_rect (start -5 -5) (end 45 5) (stroke (width 0.1) (type default)) '
+                 f'(fill none) (layer "Edge.Cuts") (uuid "{next(ids)}"))')
+    lines.append(")")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
 
 
 def via_board() -> BoardSnapshot:

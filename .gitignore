@@ -90,6 +90,7 @@ boards_local/
 *.drl
 # ... except the synthetic examples, and small boards drawn on purpose for tests.
 !examples/*/*.kipi.json.gz
+!examples/fields/fields.kicad_pcb
 !tests/boards/*.kicad_pcb
 !tests/boards/*.kicad_pro
 
