@@ -12,8 +12,8 @@ depends on the mesh.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -37,6 +37,9 @@ class Problem:
     x: float
     y: float
     layer: Optional[str] = None
+    # The numbers behind the title, keyed with their units (``drop_mv``, ``mean_j_a_mm2``,
+    # ``current_a`` ...), for reports and the agent interface.
+    data: Dict[str, Any] = field(default_factory=dict)
 
 
 def find_problems(result: RailResult, limits: Optional[Limits] = None,
@@ -61,7 +64,9 @@ def _loads(result: RailResult, limits: Limits) -> List[Problem]:
             f"{t.name}: {t.v_min:.4f} V at its worst pin ({mv:.2f} mV, {pct:.2f} % below "
             f"{result.v_ref:g} V)",
             f"{t.ref}, {len(t.pad_ids)} pin(s), {t.current:g} A; {limit}.",
-            pct, float(x), float(y)))
+            pct, float(x), float(y),
+            data={"name": t.name, "ref": t.ref, "drop_mv": mv, "drop_pct": pct,
+                  "v_min_v": t.v_min, "current_a": t.current}))
     return out
 
 
@@ -118,7 +123,8 @@ def _hotspots(result: RailResult, limits: Limits, top: int) -> List[Problem]:
                 FAIL if fail else INFO, "hotspot",
                 f"Current crowding on {layer.name}: {mean_j:.1f} A/mm² mean over {area:.3g} mm²",
                 f"Peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners); {why}.",
-                mean_j, float(x), float(y), layer.name))
+                mean_j, float(x), float(y), layer.name,
+                data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area}))
     found.sort(key=lambda p: -p.value)
     fails = [p for p in found if p.severity == FAIL]
     return fails + [p for p in found if p.severity != FAIL][:max(0, top - len(fails))]
@@ -140,5 +146,7 @@ def _vias(result: RailResult, limits: Limits, top: int) -> List[Problem]:
             FAIL if fail else INFO, "via",
             f"{what} carrying {v.current:.3f} A (drill {v.drill_mm:g} mm)",
             f"{v.power * 1e3:.3g} mW in the barrel; {limit}.",
-            v.current, float(v.position[0]), float(v.position[1])))
+            v.current, float(v.position[0]), float(v.position[1]),
+            data={"via_id": v.owner_id, "via_kind": v.kind, "current_a": v.current,
+                  "power_w": v.power, "drill_mm": v.drill_mm}))
     return out

@@ -1,15 +1,16 @@
 """Per-layer colour maps of a solved rail, written as PNG files (headless, no Qt).
 
 Two maps per copper layer: the voltage *drop* below the source (mV, per node, smooth) and
-the current density (A/mm², per triangle). KiCad's y axis points down, so the plots invert
-y to look like the board in KiCad.
+the current density (A/mm², per triangle). :func:`render_layer_map` draws one map (drop,
+voltage or current), optionally zoomed to a region. KiCad's y axis points down, so the
+plots invert y to look like the board in KiCad.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -60,43 +61,77 @@ def _decorate(ax, outline: Sequence[np.ndarray], result: RailResult,
     ax.set_ylabel("y (mm)")
 
 
+FIELDS = ("drop", "voltage", "current")
+
+
+def _rail_voltage_range(result: RailResult):
+    """(lowest, highest) node voltage over every layer of the rail, or None."""
+    finite = [lf.voltage[np.isfinite(lf.voltage)] for lf in result.layers]
+    finite = [v for v in finite if v.size]
+    if not finite:
+        return None
+    return float(min(v.min() for v in finite)), float(max(v.max() for v in finite))
+
+
+def render_layer_map(result: RailResult, layer: LayerField, field: str,
+                     outline: Sequence[np.ndarray], path, problems: Optional[List[Problem]] = None,
+                     region: Optional[Sequence[float]] = None, dpi: int = 150) -> Dict[str, object]:
+    """One colour map of ``field`` ('drop', 'voltage' or 'current') on ``layer``, saved as
+    a PNG at ``path``. ``region`` = (x_min, y_min, x_max, y_max) in mm zooms the view; the
+    colour scale stays the rail's (drop, voltage) or the layer's (current). Returns the
+    scale: ``{"unit", "min", "max", "clipped"}``."""
+    if field not in FIELDS:
+        raise ValueError(f"field must be one of {', '.join(FIELDS)}, not {field!r}")
+    problems = problems or []
+    tri = _triangulation(layer)
+    fig = Figure(figsize=(8, 6), dpi=dpi, layout="constrained")
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot()
+    vrange = _rail_voltage_range(result)
+    clipped = False
+    if field == "drop":
+        drop_max = max(result.v_ref - vrange[0], 0.0) * 1e3 if vrange else 0.0
+        lo, hi, unit = 0.0, max(drop_max, 1e-9), "mV"
+        drop_mv = np.nan_to_num((result.v_ref - layer.voltage) * 1e3)
+        im = ax.tripcolor(tri, drop_mv, shading="gouraud", cmap=DROP_CMAP, vmin=lo, vmax=hi,
+                          rasterized=True)
+        fig.colorbar(im, ax=ax, label=f"drop below {result.v_ref:g} V (mV)")
+        title = "voltage drop"
+    elif field == "voltage":
+        lo, hi = vrange if vrange else (0.0, 1.0)
+        hi = max(hi, lo + 1e-12)
+        unit = "V"
+        im = ax.tripcolor(tri, np.nan_to_num(layer.voltage, nan=lo), shading="gouraud",
+                          cmap=DROP_CMAP, vmin=lo, vmax=hi, rasterized=True)
+        fig.colorbar(im, ax=ax, label="voltage (V)")
+        title = "voltage"
+    else:
+        j = layer.current_density
+        top = float(np.percentile(j, J_CLIP_PERCENTILE)) if j.size else 1.0
+        lo, hi, unit, clipped = 0.0, max(top, 1e-9), "A/mm²", True
+        im = ax.tripcolor(tri, facecolors=j, cmap=J_CMAP, vmin=lo, vmax=hi, rasterized=True)
+        fig.colorbar(im, ax=ax, label=f"current density (A/mm²), scale clipped at "
+                                      f"{J_CLIP_PERCENTILE:g}th percentile", extend="max")
+        title = "current density"
+    ax.set_title(f"{result.net} — {layer.name}: {title}")
+    _decorate(ax, outline, result, problems, layer.name)
+    if region is not None:
+        x0, y0, x1, y1 = (float(v) for v in region)
+        ax.set_xlim(min(x0, x1), max(x0, x1))
+        ax.set_ylim(max(y0, y1), min(y0, y1))   # KiCad: y down
+    fig.savefig(path)
+    return {"unit": unit, "min": float(lo), "max": float(hi), "clipped": clipped}
+
+
 def save_layer_maps(result: RailResult, outline: Sequence[np.ndarray], out_dir,
                     problems: Optional[List[Problem]] = None, dpi: int = 150) -> List[Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    problems = problems or []
     written = []
-    drop_max = max((float(np.nanmax(result.v_ref - lf.voltage)) for lf in result.layers
-                    if np.isfinite(lf.voltage).any()), default=0.0) * 1e3
     for layer in result.layers:
-        tri = _triangulation(layer)
         stem = f"{safe_name(result.net)}_{safe_name(layer.name)}"
-
-        fig = Figure(figsize=(8, 6), dpi=dpi, layout="constrained")
-        FigureCanvasAgg(fig)
-        ax = fig.add_subplot()
-        drop_mv = np.nan_to_num((result.v_ref - layer.voltage) * 1e3)
-        im = ax.tripcolor(tri, drop_mv, shading="gouraud", cmap=DROP_CMAP, vmin=0.0,
-                          vmax=max(drop_max, 1e-9), rasterized=True)
-        fig.colorbar(im, ax=ax, label=f"drop below {result.v_ref:g} V (mV)")
-        ax.set_title(f"{result.net} — {layer.name}: voltage drop")
-        _decorate(ax, outline, result, problems, layer.name)
-        path = out_dir / f"{stem}_drop.png"
-        fig.savefig(path)
-        written.append(path)
-
-        fig = Figure(figsize=(8, 6), dpi=dpi, layout="constrained")
-        FigureCanvasAgg(fig)
-        ax = fig.add_subplot()
-        j = layer.current_density
-        top = float(np.percentile(j, J_CLIP_PERCENTILE)) if j.size else 1.0
-        im = ax.tripcolor(tri, facecolors=j, cmap=J_CMAP, vmin=0.0, vmax=max(top, 1e-9),
-                          rasterized=True)
-        fig.colorbar(im, ax=ax, label=f"current density (A/mm²), scale clipped at "
-                                      f"{J_CLIP_PERCENTILE:g}th percentile", extend="max")
-        ax.set_title(f"{result.net} — {layer.name}: current density")
-        _decorate(ax, outline, result, problems, layer.name)
-        path = out_dir / f"{stem}_current.png"
-        fig.savefig(path)
-        written.append(path)
+        for field, suffix in (("drop", "drop"), ("current", "current")):
+            path = out_dir / f"{stem}_{suffix}.png"
+            render_layer_map(result, layer, field, outline, path, problems, dpi=dpi)
+            written.append(path)
     return written
