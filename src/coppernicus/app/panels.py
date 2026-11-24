@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import copy
 import html
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QDoubleValidator
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMenu,
     QPlainTextEdit,
     QPushButton,
@@ -85,7 +86,12 @@ def rail_nets(nets: Iterable[str], heuristic: Iterable[str], marked: Iterable[st
     return [n for n in nets if n in keep]
 
 
+KICAD_MARK = "[KiCad]"
+
+
 class NetPanel(QWidget):
+    """The board's nets. Each item's text is the net, with a "[KiCad]" mark on a rail from
+    the KiCad footprint fields; the net itself is the item's ``Qt.UserRole`` data."""
     net_selected = Signal(str)
     marked_changed = Signal(list)       # the nets marked as rails by hand
 
@@ -94,6 +100,7 @@ class NetPanel(QWidget):
         self._board: Optional[Board] = None
         self._configured: set = set()
         self._marked: List[str] = []
+        self._kicad: Dict[str, str] = {}        # rails from KiCad fields: net -> tooltip
         self.filter = QLineEdit(placeholderText="Filter nets…")
         self.power_only = QCheckBox("Rails only")
         self.power_only.setToolTip("Power and ground nets found by name and zones, nets you marked "
@@ -109,14 +116,18 @@ class NetPanel(QWidget):
         layout.addWidget(self.list)
         self.filter.textChanged.connect(self._refill)
         self.power_only.toggled.connect(self._refill)
-        self.list.currentTextChanged.connect(self._emit)
+        self.list.currentItemChanged.connect(
+            lambda item, _previous: self._emit(item.data(Qt.UserRole) if item is not None else ""))
 
-    def set_board(self, board: Optional[Board], configured: List[str] = (), marked: List[str] = ()):
+    def set_board(self, board: Optional[Board], configured: List[str] = (), marked: List[str] = (),
+                  kicad: Optional[Mapping[str, str]] = None):
         """A new board: nothing is selected, so selecting any net afterwards (even one with
-        the same name as before) emits :attr:`net_selected`."""
+        the same name as before) emits :attr:`net_selected`. ``kicad``: the rails from the
+        KiCad footprint fields, each with its tooltip (the parts)."""
         self._board = board
         self._configured = set(configured)
         self._marked = list(marked)
+        self._kicad = dict(kicad or {})
         self._refill(keep=False)
 
     @property
@@ -135,7 +146,7 @@ class NetPanel(QWidget):
         item = self.list.itemAt(pos)
         if item is None or self._board is None:
             return
-        net = item.text()
+        net = item.data(Qt.UserRole)
         menu = QMenu(self)
         if net in self._marked:
             menu.addAction("Unmark as rail", lambda: self.set_marked(net, False))
@@ -146,21 +157,29 @@ class NetPanel(QWidget):
             menu.addAction("Mark as rail", lambda: self.set_marked(net, True))
         menu.exec(self.list.viewport().mapToGlobal(pos))
 
-    def mark_configured(self, nets: List[str]):
+    def mark_configured(self, nets: List[str], kicad: Optional[Mapping[str, str]] = None):
+        """The nets with sources or loads; with ``kicad``, also the rails from the KiCad
+        footprint fields (net -> tooltip)."""
         self._configured = set(nets)
+        if kicad is not None:
+            self._kicad = dict(kicad)
         self._refill(keep=True)
 
+    def _find(self, net: str) -> Optional[QListWidgetItem]:
+        return next((self.list.item(i) for i in range(self.list.count())
+                     if self.list.item(i).data(Qt.UserRole) == net), None)
+
     def select(self, net: str):
-        items = self.list.findItems(net, Qt.MatchExactly)
-        if not items:
+        item = self._find(net)
+        if item is None:
             self.power_only.setChecked(False)
             self.filter.clear()
-            items = self.list.findItems(net, Qt.MatchExactly)
-        if items:
-            self.list.setCurrentItem(items[0])
+            item = self._find(net)
+        if item is not None:
+            self.list.setCurrentItem(item)
 
     def _refill(self, *_args, keep: bool = True):
-        current = self.list.currentItem().text() if keep and self.list.currentItem() else None
+        current = self.list.currentItem().data(Qt.UserRole) if keep and self.list.currentItem() else None
         self.list.blockSignals(True)
         self.list.clear()
         if self._board is not None:
@@ -171,23 +190,27 @@ class NetPanel(QWidget):
             for n in nets:
                 if text and text not in n.lower():
                     continue
-                self.list.addItem(n)
-                item = self.list.item(self.list.count() - 1)
+                # Made with the list as its parent, so the list owns it.
+                item = QListWidgetItem(f"{n}  {KICAD_MARK}" if n in self._kicad else n, self.list)
+                item.setData(Qt.UserRole, n)
                 f = item.font()
-                tips = []
-                if n in self._configured:
+                tips = [self._kicad[n]] if n in self._kicad else []
+                if n in self._configured and n not in self._kicad:
                     f.setBold(True)
                     tips.append("has sources/loads in this project")
                 if n in self._marked:
                     f.setItalic(True)
                     tips.append("marked as a rail by hand")
+                if n in self._kicad:
+                    f.setBold(True)
                 item.setFont(f)
                 if tips:
-                    item.setToolTip("; ".join(tips).capitalize())
+                    tip = "; ".join(tips)
+                    item.setToolTip(tip[:1].upper() + tip[1:])
             if current:
-                found = self.list.findItems(current, Qt.MatchExactly)
-                if found:
-                    self.list.setCurrentItem(found[0])
+                found = self._find(current)
+                if found is not None:
+                    self.list.setCurrentItem(found)
         self.list.blockSignals(False)
 
     def _emit(self, text: str):

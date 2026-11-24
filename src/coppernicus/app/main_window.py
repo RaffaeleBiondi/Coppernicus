@@ -352,7 +352,7 @@ class MainWindow(QMainWindow):
         self.layer_box.blockSignals(False)
         self._refresh_results()                       # no net yet: nothing of the old board shown
         self.rail_panel.set_settings(self.project.settings)
-        self.nets.set_board(board, self._configured_nets(), self.project.marked_rails)
+        self.nets.set_board(board, self._configured_nets(), self.project.marked_rails, self._kicad_nets())
         self.problems.clear()
         self.dirty = project is None
         self._update_title()
@@ -428,6 +428,11 @@ class MainWindow(QMainWindow):
 
     def _configured_nets(self) -> List[str]:
         return [r.net for r in self.merged.project.rails if r.sources or r.loads]
+
+    def _kicad_nets(self) -> Dict[str, str]:
+        """The rails from the KiCad footprint fields, each with its net-list tooltip."""
+        return {net: f"rail from KiCad footprint fields (parts {', '.join(o.board_fields['parts'])})"
+                for net, o in self.merged.origins.items() if o.source == "fields" and o.board_fields}
 
     def _solved_rail(self, net: str) -> Rail:
         """The rail of ``net`` that is solved, drawn and judged: the merged one, or the draft
@@ -579,7 +584,7 @@ class MainWindow(QMainWindow):
             self.project.rails.append(rail)
         self._remerge()
         self._show_fields_error()
-        self.nets.mark_configured(self._configured_nets())
+        self.nets.mark_configured(self._configured_nets(), self._kicad_nets())
         self.dirty = True
         self._update_title()
         return rail

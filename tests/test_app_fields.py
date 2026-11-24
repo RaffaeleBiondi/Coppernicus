@@ -87,6 +87,38 @@ def cli_rails(project, tmp_path, capsys, *extra):
     return code, json.loads(capsys.readouterr().out)
 
 
+def net_item(window, net):
+    from PySide6.QtCore import Qt
+    found = [window.nets.list.item(i) for i in range(window.nets.list.count())
+             if window.nets.list.item(i).data(Qt.UserRole) == net]
+    return found[0] if found else None
+
+
+# ---------------------------------------------------------------------- the net list
+
+def test_a_kicad_rail_is_listed_as_configured_with_a_marker_naming_its_parts(window, tmp_path):
+    from PySide6.QtWidgets import QApplication
+    window.open_project(strip(tmp_path))
+    QApplication.processEvents()
+    item = net_item(window, "VCC")
+    assert item is not None and "KiCad" in item.text() and item.font().bold()
+    assert "KiCad footprint fields" in item.toolTip() and "J1, U1" in item.toolTip()
+    assert window.net == "VCC"                       # the first rail, selected at open
+    window.nets.select("VCC")
+    assert window.net == "VCC"
+
+
+def test_the_net_list_keeps_every_rail_after_one_with_a_tooltip(window):
+    """The net-list items carry their net as data: every configured rail is still listed."""
+    from pathlib import Path
+
+    from PySide6.QtCore import Qt
+    chain = Path(__file__).resolve().parents[1] / "examples" / "power_chain" / "power_chain.coppernicus.yml"
+    window.open_project(chain)
+    listed = {window.nets.list.item(i).data(Qt.UserRole) for i in range(window.nets.list.count())}
+    assert {"VIN", "+3V3", "+1V8", "GND"} <= listed and window.net == "VIN"
+
+
 # ---------------------------------------------------------------------- solving
 
 def test_f5_on_a_kicad_rail_gives_the_cli_numbers_limits_and_notes(window, tmp_path, capsys):
