@@ -135,9 +135,9 @@ def settings_to_dict(s: Settings, thickness: Mapping[str, float]) -> Dict[str, A
 def terminal_from_dict(data: Mapping[str, Any], kind: str, base=None):
     """A source (``voltage_v``) or load (``current_a``) from a plain dict.
 
-    With ``base`` (an existing Source or Load), the result is ``base`` with the dict's
-    fields replaced: every other field of ``base`` (and its exact class) is carried over,
-    so fields this function does not know about are never dropped."""
+    With ``base`` (an existing Source or Load), the result is ``base`` with only the keys
+    the dict holds replaced: every other field of ``base`` (and its exact class) is carried
+    over, so fields this function does not know about are never dropped."""
     from coppernicus.project import Load, Source
     if not isinstance(data, Mapping):
         raise ServiceError(E.INVALID_INPUT, f"each {kind} must be an object, not {data!r}")
@@ -163,6 +163,10 @@ def terminal_from_dict(data: Mapping[str, Any], kind: str, base=None):
                   "pins": pins, "name": name}
         cls = Load
     if base is not None:
+        # Only what the dict says changes: an absent "pins" or "name" keeps the base's.
+        for key in ("pins", "name"):
+            if key not in data:
+                values.pop(key)
         return dataclasses.replace(base, **values)
     return cls(**values)
 

@@ -341,11 +341,15 @@ class _RailV2(Rail):
 
 def test_dict_edits_keep_fields_the_service_does_not_know(session, boards):
     from coppernicus.service.convert import rail_from_dicts, terminal_from_dict
-    src = _SourceV2("J1", 3.3, None, "Buck", kind="smps", efficiency=0.9)
+    src = _SourceV2("J1", 3.3, ["2"], "Buck", kind="smps", efficiency=0.9)
     edited = terminal_from_dict({"ref": "J1", "voltage_v": 3.0}, "source", base=src)
     assert type(edited) is _SourceV2
     assert (edited.kind, edited.efficiency, edited.voltage) == ("smps", 0.9, 3.0)
-    assert edited.name == ""                                  # set by the dict (absent = empty)
+    assert (edited.name, edited.pins) == ("Buck", ["2"])       # not in the dict: kept
+    renamed = terminal_from_dict({"ref": "J1", "voltage_v": 3.0, "name": "", "pins": "all"}, "source",
+                                 base=src)
+    assert (renamed.name, renamed.pins, renamed.kind) == ("", None, "smps")   # in the dict: set
+    src = _SourceV2("J1", 3.3, None, "Buck", kind="smps", efficiency=0.9)
 
     base = _RailV2("+3V3", sources=[src],
                    loads=[_LoadV2("U2", 1.5, ground_ref="G2"), _LoadV2("U1", 2.0, ground_ref="G1")],
