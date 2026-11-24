@@ -60,9 +60,10 @@ def _result(net, v_ref, max_drop, **kw):
     (_result("-3V3", -3.3, 0.01234, drop_sign=-1.0), "max drop 12.34 mV above -3.3 V (toward 0 V)"),
     # a net at 0 V solved alone: the return current lifts it, a rise
     (_result("GND", 0.0, 0.00567, drop_sign=-1.0), "max ground rise 5.67 mV above 0 V"),
-    # a ground group: its rise is signed (below 0 V under a negative rail)
+    # a ground group: its rise is signed; below 0 V (under a negative rail) it is a shift
     (_result("GND", 0.0, 0.00567, kind="ground"), "max ground rise 5.67 mV above 0 V"),
-    (_result("GND", 0.0, -0.00567, kind="ground"), "max ground rise 5.67 mV below 0 V"),
+    (_result("GND", 0.0, -0.00567, kind="ground"), "max ground shift 5.67 mV below 0 V"),
+    (_result("GND", 0.0, -0.00567, drop_sign=-1.0), "max ground shift 5.67 mV below 0 V"),
     # a rail driven at 0 V inside a power tree draws its loads' current: a drop below 0 V
     (_result("VZ", 0.0, 0.00567), "max drop 5.67 mV below 0 V"),
 ])

@@ -363,13 +363,27 @@ def from_0v(volts: float) -> str:
     return f"{abs(volts) * 1e3:.2f} mV {'above' if volts >= 0 else 'below'} 0 V"
 
 
+def drop_words(volts: float, v_ref: float, sign: float, rise: bool) -> Tuple[str, str]:
+    """What a drop of ``volts`` is called and which side of its reference it sits on, from
+    the net's ``v_ref``, ``sign`` (:attr:`RailResult.sign`) and whether it is read as a rise
+    (:meth:`RailResult.is_rise`): ("drop", "below 3.3 V"), ("drop", "above -3.3 V (toward
+    0 V)"), or on a ground ("ground rise", "above 0 V") and, below 0 V (a ground under a
+    negative rail), ("ground shift", "below 0 V")."""
+    if rise:
+        return ("ground rise", "above 0 V") if volts >= 0 else ("ground shift", "below 0 V")
+    if sign < 0:
+        return "drop", f"above {v_ref:g} V (toward 0 V)"
+    return "drop", f"below {v_ref:g} V"
+
+
 def max_drop_text(res: RailResult) -> str:
     """The worst of the copper for a summary line: "max drop 12.34 mV below 3.3 V", "max
     drop 12.34 mV above -3.3 V (toward 0 V)", or, on a ground (a ground group, a net at 0 V
-    solved alone), "max ground rise 5.67 mV above 0 V" (signed on a ground group)."""
-    if res.is_rise():
-        return f"max ground rise {from_0v(res.max_drop)}"
-    return f"max drop {res.max_drop * 1e3:.2f} {res.drop_unit()}"
+    solved alone), "max ground rise 5.67 mV above 0 V" or "max ground shift 5.67 mV below
+    0 V" (:func:`drop_words`)."""
+    what, where = drop_words(res.max_drop, res.v_ref, res.sign, res.is_rise())
+    mv = abs(res.max_drop) * 1e3 if res.is_rise() else res.max_drop * 1e3
+    return f"max {what} {mv:.2f} mV {where}"
 
 
 def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:
@@ -394,8 +408,11 @@ def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:
         volts = abs(volts)
     mv = volts * 1e3
     where = f" on {layer}" if layer else ""
-    title = (f"{res.net}: largest ground rise {from_0v(volts)}{where}" if res.sign < 0
-             else f"{res.net}: largest ground rise {mv:.2f} mV{where}")
+    if res.sign < 0:
+        what, side = drop_words(volts, res.v_ref, res.sign, True)
+        title = f"{res.net}: largest {what} {abs(mv):.2f} mV {side}{where}"
+    else:
+        title = f"{res.net}: largest ground rise {mv:.2f} mV{where}"
     return [Problem(
         FAIL if abs(mv) > limit else INFO, "rise", _against(title, abs(mv) > limit, limit, "mV", source),
         f"Copper furthest from the {res.v_ref:g} V reference; limit {limit:g} mV.",

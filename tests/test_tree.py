@@ -494,12 +494,14 @@ def test_a_ground_below_0_v_is_a_rise_by_its_magnitude():
     assert rise.data["rise_mv"] == pytest.approx(gnd.max_drop * 1e3, rel=1e-3)
     assert pin.data["rise_mv"] == pytest.approx(ret.v_min * 1e3, rel=1e-3)
     assert "below 0 V" in rise.title and "below 0 V" in pin.title
+    assert "largest ground shift" in rise.title and "rise" not in rise.title
     assert pin.value == pytest.approx(abs(ret.v_min) * 1e3, rel=1e-3)        # ranked by magnitude
     from coppernicus.power_tree import tree_summary, tree_text
     doc = tree_summary(tree)
     row = next(gr for gr in doc["groups"] if gr["group"] == "GND")
     assert row["max_rise_mv"] == pytest.approx(gnd.max_drop * 1e3) and row["verdict"] == "fail"
-    assert any("GND" in line and "below 0 V" in line for line in tree_text(doc))
+    [line] = [line for line in tree_text(doc) if line.lstrip().startswith("GND ")]
+    assert "max ground shift" in line and "mV below 0 V" in line and "rise" not in line, line
 
 
 def strip_board_with_ground():

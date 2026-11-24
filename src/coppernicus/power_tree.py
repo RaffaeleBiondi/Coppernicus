@@ -426,6 +426,8 @@ def _input_text(v: Dict[str, Any]) -> str:
 
 def tree_text(doc: Dict[str, Any]) -> List[str]:
     """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
+    from coppernicus.problems import drop_words
+
     lines = ["VRMs (sources and regulators)",
              f"  {'name':<14} {'kind':<6} {'group':<10} {'V set':>8} {'V out':>9} {'I out':>9} "
              f"{'V in':>9} {'I in':>9} {'P loss':>9}"]
@@ -451,8 +453,11 @@ def tree_text(doc: Dict[str, Any]) -> List[str]:
     for gr in doc["groups"]:
         if gr["kind"] == "ground":
             rise = gr["max_rise_mv"]
-            worst = ("max rise —" if rise is None else
-                     f"max rise {abs(rise):.3f} mV {'above' if rise >= 0 else 'below'} 0 V")
+            if rise is None:
+                worst = "max ground rise —"
+            else:
+                what, where = drop_words(rise, 0.0, -1.0, True)
+                worst = f"max {what} {abs(rise):.3f} mV {where}"
         else:
             worst = (f"max drop {_fmt(gr['max_drop_mv'], 0, '.3f', ' mV').strip()} "
                      f"({_fmt(gr['max_drop_pct'], 0, '.3f', ' %').strip()})")

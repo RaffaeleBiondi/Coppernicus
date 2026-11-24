@@ -96,7 +96,7 @@ def test_the_tree_header_of_a_negative_rail_reads_its_drop_toward_0_v():
     assert "max drop 12.34 mV above -3.3 V (toward 0 V)" in head and "below" not in head
     gnd = RailResult("GND", ["GND"], 0.0, [], [], [], [], -0.00567, 0.0, 0.002, 0.0, kind="ground")
     head = tree_header_html("GND", gnd, GroupVerdict("pass", 0, {}, {}))
-    assert "max ground rise 5.67 mV below 0 V" in head
+    assert "max ground shift 5.67 mV below 0 V" in head and "rise" not in head
 
 
 def test_the_rail_header_of_a_net_at_0_v_solved_alone_reads_a_rise():
