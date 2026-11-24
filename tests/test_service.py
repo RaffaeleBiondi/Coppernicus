@@ -1,6 +1,7 @@
 """The service layer on synthetic boards: JSON in and out, structured errors, closed-form
 checks for probe and cut_current, the result memory bound."""
 
+import dataclasses
 import json
 import math
 import os
@@ -317,3 +318,50 @@ def test_solve_project_reports_each_rail(tmp_path, boards, session):
     with pytest.raises(ServiceError) as e:
         session.solve_project(path, rails=["GND"])
     assert e.value.code == "invalid_input" and "+3V3" in e.value.hint
+
+
+# Stand-ins for fields the project model will gain (v2: regulator kind, efficiency, ground
+# pins, series links...). Any path that rebuilds terminals from dicts must carry them.
+@dataclasses.dataclass
+class _SourceV2(Source):
+    kind: str = "source"
+    efficiency: float = 1.0
+
+
+@dataclasses.dataclass
+class _LoadV2(Load):
+    ground_ref: str = ""
+
+
+@dataclasses.dataclass
+class _RailV2(Rail):
+    links: list = dataclasses.field(default_factory=list)
+
+
+def test_dict_edits_keep_fields_the_service_does_not_know(session, boards):
+    from coppernicus.service.convert import rail_from_dicts, terminal_from_dict
+    src = _SourceV2("J1", 3.3, None, "Buck", kind="smps", efficiency=0.9)
+    edited = terminal_from_dict({"ref": "J1", "voltage_v": 3.0}, "source", base=src)
+    assert type(edited) is _SourceV2
+    assert (edited.kind, edited.efficiency, edited.voltage) == ("smps", 0.9, 3.0)
+    assert edited.name == ""                                  # set by the dict (absent = empty)
+
+    base = _RailV2("+3V3", sources=[src],
+                   loads=[_LoadV2("U2", 1.5, ground_ref="G2"), _LoadV2("U1", 2.0, ground_ref="G1")],
+                   links=["L1"])
+    rail = rail_from_dicts("+3V3", [{"ref": "J1", "voltage_v": 3.3}],
+                           [{"ref": "U1", "current_a": 1.0}, {"ref": "U2", "current_a": 0.5},
+                            {"ref": "U3", "current_a": 0.3}],
+                           {"max_drop_pct": 0.25}, base=base)
+    assert type(rail) is _RailV2 and rail.links == ["L1"] and rail.limits.max_drop_pct == 0.25
+    assert rail.sources[0].efficiency == 0.9
+    # Matched by ref when the rows moved; a new terminal starts from the defaults.
+    assert [(ld.ref, getattr(ld, "ground_ref", None), ld.current) for ld in rail.loads] == [
+        ("U1", "G1", 1.0), ("U2", "G2", 0.5), ("U3", None, 0.3)]
+
+    bid = session.open_board(boards["demo"])["board_id"]
+    rid = session.solve_rail(bid, "+3V3", [{"ref": "J1", "voltage_v": 3.3}],
+                             [{"ref": "U1", "current_a": 2.0}], base_rail=base)["result_id"]
+    kept = session._results[rid].rail
+    assert kept.links == ["L1"] and kept.sources[0].kind == "smps"
+    assert kept.loads[0].ground_ref == "G1"

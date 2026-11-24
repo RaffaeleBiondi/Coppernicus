@@ -4,9 +4,10 @@ units (``_v``, ``_mv``, ``_a``, ``_a_mm2``, ``_mm``, ``_w``, ``_pct``), safe to 
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -131,8 +132,12 @@ def settings_to_dict(s: Settings, thickness: Mapping[str, float]) -> Dict[str, A
     return out
 
 
-def terminal_from_dict(data: Mapping[str, Any], kind: str):
-    """A source (``voltage_v``) or load (``current_a``) from a plain dict."""
+def terminal_from_dict(data: Mapping[str, Any], kind: str, base=None):
+    """A source (``voltage_v``) or load (``current_a``) from a plain dict.
+
+    With ``base`` (an existing Source or Load), the result is ``base`` with the dict's
+    fields replaced: every other field of ``base`` (and its exact class) is carried over,
+    so fields this function does not know about are never dropped."""
     from coppernicus.project import Load, Source
     if not isinstance(data, Mapping):
         raise ServiceError(E.INVALID_INPUT, f"each {kind} must be an object, not {data!r}")
@@ -150,8 +155,48 @@ def terminal_from_dict(data: Mapping[str, Any], kind: str):
         raise ServiceError(E.INVALID_INPUT, f"{kind} {ref}: {e}") from None
     name = str(data.get("name") or "")
     if kind == "source":
-        return Source(ref, _number(data[value_key], f"{ref} voltage_v"), pins, name)
-    return Load(ref, _number(data[value_key], f"{ref} current_a", positive=True), pins, name)
+        values = {"ref": ref, "voltage": _number(data[value_key], f"{ref} voltage_v"),
+                  "pins": pins, "name": name}
+        cls = Source
+    else:
+        values = {"ref": ref, "current": _number(data[value_key], f"{ref} current_a", positive=True),
+                  "pins": pins, "name": name}
+        cls = Load
+    if base is not None:
+        return dataclasses.replace(base, **values)
+    return cls(**values)
+
+
+def rail_from_dicts(net: str, sources: Sequence[Mapping[str, Any]], loads: Sequence[Mapping[str, Any]],
+                    limits: Optional[Mapping[str, Any]] = None, follow_net_ties: bool = True,
+                    base=None):
+    """A Rail from plain dicts. With ``base`` (an existing Rail), the result keeps every
+    field of ``base`` it does not set (and its exact class), and each terminal starts from
+    the matching terminal of ``base``: the one in the same row when its ref matches, else
+    the first unused one with that ref. Fields added to the project model later are thus
+    carried through without changes here."""
+    from coppernicus.project import Rail
+
+    def build(items, old, kind):
+        used, out = set(), []
+        for i, data in enumerate(items):
+            ref = str(data.get("ref") or "").strip() if isinstance(data, Mapping) else ""
+            match = None
+            if i < len(old) and old[i].ref == ref and i not in used:
+                match = i
+            else:
+                match = next((j for j, t in enumerate(old) if t.ref == ref and j not in used), None)
+            if match is not None:
+                used.add(match)
+            out.append(terminal_from_dict(data, kind, old[match] if match is not None else None))
+        return out
+
+    old_sources = list(base.sources) if base is not None else []
+    old_loads = list(base.loads) if base is not None else []
+    values = {"net": str(net), "sources": build(sources, old_sources, "source"),
+              "loads": build(loads, old_loads, "load"), "limits": limits_from_dict(limits),
+              "follow_net_ties": bool(follow_net_ties)}
+    return dataclasses.replace(base, **values) if base is not None else Rail(**values)
 
 
 # ---------------------------------------------------------------------- outputs

@@ -282,15 +282,17 @@ class Session:
     def solve_rail(self, board_id: str, net: str, sources: Sequence[Mapping[str, Any]],
                    loads: Sequence[Mapping[str, Any]], limits: Optional[Mapping[str, Any]] = None,
                    settings: Optional[Mapping[str, Any]] = None, follow_net_ties: bool = True,
-                   top: int = 5, progress: Progress = None, cancelled: Cancel = None) -> Dict[str, Any]:
+                   top: int = 5, progress: Progress = None, cancelled: Cancel = None,
+                   base_rail: Optional[Rail] = None) -> Dict[str, Any]:
         """Solve one rail: sources hold ``voltage_v`` on their pins, loads draw ``current_a``
-        split equally across their pins. Returns a compact summary with a ``result_id``."""
+        split equally across their pins. Returns a compact summary with a ``result_id``.
+
+        ``base_rail`` (in-process callers only) is an existing rail the dicts edit: every
+        field they do not set, on the rail and on each matching terminal, is carried over."""
         entry = self._entry(board_id)
         if not isinstance(sources, (list, tuple)) or not isinstance(loads, (list, tuple)):
             raise ServiceError(E.INVALID_INPUT, "sources and loads must be lists of objects")
-        rail = Rail(str(net), sources=[C.terminal_from_dict(s, "source") for s in sources],
-                    loads=[C.terminal_from_dict(ld, "load") for ld in loads],
-                    limits=C.limits_from_dict(limits), follow_net_ties=bool(follow_net_ties))
+        rail = C.rail_from_dicts(net, sources, loads, limits, follow_net_ties, base=base_rail)
         solve_settings, thickness = C.settings_from_dict(settings)
         live = self._solve(entry, rail, solve_settings, thickness, top, progress, cancelled)
         return C.jsonable(live.rec.summary)
