@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import difflib
 import fnmatch
+import json
 import logging
 import math
 import os
@@ -403,28 +404,7 @@ class Session:
         ``stop_on_error``. ``on_board(board_info, n_rails, n_layers)`` is called once the board is open
         and the rails are chosen; ``on_rail(result_id, summary)`` after each rail, while its
         full result is still in memory."""
-        path = Path(str(project_path)).expanduser()
-        try:
-            project = Project.load(path)
-        except FileNotFoundError:
-            raise ServiceError(E.FILE_NOT_FOUND, f"No such project file: {project_path}",
-                               "give an absolute path to a *.coppernicus.yml file") from None
-        except yaml.YAMLError as e:
-            mark = getattr(e, "problem_mark", None)
-            where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
-            raise ServiceError(E.INVALID_PROJECT,
-                               f"{path.name} is not valid YAML{where}: {getattr(e, 'problem', None) or e}",
-                               "fix the project file; its format is in the README") from None
-        except (ProjectError, OSError) as e:
-            raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
-                               "fix the project file; its format is in the README") from None
-        board_info = self.open_board(project.board_path())
-        entry = self._entry(board_info["board_id"])
-        try:                              # a wrong layer name fails the project, not each rail
-            entry.variant(project.settings.copper_thickness_mm)
-        except ServiceError as e:
-            raise ServiceError(e.code, f"{path.name}: settings.copper_thickness_mm: {e.message}",
-                               "use the copper layer names as in KiCad") from None
+        path, project, board_info, entry = self._open_project(project_path)
         wanted = list(rails or [])
         selected = [r for r in project.rails if not wanted or r.net in wanted]
         if not selected:
@@ -489,6 +469,59 @@ class Session:
             "verdict_note": note, "not_judged": unjudged,
             "assumptions": [], "warnings": entry.warnings(),
         })
+
+    def _open_project(self, project_path):
+        """Load a project file and open its board: (path, project, board info, entry). A
+        project error, or a copper_thickness_mm layer the board does not have, is one
+        ServiceError for the whole project."""
+        path = Path(str(project_path)).expanduser()
+        try:
+            project = Project.load(path)
+        except FileNotFoundError:
+            raise ServiceError(E.FILE_NOT_FOUND, f"No such project file: {project_path}",
+                               "give an absolute path to a *.coppernicus.yml file") from None
+        except yaml.YAMLError as e:
+            mark = getattr(e, "problem_mark", None)
+            where = f" at line {mark.line + 1}, column {mark.column + 1}" if mark is not None else ""
+            raise ServiceError(E.INVALID_PROJECT,
+                               f"{path.name} is not valid YAML{where}: {getattr(e, 'problem', None) or e}",
+                               "fix the project file; its format is in the README") from None
+        except (ProjectError, OSError) as e:
+            raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                               "fix the project file; its format is in the README") from None
+        board_info = self.open_board(project.board_path())
+        entry = self._entry(board_info["board_id"])
+        try:                              # a wrong layer name fails the project, not each rail
+            entry.variant(project.settings.copper_thickness_mm)
+        except ServiceError as e:
+            raise ServiceError(e.code, f"{path.name}: settings.copper_thickness_mm: {e.message}",
+                               "use the copper layer names as in KiCad") from None
+        return path, project, board_info, entry
+
+    def solve_tree(self, project_path, top: int = 5, progress: Progress = None,
+                   cancelled: Cancel = None) -> Dict[str, Any]:
+        """Solve the project's whole power tree at once: every rail and ground group, with
+        the regulators' input currents and the ground return computed exactly. Returns
+        :func:`coppernicus.power_tree.tree_summary` unchanged (the document of
+        ``coppernicus solve --tree --json``, without its ``summary_file``), judged against
+        the project's limits only. The groups are not kept as results: no maps or probes."""
+        from coppernicus.engine.tree import solve_project_tree
+        from coppernicus.power_tree import tree_summary
+        path, project, _, entry = self._open_project(project_path)
+        with self._solve_lock:
+            if progress is not None:
+                progress(f"solving the power tree of {path.name}")
+            try:
+                tree = solve_project_tree(entry.board, project, progress=progress,
+                                          cancelled=cancelled or (lambda: False))
+            except Cancelled:
+                raise ServiceError(E.CANCELLED, f"{path.name}: solve cancelled") from None
+            except EngineError as e:
+                raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}",
+                                   "fix the project file (sources, loads, their ground pins, "
+                                   "links), then solve again") from None
+        # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
+        return json.loads(json.dumps(tree_summary(tree, top=max(1, int(top))), allow_nan=False))
 
     # ================================================================== result queries
     def _record(self, result_id: str, heavy: bool = True) -> _ResultRecord:

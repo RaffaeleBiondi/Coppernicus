@@ -50,7 +50,12 @@ why, and ask for what is missing.
      copper effect.
    - A project file can hold the same setting. If a result's assumptions start with
      "What-if copper thickness", say so: the numbers are not the board file's copper.
-8. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
+8. Power tree: `solve_tree(project_path)` solves a project's rails and grounds together
+   (regulator input currents and the ground return exact; when a ground net is solved, it
+   needs every load's and regulator's ground pins). Read `loads[].drop_mv` / `drop_pct`
+   (supply minus ground, from nominal), the VRMs' `regulation`, and each group's problems.
+   It returns no result ids: for maps, use `solve_project`.
+9. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
    layer's maps with zoom, pan and a hover readout, plus the problems, worst values and
    assumptions. Give the user its `path`; you cannot read the page yourself.
 

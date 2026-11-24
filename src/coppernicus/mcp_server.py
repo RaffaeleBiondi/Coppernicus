@@ -39,6 +39,8 @@ Typical flow: open_board(path) -> list_nets -> net_parts(net) to choose the sour
 regulator output or supply connector, voltage_v) and the loads (ref, current_a) ->
 solve_rail -> get_problems / render_map / probe / cut_current -> change settings
 (copper_thickness_mm, via_plating_um, copper_temp_c) and solve again -> compare_results.
+From a project file: solve_project (rails one by one, with maps) or solve_tree (the whole
+power tree at once, ground return included; tables only).
 Units are in every key name (_v, _mv, _a, _a_mm2, _mm, _w, _pct). Coordinates are mm in
 KiCad's frame (y down); layer names as in KiCad. Board files are only read.
 A verdict (pass/fail) exists only against limits the user gives; without limits results are
@@ -256,6 +258,23 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         to draw as skipped, and an overall verdict."""
         bridge = _Bridge(ctx)
         return _call("solve_project", session.solve_project, project_path, rails, top,
+                     progress=bridge.progress, cancelled=bridge.cancelled)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def solve_tree(project_path: Annotated[str, Field(description="Absolute path to a "
+                                                                  "*.coppernicus.yml project file.")],
+                   ctx: Context,
+                   top: Annotated[int, Field(ge=1, le=50)] = 5) -> dict[str, Any]:
+        """Solve a project's whole power tree at once: every rail and ground group together,
+        with the regulators' input currents and the ground return computed exactly (when a
+        ground net is solved, loads and regulators need their ground pins). Returns the VRM,
+        load, link and group tables, each group's problems ("load" on a rail; "rise" and
+        "return" on a ground), the verdict per group
+        against the project's own limits, assumptions and warnings: the same document as
+        `coppernicus solve --tree --json`. No result ids: render_map and probe do not apply
+        to tree groups (solve_project per rail for maps)."""
+        bridge = _Bridge(ctx)
+        return _call("solve_tree", session.solve_tree, project_path, top,
                      progress=bridge.progress, cancelled=bridge.cancelled)
 
     @mcp.tool(annotations=WRITES_FILE)

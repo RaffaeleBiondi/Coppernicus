@@ -75,6 +75,7 @@ input.
 | `cut_current` | `result_id`, `layer`, `x1_mm`, `y1_mm`, `x2_mm`, `y2_mm` | A cross-section along a segment: the copper width crossed, the current through it (∫ J·n t ds, signed along `normal`), and the mean and max \|J\|. Use it to measure a neck. |
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
 | `solve_project` | `project_path`, `rails`?, `top`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings. Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. |
+| `solve_tree` | `project_path`, `top`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. |
 | `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
 
 A summary's `problems` list is complete: every load, then the `top` current-crowding spots and
@@ -128,6 +129,28 @@ draws differ (for example a `solve_project` result against a `solve_rail` what-i
 rail): the deltas then mix copper and current. For a what-if on a project rail, change the
 project's settings and solve the project again.
 
+### Power tree
+
+`solve_tree(project_path)` solves every rail and ground of a project together, as
+`coppernicus solve --tree` does. A regulator's input current is computed from what its output
+draws, and the ground return is solved on the ground net, so a load sees its supply minus its
+ground. It needs the project's v2 fields: each regulator's `kind` and `input` pins and, when a
+ground net is solved, each regulator's and load's `ground` pins (see
+`docs/engine-mapping.md`). The document has:
+- `verdict`, `verdict_note`, `failed`: judged per group against the project's limits only;
+- `vrms`: each source and regulator, with `v_set_v`, `v_out_v`, `i_out_a`, `v_in_v`, `i_in_a`,
+  `p_loss_w` and `regulation` (why it cannot hold its voltage, if so);
+- `loads`: each load's `v_supply_v`, `v_ground_v`, `v_across_v`, `drop_mv` and `drop_pct`
+  (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`;
+- `links` and `groups`: a rail group has `max_drop_mv` and `max_drop_pct`, a ground group
+  `max_rise_mv` (its `max_drop_pct` is `null`); each group has its `limits`, `verdict` and
+  `problems` (`load` on a rail; `rise` and `return` on a ground; `hotspot` and `via` on both);
+- `assumptions` and `warnings`.
+
+Tree groups are not kept as results: there is no `result_id` per group, so `render_map`,
+`probe`, `cut_current`, `compare_results` and `report` do not apply to them. For maps, solve
+the rails with `solve_project`.
+
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;
 - `max_current_density_a_mm2`;
@@ -135,7 +158,8 @@ Limits, all optional:
 - `max_ground_rise_mv`: for a ground net solved on its own (a 0 V source at the reference
   point, its return pins as loads), the largest allowed rise of its copper above the source,
   in mV. A single-rail solve judges it on any net it is set on. In the power tree
-  (`coppernicus solve --tree`) it judges ground groups only, and is ignored on a supply rail.
+  (`solve_tree`, `coppernicus solve --tree`) it judges ground groups only, and is ignored on a
+  supply rail.
 
 Problem kinds, in `problems` of every summary and of `get_problems`:
 - `load`: a load's drop at its worst pin (`drop_mv`, `drop_pct`);
@@ -360,9 +384,11 @@ setting with the others.
   used results, within `--max-result-mb`, keep their fields. An older result keeps its summary,
   so `compare_results` still works on it. Maps, probes and cuts on it return `result_evicted`,
   whose hint says which rail to solve again.
-- **DC only, one net at a time.** The ground return is not included; solve the ground net as its
-  own rail. The power tree, thermal, AC impedance and DC-DC ripple, which KiPI's engine has, are
-  not exposed yet.
+- **DC only.** A single-rail solve does not include the ground return; solve the ground net as
+  its own rail, or the whole project with `solve_tree`. Thermal, AC impedance and DC-DC
+  ripple, which KiPI's engine has, are not exposed yet.
+- **No maps of tree groups.** `solve_tree` returns tables and problems with their x/y, not
+  result ids.
 - **What-ifs are settings only:** copper thickness, via plating and temperature, in `solve_rail`
   or in a project file. Adding vias or editing copper is a later step; real changes are made in
   KiCad.
