@@ -173,3 +173,93 @@ engine_options:
 
 A project file written before v2 loads unchanged, and its `to_dict()` is the same dict: no
 key is added.
+
+---
+
+## Task 7: power-tree solve → Coppernicus results (`kipi/dc/pi/tree.py`, `kipi/dc/pi/results.py`)
+
+Code: `coppernicus.engine.tree.solve_project_tree(board, project, progress=None,
+cancelled=…) -> TreeResult`. It wraps `kipi.dc.pi.tree.solve_tree(snapshot, to_pisetup(board,
+project), progress, temperature)`.
+
+Before solving, it raises `EngineError` for:
+- KiPI's `validate()` messages (a VRM whose input is its own output, an LDO without input
+  pins, a ground with no 0 V reference, a loop…);
+- a load without ground pins while a ground net is solved;
+- an LDO or switcher without ground pins while a ground net is solved.
+
+KiPI's own `SolveError`s become `EngineError` too.
+
+### Groups → `TreeResult.groups: Dict[str, RailResult]`
+
+| KiPI `GroupResult` | Coppernicus | Notes |
+|---|---|---|
+| key `label_of(g)` ("busiest net (+N nets)") | the key | A rail group is keyed by the project rail its VRM drives (`+3V3`, even when FB1 joins `+3V3_F` to it). A ground group is keyed by the first ground net the project names in it (`GND`). |
+| `nets` | `RailResult.net` = the key, `RailResult.nets` = every net of the group, the key first | |
+| `kind` (`"rail"` / `"ground"`) | `RailResult.kind` (new field, default `"rail"`) | Additive. Per-rail results keep `"rail"`. |
+| `result.mesh / solution / fields` | layers, vias, power loss, `j_max`: through the per-rail `_convert` | The same arrays as a per-rail result, so maps, isolines, arrows, Measure and Compare work unchanged. |
+| `fields.v_ref` (rail: the VRM's set point above the ground it regulates against; ground: 0 V) | `RailResult.v_ref` | Drops on a rail are measured from the set point, as in KiPI. A remote-sensed VRM lifts its output pins above it: a boost, shown as a negative drop. |
+| `fields.summary["max_drop"]` | `RailResult.max_drop` | On a ground group, `max_drop` is the largest **rise** above 0 V (`summary["max_boost"]`), and the map field becomes "Ground rise (mV)". |
+| `fields.terminals` | `RailResult.sources` / `loads` | Every terminal of the group: VRM outputs, setup loads, the inputs of the VRMs it feeds (`"U1 (input)"`), sense pins (0 A), ground references (`"J1 (gnd)"`), returns (`"U3 (return)"`), VRM grounds (`"U1 (gnd)"`). `ref` = the footprint of the first pad. |
+| `iterations`, `converged` | `RailResult.stats["iterations"]`, a warning when not converged | |
+
+### VRMs → `TreeResult.vrms: List[VrmReport]` (new, `results.py`)
+
+| KiPI `VrmReport` | Coppernicus `VrmReport` | Unit |
+|---|---|---|
+| `name` | `name` | — | The setup name (`terminal_names`). |
+| `kind`, `group` | `kind`, `group` (our key) | — |
+| `v_set` | `v_set_v` | V |
+| `v_out` | `v_out_v` (at its output pins) | V |
+| `v_sense` | `v_sense_v` (`None` without sense) | V |
+| `i_out` | `i_out_a` | A |
+| `v_in`, `i_in` | `v_in_v`, `i_in_a` (`None` for a source) | V, A |
+| `p_out`, `p_in`, `p_loss` | `p_out_w`, `p_in_w`, `p_loss_w` | W | Power across its own pins, from its ground pins (KiPI). |
+| `v_ground` | `v_ground_v` | V |
+| `v_ground_sense` | `v_ground_sense_v` | V |
+| `regulation` | `regulation` | — | KiPI's reason it cannot hold its voltage (an LDO with less than its dropout across it; the dropout defaults to 0 V, so this means its input fell below its output). |
+| `current_limit_a`, `passed`, `phases`, `load_line_mohm`, `v_droop` | — | | Not exposed (no current limit, single phase, no load line). |
+
+### Loads → `TreeResult.loads: List[LoadReport]` (new, `results.py`)
+
+| KiPI `LoadReport` | Coppernicus `LoadReport` | Unit | Notes |
+|---|---|---|---|
+| `name`, `group` | `name`, `group` (our key) | — | |
+| `current` | `current_a` | A | 0 when disconnected. |
+| `nominal` | `nominal_v` | V | The target voltage of the VRM that drives the group. |
+| `v_supply`, `v_supply_min` | `v_supply_v` (mean over the supply pins), `v_supply_min_v` | V | |
+| `v_ground` | `v_ground_v` (mean, `None` without ground pins) | V | |
+| `v_effective` | `v_across_v` = `v_supply_v − (v_ground_v or 0)` | V | |
+| `v_worst` | `v_worst_v` | V | Lowest supply pin minus highest ground pin (or the boost side when that is further from nominal). |
+| — | `drop_v` = `nominal_v − v_worst_v`, `drop_pct` | V, % | The ground's rise counts in the drop: this is the voltage the part sees. |
+| `status` | `status` | — | `DISCONNECTED`, `NOT CONVERGED` or `VRM OUT OF REGULATION`, as KiPI reports them. |
+| `passed` | `passed` | — | **Coppernicus's own verdict:** `drop_pct ≤ max_drop_pct` of the rail the load is on, `None` without a limit. KiPI's `passed` is ignored, since no tolerance is passed to it. |
+
+### Verdicts (only against the user's limits, per group)
+
+- A rail group uses the limits of the project rail it is keyed by (`max_drop_pct` on its loads'
+  `drop_pct`; `max_current_density` and `max_via_current` on its copper and vias, as in the
+  per-rail solve).
+- A ground group uses the limits of a project rail with the ground's net, if the user set
+  limits on it (selecting `GND` in the net list and typing a limit). `max_drop_pct` does not
+  apply to a ground, which has no nominal voltage: it is reported as not judged. The other two
+  limits apply as on a rail.
+- The Problems list of a tree group ranks its loads by `drop_pct` (supply minus ground), not by
+  supply drop alone. On a ground group it ranks return pins by rise. Hotspots and vias are
+  ranked the same way on both.
+
+### Per-rail solve of a rail that feeds regulators or links (coordinator-approved)
+
+`solve_rail(board, rail, settings, …, project=None)`. With the project, a rail that feeds a
+regulator input or a link draws an estimate of that current. The estimate uses nominal
+voltages and no copper losses, mirroring KiPI's `_estimated_input`:
+- LDO: `I_out + I_q`;
+- switcher: `|V_out|·I_out / (η·|V_in nominal|) + I_q`;
+- a link to another net: what that net's group draws.
+
+Here `I_out` is what the regulator's output group draws, recursively. Each estimate is a load
+named `"U1 (input, estimated)"` / `"FB1 (link, estimated)"` on those pins. One assumption
+line names the regulators, their η and I_q, and says "estimated at nominal voltages; the
+power-tree solve computes it exactly". A switcher without η raises. A load already on those
+pins raises the same double-counting error as the tree. Without `project`, `solve_rail` is
+unchanged.
