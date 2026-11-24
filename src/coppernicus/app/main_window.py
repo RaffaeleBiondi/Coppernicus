@@ -12,8 +12,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QLocale, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence, QShortcut
+from PySide6.QtCore import QLocale, Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -34,7 +34,7 @@ from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel
 from coppernicus.app.picking import add_picked_pin, pick_nets
-from coppernicus.app.worker import SolveWorker
+from coppernicus.app.worker import ReportWorker, SolveWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
         self.net: Optional[str] = None
         self.results: Dict[str, RailResult] = {}
         self.worker: Optional[SolveWorker] = None
+        self.report_worker: Optional[ReportWorker] = None
         self.dirty = False
         self.last_render_s = 0.0
         self._candidates: Dict[Tuple, List[str]] = {}      # pickable pad ids per set of nets
@@ -164,7 +165,8 @@ class MainWindow(QMainWindow):
                                      (None, None, None),
                                      ("Solve", "F5", self.solve),
                                      ("Pin as baseline", "Ctrl+B", self.pin_baseline),
-                                     ("Export maps…", "Ctrl+E", self.export_maps)):
+                                     ("Export maps…", "Ctrl+E", self.export_maps),
+                                     ("Export report…", "Ctrl+R", self.export_report)):
             if text is None:
                 tb.addSeparator()
                 continue
@@ -299,6 +301,63 @@ class MainWindow(QMainWindow):
         rail = self.project.rail(self.net) or Rail(self.net)
         written = save_layer_maps(res, self.board.outline(), folder, find_problems(res, rail.limits))
         self.statusBar().showMessage(f"Wrote {len(written)} maps to {folder}")
+
+    def export_report(self):
+        """Write the offline HTML report of every solved rail (WS1's coppernicus.report), off
+        the UI thread, to a file chosen in a Save dialog that starts in results/ next to the
+        project (the CLI's folder), or in the home folder for an unsaved project, never next to
+        a board elsewhere."""
+        if self.worker is not None and self.worker.isRunning():
+            self.statusBar().showMessage("A solve is running: export the report when it has finished")
+            return
+        if self.board is None or not self.results:
+            self.statusBar().showMessage("Solve at least one rail first: the report shows the solved rails")
+            return
+        if self.report_worker is not None and self.report_worker.isRunning():
+            self.statusBar().showMessage("A report is already being written")
+            return
+        start = self._report_start_path()
+        path, _ = QFileDialog.getSaveFileName(self, "Export report", str(start), "HTML report (*.html)")
+        if not path:
+            return
+        path = Path(path)
+        if path.suffix.lower() not in (".html", ".htm"):
+            path = path.with_name(path.name + ".html")
+        self.report_worker = ReportWorker(self.results.values(), copy.deepcopy(self.project), path,
+                                          self.board.outline(), self.board.name, self)
+        self.report_worker.succeeded.connect(self._report_written)
+        self.report_worker.failed.connect(self._report_failed)
+        self.statusBar().showMessage(f"Writing the report of {len(self.results)} rail(s)… "
+                                     "(a few seconds on big boards)")
+        self.report_worker.start()
+
+    def _report_start_path(self) -> Path:
+        if self.project.path:
+            project = Path(self.project.path)
+            stem = project.name
+            for suffix in (".coppernicus.yml", ".yml", ".yaml"):
+                if stem.endswith(suffix):
+                    stem = stem[: -len(suffix)]
+                    break
+            folder = project.parent / "results"
+            folder.mkdir(exist_ok=True)
+        else:
+            stem, folder = (self.board.name.split(".")[0] or "coppernicus"), Path.home()
+        return folder / f"{stem}_report.html"
+
+    def _report_written(self, path):
+        path = Path(path)
+        size_mb = path.stat().st_size / 1e6
+        self.statusBar().showMessage(f"Report written: {path.name} ({size_mb:.2f} MB) in {path.parent}")
+        answer = QMessageBox.question(self, "Report written",
+                                      f"{path}\n{size_mb:.2f} MB. Open it in the browser?",
+                                      QMessageBox.Open | QMessageBox.Close)
+        if answer == QMessageBox.Open:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _report_failed(self, message: str):
+        self.statusBar().showMessage("The report could not be written")
+        QMessageBox.warning(self, "Cannot write the report", message)
 
     def _update_title(self):
         name = self.project.path.name if self.project.path else "unsaved project"

@@ -538,6 +538,65 @@ def run_compare(window, check: Checks, args, out: Path):
     window.dirty = False
 
 
+def run_report(window, check: Checks, args, out: Path):
+    """Export report: refused without results or while a solve runs; otherwise a Save dialog
+    that starts in results/ next to the project, the file written off the UI thread, its
+    size reported, and an offer to open it (QDesktopServices is intercepted here)."""
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+    from coppernicus.project import Project
+    project = Project.load(ROOT / "examples" / "demo" / "demo.coppernicus.yml")
+    project.save(out / "demo_copy.coppernicus.yml")           # a project outside the repository
+    asked, opened = [], []
+    target = out / "chosen" / "demo_report.html"
+    real_save, real_open, real_question = (QFileDialog.getSaveFileName, QDesktopServices.openUrl,
+                                           QMessageBox.question)
+    QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (asked.append(a[2]), (str(target), ""))[1])
+    QDesktopServices.openUrl = staticmethod(lambda url: opened.append(url.toLocalFile()) or True)
+    QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Open)
+    try:
+        window.open_project(out / "demo_copy.coppernicus.yml")
+        QApplication.processEvents()
+        window.export_report()
+        status = window.statusBar().currentMessage()
+        check("export without results is refused", not asked and "Solve" in status, status)
+        window.solve()                                       # still running...
+        window.export_report()
+        check("export while a solve runs is refused", not asked and "solve is running"
+              in window.statusBar().currentMessage(), window.statusBar().currentMessage())
+        if window.worker is not None:
+            window.worker.wait(int(args.timeout * 1000))
+        QApplication.processEvents()
+        QApplication.processEvents()
+        window.export_report()
+        check("the Save dialog starts in results/ next to the project",
+              asked and Path(asked[-1]) == out / "results" / "demo_copy_report.html", str(asked))
+        if window.report_worker is not None:
+            window.report_worker.wait(int(args.timeout * 1000))
+        QApplication.processEvents()
+        QApplication.processEvents()
+        text = target.read_text(encoding="utf-8") if target.exists() else ""
+        status = window.statusBar().currentMessage()
+        check("the report is written", text.lstrip().lower().startswith("<!doctype html") and "+3V3" in text,
+              f"{target} ({len(text)} chars)")
+        check("its size is reported", "MB" in status and str(target.name) in status, status)
+        check("and it is offered to open", opened == [str(target)], str(opened))
+        n = len(asked)
+        window.solve()                                       # results exist, and a solve runs
+        window.export_report()
+        status = window.statusBar().currentMessage()
+        check("... and with results, a running solve still blocks it", len(asked) == n
+              and "solve is running" in status, status)
+        if window.worker is not None:
+            window.worker.wait(int(args.timeout * 1000))
+        QApplication.processEvents()
+    finally:
+        QFileDialog.getSaveFileName, QDesktopServices.openUrl, QMessageBox.question = (
+            real_save, real_open, real_question)
+    window.dirty = False
+
+
 def run_close_asks(window, check: Checks, out: Path):
     """Closing with only hand-marked rails asks to save (the dialog answers Discard)."""
     from PySide6.QtWidgets import QApplication
@@ -624,6 +683,7 @@ def main(argv=None) -> int:
             run_local(window, check, args, out)
         run_review_fixes(window, check, args, out)
         run_compare(window, check, args, out)
+        run_report(window, check, args, out)
         run_open_asks(window, check, out)
         run_close_asks(window, check, out)
     finally:

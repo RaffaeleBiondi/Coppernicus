@@ -37,3 +37,24 @@ class SolveWorker(QThread):
             self.failed.emit("Unexpected error:\n" + traceback.format_exc())
         else:
             self.succeeded.emit(result)
+
+
+class ReportWorker(QThread):
+    """Writes the offline HTML report (seconds on big boards) away from the UI thread."""
+    succeeded = Signal(object)        # Path of the written file
+    failed = Signal(str)
+
+    def __init__(self, results, project, path, outline, board_name: str, parent=None):
+        super().__init__(parent)
+        self._results, self._project, self._path = list(results), project, path
+        self._outline, self._board_name = outline, board_name
+
+    def run(self):
+        from coppernicus.report import write_report
+        try:
+            path = write_report(self._results, self._project, self._path, outline=self._outline,
+                                board_name=self._board_name)
+        except Exception:                                   # noqa: BLE001 - shown to the user
+            self.failed.emit("Cannot write the report:\n" + traceback.format_exc())
+        else:
+            self.succeeded.emit(path)
