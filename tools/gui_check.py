@@ -861,6 +861,9 @@ def run_power_tree(window, check: Checks, args, out: Path):
     saved = Project.load(path)
     check("... saved: η 0.8 and U4 0.6 A", (saved.rail("+3V3").sources[0].efficiency,
                                              saved.rail("+3V3").loads[0].current) == (0.8, 0.6))
+    check("... saved: the limits-only GND rail keeps its ground-rise limit",
+          saved.rail("GND") is not None and saved.rail("GND").limits.max_ground_rise_mv == 10.0
+          and window.project.rail("GND") is not None)
     assert g.I_U4 == 0.5       # the example itself is unchanged
 
 

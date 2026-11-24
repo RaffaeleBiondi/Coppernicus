@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -108,8 +109,12 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.show_arrows)
         bar.addSpacing(12)
         bar.addWidget(self.measure)
-        bar.addStretch(1)
-        bar.addWidget(QLabel("<small>drag: pan · wheel: zoom · double-click: read values</small>"))
+        hint = QLabel("<small>double-click: read values</small>")
+        hint.setToolTip("Drag to pan, wheel to zoom, double-click to read V, drop and |J|")
+        hint.setWordWrap(True)                  # may wrap: the bar must fit a laptop screen
+        hint.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        hint.setMinimumWidth(80)                # at most two lines
+        bar.addWidget(hint, 1)
         bar.addWidget(fit)
         centre = QWidget()
         cl = QVBoxLayout(centre)
@@ -131,7 +136,14 @@ class MainWindow(QMainWindow):
         self.results_tabs.addTab(self.compare, "Compare")
         self.results_tabs.addTab(self.tree_panel, "Power tree")
         self._dock("Nets", self.nets, Qt.LeftDockWidgetArea)
-        self._dock("Rail setup", self.rail_panel, Qt.RightDockWidgetArea)
+        rail_scroll = QScrollArea()             # the rail setup is taller than a laptop screen
+        rail_scroll.setWidget(self.rail_panel)
+        rail_scroll.setWidgetResizable(True)
+        rail_scroll.setFrameShape(QScrollArea.NoFrame)
+        rail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)     # scroll down only
+        rail_scroll.setMinimumWidth(self.rail_panel.minimumSizeHint().width()
+                                    + rail_scroll.verticalScrollBar().sizeHint().width())
+        self._dock("Rail setup", rail_scroll, Qt.RightDockWidgetArea)
         problems_dock = self._dock("Results", self.results_tabs, Qt.BottomDockWidgetArea)
         self.resizeDocks([problems_dock], [300], Qt.Vertical)
 
@@ -297,7 +309,10 @@ class MainWindow(QMainWindow):
             self._save(Path(path))
 
     def _save(self, path: Path):
-        self.project.rails = [r for r in self.project.rails if r.sources or r.loads]
+        # Rails picked but never set up are not saved; a rail with only limits (a ground
+        # net's ground-rise limit) is.
+        self.project.rails = [r for r in self.project.rails if r.sources or r.loads
+                              or any(v is not None for v in vars(r.limits).values())]
         try:
             self.project.save(path)
         except (OSError, ProjectError) as e:
