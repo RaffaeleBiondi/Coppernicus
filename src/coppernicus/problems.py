@@ -226,38 +226,55 @@ def _returns(res: RailResult, limits: Optional[Limits] = None) -> List[Problem]:
     limit = (limits or Limits()).max_ground_rise_mv
     out = []
     for t in res.loads:
-        rise = t.v_max - res.v_ref
+        rise = _signed_max(t.v_max - res.v_ref, t.v_min - res.v_ref)   # its worst pin
         if not np.isfinite(rise):
             continue
         x, y = t.positions[0] if t.positions else (np.nan, np.nan)
-        fail = limit is not None and rise * 1e3 > limit
+        fail = limit is not None and abs(rise) * 1e3 > limit
         note = f"limit {limit:g} mV" if limit is not None else "no ground-rise limit set"
         out.append(Problem(
-            FAIL if fail else INFO, "return", f"{t.name}: ground {rise * 1e3:.2f} mV above 0 V",
+            FAIL if fail else INFO, "return", f"{t.name}: ground {from_0v(rise)}",
             f"{t.ref}, {len(t.pad_ids)} pin(s), {abs(t.current):g} A; {note}.",
-            rise * 1e3, float(x), float(y),
+            abs(rise) * 1e3, float(x), float(y),
             data={"name": t.name, "ref": t.ref, "rise_mv": rise * 1e3, "current_a": t.current}))
     return out
 
 
+def _signed_max(a: float, b: float) -> float:
+    """Whichever of ``a`` and ``b`` is larger in magnitude, with its sign."""
+    return a if abs(a) >= abs(b) else b
+
+
+def from_0v(volts: float) -> str:
+    """A ground's rise in words: "12.34 mV above 0 V" or "12.34 mV below 0 V"."""
+    return f"{abs(volts) * 1e3:.2f} mV {'above' if volts >= 0 else 'below'} 0 V"
+
+
 def _rise(res: RailResult, limits: Limits) -> List[Problem]:
     """With a ``max_ground_rise_mv`` limit: the largest deviation of the net's copper from
-    its reference (a ground group's rise above 0 V; a net solved alone, its distance from the
-    source voltage), and where it is."""
+    its reference, and where it is. On a ground group of a power tree it is signed (below
+    0 V under a negative rail), judged by its magnitude; on a net solved alone it is the
+    magnitude (that solve draws every load current out of the copper, so its sign is not
+    the physical one)."""
     limit = limits.max_ground_rise_mv
     if limit is None:
         return []
     best = (0.0, np.nan, np.nan, None)
     for lf in res.layers:
-        dev = np.abs(lf.voltage - res.v_ref)
+        dev = lf.voltage - res.v_ref
         if not np.any(np.isfinite(dev)):
             continue
-        i = int(np.nanargmax(dev))
-        if dev[i] > best[0]:
+        i = int(np.nanargmax(np.abs(dev)))
+        if abs(dev[i]) > abs(best[0]):
             best = (float(dev[i]), float(lf.points[i, 0]), float(lf.points[i, 1]), lf.name)
-    mv, x, y, layer = best[0] * 1e3, best[1], best[2], best[3]
+    volts, x, y, layer = best
+    if res.kind != "ground":
+        volts = abs(volts)
+    mv = volts * 1e3
+    where = f" on {layer}" if layer else ""
+    title = (f"{res.net}: largest ground rise {from_0v(volts)}{where}" if res.kind == "ground"
+             else f"{res.net}: largest ground rise {mv:.2f} mV{where}")
     return [Problem(
-        FAIL if mv > limit else INFO, "rise",
-        f"{res.net}: largest ground rise {mv:.2f} mV" + (f" on {layer}" if layer else ""),
+        FAIL if abs(mv) > limit else INFO, "rise", title,
         f"Copper furthest from the {res.v_ref:g} V reference; limit {limit:g} mV.",
-        mv, x, y, layer, data={"rise_mv": mv, "limit_mv": limit})]
+        abs(mv), x, y, layer, data={"rise_mv": mv, "limit_mv": limit})]

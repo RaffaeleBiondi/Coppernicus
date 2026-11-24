@@ -327,7 +327,7 @@ class Project:
                     net=str(rd["net"]),
                     sources=[_source_in(s) for s in rd.get("sources") or []],
                     loads=[_load_in(ld) for ld in rd.get("loads") or []],
-                    limits=Limits(**(rd.get("limits") or {})),
+                    limits=_limits_in(rd.get("limits") or {}, str(rd["net"])),
                     follow_net_ties=bool(rd.get("follow_net_ties", True)),
                 ))
             marked = data.get("marked_rails") or []
@@ -388,6 +388,14 @@ def _portable_path(text: str) -> Path:
     if "\\" in text and os.sep == "/":
         return Path(PureWindowsPath(text).as_posix())
     return Path(text)
+
+
+def _limits_in(d: Any, net: str) -> Limits:
+    """A rail's limits: each one empty or a finite number (a NaN limit would pass anything)."""
+    if not isinstance(d, dict):
+        raise ValueError(f"rail {net}: limits must be a mapping of limit names to numbers")
+    return Limits(**{k: None if v is None else _number(v, f"rail {net}: limit {k}")
+                     for k, v in d.items()})
 
 
 def _number(value: Any, what: str) -> float:

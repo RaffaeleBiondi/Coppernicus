@@ -239,8 +239,8 @@ def tree_text(doc: Dict[str, Any]) -> List[str]:
     for ld in doc["loads"]:
         verdict = ("FAIL" if ld["exceeds_drop_limit"] else "pass" if ld["exceeds_drop_limit"] is False
                    else "not judged")
-        drop = (f"{ld['drop_mv']:.2f} mV ({ld['drop_pct']:.2f} %)" if ld["drop_mv"] is not None
-                else "—")
+        drop = (f"{ld['drop_mv']:.2f} mV ({_fmt(ld['drop_pct'], 0, '.2f', ' %').strip()})"
+                if ld["drop_mv"] is not None else "—")
         lines.append(f"  {ld['name']:<14} {ld['group']:<10} {_fmt(ld['current_a'], 8, '.4g', 'A')} "
                      f"{_fmt(ld['nominal_v'], 8, '.4g', 'V')} {_fmt(ld['v_supply_v'], 9, '.5f', 'V')} "
                      f"{_fmt(ld['v_ground_v'], 9, '.2f', 'mV', 1e3)} {_fmt(ld['v_across_v'], 9, '.5f', 'V')} "
@@ -248,14 +248,18 @@ def tree_text(doc: Dict[str, Any]) -> List[str]:
     lines.append("Groups")
     for gr in doc["groups"]:
         if gr["kind"] == "ground":
-            worst = f"max rise {gr['max_rise_mv']:.3f} mV above 0 V"
+            rise = gr["max_rise_mv"]
+            worst = ("max rise —" if rise is None else
+                     f"max rise {abs(rise):.3f} mV {'above' if rise >= 0 else 'below'} 0 V")
         else:
-            worst = f"max drop {gr['max_drop_mv']:.3f} mV ({gr['max_drop_pct']:.3f} %)"
+            worst = (f"max drop {_fmt(gr['max_drop_mv'], 0, '.3f', ' mV').strip()} "
+                     f"({_fmt(gr['max_drop_pct'], 0, '.3f', ' %').strip()})")
         lines.append(f"  {gr['group']:<10} {gr['kind']:<6} {' + '.join(gr['nets']):<22} {worst}, "
-                     f"copper loss {gr['power_loss_w'] * 1e3:.3g} mW: {gr['verdict']}")
+                     f"copper loss {_fmt(gr['power_loss_w'], 0, '.3g', ' mW', 1e3).strip()}: "
+                     f"{gr['verdict']}")
     for k in doc["links"]:
-        lines.append(f"  link {k['name']}: {k['current_a']:.4f} A, {k['power_w'] * 1e3:.3g} mW "
-                     f"({' ↔ '.join(k['nets'])})")
+        lines.append(f"  link {k['name']}: {_fmt(k['current_a'], 0, '.4f', ' A').strip()}, "
+                     f"{_fmt(k['power_w'], 0, '.3g', ' mW', 1e3).strip()} ({' ↔ '.join(k['nets'])})")
     lines.append(f"Verdict: {doc['verdict']}. {doc['verdict_note']}")
     lines += [f"  assumption: {a}" for a in doc["assumptions"]]
     lines += [f"  warning: {w}" for w in doc["warnings"]]

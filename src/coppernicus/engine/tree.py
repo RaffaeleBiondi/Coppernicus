@@ -102,6 +102,16 @@ def _terminals(board: Board, fields):
     return sources, loads
 
 
+def _worst(kind: str, v_ref: float, sm) -> float:
+    """A group's largest drop. On a negative rail the voltage lost toward 0 V is above its
+    reference: KiPI's "boost". A ground's rise is the one with the largest magnitude, signed:
+    above 0 V under positive rails, below it under negative ones."""
+    up, down = float(sm["max_boost"]), float(sm["max_drop"])
+    if kind == "ground":
+        return up if up >= down else -down
+    return up if v_ref < 0 else down
+
+
 def _group(board: Board, key: str, g, assumptions: List[str]) -> RailResult:
     result = g.result
     sol, fields = result.solution, result.fields
@@ -114,9 +124,7 @@ def _group(board: Board, key: str, g, assumptions: List[str]) -> RailResult:
     return RailResult(
         net=key, nets=[key] + sorted(n for n in g.nets if n != key), v_ref=float(fields.v_ref),
         layers=layers, sources=sources, loads=loads, vias=vias,
-        # A ground's rise, and on a negative rail the voltage lost toward 0 V, are above
-        # its reference: KiPI's "boost".
-        max_drop=float(sm["max_boost"] if g.kind == "ground" or fields.v_ref < 0 else sm["max_drop"]),
+        max_drop=_worst(g.kind, float(fields.v_ref), sm),
         j_max=float(sm["j_max"]), power_loss=float(sm["power_loss"]),
         energy_balance_error=float(sm["energy_balance_error"]),
         loss_vias=float(sum(v.power for v in fields.vias)),
@@ -159,9 +167,10 @@ def solve_project_tree(board: Board, project: Project,
 
     assumptions = _assumptions(project, setup)
     assumptions += thickness_note(thickness, board.file_thickness_mm)
+    excluded = set(setup.excluded_nets or [])
     notes = [f"Rail {r.net} is solved as a ground in the power tree (from the ground pins); its "
              f"own sources and loads are used only when {r.net} is solved alone."
-             for r in ground_rails(project)]
+             for r in ground_rails(project) if r.net not in excluded]
     out = TreeResult(assumptions=assumptions, warnings=notes + list(kt.warnings),
                      stats={"seconds": seconds, "groups": float(len(kt.groups))})
     for label, g in kt.groups.items():

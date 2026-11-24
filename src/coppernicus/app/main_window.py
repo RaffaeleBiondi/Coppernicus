@@ -40,7 +40,7 @@ from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
 from coppernicus.power_tree import judge_loads
-from coppernicus.problems import FAIL, find_problems, find_tree_problems, limits_dict
+from coppernicus.problems import FAIL, find_problems, find_tree_problems, from_0v, limits_dict
 from coppernicus.project import Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
 
@@ -775,7 +775,7 @@ class MainWindow(QMainWindow):
         limits = tree.limits.get(key)
         problems = find_tree_problems(tree, key, limits)
         fails = sum(p.severity == FAIL for p in problems)
-        worst = (f"max rise {res.max_drop * 1e3:.2f} mV above 0 V" if res.kind == "ground"
+        worst = (f"max ground rise {from_0v(res.max_drop)}" if res.kind == "ground"
                  else f"max drop {res.max_drop * 1e3:.2f} mV below the {res.v_ref:.4g} V set point")
         judged = bool(limits_dict(limits, res.kind))
         verdict = (f"<span style='color:#c0392b'><b>{fails} limit(s) exceeded</b></span>" if fails

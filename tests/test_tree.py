@@ -364,3 +364,89 @@ def test_tree_honours_the_copper_thickness_setting(board, tree):
     assert _load(thick, "U3").v_ground_v == pytest.approx(_load(tree, "U3").v_ground_v / 2, rel=1e-3)
     assert any("copper_thickness_mm" in a for a in thick.assumptions)
     assert not any("copper_thickness_mm" in a for a in tree.assumptions)
+
+
+# ------------------------------------------------------------------ second review
+
+def _strip_project(voltage, **rail):
+    from coppernicus.engine.synthetic import Strip
+    from coppernicus.project import Project, Rail
+    return Project(rails=[Rail(Strip.NET, sources=[Source("J1", voltage)], loads=[Load("U1", 1.0)],
+                               **rail)])
+
+
+def test_a_negative_rail_solved_alone_fails_its_drop_limit():
+    """The drop of a negative rail solved alone is a fraction of |V|: positive, so the limit
+    can fail (review finding 2)."""
+    from coppernicus.engine.synthetic import Strip, strip_board
+    from coppernicus.problems import find_problems
+    project = _strip_project(-3.3, limits=Limits(max_drop_pct=0.001))
+    res = solve_rail(Board(strip_board()), project.rails[0])
+    r = RHO * Strip.length() / (Strip.W * OZ1)
+    assert res.drop(res.loads[0]) == pytest.approx(r, rel=5e-3)
+    assert res.drop_pct(res.loads[0]) == pytest.approx(100 * r / 3.3, rel=5e-3)
+    [u1] = [p for p in find_problems(res, project.rails[0].limits) if p.kind == "load"]
+    assert u1.severity == FAIL
+
+
+def test_tree_text_prints_a_rail_at_0_v_without_a_percentage():
+    """A rail driven at 0 V has no drop percentage: the text table shows "—" (finding 3)."""
+    from coppernicus.engine.synthetic import Strip, strip_board
+    from coppernicus.power_tree import tree_summary, tree_text
+    doc = tree_summary(solve_project_tree(Board(strip_board()), _strip_project(0.0)))
+    [u1] = doc["loads"]
+    assert u1["drop_pct"] is None
+    lines = "\n".join(tree_text(doc))
+    assert "—" in lines and Strip.NET in lines
+
+
+def test_an_excluded_ground_rail_is_not_said_to_be_solved_as_a_ground(board):
+    from coppernicus.project import Rail
+    project = power_chain_project()
+    project.rails.append(Rail("GND", sources=[Source("J1", 0.0, ["2"])], loads=[Load("U3", 2.0, ["2"])]))
+    project.engine_options = {"excluded_nets": ["GND"]}
+    tree = solve_project_tree(board, project)
+    assert "GND" not in tree.groups
+    assert not any("solved as a ground" in w for w in tree.warnings)
+
+
+def test_a_ground_below_0_v_is_a_rise_by_its_magnitude():
+    """Under a negative rail the ground sinks below 0 V: the group's largest rise, the rise
+    problem and the return pins all give |V| from 0 V, and the limit judges it (finding 9)."""
+    from coppernicus.project import Project, Rail
+    b = strip_board_with_ground()
+    project = Project(rails=[
+        Rail("VCC", sources=[Source("J1", -3.3, ["1"], ground_pins=["2"], ground_net="GND")],
+             loads=[Load("U1", 1.0, ["1"], ground_pins=["2"], ground_net="GND")]),
+        Rail("GND", limits=Limits(max_ground_rise_mv=1.0))])
+    tree = solve_project_tree(b, project)
+    gnd = tree.groups["GND"]
+    [ret] = [t for t in gnd.loads if t.name == "U1 (return)"]
+    assert ret.v_min < -1e-3                                       # below 0 V
+    # One number with one sign everywhere: the rise with the largest magnitude, signed.
+    assert gnd.max_drop == pytest.approx(ret.v_min, rel=1e-3)
+    probs = find_tree_problems(tree, "GND", tree.limits["GND"])
+    rise = next(p for p in probs if p.kind == "rise")
+    pin = next(p for p in probs if p.kind == "return")
+    assert rise.severity == FAIL and pin.severity == FAIL
+    assert rise.data["rise_mv"] == pytest.approx(gnd.max_drop * 1e3, rel=1e-3)
+    assert pin.data["rise_mv"] == pytest.approx(ret.v_min * 1e3, rel=1e-3)
+    assert "below 0 V" in rise.title and "below 0 V" in pin.title
+    assert pin.value == pytest.approx(abs(ret.v_min) * 1e3, rel=1e-3)        # ranked by magnitude
+    from coppernicus.power_tree import tree_summary, tree_text
+    doc = tree_summary(tree)
+    row = next(gr for gr in doc["groups"] if gr["group"] == "GND")
+    assert row["max_rise_mv"] == pytest.approx(gnd.max_drop * 1e3) and row["verdict"] == "fail"
+    assert any("GND" in line and "below 0 V" in line for line in tree_text(doc))
+
+
+def strip_board_with_ground():
+    """VCC: J1.1 → U1.1 and GND: J1.2 → U1.2, 40 mm tracks on F.Cu."""
+    from coppernicus.engine.synthetic import F, SyntheticBoard, two_layer_stackup
+    b = SyntheticBoard("strip_gnd", two_layer_stackup())
+    for ref, x in (("J1", 0.0), ("U1", 40.0)):
+        b.square_pad(ref, "1", "VCC", x, 0.0, 1.5)
+        b.square_pad(ref, "2", "GND", x, 5.0, 1.5)
+    b.track("VCC", F, 0.5, (0.0, 0.0), (40.0, 0.0))
+    b.track("GND", F, 0.5, (0.0, 5.0), (40.0, 5.0))
+    return Board(b.snapshot())

@@ -289,6 +289,14 @@ def test_loader_edge_values():
     with pytest.raises(ProjectError, match="FB1.*ref"):
         Project.from_dict({"links": [{"name": "FB1", "ref": "FB1", "a": {"ref": "R5", "net": "A"},
                                       "b": {"net": "B"}, "resistance_ohm": 0.1}]})
+    # A limit that is NaN would pass everything (second review, finding 8).
+    for key in ("max_ground_rise_mv", "max_drop_pct"):
+        with pytest.raises(ProjectError, match=f"{key}.*number"):
+            Project.from_dict({"rails": [{"net": "GND", "limits": {key: float("nan")}}]})
+    with pytest.raises(ProjectError, match="max_drop_pct.*number"):
+        Project.from_dict({"rails": [{"net": "GND", "limits": {"max_drop_pct": "lots"}}]})
+    assert Project.from_dict({"rails": [{"net": "GND", "limits": {"max_drop_pct": None}}]}
+                             ).rails[0].limits.max_drop_pct is None
 
 
 def test_ground_rise_limit_round_trip_and_omitted_when_unset(tmp_path):

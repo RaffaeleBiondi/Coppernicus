@@ -65,7 +65,8 @@ class RailResult:
     sources: List[TerminalResult]
     loads: List[TerminalResult]
     vias: List[ViaCurrent]
-    max_drop: float                # V, largest drop below v_ref anywhere on the copper
+    max_drop: float                # V, largest drop below v_ref anywhere on the copper (a
+                                   # ground of a power tree: its rise, see ``kind``)
     j_max: float                   # A/mm^2, point maximum (mesh-dependent at sharp corners)
     power_loss: float              # W, total in copper, barrels and series links
     energy_balance_error: float    # relative; ~0 for a sound solve
@@ -75,7 +76,8 @@ class RailResult:
     warnings: List[str] = field(default_factory=list)
     assumptions: List[str] = field(default_factory=list)   # inputs the engine filled in
     # "rail", or "ground" for a ground net of a power-tree solve: v_ref is then its 0 V
-    # reference and max_drop the largest rise above it.
+    # reference and max_drop the rise with the largest magnitude, signed (negative: the
+    # ground sinks below 0 V, as under a negative rail).
     kind: str = "rail"
 
     # ------------------------------------------------------------------ helpers
@@ -87,7 +89,8 @@ class RailResult:
         return self.v_ref - t.v_min
 
     def drop_pct(self, t: TerminalResult) -> float:
-        return 100.0 * self.drop(t) / self.v_ref if self.v_ref else float("nan")
+        """The drop as a share of |v_ref| (positive on a negative rail too)."""
+        return 100.0 * self.drop(t) / abs(self.v_ref) if self.v_ref else float("nan")
 
     def loss_breakdown(self) -> Dict[str, float]:
         """Watts per copper layer, plus vias and series links: where the voltage is lost."""
