@@ -71,6 +71,10 @@ input.
 | `cut_current` | `result_id`, `layer`, `x1_mm`, `y1_mm`, `x2_mm`, `y2_mm` | A cross-section along a segment: the copper width crossed, the current through it (∫ J·n t ds, signed along `normal`), and the mean and max \|J\|. Use it to measure a neck. |
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
 | `solve_project` | `project_path`, `rails`?, `top`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings. Returns one `solve_rail` summary per rail and an overall verdict; a rail that fails to solve is reported in place. |
+| `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
+
+A summary's `problems` list is complete: every load, then the `top` current-crowding spots and
+the `top` vias by current (default 5 each), plus any that exceed a limit you set.
 
 `solve_rail` settings, all optional:
 - `max_edge_mm`: the largest mesh edge on planes (default 0.5).
@@ -78,7 +82,9 @@ input.
   type.
 - `copper_temp_c`: copper temperature for ρ(T) (default 20).
 - `copper_thickness_mm`: a what-if thickness per layer name, for example `{"B.Cu": 0.07}`. The
-  board file is not changed.
+  board file is not changed. This is a quick test for agents, available only here in
+  `solve_rail`. It is deliberately not part of project files: a real change of copper weight is
+  made in KiCad, which then becomes the board that is solved.
 
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;
@@ -173,6 +179,54 @@ shortened; that second option needs a board edit, which is not modelled here.
 SDK's own client (`test_acceptance_an_agent_reproduces_the_demo_analysis`). It finds the neck
 from the broadest hotspot, as above, and checks the 7 mm width and the 3.5 A current.
 
+To hand the result to the person, call `report()` (or `report(result_ids=["r1", "r2"])` to put
+the what-if next to the original) and give them the path.
+
+## HTML report
+
+<p align="center">
+  <img src="images/report-demo.png" alt="Coppernicus HTML report of the demo board: verdict against the 0.25 % limit, worst values, the B.Cu drop map and a hover readout" width="820">
+</p>
+
+`coppernicus solve PROJECT --html` (or the MCP `report` tool) writes one self-contained HTML
+file. It needs no network and no installed software beyond a current browser (Chrome, Edge,
+Firefox or Safari). It holds:
+
+- every rail and every copper layer, as voltage drop, voltage or current density, with zoom
+  (wheel), pan (drag) and a **hover readout** of V, drop and |J|;
+- toggles for sources, loads and current-crowding spots;
+- the verdict, which names the limits you set ("not judged" when there are none), and a
+  worst-values summary per rail: worst load, largest drop, copper loss, strongest current
+  crowding, most loaded via;
+- the problems table (click a row to zoom to it), the loads and sources, the loss per layer,
+  the settings, the assumptions and the warnings.
+
+**How the maps are stored.** A large board's mesh is too big to embed, so each layer is sampled
+on square cells:
+- the voltage at each cell centre is interpolated in the full-resolution triangle that holds
+  it, and |J| is that triangle's value;
+- both are kept to 16 bits and compressed.
+
+The readout gives the values **at the centre of the cell under the pointer**, says so, and
+states the cell size and the storage step. It never interpolates between cells. Summary
+numbers and problems come from the full mesh. A browser check on the demo matched the Python
+probe at three points, to 1 µV and to the |J| step.
+
+The cell size is chosen per report to stay under a file-size budget (about 27 MB, so at most
+about 30 MB), and never finer than a sixth of the median mesh edge. Measured on a synthetic
+4-layer board with 3.07 M triangles (80 × 60 mm planes):
+- cells of 0.032 mm, 2498 × 1874 per layer;
+- a 19.7 MB file, written in 5–7 s;
+- in headless Chromium on an Apple-silicon Mac, the first map shows within 0.16 s of opening
+  the page, each further layer decodes in about 45 ms, and the page holds about 190 MB of
+  JavaScript memory after every layer has been shown.
+
+The demo board's report is 2.2 MB, with 0.027 mm cells.
+
+Paths: `--html` alone writes `<out>/<project>_report.html`, where `<out>` defaults to
+`results/` next to the project file. `--html PATH` writes it elsewhere, and `--open` also opens
+it in the default browser.
+
 ## Without MCP: the CLI with `--json`
 
 `nets`, `parts` and `solve` take `--json`. Each prints one JSON document on stdout (the same
@@ -181,8 +235,12 @@ data as the tools) and nothing else; progress from `-v` goes to stderr.
 ```sh
 uv run coppernicus nets board.kicad_pcb --json [--all]
 uv run coppernicus parts board.kicad_pcb +3V3 --json
-uv run coppernicus solve project.coppernicus.yml --out results --json [--rail NET] [--no-maps]
+uv run coppernicus solve project.coppernicus.yml --out results --json [--rail NET] [--no-maps] \
+  [--top N] [--html [PATH]] [--open]
 ```
+
+`--top N` sets how many current-crowding spots and vias are listed per rail (default 5 each;
+every load is always listed).
 
 Exit codes:
 
@@ -192,8 +250,10 @@ Exit codes:
 | 1 | `solve` only: a limit you set was exceeded on some rail. |
 | 2 | Error. stdout holds `{"error": {"code", "message", "hint"}}` and stderr a one-line message. |
 
-`solve --json` still writes the PNG maps and the `*_summary.json` file to `--out`. That file
-keeps its earlier format for existing scripts. Its path is in the document's `summary_file`.
+`solve` writes the PNG maps and `<project>_summary.json` to `--out`, with or without `--json`.
+The summary file **is** the document that `--json` prints, unit-keyed like the MCP tools. Its
+path is in the document's `summary_file`, and the HTML report's path, when one is written, is
+in `report_file`.
 
 ## Limits of this version
 
@@ -205,11 +265,13 @@ keeps its earlier format for existing scripts. Its path is in the document's `su
   own rail. The power tree, thermal, AC impedance and DC-DC ripple, which KiPI's engine has, are
   not exposed yet.
 - **What-ifs are settings only:** copper thickness, via plating and temperature. Adding vias or
-  editing copper is a later step. `copper_thickness_mm` is accepted by `solve_rail`, not yet in
-  project files.
-- **Not yet available:**
-  - Phase 2: an interactive offline HTML report and `solve --html` / `--open`;
-  - Phase 3: a GitHub Action, and sources and loads defined inside KiCad.
+  editing copper is a later step. `copper_thickness_mm` stays an MCP-only quick test, by
+  design.
+- **The HTML report's maps are sampled on cells** (see [HTML report](#html-report)). Features
+  smaller than a cell, such as a hole or a very thin track, can look blocky or vanish in the
+  map, while the numbers, the problems and the probes stay exact.
+- **Not yet available:** Phase 3, a GitHub Action for KiCad repositories, and sources and loads
+  defined inside KiCad.
 - **Tested** on macOS, with synthetic boards and the SDK's own client (in memory and over stdio).
   Registration in Claude Code and Claude Desktop follows their documented commands but has not
   been run in those hosts yet. Windows is untested.
