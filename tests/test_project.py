@@ -223,3 +223,22 @@ def test_carry_over_by_row_keeps_each_rows_own_fields():
     # A new row (no origin) starts from the defaults; a deleted row shifts nothing.
     assert carry_over(loaded, [Load("U1", 0.2, ["2"]), Load("U1", 0.3)], [1, None]) == [
         loaded[1], Load("U1", 0.3)]
+
+
+def test_loader_edge_values():
+    """``kind:`` left empty is the default; NaN numbers and a part named inside a link side
+    are refused instead of silently kept or dropped."""
+    p = Project.from_dict({"rails": [{"net": "+3V3", "sources": [
+        {"ref": "U1", "voltage": 3.3, "kind": None}]}]})
+    assert p.rails[0].sources[0].kind == "source"
+    for bad in ({"ref": "U1", "voltage": ".nan"}, {"ref": "U1", "voltage": 3.3, "quiescent_a": "nan"}):
+        with pytest.raises(ProjectError, match="number"):
+            Project.from_dict({"rails": [{"net": "+3V3", "sources": [bad]}]})
+    with pytest.raises(ProjectError, match="number"):
+        Project.from_dict({"rails": [{"net": "+3V3", "loads": [{"ref": "U1", "current": float("nan")}]}]})
+    with pytest.raises(ProjectError, match="number"):
+        Project.from_dict({"links": [{"name": "FB1", "ref": "FB1", "a": {"net": "A"}, "b": {"net": "B"},
+                                      "resistance_ohm": float("nan")}]})
+    with pytest.raises(ProjectError, match="FB1.*ref"):
+        Project.from_dict({"links": [{"name": "FB1", "ref": "FB1", "a": {"ref": "R5", "net": "A"},
+                                      "b": {"net": "B"}, "resistance_ohm": 0.1}]})
