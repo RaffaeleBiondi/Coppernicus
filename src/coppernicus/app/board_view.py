@@ -122,7 +122,9 @@ class ColorBar(QWidget):
             return
         p = QPainter(self)
         p.fillRect(self.rect(), QColor("white"))
-        top, bottom, x0, w = 58, self.height() - 16, 10, 18
+        flags = Qt.AlignLeft | Qt.AlignBottom | Qt.TextWordWrap
+        title_h = p.fontMetrics().boundingRect(0, 0, self.width() - 6, 1000, flags, self._title).height()
+        top, bottom, x0, w = title_h + 18, self.height() - 16, 10, 18      # the title sets the top
         h = max(bottom - top, 10)
         rgba = (colormaps[self._cmap](np.linspace(1, 0, h))[:, :3] * 255).astype(np.uint8)
         img = np.ascontiguousarray(np.repeat(rgba[:, None, :], w, axis=1))
@@ -130,8 +132,7 @@ class ColorBar(QWidget):
         p.drawPixmap(x0, top, QPixmap.fromImage(qimg))
         p.setPen(QColor("black"))
         p.drawRect(x0, top, w, h)
-        p.drawText(4, 4, self.width() - 6, top - 10, Qt.AlignLeft | Qt.AlignBottom | Qt.TextWordWrap,
-                   self._title)
+        p.drawText(4, 4, self.width() - 6, top - 10, flags, self._title)
         for k in range(6):
             frac = k / 5
             y = int(bottom - frac * h)
