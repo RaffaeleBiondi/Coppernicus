@@ -123,6 +123,16 @@ def estimate_note(draws: Sequence[Draw]) -> List[str]:
             f"voltages, without copper losses; the power-tree solve computes it exactly: {items}."]
 
 
+def judge_loads(tree) -> None:
+    """Set each load's verdict against the drop limit of its group (``tree.limits``), only
+    the user's: ``None`` without a limit, or for a load that was not solved."""
+    for ld in tree.loads:
+        limits = tree.limits.get(ld.group)
+        limit = getattr(limits, "max_drop_pct", None)
+        ok = ld.status not in ("DISCONNECTED", "NOT CONVERGED") and math.isfinite(ld.drop_pct)
+        ld.passed = None if limit is None or not ok else bool(ld.drop_pct <= limit)
+
+
 # ---------------------------------------------------------------------- summary
 
 def _num(x: Optional[float]) -> Optional[float]:

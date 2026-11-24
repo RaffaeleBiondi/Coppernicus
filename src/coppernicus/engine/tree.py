@@ -24,10 +24,9 @@ from kipi.dc.solver.setup import REF_TEMP_C
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import terminal_names, to_pisetup
 from coppernicus.engine.solve import Cancelled, _Progress, engine_settings, mesh_fields
+from coppernicus.power_tree import judge_loads
 from coppernicus.project import Project, pin_ref, pins_text
 from coppernicus.results import (
-    DISCONNECTED,
-    NOT_CONVERGED,
     LoadReport,
     RailResult,
     TerminalResult,
@@ -135,10 +134,6 @@ def _group(board: Board, key: str, g, assumptions: List[str]) -> RailResult:
         warnings=warnings, assumptions=list(assumptions), kind=g.kind)
 
 
-def _finite(x: Optional[float]) -> bool:
-    return x is not None and math.isfinite(x)
-
-
 def solve_project_tree(board: Board, project: Project,
                        progress: Optional[Callable[[str], None]] = None,
                        cancelled: Callable[[], bool] = lambda: False) -> TreeResult:
@@ -196,15 +191,11 @@ def solve_project_tree(board: Board, project: Project,
         v_worst = ld.v_low if ld.v_low is not None else ld.v_worst
         drop = ld.nominal - v_worst
         pct = 100.0 * drop / abs(ld.nominal) if ld.nominal else math.nan
-        limits = out.limits.get(key)
-        passed = None
-        if (limits is not None and limits.max_drop_pct is not None
-                and ld.status not in (DISCONNECTED, NOT_CONVERGED) and _finite(pct)):
-            passed = bool(pct <= limits.max_drop_pct)
         across = ld.v_effective
         out.loads.append(LoadReport(
             name=ld.name, group=key, current_a=float(ld.current), nominal_v=float(ld.nominal),
             v_supply_v=float(ld.v_supply), v_supply_min_v=float(ld.v_supply_min),
             v_ground_v=ld.v_ground, v_across_v=float(across), v_worst_v=float(v_worst),
-            drop_v=float(drop), drop_pct=float(pct), status=ld.status, passed=passed))
+            drop_v=float(drop), drop_pct=float(pct), status=ld.status))
+    judge_loads(out)
     return out
