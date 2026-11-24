@@ -8,8 +8,9 @@
 Offscreen, Qt has no OpenGL context, so the app's own view draws nothing: the check covers
 the app logic (pads picked, rows, solve, ΔV, arrow geometry) and renders the view's scene
 with a separate off-screen VTK window into ``--out`` (``*_scene.png``). With ``--window`` it
-also sends mouse presses and releases to the view. It saves projects only into ``--out``
-and never writes next to a board. Exit code 0 when every check passes, 1 otherwise.
+also sends mouse presses, releases and moves (the hover readout) to the view. It saves
+projects and the app's settings only into ``--out`` and never writes next to a board. Exit
+code 0 when every check passes, 1 otherwise.
 """
 
 from __future__ import annotations
@@ -1088,7 +1089,8 @@ def report_hover_times(window, check: Checks, what: str, n: int = 200):
           f"{renders} VTK render(s)); "
           f"moves 4 ms apart through the event loop {loop:.3f} s, {ticks} probe(s) let through by "
           f"the 40 ms timer ({ticks / loop:.0f}/s)", flush=True)
-    check(f"hover: {n} moves timed on {what}", True)
+    check(f"hover: {n} moves timed on {what}; the timer probes a moving pointer, at most once per 40 ms",
+          0 < ticks <= loop / 0.040 + 1, f"{ticks} probes in {loop:.3f} s")
 
 
 def run_hover(window, check: Checks, args, out: Path):
