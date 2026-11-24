@@ -458,8 +458,12 @@ class Session:
                                    project=project, notes=merged.notes.get(rail.net, ()),
                                    from_board_fields=from_fields)
             except ServiceError as e:
+                if from_fields and e.code != E.CANCELLED:     # say where the rail came from
+                    e = ServiceError(e.code, f"{e.message} (rail {rail.net} from KiCad footprint "
+                                     f"fields: check PI_RAIL and PI_PINS on "
+                                     f"{', '.join(merged.parts.get(rail.net, []))})", e.hint)
                 if stop_on_error or e.code == E.CANCELLED:
-                    raise
+                    raise e from None
                 out_rails.append({"net": rail.net, "from_board_fields": from_fields,
                                   "error": e.to_dict()})
                 verdicts.append("error")

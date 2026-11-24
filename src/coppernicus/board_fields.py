@@ -131,10 +131,10 @@ def field_rails(fields: Mapping[str, Mapping[str, str]]) -> Dict[str, FieldRail]
     rails: Dict[str, FieldRail] = {}
     for ref in sorted(fields, key=_ref_key):
         f = fields[ref]
-        unknown = sorted(n for n in f if n.startswith(PREFIX) and n not in FIELDS)
+        unknown = sorted(n for n in f if n.upper().startswith(PREFIX) and n not in FIELDS)
         if unknown:
             raise FieldError(f"{ref}: unknown field {', '.join(unknown)} (the fields are "
-                             f"{', '.join(FIELDS)})")
+                             f"{', '.join(FIELDS)}, in upper case)")
         nets = _split(f.get("PI_RAIL"))
         values = {n: _split(f.get(n)) for n in FIELDS[1:]}
         if nets is None:
@@ -186,6 +186,7 @@ class Merged:
     project: Project
     from_fields: List[str]
     notes: Dict[str, List[str]]
+    parts: Dict[str, List[str]] = field(default_factory=dict)     # net → refs with PI_RAIL on it
 
 
 def merge(project: Project, fields: Mapping[str, Mapping[str, str]]) -> Merged:
@@ -209,7 +210,7 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]]) -> Merged:
     for net in added:
         out.rails.append(rails[net].rail())
         notes[net] = [rails[net].note()]
-    return Merged(out, added, notes)
+    return Merged(out, added, notes, {n: list(rails[n].parts) for n in added})
 
 
 def listing(fields: Mapping[str, Mapping[str, str]]) -> List[Dict[str, object]]:

@@ -20,7 +20,8 @@ PREFIX = "PI_"
 
 def read_part_fields(path, prefix: str = PREFIX) -> Dict[str, Dict[str, str]]:
     """``{reference: {field name: text}}`` for the footprints of the ``.kicad_pcb`` at
-    ``path`` that have fields whose names start with ``prefix`` (other fields are left out).
+    ``path`` that have fields whose names start with ``prefix``, in any case (``pi_load``
+    too, so that the caller can refuse it rather than miss it); other fields are left out.
     Raises :class:`EngineError` for another board format (only KiCad board files carry
     footprint fields), an unreadable file, or two footprints with the same reference both
     carrying such fields."""
@@ -38,7 +39,7 @@ def read_part_fields(path, prefix: str = PREFIX) -> Dict[str, Dict[str, str]]:
                  if len(p) > 2 and isinstance(p[1], str) and isinstance(p[2], str)}
         ref = props.get("Reference") or next(
             (t[2] for t in children(fp, "fp_text") if len(t) > 2 and t[1] == "reference"), "")
-        mine = {k: v for k, v in props.items() if k.startswith(prefix)}
+        mine = {k: v for k, v in props.items() if k.upper().startswith(prefix.upper())}
         if not mine:
             continue
         if ref in out:

@@ -234,3 +234,33 @@ def test_solve_tree_takes_the_fields_too(board, tmp_path):
     doc = Session(out_dir=tmp_path / "out").solve_tree(project_file(tmp_path))
     assert [g["group"] for g in doc["groups"]] == ["VCC"]
     assert any(a.startswith("Rail VCC from KiCad footprint fields") for a in doc["assumptions"])
+
+
+@pytest.mark.parametrize("fields, extra, code, words", [
+    ({"U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A", "PI_PINS": "9"}}, (), "pin_not_on_net", "no pin '9'"),
+    ({"U2": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}}, [("U2", 20.0, 3.0, "GND")], "part_not_on_net",
+     "U2 has no pads on net VCC"),
+    ({"J9": {"PI_RAIL": "NOPE", "PI_SOURCE": "1V"}, "U9": {"PI_RAIL": "NOPE", "PI_LOAD": "1A"}},
+     [("J9", 10.0, 3.0, "VCC"), ("U9", 30.0, 3.0, "VCC")],
+     "net_not_found", "NOPE")])
+def test_errors_found_while_solving_a_field_rail_say_where_it_came_from(tmp_path, fields, extra, code,
+                                                                        words):
+    write_strip_board(tmp_path / "strip.kicad_pcb", {**FIELDS, **fields}, extra_parts=extra)
+    with pytest.raises(ServiceError) as e:
+        Session(out_dir=tmp_path / "out").solve_project(project_file(tmp_path), stop_on_error=True)
+    assert e.value.code == code and words in e.value.message
+    assert "from KiCad footprint fields: check PI_RAIL and PI_PINS on" in e.value.message
+
+
+def test_a_missing_current_and_a_lower_case_name_are_errors(tmp_path):
+    session = Session(out_dir=tmp_path / "out")
+    write_strip_board(tmp_path / "strip.kicad_pcb", {"J1": FIELDS["J1"]})
+    with pytest.raises(ServiceError) as e:
+        session.solve_project(project_file(tmp_path))
+    assert e.value.code == "invalid_board_field" and "PI_LOAD" in e.value.message
+    lower = {"J1": FIELDS["J1"], "U1": {"PI_RAIL": "VCC", "pi_load": "1A"}}
+    write_strip_board(tmp_path / "strip.kicad_pcb", lower)
+    assert read_part_fields(tmp_path / "strip.kicad_pcb")["U1"] == lower["U1"]
+    with pytest.raises(ServiceError) as e:
+        session.solve_project(project_file(tmp_path))
+    assert "unknown field pi_load" in e.value.message and "upper case" in e.value.message

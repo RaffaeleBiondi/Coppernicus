@@ -109,7 +109,8 @@ The owner approved the fields as an optional input. Where the proposal left a ch
 the simplest one was taken:
 
 1. **Names:** the `PI_` prefix, as proposed. An unknown `PI_*` name (a typo such as
-   `PI_LOADS`) is an error, so a misspelt current is never silently missing.
+   `PI_LOADS`, or `pi_load` in another case) is an error, so a misspelt current is never
+   silently missing.
 2. **`PI_LIMIT_DROP` exists.** When several parts on one rail give one, the strictest is used,
    and the assumptions name the part it came from.
 3. **Off by default.** `use_board_fields: true` in the project file (saved only when on), or

@@ -133,7 +133,10 @@ Coppernicus reads them from the `.kicad_pcb` (only) and never writes it. This is
   `PI_SOURCE=;3.3V`. Every field must have as many values as `PI_RAIL`.
 - **Units are required:** `V`; `A` or `mA`; `%`. A bare number (`2`), a comma (`2,5A`) or a
   KiCad-style value (`3V3`) is refused, with the part, the field and the text in the message.
-  An unknown `PI_*` name (a typo such as `PI_LOADS`) is refused too. A blank field is not set.
+  An unknown `PI_*` name (a typo such as `PI_LOADS`, or `pi_load` in lower case) is refused
+  too. A blank field is not set. An error found while solving a field rail (a `PI_RAIL` net not
+  on the board, a part with no pad on it, a `PI_PINS` that matches nothing) says the rail came
+  from the fields and names the parts.
 - **Rails.** A net with at least one `PI_SOURCE` and one `PI_LOAD` is a rail. A net the fields
   leave incomplete (a load but no source, or the reverse) is an `invalid_board_field` error
   naming the missing field, unless the project file defines that rail.
