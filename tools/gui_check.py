@@ -785,13 +785,29 @@ def run_power_tree(window, check: Checks, args, out: Path):
     window.group_box.setCurrentIndex(window.group_box.findData("+1V8"))
     QApplication.processEvents()
     check("... +1V8 shown from the tree", window.view._result is tree.groups["+1V8"])
+    spin = window.rail_panel.loads.table.cellWidget(0, 3)            # VIN is still the net
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    window.group_box.setCurrentIndex(window.group_box.findData("GND"))
+    QApplication.processEvents()
+    spin = window.rail_panel.loads.table.cellWidget(0, 3)
+    spin.setValue(0.55)
+    QApplication.processEvents()
+    check("... editing the rail while a group is shown keeps the table being edited",
+          window.rail_panel.loads.table.cellWidget(0, 3) is spin
+          and window.project.rail("+3V3").loads[0].current == 0.55)
+    spin.setValue(0.5)
+    QApplication.processEvents()
+    tree = solve_tree_and_wait(window, args.timeout)
 
     i_in_before = next(v.i_in_a for v in tree.vrms if v.name == "U1")
+    window.nets.select("VIN")
+    QApplication.processEvents()
+    solve_and_wait(window, args.timeout)                 # VIN alone: U1's input estimated
     window.nets.select("+3V3")
     QApplication.processEvents()
     check("... picking a net goes back to the rail solved alone", window.group_box.currentData() is None)
-    window.rail_panel.select_source(0)
-    box = window.rail_panel.source_box
+    box = window.rail_panel.source_box               # the first source is shown and selected
     check("power tree: the regulator box shows U1 as a switcher, η 0.9, input VIN.1, ground GND.3",
           (box.kind.currentData(), box.efficiency.text(), box.input.get(), box.ground.get())
           == ("smps", "0.9", ("", ["1"], "VIN"), ("", ["3"], "GND")),
@@ -801,6 +817,8 @@ def run_power_tree(window, check: Checks, args, out: Path):
     QApplication.processEvents()
     check("... editing η writes the project and drops the stale tree",
           window.project.rail("+3V3").sources[0].efficiency == 0.8 and window.dirty and window.tree is None)
+    check("... and the result of VIN, whose estimate used U1's η", "VIN" not in window.results,
+          str(sorted(window.results)))
     window.rail_panel.select_load(0)
     ground = window.rail_panel.load_ground.get()
     check("... the load box shows U4's ground pins", ground == ("", ["2"], "GND"), str(ground))
@@ -808,6 +826,16 @@ def run_power_tree(window, check: Checks, args, out: Path):
     QApplication.processEvents()
     src = window.project.rail("+3V3").sources[0]
     check("... a table edit after it keeps η 0.8", src.efficiency == 0.8 and src.kind == "smps", repr(src))
+    window.solve_tree()                                   # edited while it solves…
+    window.project.rail("+1V8").limits.max_drop_pct = None
+    window.rail_panel.loads.table.cellWidget(0, 3).setValue(0.61)
+    window.tree_worker.wait(int(args.timeout * 1000))
+    QApplication.processEvents()
+    QApplication.processEvents()
+    check("... a tree solved while the setup changed is not shown as current", window.tree is None,
+          window.statusBar().currentMessage())
+    window.rail_panel.loads.table.cellWidget(0, 3).setValue(0.6)
+    QApplication.processEvents()
     tree = solve_tree_and_wait(window, args.timeout)
     i_in = next(v.i_in_a for v in tree.vrms if v.name == "U1") if tree else None
     check("power tree: a lower efficiency draws more input current", i_in is not None and i_in > i_in_before,

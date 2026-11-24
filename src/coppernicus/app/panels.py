@@ -606,6 +606,10 @@ class RailPanel(QWidget):
                             (self.max_via, lim.max_via_current)):
             edit.setText("" if value is None else f"{value:g}")
         self._loading = False
+        # The first row of each table is the current one, so the boxes below edit it.
+        for table, items in ((self.sources, rail.sources), (self.loads, rail.loads)):
+            if items:
+                table.table.setCurrentCell(0, 0)
         self._show_source(0 if rail.sources else -1)
         self._show_load(0 if rail.loads else -1)
 

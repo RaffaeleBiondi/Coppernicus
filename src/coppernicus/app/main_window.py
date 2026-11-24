@@ -71,6 +71,7 @@ class MainWindow(QMainWindow):
         self._diff_cache: Optional[Tuple] = None      # (baseline, run, layer, (Δ mV, note))
         self._fallback_reason = ""                     # why the Δ map was not shown, last draw
         self.tree: Optional[TreeResult] = None          # the last power-tree solve, if still valid
+        self._revision = 0            # +1 per edit of the setup: a tree solved before is stale
         self.tree_worker: Optional[TreeWorker] = None
 
         # Centre: pickers + view.
@@ -417,7 +418,13 @@ class MainWindow(QMainWindow):
 
     def _rail_edited(self):
         rail = self._adopt_draft()
+        self._revision += 1
         self._drop_tree("The setup changed: solve the power tree again (Ctrl+T)")
+        # Rails solved alone that drew an estimate from the project may depend on this rail.
+        for net, res in list(self.results.items()):
+            if net != rail.net and any(t.name.endswith("estimated)") for t in res.loads):
+                self.results.pop(net)
+                self.runs.pop(net, None)
         self.runs.pop(rail.net, None)
         self._diff_cache = None
         if self.results.pop(rail.net, None) is not None:          # the old result no longer applies
@@ -443,6 +450,7 @@ class MainWindow(QMainWindow):
     def _settings_edited(self):
         self.dirty = True
         self._update_title()
+        self._revision += 1
         self._drop_tree("Solve settings changed: solve the power tree again (Ctrl+T)")
         if self.results:                                           # every result used the old settings
             self.results.clear()
@@ -643,6 +651,7 @@ class MainWindow(QMainWindow):
         self.results_tabs.setCurrentWidget(self.tree_panel)
         self.tree_worker = TreeWorker(self.board, self.project, self)
         self.tree_worker.generation = self._generation
+        self.tree_worker.revision = self._revision
         self.tree_worker.message.connect(lambda m: self.statusBar().showMessage(m))
         self.tree_worker.succeeded.connect(self._tree_solved)
         self.tree_worker.failed.connect(self._tree_failed)
@@ -650,6 +659,11 @@ class MainWindow(QMainWindow):
 
     def _tree_solved(self, tree: TreeResult):
         if self._is_stale():
+            return
+        if getattr(self.sender(), "revision", self._revision) != self._revision:
+            msg = "The setup changed while the power tree was solving: solve it again (Ctrl+T)"
+            self.tree_panel.clear(msg)
+            self.statusBar().showMessage(msg)
             return
         self.tree = tree
         self.tree_panel.set_tree(tree, self._tree_verdict())
@@ -691,7 +705,7 @@ class MainWindow(QMainWindow):
         if had or reason == "":
             self.tree_panel.clear(reason)
         if shown and self.net:
-            self._group_changed()
+            self._show_net_view()
 
     def _set_group(self, key: Optional[str]):
         self.group_box.blockSignals(True)
@@ -723,7 +737,23 @@ class MainWindow(QMainWindow):
             self._show_tree_problems(group)
             self.refresh_view(fit=True)
         elif self.net:
-            self.select_net(self.net)
+            self._show_net_view()
+
+    def _show_net_view(self):
+        """Back to the shown net solved alone: its layers, problems and map. The rail panel is
+        left as it is (it may be in the middle of an edit)."""
+        self.layer_box.blockSignals(True)
+        self.layer_box.clear()
+        for lid in self.board.net_layers(self.net):
+            self.layer_box.addItem(self.board.layer_name(lid), lid)
+        self.layer_box.blockSignals(False)
+        res = self.results.get(self.net)
+        if res is not None:
+            self._show_problems(res)
+        else:
+            self.problems.clear(f"<b>{self.net}</b>: add a source and a load, then Solve (F5)")
+        self._refresh_results()
+        self.refresh_view(fit=True)
 
     def _show_tree_problems(self, key: str):
         res, tree = self.tree.groups[key], self.tree
