@@ -189,6 +189,19 @@ and current density, render maps, measure a cross-section and compare what-ifs. 
 only has a shell can use `--json` on `nets`, `parts` and `solve` instead. Registration, the
 tools, conventions and a worked example are in [docs/agents.md](docs/agents.md).
 
+For Claude Code there is also a skill that teaches the agent how to use these tools well. It
+shows the order of the calls and the answer to give: numbers, then a verdict only against your
+limits, then where and why. It also tells the agent never to invent thresholds. Install it
+once:
+
+```sh
+mkdir -p ~/.claude/skills
+cp -r skills/analyzing-pdn-with-coppernicus ~/.claude/skills/
+```
+
+It starts by itself when you ask Claude whether a rail holds, about voltage drop, current
+density, via current or copper heating.
+
 ## Project file
 
 The app writes the project file for you, and it is also easy to edit by hand:

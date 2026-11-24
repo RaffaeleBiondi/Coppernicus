@@ -65,6 +65,7 @@ Coppernicus/
 ├── tests/               # synthetic boards with closed-form answers; boards_local/ tests skip if absent
 ├── examples/demo/       # synthetic demo board and project
 ├── tools/               # macOS launcher, scripted GUI check, docs screenshots
+├── skills/              # Claude Code skill for agents that use the MCP server
 ├── docs/                # this page, the KiPI analysis, plans, images
 └── Logo/
 ```
