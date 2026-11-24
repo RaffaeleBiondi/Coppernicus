@@ -284,6 +284,28 @@ def test_the_net_tie_option_of_a_kicad_rail_is_saved_on_its_own(window, tmp_path
     assert Project.load(tmp_path / "saved.coppernicus.yml").rails == [Rail("VCC", follow_net_ties=False)]
 
 
+def test_a_project_rail_over_incomplete_fields_is_editable_with_the_warning_in_the_banner(window, tmp_path):
+    own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0)])
+    open_net(window, strip(tmp_path, {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "2A"}}, rails=[own]))
+    rp = window.rail_panel
+    assert window.fields_error is None and window.merged.origins["VCC"].source == "project"
+    assert rp.banner.text.text().startswith("KiCad fields on VCC are incomplete")
+    assert rp.banner.button.isHidden() and not rp.read_only and rp.loads.rows() == [("", "U1", None, 1.0)]
+    assert net_item(window, "VCC").text() == "VCC"
+
+
+def test_a_board_without_fields_shows_no_banner(window, tmp_path):
+    from PySide6.QtWidgets import QApplication
+    open_net(window, strip(tmp_path))
+    write_strip_board(tmp_path / "plain.kicad_pcb")
+    window.dirty = False
+    window.open_board(tmp_path / "plain.kicad_pcb")
+    QApplication.processEvents()
+    banner = window.rail_panel.banner
+    assert window.board_fields.fields == {} and window.merged.origins == {}
+    assert banner.text.isHidden() and banner.button.isHidden() and banner.warnings.isHidden()
+
+
 # ---------------------------------------------------------------------- override, and back
 
 def test_override_copies_the_kicad_rail_into_the_project_and_the_way_back_keeps_its_limits(

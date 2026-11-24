@@ -375,6 +375,8 @@ class MainWindow(QMainWindow):
             self.tree_worker.cancel()
         self._drop_tree("")
         self.rail_panel.clear_rail()
+        self._kicad_shown = False
+        self._show_banner(None)
         self.view.reset()
         self.layer_box.blockSignals(True)
         self.layer_box.clear()
