@@ -278,9 +278,9 @@ def _cmd_solve_tree(args) -> int:
             _print_json({"error": {"code": code, "message": message, "hint": hint}})
         print(f"error: {message}", file=sys.stderr)
         return EXIT_ERROR
-    if args.rail or args.html is not None or args.open:
-        return fail("invalid_input", "--tree solves the whole project: --rail, --html and --open do "
-                    "not apply to it", "leave groups out with engine_options: excluded_nets")
+    if args.rail:
+        return fail("invalid_input", "--tree solves the whole project: --rail does not apply to it",
+                    "leave groups out with engine_options: excluded_nets")
     if not Path(args.project).is_file():
         return fail("file_not_found", f"No such file: {args.project}")
     try:
@@ -309,6 +309,14 @@ def _cmd_solve_tree(args) -> int:
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / f"{safe_name(Path(args.project).stem)}_tree_summary.json"
+    if args.html is not None or args.open:     # one page: every group, the VRM and load tables
+        from coppernicus.report import write_tree_report
+        html_path = (Path(args.html) if args.html else
+                     out_dir / f"{safe_name(Path(args.project).stem)}_tree_report.html")
+        doc["report_file"] = write_tree_report(
+            tree, doc, html_path, outline=board.outline(), board_name=board.name,
+            project=Path(args.project).name, top=max(args.top, 10),
+            settings=dict(vars(project.settings))).as_posix()
     doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
     summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
                             encoding="utf-8")
@@ -319,6 +327,11 @@ def _cmd_solve_tree(args) -> int:
               f"in {tree.stats['seconds']:.1f} s")
         print("\n".join(tree_text(doc)))
         print(f"Summary: {summary_path}")
+        if "report_file" in doc:
+            print(f"Report: {doc['report_file']}")
+    if args.open and "report_file" in doc:
+        import webbrowser
+        webbrowser.open(Path(doc["report_file"]).resolve().as_uri())
     return _exit_for(doc)
 
 

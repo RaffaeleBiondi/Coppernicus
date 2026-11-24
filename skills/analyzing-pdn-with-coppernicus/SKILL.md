@@ -61,7 +61,8 @@ why, and ask for what is missing.
    (regulator input currents and the ground return exact; when a ground net is solved, it
    needs every load's and regulator's ground pins). Read `loads[].drop_mv` / `drop_pct`
    (supply minus ground, from nominal), the VRMs' `regulation`, and each group's problems.
-   It returns no result ids: for maps, use `solve_project`.
+   It returns no result ids: for maps, use `solve_project`, or point the user to
+   `coppernicus solve PROJECT --tree --html` (every group's maps and the VRM and load tables).
 9. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
    layer's maps with zoom, pan and a hover readout, plus the problems, worst values and
    assumptions. Give the user its `path`; you cannot read the page yourself.

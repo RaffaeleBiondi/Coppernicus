@@ -210,6 +210,9 @@ class RailReport:
     # The names of its estimated draws (regulator inputs and links a project rail feeds);
     # None: told by the engine's name suffix ", estimated)".
     estimated: Optional[Sequence[str]] = None
+    # Its verdict as already judged (a power-tree group: the tree's own), instead of judging
+    # ``problems`` against ``limits`` here.
+    judged: Optional[Mapping[str, Any]] = None
 
 
 def _median_edge_mm(result: RailResult) -> float:
@@ -251,6 +254,7 @@ class ReportBuilder:
         self.budget_mb = float(budget_mb)
         self.expected_layers = expected_layers
         self.top = max(1, int(top))           # hotspots and vias ranked per rail
+        self.tree: Optional[Dict[str, Any]] = None   # a power-tree solve: its verdict and tables
         self.cell_scale = max(float(cell_scale), 1.0)   # > 1 coarsens every cell (a resample)
         self.rails: List[Dict[str, Any]] = []
         self.blocks: Dict[str, str] = {}
@@ -279,7 +283,8 @@ class ReportBuilder:
 
     def add_rail(self, result: RailResult, limits: Optional[Limits] = None,
                  problems: Optional[List[Problem]] = None, label: str = "",
-                 notes: Sequence[str] = (), estimated: Optional[Sequence[str]] = None) -> None:
+                 notes: Sequence[str] = (), estimated: Optional[Sequence[str]] = None,
+                 judged: Optional[Mapping[str, Any]] = None) -> None:
         """Sample and add one solved rail. ``limits`` are the user's (judged only against
         them); ``problems`` default to :func:`find_problems` with those limits. ``estimated``
         names the loads that are estimated draws; without it, the engine's name suffix
@@ -335,7 +340,7 @@ class ReportBuilder:
         top_hot = max(hot, key=lambda p: p.value, default=None)
         top_via = max(result.vias, key=lambda v: v.current, default=None)
         busiest = max(result.layers, key=lambda lf: lf.power, default=None)
-        judged = verdict(problems, limits, result)
+        judged = dict(judged) if judged is not None else verdict(problems, limits, result)
         judged["verdict_text"] = verdict_text(judged)
         self.rails.append({
             "net": result.net, "label": label or result.net, "nets": list(result.nets),
@@ -387,6 +392,7 @@ class ReportBuilder:
             "codes": {"v": V_CODES, "j": J_CODES},
             "cmaps": {"viridis": _cmap("viridis"), "magma": _cmap("magma")},
             "rails": self.rails,
+            **({"tree": self.tree} if self.tree else {}),
         })
 
     def html(self) -> str:
@@ -446,7 +452,8 @@ def write_report(results: Iterable[ResultLike], project: Optional[Project], path
 def build_report(items: Sequence[RailReport], *, title: str = "", board_name: str = "",
                  outline: Sequence[np.ndarray] = (), project: str = "",
                  settings: Optional[Mapping[str, Any]] = None,
-                 budget_mb: float = DEFAULT_BUDGET_MB) -> Tuple[ReportBuilder, str]:
+                 budget_mb: float = DEFAULT_BUDGET_MB,
+                 tree: Optional[Mapping[str, Any]] = None) -> Tuple[ReportBuilder, str]:
     """Build a report of all ``items`` and its HTML. When the first estimate of the cell size
     makes the page larger than ``MAX_FILE_MB``, the cells are coarsened and the page rebuilt,
     up to three times (coarser cells compress less well, so one step can fall short)."""
@@ -456,7 +463,8 @@ def build_report(items: Sequence[RailReport], *, title: str = "", board_name: st
                           expected_layers=sum(len(i.result.layers) for i in items))
         for item in items:
             b.add_rail(item.result, item.limits, item.problems, item.label, item.notes,
-                       item.estimated)
+                       item.estimated, item.judged)
+        b.tree = tree
         return b
 
     scale, seconds = 1.0, 0.0
@@ -472,6 +480,31 @@ def build_report(items: Sequence[RailReport], *, title: str = "", board_name: st
         text = builder.html()
     builder.seconds += seconds
     return builder, text
+
+
+def write_tree_report(tree, doc: Mapping[str, Any], path, *, outline: Sequence[np.ndarray] = (),
+                      board_name: str = "", project: str = "", title: str = "", top: int = 10,
+                      settings: Optional[Mapping[str, Any]] = None,
+                      budget_mb: float = DEFAULT_BUDGET_MB) -> Path:
+    """The report of a power-tree solve: every group (its maps, its problems and the tree's
+    own verdict for it, from ``doc``, the :func:`coppernicus.power_tree.tree_summary` of
+    ``tree``), with the tree's verdict and its VRM, load and link tables."""
+    from coppernicus.power_tree import group_limits
+    from coppernicus.problems import find_tree_problems
+    groups = {g["group"]: g for g in doc.get("groups", [])}
+    items = []
+    for key, res in tree.groups.items():
+        g = groups.get(key, {})
+        judged = {"verdict": g.get("verdict", "not_judged"), "limits": g.get("limits") or {},
+                  "failed": g.get("failed", 0), "not_judged": g.get("not_judged") or [],
+                  "verdict_note": g.get("verdict_note", "")}
+        items.append(RailReport(res, group_limits(tree, key)[0], find_tree_problems(tree, key, top=top),
+                                label=f"{key} ({res.kind} group)", judged=judged))
+    meta = {k: doc.get(k) for k in ("verdict", "verdict_note", "not_judged", "vrms", "loads", "links")}
+    builder, text = build_report(items, title=title or f"Coppernicus power tree: {project or board_name}",
+                                 board_name=board_name, outline=outline, project=project,
+                                 settings=settings, budget_mb=budget_mb, tree=meta)
+    return builder.write(path, text)
 
 
 def verdict_text(judged: Mapping[str, Any]) -> str:

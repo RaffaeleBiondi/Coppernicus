@@ -206,3 +206,28 @@ def test_the_ci_table_says_which_way_the_copper_moves(strip, tmp_path, volts, wo
     md = ci.summary_markdown({"verdict": doc["verdict"], "projects": [
         {"project": "p.coppernicus.yml", "exit_code": 0, "doc": doc}]})
     assert "| Worst of the copper |" in md and f" {words} |" in md
+
+
+def test_solve_tree_html_adds_the_groups_and_the_vrm_and_load_tables(tmp_path, capsys):
+    """solve --tree --html: one page with every group of the tree (maps, problems, the tree's
+    own verdict per group) and the tree's VRM and load tables."""
+    import re
+    import shutil
+    from pathlib import Path
+    shutil.copytree(Path(__file__).resolve().parents[1] / "examples" / "power_chain", tmp_path / "c")
+    path = tmp_path / "c" / "power_chain.coppernicus.yml"
+    page = tmp_path / "tree.html"
+    assert main(["solve", str(path), "--tree", "--json", "--out", str(tmp_path / "o"),
+                 "--html", str(page)]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
+    assert Path(doc["report_file"]) == page
+    text = page.read_text(encoding="utf-8")
+    meta = json.loads(re.search(r'id="meta">(.*?)</script>', text, re.S).group(1))
+    groups = {g["group"]: g for g in doc["groups"]}
+    assert [r["net"] for r in meta["rails"]] == list(groups)
+    for rail in meta["rails"]:
+        assert rail["verdict"] == groups[rail["net"]]["verdict"] and rail["verdict_text"]
+    assert [v["name"] for v in meta["tree"]["vrms"]] == [v["name"] for v in doc["vrms"]]
+    assert [ld["name"] for ld in meta["tree"]["loads"]] == [ld["name"] for ld in doc["loads"]]
+    assert meta["tree"]["verdict"] == doc["verdict"] and 'id="tree-vrms"' in text
+    assert main(["solve", str(path), "--tree", "--rail", "+3V3"]) == 2      # still refused

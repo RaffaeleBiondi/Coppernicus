@@ -248,7 +248,9 @@ a net the tree does not solve is a not-judged item ("NET: not solved in the powe
 
 Tree groups are not kept as results: there is no `result_id` per group, so `render_map`,
 `probe`, `cut_current`, `compare_results` and `report` do not apply to them. For maps, solve
-the rails with `solve_project`.
+the rails with `solve_project`, or give the user `coppernicus solve PROJECT --tree --html`: one
+offline page with every group (maps, problems and the tree's verdict per group) and the tree's
+VRM, load and link tables.
 
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;
@@ -441,6 +443,7 @@ uv run coppernicus nets board.kicad_pcb --json [--all]
 uv run coppernicus parts board.kicad_pcb +3V3 --json
 uv run coppernicus solve project.coppernicus.yml --out results --json [--rail NET] [--no-maps] \
   [--top N] [--html [PATH]] [--open] [--no-board-fields] [--tree]
+# --tree --html writes <project>_tree_report.html: every group, the VRM, load and link tables
 uv run coppernicus fields board.kicad_pcb --json
 ```
 

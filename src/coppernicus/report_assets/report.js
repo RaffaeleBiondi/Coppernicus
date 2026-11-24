@@ -282,6 +282,24 @@ canvas.addEventListener("pointermove", (e) => { if (S.drag) { S.view.tx = S.drag
 canvas.addEventListener("pointerup", () => { S.drag = null; });
 window.addEventListener("resize", () => draw());
 if (typeof DecompressionStream === "undefined") { $("busy").textContent = "This browser cannot decompress the maps (no DecompressionStream); use a current Chrome, Edge, Firefox or Safari."; $("busy").hidden = false; }
+if (M.tree) {                 // solve --tree --html: the tree's own tables, once for the page
+  const T = M.tree, mw = (x) => (ok(x) ? sig(x * 1e3, 3) : "–");
+  $("tree").hidden = false;
+  $("tree-verdict").append(badge(T.verdict), " ", T.verdict_note || "");
+  table("tree-vrms", [["VRM", ""], ["Kind", ""], ["Group", ""], ["V set (V)", "num"], ["V out (V)", "num"], ["I out (A)", "num"],
+    ["V in (V)", "num"], ["I in (A)", "num"], ["Loss (mW)", "num"], ["", ""]],
+    T.vrms.map((v) => [[v.name, ""], [v.kind, ""], [v.group, ""], [sig(v.v_set_v, 4), "num"], [sig(v.v_out_v, 6), "num"],
+      [sig(v.i_out_a, 4), "num"], [ok(v.v_in_v) ? sig(v.v_in_v, 6) : "–", "num"], [ok(v.i_in_a) ? sig(v.i_in_a, 4) : "–", "num"],
+      [mw(v.p_loss_w), "num"], [v.regulation || "", ""]]));
+  table("tree-loads", [["Load", ""], ["Group", ""], ["I (A)", "num"], ["Nominal (V)", "num"], ["Across (V)", "num"],
+    ["Drop (mV)", "num"], ["Drop (%)", "num"], ["Verdict", ""]],
+    T.loads.map((l) => [[l.name, ""], [l.group, ""], [sig(l.current_a, 4), "num"], [sig(l.nominal_v, 4), "num"],
+      [ok(l.v_across_v) ? sig(l.v_across_v, 6) : "–", "num"], [ok(l.drop_mv) ? sig(l.drop_mv, 4) : "–", "num"],
+      [ok(l.drop_pct) ? sig(l.drop_pct, 3) : "–", "num"],
+      [l.status || (l.exceeds_drop_limit ? el("span", { class: "badge fail" }, "FAIL") : l.exceeds_drop_limit === false ? "within" : "not judged"), ""]]));
+  table("tree-links", [["Link", ""], ["Nets", ""], ["Current (A)", "num"], ["Loss (mW)", "num"]],
+    (T.links || []).map((k) => [[k.name, ""], [(k.nets || []).join(" ↔ "), ""], [sig(k.current_a, 4), "num"], [mw(k.power_w), "num"]]));
+}
 if (M.rails.length) setRail(0);
 window.__coppernicus = { ready: () => layerImage(S.rail, S.layer, S.field).then(() => true), state: S };
 })();
