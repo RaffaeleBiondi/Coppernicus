@@ -28,9 +28,29 @@ ENGINE_OPTIONS = ("excluded_nets",)
 Key = Tuple[str, str, int]
 
 
+def ground_nets(project: Project) -> List[str]:
+    """Ground nets the project names, in order (sources' ground and ground-sense pins, then
+    loads' ground pins)."""
+    out: List[str] = []
+    for r in project.rails:
+        for s in r.sources:
+            out += [n for n in (s.ground_net, s.ground_sense_net) if n]
+        out += [ld.ground_net for ld in r.loads if ld.ground_net]
+    return list(dict.fromkeys(out))
+
+
+def ground_rails(project: Project) -> List[Rail]:
+    """Rails on a net the tree uses as a ground: set up to solve that ground on its own (a
+    0 V source, its return pins as loads). The tree solves the net as a ground instead."""
+    grounds = set(ground_nets(project))
+    return [r for r in project.rails if r.net in grounds and (r.sources or r.loads)]
+
+
 def _mapped(project: Project) -> List[Rail]:
-    """The rails that go into the setup: every one with a source or a load."""
-    return [r for r in project.rails if r.sources or r.loads]
+    """The rails that go into the setup: every one with a source or a load, except those on
+    a net used as a ground (see :func:`ground_rails`)."""
+    grounds = set(ground_nets(project))
+    return [r for r in project.rails if (r.sources or r.loads) and r.net not in grounds]
 
 
 def _fresh(base: str, taken: set) -> str:

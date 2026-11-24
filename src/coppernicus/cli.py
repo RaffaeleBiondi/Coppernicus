@@ -6,6 +6,7 @@
     coppernicus parts BOARD NET [--json]      parts and pins on a net (to write sources and loads)
     coppernicus solve PROJECT [--out DIR] [--rail NET ...] [--no-maps] [--top N] [--json]
                               [--html [PATH]] [--open]
+    coppernicus solve PROJECT --tree [--out DIR] [--top N] [--json]   the whole power tree
     coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
 
 ``solve`` exits with 0 when every rail solved and no user limit was exceeded, 1 when a
@@ -201,6 +202,59 @@ def _cmd_solve(args) -> int:
     return EXIT_LIMIT if doc["verdict"] == "fail" else EXIT_OK
 
 
+def _cmd_solve_tree(args) -> int:
+    """``solve --tree``: every rail and ground of the project solved together (regulator input
+    currents, ground return). Prints the VRM, load and group tables, or with ``--json`` the
+    :func:`coppernicus.power_tree.tree_summary` document, which is also written to
+    ``<project>_tree_summary.json``. Exit codes as ``solve``."""
+    from coppernicus.engine import Board, EngineError
+    from coppernicus.engine.tree import solve_project_tree
+    from coppernicus.maps import safe_name
+    from coppernicus.power_tree import tree_summary, tree_text
+    from coppernicus.project import Project, ProjectError
+
+    quiet = args.json
+
+    def fail(code, message, hint=""):
+        if quiet:
+            _print_json({"error": {"code": code, "message": message, "hint": hint}})
+        print(f"error: {message}", file=sys.stderr)
+        return EXIT_ERROR
+    if args.rail or args.html is not None or args.open:
+        return fail("invalid_input", "--tree solves the whole project: --rail, --html and --open do "
+                    "not apply to it", "leave groups out with engine_options: excluded_nets")
+    if not Path(args.project).is_file():
+        return fail("file_not_found", f"No such file: {args.project}")
+    try:
+        project = Project.load(args.project)
+        board = Board.open(project.board_path())
+    except (OSError, ProjectError) as e:
+        return fail("invalid_project", str(e))
+    except EngineError as e:
+        return fail("board_unreadable", str(e))
+    stream = sys.stderr if quiet else sys.stdout
+    try:
+        tree = solve_project_tree(board, project, progress=(
+            (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None))
+    except EngineError as e:
+        return fail("solve_failed", str(e), "fix the project file, then solve again")
+    doc = tree_summary(tree, top=args.top)
+    out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    summary_path = out_dir / f"{safe_name(Path(args.project).stem)}_tree_summary.json"
+    doc["summary_file"] = str(summary_path)
+    summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
+                            encoding="utf-8")
+    if quiet:
+        _print_json(doc)
+    else:
+        print(f"Board: {board.name} · power tree: {len(tree.groups)} groups solved "
+              f"in {tree.stats['seconds']:.1f} s")
+        print("\n".join(tree_text(doc)))
+        print(f"Summary: {summary_path}")
+    return EXIT_LIMIT if doc["verdict"] == "fail" else EXIT_OK
+
+
 def _print_rail(res, problems):
     from coppernicus.problems import FAIL
     others = [n for n in res.nets if n != res.net]
@@ -281,6 +335,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="also write an offline HTML report (default path: <out>/<project>_report.html)")
     p.add_argument("--open", action="store_true", help="open the HTML report in the browser (implies --html)")
     p.set_defaults(func=_cmd_solve)
+    # Power tree (Task 7): every rail and ground solved together; replaces the command run.
+    p.add_argument("--tree", action="store_const", dest="func", const=_cmd_solve_tree,
+                   help="solve the whole power tree: rails and grounds together, regulator input "
+                        "currents, ground return (prints VRM, load and group tables)")
 
     p = sub.add_parser("mcp", help="run the MCP server for AI agents (stdio; see README)")
     p.add_argument("--out", help="folder for maps, one session-... subfolder per run "

@@ -270,3 +270,31 @@ def test_copper_thickness_values_are_checked(value, tmp_path):
     assert "copper_thickness_mm[B.Cu]" in str(e.value) and "1 oz copper is 0.035, not 35" in str(e.value)
     with pytest.raises(ProjectError, match="map copper layer names to mm"):
         Settings(copper_thickness_mm=[0.035])
+
+
+def test_loader_edge_values():
+    """``kind:`` left empty is the default; NaN numbers and a part named inside a link side
+    are refused instead of silently kept or dropped."""
+    p = Project.from_dict({"rails": [{"net": "+3V3", "sources": [
+        {"ref": "U1", "voltage": 3.3, "kind": None}]}]})
+    assert p.rails[0].sources[0].kind == "source"
+    for bad in ({"ref": "U1", "voltage": ".nan"}, {"ref": "U1", "voltage": 3.3, "quiescent_a": "nan"}):
+        with pytest.raises(ProjectError, match="number"):
+            Project.from_dict({"rails": [{"net": "+3V3", "sources": [bad]}]})
+    with pytest.raises(ProjectError, match="number"):
+        Project.from_dict({"rails": [{"net": "+3V3", "loads": [{"ref": "U1", "current": float("nan")}]}]})
+    with pytest.raises(ProjectError, match="number"):
+        Project.from_dict({"links": [{"name": "FB1", "ref": "FB1", "a": {"net": "A"}, "b": {"net": "B"},
+                                      "resistance_ohm": float("nan")}]})
+    with pytest.raises(ProjectError, match="FB1.*ref"):
+        Project.from_dict({"links": [{"name": "FB1", "ref": "FB1", "a": {"ref": "R5", "net": "A"},
+                                      "b": {"net": "B"}, "resistance_ohm": 0.1}]})
+
+
+def test_ground_rise_limit_round_trip_and_omitted_when_unset(tmp_path):
+    p = Project(board="b.kicad_pcb", rails=[Rail("GND", limits=Limits(max_ground_rise_mv=10.0))])
+    path = p.save(tmp_path / "g.coppernicus.yml")
+    assert "max_ground_rise_mv: 10.0" in path.read_text()
+    assert Project.load(path).rails[0].limits.max_ground_rise_mv == 10.0
+    plain = Project(board="b.kicad_pcb", rails=[Rail("VCC", limits=Limits(max_drop_pct=1.0))]).to_dict()
+    assert plain["rails"][0]["limits"] == {"max_drop_pct": 1.0}

@@ -231,7 +231,9 @@ class PowerChain:
     I_U3, I_U4 = 2.0, 0.5
 
 
-def power_chain_board() -> BoardSnapshot:
+def power_chain_board(island: bool = False) -> BoardSnapshot:
+    """``island`` adds U9, a part whose +3V3 and GND pads sit on copper joined to nothing
+    (a load that cannot be reached: disconnected)."""
     g, b = PowerChain, SyntheticBoard("power_chain", two_layer_stackup())
     for net, pins in (("VIN", g.VIN), ("+3V3", g.V3V3), ("+3V3_F", g.V3V3_F), ("+1V8", g.V1V8)):
         xs = list(pins.values())
@@ -243,6 +245,11 @@ def power_chain_board() -> BoardSnapshot:
     for pin, x in g.GND.items():
         ref, num = pin.split(".")
         b.pad(ref, num, "GND", box(x, 0, x + 1, g.W), layers=(B,))
+    if island:
+        b.zone("+3V3", F, box(110, 0, 113, g.W))
+        b.pad("U9", "1", "+3V3", box(111, 0, 112, g.W))
+        b.zone("GND", B, box(110, 0, 113, g.W))
+        b.pad("U9", "2", "GND", box(111, 0, 112, g.W), layers=(B,))
     return b.snapshot()
 
 

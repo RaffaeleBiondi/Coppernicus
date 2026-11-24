@@ -680,8 +680,11 @@ def run_power_chain(window, check: Checks, args, out: Path):
         window.nets.select(net)
         QApplication.processEvents()
         res = solve_and_wait(window, args.timeout)
-        check(f"power chain: {net} solves on its own", res is not None and len(res.loads) == 1,
-              "" if res is None else f"drop {res.drop(res.loads[0]) * 1e3:.2f} mV")
+        # +3V3 also delivers what FB1 passes on to +3V3_F, estimated (Task 7).
+        expected = {"+3V3": ["U4", "FB1 (link, estimated)"], "+1V8": ["U3"]}[net]
+        check(f"power chain: {net} solves on its own", res is not None
+              and [t.name for t in res.loads] == expected,
+              "" if res is None else ", ".join(f"{t.name} {res.drop(t) * 1e3:.2f} mV" for t in res.loads))
 
     window.nets.select("+3V3")
     QApplication.processEvents()
@@ -723,6 +726,147 @@ def run_power_chain(window, check: Checks, args, out: Path):
           f"{saved.rails!r} {saved.links!r}" if saved.rails != expected.rails else "")
 
 
+def solve_tree_and_wait(window, timeout_s: float):
+    from PySide6.QtWidgets import QApplication
+    window.solve_tree()
+    if window.tree_worker is None:
+        return None
+    window.tree_worker.wait(int(timeout_s * 1000))
+    QApplication.processEvents()
+    QApplication.processEvents()
+    return window.tree
+
+
+def run_power_tree(window, check: Checks, args, out: Path):
+    """Task 7: on the power-chain example, a rail solved alone draws its regulator's
+    estimated input; "Solve power tree" fills the Power tree tab and the group selector; a
+    ground group shows its rise; the regulator box edits a source's kind, efficiency and pins
+    and survives table edits and saving."""
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.engine.synthetic import PowerChain as g
+    from coppernicus.project import Project
+    window.open_project(CHAIN_PROJECT)
+    QApplication.processEvents()
+    window.nets.select("VIN")
+    QApplication.processEvents()
+    res = solve_and_wait(window, args.timeout)
+    est = [t for t in res.loads if t.name == "U1 (input, estimated)"] if res else []
+    check("power tree: VIN solves alone, drawing U1's estimated input",
+          len(est) == 1 and abs(est[0].current - (g.V_SMPS * (g.I_U4 + g.I_U3 + g.IQ_LDO)
+                                                  / (g.ETA * g.V_SRC) + g.IQ_SMPS)) < 1e-9,
+          f"{est[0].current:.4f} A" if est else str(res))
+
+    tree = solve_tree_and_wait(window, args.timeout)
+    check("power tree: Solve power tree finishes", tree is not None and set(tree.groups) == {
+        "VIN", "+3V3", "+1V8", "GND"}, "" if tree is None else str(sorted(tree.groups)))
+    if tree is None:
+        return
+    vrms, loads = window.tree_panel.vrm_rows(), window.tree_panel.load_rows()
+    check("... the VRM table lists J1, U1, U2", [r[0] for r in vrms] == ["J1", "U1", "U2"], str(vrms))
+    u3 = next((r for r in loads if r[0] == "U3"), None)
+    check("... the load table shows U3 at 1.80000 V across", u3 is not None and "1.80000" in u3, str(u3))
+    check("... and the ferrite link", "FB1" in window.tree_panel.links.text(), window.tree_panel.links.text())
+    keys = {window.group_box.itemData(i) for i in range(window.group_box.count())}
+    check("... the group selector lists the rails and GND", keys == {None, "VIN", "+3V3", "+1V8", "GND"},
+          str(keys))
+    window.group_box.setCurrentIndex(window.group_box.findData("GND"))
+    QApplication.processEvents()
+    title = window.view.colorbar._title
+    check("... GND shows as a ground-rise map", window.view._result is tree.groups["GND"]
+          and "ground rise" in title, title)
+    render_scene(window.view, out / "power_tree_gnd_scene.png")
+    top = window.problems.tree.topLevelItem(0)
+    check("... its Problems list ranks the return pins by rise",
+          top is not None and "U3 (return)" in top.text(1), top.text(1) if top else "empty")
+    window.view._on_double_click((97.5, -1.0))
+    msg = window.statusBar().currentMessage()
+    check("... a double-click on GND reads the rise", "rise = 38.4" in msg, msg)
+    window.group_box.setCurrentIndex(window.group_box.findData("+1V8"))
+    QApplication.processEvents()
+    check("... +1V8 shown from the tree", window.view._result is tree.groups["+1V8"])
+    spin = window.rail_panel.loads.table.cellWidget(0, 3)            # VIN is still the net
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    window.group_box.setCurrentIndex(window.group_box.findData("GND"))
+    QApplication.processEvents()
+    spin = window.rail_panel.loads.table.cellWidget(0, 3)
+    spin.setValue(0.55)
+    QApplication.processEvents()
+    check("... editing the rail while a group is shown keeps the table being edited",
+          window.rail_panel.loads.table.cellWidget(0, 3) is spin
+          and window.project.rail("+3V3").loads[0].current == 0.55)
+    spin.setValue(0.5)
+    QApplication.processEvents()
+    tree = solve_tree_and_wait(window, args.timeout)
+
+    i_in_before = next(v.i_in_a for v in tree.vrms if v.name == "U1")
+    window.nets.select("VIN")
+    QApplication.processEvents()
+    solve_and_wait(window, args.timeout)                 # VIN alone: U1's input estimated
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    check("... picking a net goes back to the rail solved alone", window.group_box.currentData() is None)
+    box = window.rail_panel.source_box               # the first source is shown and selected
+    check("power tree: the regulator box shows U1 as a switcher, η 0.9, input VIN.1, ground GND.3",
+          (box.kind.currentData(), box.efficiency.text(), box.input.get(), box.ground.get())
+          == ("smps", "0.9", ("", ["1"], "VIN"), ("", ["3"], "GND")),
+          f"{box.kind.currentData()} {box.efficiency.text()} {box.input.get()} {box.ground.get()}")
+    box.efficiency.setText("0.8")
+    box.efficiency.editingFinished.emit()
+    QApplication.processEvents()
+    check("... editing η writes the project and drops the stale tree",
+          window.project.rail("+3V3").sources[0].efficiency == 0.8 and window.dirty and window.tree is None)
+    check("... and the result of VIN, whose estimate used U1's η", "VIN" not in window.results,
+          str(sorted(window.results)))
+    window.rail_panel.select_load(0)
+    ground = window.rail_panel.load_ground.get()
+    check("... the load box shows U4's ground pins", ground == ("", ["2"], "GND"), str(ground))
+    window.rail_panel.loads.table.cellWidget(0, 3).setValue(0.6)
+    QApplication.processEvents()
+    src = window.project.rail("+3V3").sources[0]
+    check("... a table edit after it keeps η 0.8", src.efficiency == 0.8 and src.kind == "smps", repr(src))
+    window.solve_tree()                                   # edited while it solves…
+    window.project.rail("+1V8").limits.max_drop_pct = None
+    window.rail_panel.loads.table.cellWidget(0, 3).setValue(0.61)
+    window.tree_worker.wait(int(args.timeout * 1000))
+    QApplication.processEvents()
+    QApplication.processEvents()
+    check("... a tree solved while the setup changed is not shown as current", window.tree is None,
+          window.statusBar().currentMessage())
+    window.rail_panel.loads.table.cellWidget(0, 3).setValue(0.6)
+    QApplication.processEvents()
+    tree = solve_tree_and_wait(window, args.timeout)
+    i_in = next(v.i_in_a for v in tree.vrms if v.name == "U1") if tree else None
+    check("power tree: a lower efficiency draws more input current", i_in is not None and i_in > i_in_before,
+          f"{i_in_before:.4f} → {i_in}")
+    window.nets.select("GND")                             # a ground-rise limit on GND
+    QApplication.processEvents()
+    window.rail_panel.max_rise.setText("10")
+    window.rail_panel.max_rise.editingFinished.emit()
+    QApplication.processEvents()
+    gnd_rail = window.project.rail("GND")
+    check("power tree: a ground-rise limit is set on GND",
+          gnd_rail is not None and gnd_rail.limits.max_ground_rise_mv == 10.0)
+    tree = solve_tree_and_wait(window, args.timeout)
+    window.show_group("GND")
+    QApplication.processEvents()
+    top = window.problems.tree.topLevelItem(0)
+    check("... and judges the ground group: the worst return pin fails",
+          "limit(s) exceeded" in window.tree_panel.summary.text() and top is not None
+          and top.text(0).upper().startswith("FAIL"),
+          f"{window.tree_panel.summary.text()} | {top.text(0) if top else ''} {top.text(1) if top else ''}")
+    path = out / "power_tree_edited.coppernicus.yml"
+    window._save(path)
+    saved = Project.load(path)
+    check("... saved: η 0.8 and U4 0.6 A", (saved.rail("+3V3").sources[0].efficiency,
+                                             saved.rail("+3V3").loads[0].current) == (0.8, 0.6))
+    check("... saved: the limits-only GND rail keeps its ground-rise limit",
+          saved.rail("GND") is not None and saved.rail("GND").limits.max_ground_rise_mv == 10.0
+          and window.project.rail("GND") is not None)
+    assert g.I_U4 == 0.5       # the example itself is unchanged
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
@@ -750,6 +894,7 @@ def main(argv=None) -> int:
         run_other_net(window, check, out)
         run_marked(window, check, out)
         run_power_chain(window, check, args, out)
+        run_power_tree(window, check, args, out)
         run_demo(window, check, args, out)
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:

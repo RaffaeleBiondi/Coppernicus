@@ -5,7 +5,7 @@ engine directly; the main window wires them together."""
 from __future__ import annotations
 
 import copy
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QDoubleValidator
@@ -34,7 +34,18 @@ from PySide6.QtWidgets import (
 
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.problems import FAIL, Problem
-from coppernicus.project import Limits, Load, Rail, Settings, Source, carry_over, parse_pins, pins_text
+from coppernicus.project import (
+    SOURCE_KINDS,
+    Limits,
+    Load,
+    PinSpec,
+    Rail,
+    Settings,
+    Source,
+    carry_over,
+    parse_pins,
+    pins_text,
+)
 
 # ---------------------------------------------------------------------- numbers
 
@@ -188,6 +199,7 @@ class TerminalTable(QWidget):
     The "Pick on board" toggle asks the main window to add pads clicked in the view."""
     changed = Signal()
     pick_toggled = Signal(bool)
+    row_selected = Signal(int)        # the current row (-1: none)
 
     def __init__(self, title: str, value_label: str, unit: str, parent=None):
         super().__init__(parent)
@@ -218,6 +230,7 @@ class TerminalTable(QWidget):
         layout.addLayout(buttons)
         layout.addWidget(self.table)
         self.table.itemChanged.connect(lambda *_: self.changed.emit())
+        self.table.currentCellChanged.connect(lambda row, *_: self.row_selected.emit(row))
 
     def set_parts(self, parts: List[PartPins]):
         self._parts = parts
@@ -230,6 +243,25 @@ class TerminalTable(QWidget):
         for i, row in enumerate(rows):
             self._append(*row, origin=i)
         self.table.blockSignals(False)
+
+    def part_flags(self) -> List[bool]:
+        """For every table row, whether it is complete and names a part (is in the rail)."""
+        out = []
+        for r in range(self.table.rowCount()):
+            part = self.table.cellWidget(r, 1)
+            out.append(part is not None and all(self.table.cellWidget(r, c) is not None for c in (2, 3))
+                       and bool(part.currentData()))
+        return out
+
+    def renumber(self):
+        """Each row in the rail becomes its own origin (see :meth:`origins`): after a change
+        made outside the table, the rail's list is the new reference."""
+        k = 0
+        for r, in_rail in enumerate(self.part_flags()):
+            item = self.table.item(r, 0)
+            if item is not None:
+                item.setData(Qt.UserRole, k if in_rail else None)
+            k += in_rail
 
     def origins(self) -> List[Optional[int]]:
         """For each row :meth:`rows` returns, its position in the last :meth:`set_rows`
@@ -304,9 +336,145 @@ class TerminalTable(QWidget):
         self.table.setCellWidget(r, 3, spin)
 
 
+def rail_index(has_part: List[bool], row: int) -> Optional[int]:
+    """The index in the rail's list of the terminal shown in table row ``row``: rows without
+    a part are not in the rail (see ``RailPanel._write_rail``)."""
+    if not 0 <= row < len(has_part) or not has_part[row]:
+        return None
+    return sum(has_part[:row])
+
+
 def _optional_float(edit: QLineEdit) -> Optional[float]:
     text = edit.text().strip().replace(",", ".")
     return float(text) if text else None
+
+
+class PinRefEdit(QWidget):
+    """A pin reference: the part (empty = the row's own part), its net and its pins."""
+    changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.part = QLineEdit(placeholderText="this part")
+        self.part.setToolTip("Part reference; empty means the part of the selected row")
+        self.net = QComboBox()
+        self.net.setEditable(True)
+        self.net.setInsertPolicy(QComboBox.NoInsert)
+        self.net.setToolTip("Net of these pins; empty means not set")
+        self.pins = QLineEdit(placeholderText="all")
+        self.pins.setToolTip("Pad numbers, comma separated; globs like A* work; 'all' = every pin "
+                             "of the part on this net")
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.part, 2)
+        row.addWidget(self.net, 3)
+        row.addWidget(self.pins, 2)
+        self.part.editingFinished.connect(self.changed.emit)
+        self.net.activated.connect(lambda *_: self.changed.emit())
+        self.net.lineEdit().editingFinished.connect(self.changed.emit)
+        self.pins.editingFinished.connect(self.changed.emit)
+
+    def set_nets(self, nets: List[str]):
+        text = self.net.currentText()
+        self.net.blockSignals(True)
+        self.net.clear()
+        self.net.addItems([""] + list(nets))
+        self.net.setEditText(text)
+        self.net.blockSignals(False)
+
+    def set(self, ref: str, pins: PinSpec, net: str):
+        for w in (self.part, self.net, self.pins):
+            w.blockSignals(True)
+        self.part.setText(ref)
+        self.net.setEditText(net)
+        self.pins.setText("" if net == "" and pins is None else pins_text(pins))
+        for w in (self.part, self.net, self.pins):
+            w.blockSignals(False)
+
+    def get(self) -> Tuple[str, PinSpec, str]:
+        """(part, pins, net); the net is empty when the reference is not set."""
+        try:
+            pins = parse_pins(self.pins.text())
+        except ValueError:
+            pins = None
+        return self.part.text().strip(), pins, self.net.currentText().strip()
+
+
+KIND_LABELS = {"source": "Source (ideal supply)", "ldo": "LDO", "smps": "Switcher (SMPS)"}
+
+
+class RegulatorBox(QGroupBox):
+    """The power-tree fields of the selected source: what kind of regulator it is, and the
+    pins of its input, ground and remote sense."""
+    changed = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__("Regulator: selected source (used by Solve power tree)", parent)
+        self.kind = QComboBox()
+        for k in SOURCE_KINDS:
+            self.kind.addItem(KIND_LABELS[k], k)
+        self.efficiency = QLineEdit(placeholderText="switcher: a fraction 0–1, e.g. 0.9")
+        self.efficiency.setValidator(DecimalValidator(0.001, 1.0, 4))
+        self.quiescent = QLineEdit(placeholderText="0")
+        self.quiescent.setValidator(DecimalValidator(0.0, 1e3, 6))
+        self.input, self.ground = PinRefEdit(), PinRefEdit()
+        self.sense, self.ground_sense = PinRefEdit(), PinRefEdit()
+        form = QFormLayout(self)
+        form.addRow("Kind", self.kind)
+        form.addRow("Efficiency", self.efficiency)
+        form.addRow("Quiescent current (A)", self.quiescent)
+        form.addRow(QLabel("<small>pins: part (empty = this one) · net · pins</small>"))
+        form.addRow("Input", self.input)
+        form.addRow("Ground", self.ground)
+        form.addRow("Remote sense", self.sense)
+        form.addRow("Ground sense", self.ground_sense)
+        self.kind.currentIndexChanged.connect(lambda *_: self._kind_changed())
+        self.efficiency.editingFinished.connect(self.changed.emit)
+        self.quiescent.editingFinished.connect(self.changed.emit)
+        for w in (self.input, self.ground, self.sense, self.ground_sense):
+            w.changed.connect(self.changed.emit)
+        self.setEnabled(False)
+
+    def _kind_changed(self):
+        self._enable()
+        self.changed.emit()
+
+    def _enable(self):
+        kind = self.kind.currentData()
+        self.efficiency.setEnabled(kind == "smps")
+        self.quiescent.setEnabled(kind != "source")
+        self.input.setEnabled(kind != "source")
+
+    def show_source(self, s: Optional[Source], nets: List[str]):
+        """Fill the box from source ``s`` (None: empty and disabled)."""
+        widgets = (self.kind, self.efficiency, self.quiescent)
+        for w in widgets:
+            w.blockSignals(True)
+        self.setEnabled(s is not None)
+        s = s or Source("", 0.0)
+        self.kind.setCurrentIndex(max(0, self.kind.findData(s.kind)))
+        self.efficiency.setText("" if s.efficiency is None else f"{s.efficiency:g}")
+        self.quiescent.setText(f"{s.quiescent_a:g}" if s.quiescent_a else "")
+        for what in ("input", "ground", "sense", "ground_sense"):
+            edit = getattr(self, what)
+            edit.set_nets(nets)
+            edit.set(getattr(s, f"{what}_ref"), getattr(s, f"{what}_pins"), getattr(s, f"{what}_net"))
+        for w in widgets:
+            w.blockSignals(False)
+        self._enable()
+
+    def write(self, s: Source):
+        """Copy the box into source ``s``."""
+        s.kind = self.kind.currentData()
+        text = self.efficiency.text().strip().replace(",", ".")
+        s.efficiency = float(text) if text else None
+        text = self.quiescent.text().strip().replace(",", ".")
+        s.quiescent_a = float(text) if text else 0.0
+        for what in ("input", "ground", "sense", "ground_sense"):
+            ref, pins, net = getattr(self, what).get()
+            setattr(s, f"{what}_ref", ref if net else "")
+            setattr(s, f"{what}_pins", pins if net else None)
+            setattr(s, f"{what}_net", net)
 
 
 class RailPanel(QWidget):
@@ -328,17 +496,27 @@ class RailPanel(QWidget):
         self.ties = QLabel()
         self.ties.setWordWrap(True)
         self.follow_ties = QCheckBox("Solve nets joined by net ties as one (tie = short)")
+        self._board: Optional[Board] = None
+        self.source_box = RegulatorBox()
+        self.load_box = QGroupBox("Ground pins: selected load (used by Solve power tree)")
+        self.load_ground = PinRefEdit()
+        QVBoxLayout(self.load_box).addWidget(self.load_ground)
+        self.load_box.setEnabled(False)
 
         limits = QGroupBox("Limits (empty = not checked; problems are still ranked)")
         self.max_drop = QLineEdit(placeholderText="e.g. 3")
         self.max_j = QLineEdit(placeholderText="A/mm²")
         self.max_via = QLineEdit(placeholderText="A")
-        for e in (self.max_drop, self.max_j, self.max_via):
+        self.max_rise = QLineEdit(placeholderText="mV, for a ground net")
+        self.max_rise.setToolTip("For a ground net: the largest rise above its 0 V reference. Judged "
+                                 "on its group in Solve power tree, and when this net is solved alone.")
+        for e in (self.max_drop, self.max_j, self.max_via, self.max_rise):
             e.setValidator(DecimalValidator(0.0, 1e9, 6))
         form = QFormLayout(limits)
         form.addRow("Max drop (%)", self.max_drop)
         form.addRow("Max current density (A/mm²)", self.max_j)
         form.addRow("Max via current (A)", self.max_via)
+        form.addRow("Max ground rise (mV)", self.max_rise)
 
         settings = QGroupBox("Solve settings (whole project)")
         self.max_edge = DecimalSpinBox(decimals=3, minimum=0.02, maximum=5.0, singleStep=0.1, suffix=" mm")
@@ -357,17 +535,21 @@ class RailPanel(QWidget):
         self.solve.setMinimumHeight(34)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        for w in (self.title, self.sources, self.loads, self.ties, self.follow_ties, limits,
-                  settings, self.solve):
+        for w in (self.title, self.sources, self.source_box, self.loads, self.load_box, self.ties,
+                  self.follow_ties, limits, settings, self.solve):
             layout.addWidget(w)
         layout.addStretch(1)
 
         self.sources.changed.connect(self._write_rail)
         self.loads.changed.connect(self._write_rail)
+        self.sources.row_selected.connect(lambda row: self._show_source(row))
+        self.loads.row_selected.connect(lambda row: self._show_load(row))
+        self.source_box.changed.connect(self._write_source_box)
+        self.load_ground.changed.connect(self._write_load_box)
         self.sources.pick_toggled.connect(lambda on: self._pick_toggled("source", on))
         self.loads.pick_toggled.connect(lambda on: self._pick_toggled("load", on))
         self.follow_ties.toggled.connect(self._write_rail)
-        for e in (self.max_drop, self.max_j, self.max_via):
+        for e in (self.max_drop, self.max_j, self.max_via, self.max_rise):
             e.editingFinished.connect(self._write_limits)
         self.max_edge.valueChanged.connect(self._write_settings)
         self.temp.valueChanged.connect(self._write_settings)
@@ -407,7 +589,7 @@ class RailPanel(QWidget):
 
     def set_rail(self, board: Board, rail: Rail, ties: List[NetTie]):
         self._loading = True
-        self._rail = rail
+        self._rail, self._board = rail, board
         # The terminals as loaded: each table row takes the fields the table does not show
         # from its own row here (carry_over), so they survive any edit of the row.
         self._loaded = (copy.deepcopy(rail.sources), copy.deepcopy(rail.loads))
@@ -425,19 +607,79 @@ class RailPanel(QWidget):
         self.follow_ties.setChecked(rail.follow_net_ties)
         lim = rail.limits
         for edit, value in ((self.max_drop, lim.max_drop_pct), (self.max_j, lim.max_current_density),
-                            (self.max_via, lim.max_via_current)):
+                            (self.max_via, lim.max_via_current), (self.max_rise, lim.max_ground_rise_mv)):
             edit.setText("" if value is None else f"{value:g}")
         self._loading = False
+        # The first row of each table is the current one, so the boxes below edit it.
+        for table, items in ((self.sources, rail.sources), (self.loads, rail.loads)):
+            if items:
+                table.table.setCurrentCell(0, 0)
+        self._show_source(0 if rail.sources else -1)
+        self._show_load(0 if rail.loads else -1)
+
+    # ------------------------------------------------------------------ power-tree fields
+    def select_source(self, row: int):
+        """Select a source row and show its regulator fields."""
+        self.sources.table.setCurrentCell(row, 0)
+        self._show_source(row)
+
+    def select_load(self, row: int):
+        """Select a load row and show its ground pins."""
+        self.loads.table.setCurrentCell(row, 0)
+        self._show_load(row)
+
+    def _terminal(self, table: "TerminalTable", items, row: int):
+        i = rail_index(table.part_flags(), row)
+        return items[i] if i is not None and i < len(items) else None
+
+    def _show_source(self, row: int):
+        s = self._terminal(self.sources, self._rail.sources, row) if self._rail else None
+        nets = self._board.part_nets(s.ref) if s is not None and self._board is not None else []
+        self.source_box.show_source(s, nets)
+
+    def _show_load(self, row: int):
+        ld = self._terminal(self.loads, self._rail.loads, row) if self._rail else None
+        self.load_box.setEnabled(ld is not None)
+        nets = self._board.part_nets(ld.ref) if ld is not None and self._board is not None else []
+        self.load_ground.set_nets(nets)
+        self.load_ground.set(*((ld.ground_ref, ld.ground_pins, ld.ground_net) if ld else ("", None, "")))
+
+    def _write_source_box(self):
+        s = self._terminal(self.sources, self._rail.sources, self.sources.table.currentRow()) \
+            if self._rail else None
+        if s is None:
+            return
+        self.source_box.write(s)
+        self._rebase()
+
+    def _write_load_box(self):
+        ld = self._terminal(self.loads, self._rail.loads, self.loads.table.currentRow()) \
+            if self._rail else None
+        if ld is None:
+            return
+        ref, pins, net = self.load_ground.get()
+        ld.ground_ref, ld.ground_pins, ld.ground_net = (ref if net else ""), (pins if net else None), net
+        self._rebase()
+
+    def _rebase(self):
+        """A field outside the tables changed: the rail as it is now becomes the reference the
+        table rows take their hidden fields from."""
+        self._loaded = (copy.deepcopy(self._rail.sources), copy.deepcopy(self._rail.loads))
+        self.sources.renumber()
+        self.loads.renumber()
+        self.rail_changed.emit()
 
     def clear_rail(self):
         """No net selected (a new board was opened)."""
         self._loading = True
         self._rail = None
         self._loaded = ([], [])
+        self.source_box.show_source(None, [])
+        self.load_box.setEnabled(False)
         self.title.setText("<i>Pick a net</i>")
         self.sources.set_rows([])
         self.loads.set_rows([])
-        for edit in (self.max_drop, self.max_j, self.max_via):
+        for edit in (self.max_drop, self.max_j, self.max_via, self.max_rise):
             edit.clear()
         self.ties.setVisible(False)
         self.follow_ties.setVisible(False)
@@ -456,6 +698,8 @@ class RailPanel(QWidget):
             setattr(self._rail, attr, carry_over(
                 loaded, [kind(ref, value, pins, name) for (name, ref, pins, value), _ in rows],
                 [origin for _, origin in rows]))
+        self._show_source(self.sources.table.currentRow())
+        self._show_load(self.loads.table.currentRow())
         self._rail.follow_net_ties = self.follow_ties.isChecked()
         self.rail_changed.emit()
 
@@ -463,7 +707,7 @@ class RailPanel(QWidget):
         if self._loading or self._rail is None:
             return
         limits = Limits(_optional_float(self.max_drop), _optional_float(self.max_j),
-                        _optional_float(self.max_via))
+                        _optional_float(self.max_via), _optional_float(self.max_rise))
         if limits != self._rail.limits:
             self._rail.limits = limits
             self.limits_changed.emit()
@@ -686,3 +930,104 @@ class ComparePanel(QWidget):
         self.info.setText(info)
         changed = [f"Changed setting {k}: {v['a']} → {v['b']}" for k, v in cmp_["settings_changed"].items()]
         self.notes.setPlainText("\n".join([*notes, *changed, *cmp_["warnings"], *cmp_["assumptions"]]))
+
+
+# ---------------------------------------------------------------------- power tree
+
+def _cell(x: Optional[float], spec: str, scale: float = 1.0) -> str:
+    return "—" if x is None or x != x else f"{x * scale:{spec}}"
+
+
+class TreePanel(QWidget):
+    """The Power tree tab: every source and regulator, every load with the voltage across its
+    supply and ground pins, and the links. Double-click a row to show its group."""
+    group_requested = Signal(str)
+
+    VRM_HEADERS = ["Name", "Kind", "Group", "V set", "V out", "I out (A)", "V in", "I in (A)",
+                   "P loss (mW)", "Ground (mV)", "Regulation"]
+    LOAD_HEADERS = ["Name", "Group", "I (A)", "Nominal", "Supply (V)", "Ground (mV)", "Across (V)",
+                    "Drop (mV)", "Drop (%)", "Verdict"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.summary = QLabel("<i>Solve power tree (Ctrl+T) solves every rail and ground "
+                              "together</i>")
+        self.summary.setWordWrap(True)
+        self.vrms = self._table(self.VRM_HEADERS)
+        self.loads = self._table(self.LOAD_HEADERS)
+        self.links = QLabel()
+        self.links.setWordWrap(True)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.addWidget(self.summary)
+        layout.addWidget(QLabel("<b>Sources and regulators</b>"))
+        layout.addWidget(self.vrms, 2)
+        layout.addWidget(QLabel("<b>Loads</b> (the voltage across their supply and ground pins)"))
+        layout.addWidget(self.loads, 3)
+        layout.addWidget(self.links)
+
+    def _table(self, headers):
+        table = QTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.cellDoubleClicked.connect(lambda r, _c, t=table: self._activated(t, r))
+        return table
+
+    def _activated(self, table, row: int):
+        item = table.item(row, 2 if table is self.vrms else 1)
+        if item is not None:
+            self.group_requested.emit(item.text())
+
+    @staticmethod
+    def _fill(table, rows, fails=()):
+        table.setRowCount(0)
+        for r, row in enumerate(rows):
+            table.insertRow(r)
+            for c, text in enumerate(row):
+                item = QTableWidgetItem(text)
+                if c > 1 and text[:1] in "-0123456789":
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if r in fails:
+                    item.setForeground(QBrush(QColor("#c0392b")))
+                table.setItem(r, c, item)
+
+    def clear(self, text: str = ""):
+        self.summary.setText(text or "<i>No power-tree result</i>")
+        self._fill(self.vrms, [])
+        self._fill(self.loads, [])
+        self.links.clear()
+
+    def set_tree(self, tree, verdict_html: str = ""):
+        vrms = [(v.name, v.kind, v.group, f"{v.v_set_v:g}", _cell(v.v_out_v, ".5f"),
+                 _cell(v.i_out_a, ".4f"), _cell(v.v_in_v, ".5f"), _cell(v.i_in_a, ".4f"),
+                 _cell(v.p_loss_w, ".1f", 1e3), _cell(v.v_ground_v, ".2f", 1e3), v.regulation)
+                for v in tree.vrms]
+        loads, fails = [], set()
+        for i, ld in enumerate(tree.loads):
+            verdict = ld.status or ("FAIL" if ld.passed is False else "pass" if ld.passed else "not judged")
+            if ld.passed is False:
+                fails.add(i)
+            loads.append((ld.name, ld.group, _cell(ld.current_a, ".4g"), f"{ld.nominal_v:g}",
+                          _cell(ld.v_supply_v, ".5f"), _cell(ld.v_ground_v, ".2f", 1e3),
+                          _cell(ld.v_across_v, ".5f"), _cell(ld.drop_v, ".2f", 1e3),
+                          _cell(ld.drop_pct, ".2f"), verdict))
+        self._fill(self.vrms, vrms)
+        self._fill(self.loads, loads, fails)
+        self.links.setText("Links (edit them in the project file): " + "; ".join(
+            f"{k['name']} {k['resistance_ohm']:g} Ω, {' ↔ '.join(k['nets'])}: {k['current_a']:.4f} A, "
+            f"{k['power_w'] * 1e3:.3g} mW" for k in tree.links if not k["name"].startswith("net tie "))
+            if any(not k["name"].startswith("net tie ") for k in tree.links) else "")
+        groups = ", ".join(f"{k} ({r.kind})" for k, r in tree.groups.items())
+        self.summary.setText(f"<b>Power tree</b>: {len(tree.groups)} groups ({groups}) solved in "
+                             f"{tree.stats.get('seconds', 0.0):.1f} s · {verdict_html}")
+
+    def vrm_rows(self):
+        return [tuple(self.vrms.item(r, c).text() for c in range(self.vrms.columnCount()))
+                for r in range(self.vrms.rowCount())]
+
+    def load_rows(self):
+        return [tuple(self.loads.item(r, c).text() for c in range(self.loads.columnCount()))
+                for r in range(self.loads.rowCount())]

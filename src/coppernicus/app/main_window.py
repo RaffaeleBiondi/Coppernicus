@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -32,15 +33,16 @@ from PySide6.QtWidgets import (
 from coppernicus import __version__
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
-from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel
+from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel, TreePanel
 from coppernicus.app.picking import add_picked_pin, pick_nets
-from coppernicus.app.worker import ReportWorker, SolveWorker
+from coppernicus.app.worker import ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
-from coppernicus.problems import FAIL, find_problems
+from coppernicus.power_tree import judge_loads
+from coppernicus.problems import FAIL, find_problems, find_tree_problems, limits_dict
 from coppernicus.project import Project, ProjectError, Rail
-from coppernicus.results import RailResult
+from coppernicus.results import RailResult, TreeResult
 
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 
@@ -69,9 +71,15 @@ class MainWindow(QMainWindow):
         self._board_stamp = ""                    # which board file, and which version of it
         self._diff_cache: Optional[Tuple] = None      # (baseline, run, layer, (Δ mV, note))
         self._fallback_reason = ""                     # why the Δ map was not shown, last draw
+        self.tree: Optional[TreeResult] = None          # the last power-tree solve, if still valid
+        self._revision = 0            # +1 per edit of the setup: a tree solved before is stale
+        self.tree_worker: Optional[TreeWorker] = None
 
         # Centre: pickers + view.
         self.view = BoardView()
+        self.group_box = QComboBox()
+        self.group_box.addItem("Rail solved alone", None)
+        self.group_box.setToolTip("After Solve power tree: show a rail or ground group of the tree")
         self.layer_box = QComboBox()
         self.field_box = QComboBox()
         for key, (label, _cmap) in FIELDS.items():
@@ -88,6 +96,9 @@ class MainWindow(QMainWindow):
         fit = QPushButton("Fit")
         fit.clicked.connect(self.view.reset_view)
         bar = QHBoxLayout()
+        bar.addWidget(QLabel("Group"))
+        bar.addWidget(self.group_box)
+        bar.addSpacing(12)
         bar.addWidget(QLabel("Layer"))
         bar.addWidget(self.layer_box)
         bar.addSpacing(12)
@@ -98,8 +109,12 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.show_arrows)
         bar.addSpacing(12)
         bar.addWidget(self.measure)
-        bar.addStretch(1)
-        bar.addWidget(QLabel("<small>drag: pan · wheel: zoom · double-click: read values</small>"))
+        hint = QLabel("<small>double-click: read values</small>")
+        hint.setToolTip("Drag to pan, wheel to zoom, double-click to read V, drop and |J|")
+        hint.setWordWrap(True)                  # may wrap: the bar must fit a laptop screen
+        hint.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        hint.setMinimumWidth(80)                # at most two lines
+        bar.addWidget(hint, 1)
         bar.addWidget(fit)
         centre = QWidget()
         cl = QVBoxLayout(centre)
@@ -114,12 +129,21 @@ class MainWindow(QMainWindow):
         self.problems = ProblemsPanel()
         self.losses = LossChart()
         self.compare = ComparePanel()
+        self.tree_panel = TreePanel()
         self.results_tabs = QTabWidget()
         self.results_tabs.addTab(self.problems, "Problems")
         self.results_tabs.addTab(self.losses, "Loss by layer")
         self.results_tabs.addTab(self.compare, "Compare")
+        self.results_tabs.addTab(self.tree_panel, "Power tree")
         self._dock("Nets", self.nets, Qt.LeftDockWidgetArea)
-        self._dock("Rail setup", self.rail_panel, Qt.RightDockWidgetArea)
+        rail_scroll = QScrollArea()             # the rail setup is taller than a laptop screen
+        rail_scroll.setWidget(self.rail_panel)
+        rail_scroll.setWidgetResizable(True)
+        rail_scroll.setFrameShape(QScrollArea.NoFrame)
+        rail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)     # scroll down only
+        rail_scroll.setMinimumWidth(self.rail_panel.minimumSizeHint().width()
+                                    + rail_scroll.verticalScrollBar().sizeHint().width())
+        self._dock("Rail setup", rail_scroll, Qt.RightDockWidgetArea)
         problems_dock = self._dock("Results", self.results_tabs, Qt.BottomDockWidgetArea)
         self.resizeDocks([problems_dock], [300], Qt.Vertical)
 
@@ -134,6 +158,8 @@ class MainWindow(QMainWindow):
         self.rail_panel.solve_requested.connect(self.solve)
         self.problems.problem_activated.connect(self.go_to_problem)
         self.layer_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
+        self.group_box.currentIndexChanged.connect(lambda *_: self._group_changed())
+        self.tree_panel.group_requested.connect(self.show_group)
         self.field_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.show_vias.toggled.connect(lambda *_: self.refresh_view())
         self.show_isolines.toggled.connect(lambda *_: self.refresh_view())
@@ -164,6 +190,7 @@ class MainWindow(QMainWindow):
                                      ("Save project as…", QKeySequence.SaveAs, self.save_project_as),
                                      (None, None, None),
                                      ("Solve", "F5", self.solve),
+                                     ("Solve power tree", "Ctrl+T", self.solve_tree),
                                      ("Pin as baseline", "Ctrl+B", self.pin_baseline),
                                      ("Export maps…", "Ctrl+E", self.export_maps),
                                      ("Export report…", "Ctrl+R", self.export_report)):
@@ -235,6 +262,9 @@ class MainWindow(QMainWindow):
         self._generation += 1
         if self.worker is not None and self.worker.isRunning():
             self.worker.cancel()                         # and _solved ignores it if it ends
+        if self.tree_worker is not None and self.tree_worker.isRunning():
+            self.tree_worker.cancel()
+        self._drop_tree("")
         self.rail_panel.clear_rail()
         self.view.reset()
         self.layer_box.blockSignals(True)
@@ -279,7 +309,10 @@ class MainWindow(QMainWindow):
             self._save(Path(path))
 
     def _save(self, path: Path):
-        self.project.rails = [r for r in self.project.rails if r.sources or r.loads]
+        # Rails picked but never set up are not saved; a rail with only limits (a ground
+        # net's ground-rise limit) is.
+        self.project.rails = [r for r in self.project.rails if r.sources or r.loads
+                              or any(v is not None for v in vars(r.limits).values())]
         try:
             self.project.save(path)
         except (OSError, ProjectError) as e:
@@ -370,6 +403,7 @@ class MainWindow(QMainWindow):
             return
         self.rail_panel.set_pick("")
         self.net = net
+        self._set_group(None)                    # a net picked in the list: the rail solved alone
         rail = self.project.rail(net) or Rail(net)
         _, ties = tied_nets(self.board, net)
         self.rail_panel.set_rail(self.board, rail, ties)
@@ -399,6 +433,13 @@ class MainWindow(QMainWindow):
 
     def _rail_edited(self):
         rail = self._adopt_draft()
+        self._revision += 1
+        self._drop_tree("The setup changed: solve the power tree again (Ctrl+T)")
+        # Rails solved alone that drew an estimate from the project may depend on this rail.
+        for net, res in list(self.results.items()):
+            if net != rail.net and any(t.name.endswith("estimated)") for t in res.loads):
+                self.results.pop(net)
+                self.runs.pop(net, None)
         self.runs.pop(rail.net, None)
         self._diff_cache = None
         if self.results.pop(rail.net, None) is not None:          # the old result no longer applies
@@ -408,6 +449,10 @@ class MainWindow(QMainWindow):
 
     def _limits_edited(self):
         rail = self._adopt_draft()
+        if self.tree is not None and rail.net in self.tree.groups:     # re-judge, no re-solve
+            self.tree.limits[rail.net] = rail.limits
+            judge_loads(self.tree)
+            self.tree_panel.set_tree(self.tree, self._tree_verdict())
         res = self.results.get(rail.net)
         if res is not None:                                        # re-rank; the solve is still valid
             self._show_problems(res)
@@ -420,6 +465,8 @@ class MainWindow(QMainWindow):
     def _settings_edited(self):
         self.dirty = True
         self._update_title()
+        self._revision += 1
+        self._drop_tree("Solve settings changed: solve the power tree again (Ctrl+T)")
         if self.results:                                           # every result used the old settings
             self.results.clear()
             self.runs.clear()
@@ -433,8 +480,9 @@ class MainWindow(QMainWindow):
             return
         layer_name = self.layer_box.currentText()
         lid = self.layer_box.currentData()
-        res = self.results.get(self.net)
-        rail = self.project.rail(self.net) or getattr(self, "_rail_draft", None)
+        group = self.group_box.currentData()
+        res = self.tree.groups.get(group) if group and self.tree else self.results.get(self.net)
+        rail = None if group else self.project.rail(self.net) or getattr(self, "_rail_draft", None)
         t0 = time.perf_counter()
         self._fallback_reason = ""
         if res is not None and res.layer(layer_name) is not None:
@@ -442,7 +490,9 @@ class MainWindow(QMainWindow):
                     ("load", [i for t in res.loads for i in t.pad_ids])]
             field, diff_mv, diff_note = self.field_box.currentData(), None, ""
             if field == "difference":
-                diff_mv, diff_note, why = self._difference(res, layer_name)
+                diff_mv, diff_note, why = ((None, "", "The difference map is for a rail solved alone, "
+                                            "not yet for a power-tree group") if group
+                                           else self._difference(res, layer_name))
                 if diff_mv is None:                  # not available: say why, show the drop
                     self._fallback_reason = why
                     self.statusBar().showMessage(why)
@@ -564,7 +614,7 @@ class MainWindow(QMainWindow):
         rail = self.project.rail(self.net) or self._rail_draft
         self.rail_panel.solve.setEnabled(False)
         self.problems.clear(f"<b>{self.net}</b>: solving…")
-        self.worker = SolveWorker(self.board, rail, self.project.settings, self)
+        self.worker = SolveWorker(self.board, rail, self.project.settings, self, project=self.project)
         self.worker.generation = self._generation
         # What produced the result, as it is now (the user may edit while it runs).
         self.worker.run_inputs = (copy.deepcopy(rail), copy.deepcopy(self.project.settings),
@@ -603,6 +653,137 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{res.net} solved in {res.stats['seconds']:.1f} s · {int(res.stats['triangles']):,} triangles · "
             f"drawn in {self.last_render_s:.2f} s{reason}")
+
+    # ------------------------------------------------------------------ power tree
+    def solve_tree(self):
+        """Solve every rail and ground of the project together (Ctrl+T)."""
+        if self.board is None:
+            return
+        if self.tree_worker is not None and self.tree_worker.isRunning():
+            self.statusBar().showMessage("The power tree is already being solved")
+            return
+        self.tree_panel.clear("<b>Power tree</b>: solving…")
+        self.results_tabs.setCurrentWidget(self.tree_panel)
+        self.tree_worker = TreeWorker(self.board, self.project, self)
+        self.tree_worker.generation = self._generation
+        self.tree_worker.revision = self._revision
+        self.tree_worker.message.connect(lambda m: self.statusBar().showMessage(m))
+        self.tree_worker.succeeded.connect(self._tree_solved)
+        self.tree_worker.failed.connect(self._tree_failed)
+        self.tree_worker.start()
+
+    def _tree_solved(self, tree: TreeResult):
+        if self._is_stale():
+            return
+        if getattr(self.sender(), "revision", self._revision) != self._revision:
+            msg = "The setup changed while the power tree was solving: solve it again (Ctrl+T)"
+            self.tree_panel.clear(msg)
+            self.statusBar().showMessage(msg)
+            return
+        self.tree = tree
+        self.tree_panel.set_tree(tree, self._tree_verdict())
+        self.group_box.blockSignals(True)
+        while self.group_box.count() > 1:
+            self.group_box.removeItem(1)
+        for key, res in tree.groups.items():
+            self.group_box.addItem(f"{key} ({res.kind})" if res.kind == "ground" else key, key)
+        self.group_box.blockSignals(False)
+        self.statusBar().showMessage(f"Power tree solved in {tree.stats['seconds']:.1f} s: "
+                                     f"{len(tree.groups)} groups · pick one in Group to see it")
+
+    def _tree_failed(self, message: str):
+        if self._is_stale():
+            return
+        self.tree_panel.clear("<b>Power tree</b>: cannot solve")
+        QMessageBox.warning(self, "Cannot solve the power tree", message)
+
+    def _tree_verdict(self) -> str:
+        tree = self.tree
+        if tree is None:
+            return ""
+        fails = sum(p.severity == FAIL for key in tree.groups
+                    for p in find_tree_problems(tree, key, tree.limits.get(key)))
+        judged = any(limits_dict(tree.limits.get(k), r.kind) for k, r in tree.groups.items())
+        return (f"<span style='color:#c0392b'><b>{fails} limit(s) exceeded</b></span>" if fails
+                else "no limits exceeded" if judged else "no limits set: nothing is judged")
+
+    def _drop_tree(self, reason: str):
+        """The power-tree result no longer matches the project (or the board)."""
+        had = self.tree is not None
+        self.tree = None
+        shown = self.group_box.currentData() is not None
+        self.group_box.blockSignals(True)
+        while self.group_box.count() > 1:
+            self.group_box.removeItem(1)
+        self.group_box.setCurrentIndex(0)
+        self.group_box.blockSignals(False)
+        if had or reason == "":
+            self.tree_panel.clear(reason)
+        if shown and self.net:
+            self._show_net_view()
+
+    def _set_group(self, key: Optional[str]):
+        self.group_box.blockSignals(True)
+        self.group_box.setCurrentIndex(max(0, self.group_box.findData(key)))
+        self.group_box.blockSignals(False)
+
+    def show_group(self, key: str):
+        """Show group ``key`` of the power tree in the view."""
+        i = self.group_box.findData(key)
+        if i >= 0:
+            self.group_box.setCurrentIndex(i)
+
+    def _group_changed(self):
+        """Fill the layer box for the shown group (or the net), show its problems and draw it."""
+        if self.board is None:
+            return
+        group = self.group_box.currentData()
+        res = self.tree.groups.get(group) if group and self.tree else None
+        if res is not None:
+            keep = self.layer_box.currentText()
+            self.layer_box.blockSignals(True)
+            self.layer_box.clear()
+            for lf in res.layers:
+                self.layer_box.addItem(lf.name, lf.layer_id)
+            busiest = max(res.layers, key=lambda lf: lf.power).name if res.layers else ""
+            i = self.layer_box.findText(keep if self.layer_box.findText(keep) >= 0 else busiest)
+            self.layer_box.setCurrentIndex(max(0, i))
+            self.layer_box.blockSignals(False)
+            self._show_tree_problems(group)
+            self.refresh_view(fit=True)
+        elif self.net:
+            self._show_net_view()
+
+    def _show_net_view(self):
+        """Back to the shown net solved alone: its layers, problems and map. The rail panel is
+        left as it is (it may be in the middle of an edit)."""
+        self.layer_box.blockSignals(True)
+        self.layer_box.clear()
+        for lid in self.board.net_layers(self.net):
+            self.layer_box.addItem(self.board.layer_name(lid), lid)
+        self.layer_box.blockSignals(False)
+        res = self.results.get(self.net)
+        if res is not None:
+            self._show_problems(res)
+        else:
+            self.problems.clear(f"<b>{self.net}</b>: add a source and a load, then Solve (F5)")
+        self._refresh_results()
+        self.refresh_view(fit=True)
+
+    def _show_tree_problems(self, key: str):
+        res, tree = self.tree.groups[key], self.tree
+        limits = tree.limits.get(key)
+        problems = find_tree_problems(tree, key, limits)
+        fails = sum(p.severity == FAIL for p in problems)
+        worst = (f"max rise {res.max_drop * 1e3:.2f} mV above 0 V" if res.kind == "ground"
+                 else f"max drop {res.max_drop * 1e3:.2f} mV below the {res.v_ref:.4g} V set point")
+        judged = bool(limits_dict(limits, res.kind))
+        verdict = (f"<span style='color:#c0392b'><b>{fails} limit(s) exceeded</b></span>" if fails
+                   else "no limits exceeded" if judged else "no limits set")
+        nets = " + ".join(res.nets)
+        self.problems.set_result(
+            f"<b>{key}</b> ({res.kind} of the power tree: {nets}): {worst} · copper loss "
+            f"{res.power_loss * 1e3:.3g} mW · {verdict}", problems, res.warnings + res.assumptions)
 
     # ------------------------------------------------------------------ before / after
     def pin_baseline(self):
@@ -726,6 +907,11 @@ class MainWindow(QMainWindow):
         if self.worker is not None and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait(5000)
+        if self.tree_worker is not None and self.tree_worker.isRunning():
+            for signal in (self.tree_worker.succeeded, self.tree_worker.failed):
+                signal.disconnect()
+            self.tree_worker.cancel()
+            self.tree_worker.wait(5000)
         if self.report_worker is not None and self.report_worker.isRunning():
             # A report cannot be cancelled halfway: finish the file, without asking to open it.
             self.report_worker.succeeded.disconnect()

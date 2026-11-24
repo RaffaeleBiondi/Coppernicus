@@ -181,6 +181,9 @@ class Limits:
     max_drop_pct: Optional[float] = None
     max_current_density: Optional[float] = None    # A/mm^2
     max_via_current: Optional[float] = None         # A
+    # For a ground net: the largest rise above its 0 V reference, mV (power-tree ground
+    # groups, and the net solved alone: the largest deviation from its source voltage).
+    max_ground_rise_mv: Optional[float] = None
 
 
 @dataclass
@@ -387,6 +390,17 @@ def _portable_path(text: str) -> Path:
     return Path(text)
 
 
+def _number(value: Any, what: str) -> float:
+    """A finite number from the file (NaN and infinity are refused)."""
+    try:
+        x = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{what} must be a number, not {value!r}") from None
+    if not math.isfinite(x):
+        raise ValueError(f"{what} must be a finite number, not {value!r}")
+    return x
+
+
 def _pins_out(pins: PinSpec):
     return "all" if pins is None else list(pins)
 
@@ -414,22 +428,23 @@ def _pin_ref_in(data: Dict[str, Any], what: str, owner: str) -> Dict[str, Any]:
 
 def _source_in(s: Dict[str, Any]) -> Source:
     ref = str(s["ref"])
-    kind = str(s.get("kind", "source"))
+    kind = str(s.get("kind") or "source")
     if kind not in SOURCE_KINDS:
         raise ValueError(f"source {ref}: kind must be one of {', '.join(SOURCE_KINDS)}, not {kind!r}")
     efficiency = s.get("efficiency")
     if efficiency is not None:
-        efficiency = float(efficiency)
+        efficiency = _number(efficiency, f"source {ref}: efficiency")
         if not 0 < efficiency <= 1:
             raise ValueError(f"source {ref}: efficiency is a fraction between 0 and 1 "
                              f"(0.9 for 90 %), not {efficiency:g}")
-    quiescent = float(s.get("quiescent_a", 0.0))
+    quiescent = _number(s.get("quiescent_a", 0.0), f"source {ref}: quiescent_a")
     if quiescent < 0:
         raise ValueError(f"source {ref}: quiescent_a cannot be negative")
     refs: Dict[str, Any] = {}
     for what in SOURCE_PIN_REFS:
         refs.update(_pin_ref_in(s, what, f"source {ref}"))
-    return Source(ref=ref, voltage=float(s["voltage"]), pins=parse_pins(s.get("pins")),
+    return Source(ref=ref, voltage=_number(s["voltage"], f"source {ref}: voltage"),
+                  pins=parse_pins(s.get("pins")),
                   name=str(s.get("name", "")), kind=kind, efficiency=efficiency,
                   quiescent_a=quiescent, **refs)
 
@@ -439,7 +454,8 @@ def _load_in(ld: Dict[str, Any]) -> Load:
     refs: Dict[str, Any] = {}
     for what in LOAD_PIN_REFS:
         refs.update(_pin_ref_in(ld, what, f"load {ref}"))
-    return Load(ref=ref, current=float(ld["current"]), pins=parse_pins(ld.get("pins")),
+    return Load(ref=ref, current=_number(ld["current"], f"load {ref}: current"),
+                pins=parse_pins(ld.get("pins")),
                 name=str(ld.get("name", "")), **refs)
 
 
@@ -454,13 +470,16 @@ def _link_in(k: Dict[str, Any]) -> Link:
         raise ValueError(f"link {name} needs its part reference (ref)")
     if k.get("resistance_ohm") is None:
         raise ValueError(f"link {name} needs resistance_ohm")
-    resistance = float(k["resistance_ohm"])
+    resistance = _number(k["resistance_ohm"], f"link {name}: resistance_ohm")
     if resistance < 0:
         raise ValueError(f"link {name}: resistance_ohm cannot be negative")
     sides = []
     for side in ("a", "b"):
         if k.get(side) is None:
             raise ValueError(f"link {name} needs side {side}: {{net, pins}}")
+        if isinstance(k[side], dict) and k[side].get("ref"):
+            raise ValueError(f"link {name}: side {side} cannot name a part (ref); a link is one "
+                             f"part, given once as its ref ({ref})")
         d = _pin_ref_in(k, side, f"link {name}")
         sides += [d[f"{side}_pins"], d[f"{side}_net"]]
     return Link(name, ref, *sides, resistance)

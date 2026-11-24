@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import copy
 import traceback
+from typing import Optional
 
 from PySide6.QtCore import QThread, Signal
 
 from coppernicus.engine import Board, Cancelled, EngineError, solve_rail
-from coppernicus.project import Rail, Settings
+from coppernicus.project import Project, Rail, Settings
 
 
 class SolveWorker(QThread):
@@ -16,10 +17,13 @@ class SolveWorker(QThread):
     succeeded = Signal(object)        # RailResult
     failed = Signal(str)
 
-    def __init__(self, board: Board, rail: Rail, settings: Settings, parent=None):
+    def __init__(self, board: Board, rail: Rail, settings: Settings, parent=None,
+                 project: Optional[Project] = None):
         super().__init__(parent)
         # Copies: the user may keep editing while the solve runs.
         self._board, self._rail, self._settings = board, copy.deepcopy(rail), copy.deepcopy(settings)
+        # With the project, the rail also delivers the regulator inputs and links it feeds.
+        self._project = copy.deepcopy(project)
         self._cancel = False
 
     def cancel(self):
@@ -28,7 +32,36 @@ class SolveWorker(QThread):
     def run(self):
         try:
             result = solve_rail(self._board, self._rail, self._settings, progress=self.message.emit,
-                                cancelled=lambda: self._cancel)
+                                cancelled=lambda: self._cancel, project=self._project)
+        except Cancelled:
+            self.failed.emit("Solve cancelled")
+        except EngineError as e:
+            self.failed.emit(str(e))
+        except Exception:                                   # noqa: BLE001 - shown to the user
+            self.failed.emit("Unexpected error:\n" + traceback.format_exc())
+        else:
+            self.succeeded.emit(result)
+
+
+class TreeWorker(QThread):
+    """The whole power tree (every rail and ground) solved in the background."""
+    message = Signal(str)
+    succeeded = Signal(object)        # TreeResult
+    failed = Signal(str)
+
+    def __init__(self, board: Board, project: Project, parent=None):
+        super().__init__(parent)
+        self._board, self._project = board, copy.deepcopy(project)
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        from coppernicus.engine.tree import solve_project_tree
+        try:
+            result = solve_project_tree(self._board, self._project, progress=self.message.emit,
+                                        cancelled=lambda: self._cancel)
         except Cancelled:
             self.failed.emit("Solve cancelled")
         except EngineError as e:
