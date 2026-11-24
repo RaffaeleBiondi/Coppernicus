@@ -27,6 +27,7 @@ def test_compare_strip_two_currents(runs):
     rail = Rail(Strip.NET, sources=[Source("J1", 1.0)], loads=[Load("U1", 1.0)])
     cmp_ = compare_runs(Run(one, rail, Settings(), "strip"), Run(two, rail, Settings(), "strip"))
     assert cmp_["result_a"] == "baseline" and cmp_["result_b"] == "current"
+    assert cmp_["max_drop_label"] == "Largest drop on the rail, mV below 1 V"
     assert cmp_["loads"][0]["delta_drop_mv"] == pytest.approx(drop_1a * 1e3, rel=1e-6)   # linear
     diff = difference_layer(one.layers[0], two.layers[0])
     assert same_mesh(one.layers[0], two.layers[0])
@@ -54,3 +55,22 @@ def test_nodes_off_the_other_copper_are_nan(runs):
     diff = difference_layer(one.layers[0], cut)
     x = one.layers[0].points[:, 0]
     assert np.isnan(diff.voltage[x > 21.0]).all() and np.isfinite(diff.voltage[x < 19.0]).all()
+
+
+def _rail_result(v_ref):
+    """A rail solved alone at ``v_ref``: the current flows into the copper at or below 0 V."""
+    from coppernicus.results import RailResult
+    return RailResult("V", ["V"], v_ref, [], [], [], [], 0.0, 0.0, 0.0, 0.0,
+                      drop_sign=-1.0 if v_ref <= 0 else 1.0)
+
+
+@pytest.mark.parametrize("v_base, v_now, label", [
+    (3.3, 3.3, "Largest drop on the rail, mV below 3.3 V"),
+    (-3.3, -3.3, "Largest drop on the rail, mV above -3.3 V (toward 0 V)"),
+    (0.0, 0.0, "Largest ground rise on the rail, mV above 0 V"),
+    # another reference in the baseline: the current run's side, the baseline's named
+    (3.3, 5.0, "Largest drop on the rail, mV below 5 V (baseline: drop below 3.3 V)"),
+])
+def test_the_largest_drop_is_labelled_with_its_side_of_the_reference(v_base, v_now, label):
+    from coppernicus.app.comparing import largest_drop_label
+    assert largest_drop_label(_rail_result(v_base), _rail_result(v_now)) == label

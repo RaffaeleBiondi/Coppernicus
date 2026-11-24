@@ -930,7 +930,7 @@ class ComparePanel(QWidget):
             rows.append((f"{d['name']}: drop at its worst pin (mV)", num(d["drop_mv_a"]),
                          num(d["drop_mv_b"]), num(d.get("delta_drop_mv"), fmt="{:+.3f}")))
         md, pl = cmp_["max_drop_mv"], cmp_["power_loss_w"]
-        rows.append(("Largest drop on the rail (mV)", num(md["a"]), num(md["b"]),
+        rows.append((cmp_.get("max_drop_label", "Largest drop on the rail (mV)"), num(md["a"]), num(md["b"]),
                      num(md["delta"], fmt="{:+.3f}")))
         rows.append(("Copper loss, total (mW)", num(pl["a"], 1e3), num(pl["b"], 1e3),
                      num(pl["delta"], 1e3, "{:+.3f}")))

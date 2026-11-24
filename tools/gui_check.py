@@ -462,6 +462,8 @@ def run_compare(window, check: Checks, args, out: Path):
     want = (now.drop(now.loads[0]) - base.drop(base.loads[0])) * 1e3
     check("U1's delta is the change of its drop", u1 is not None and abs(float(u1[3]) - want) < 2e-3,
           f"{u1}; expected {want:+.3f}")
+    check("the largest drop names its side of 3.3 V", "Largest drop on the rail, mV below 3.3 V" in rows,
+          str(list(rows)))
     check("the loss chart shows baseline and current", window.losses.series == ["baseline", "current"])
     if args.window:
         window.results_tabs.setCurrentWidget(window.compare)

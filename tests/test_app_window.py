@@ -81,3 +81,23 @@ def test_closing_during_a_rail_solve_leaves_none_of_its_signals_connected():
         worker.finished.emit()
         assert heard == [], heard
     ''')
+
+
+def test_the_compare_tab_labels_the_largest_drop_with_its_side():
+    run_in_window('''
+        from coppernicus.app.comparing import Run, compare_runs
+        from coppernicus.app.panels import ComparePanel
+        from coppernicus.engine import Board, solve_rail
+        from coppernicus.engine.synthetic import Strip, strip_board
+        from coppernicus.project import Load, Rail, Settings, Source
+
+        board = Board(strip_board())
+        rail = Rail(Strip.NET, sources=[Source("J1", -1.0)], loads=[Load("U1", 1.0)])
+        one, two = solve_rail(board, rail), solve_rail(board, rail)
+        panel = ComparePanel()
+        cmp_ = compare_runs(Run(one, rail, Settings(), "s"), Run(two, rail, Settings(), "s"))
+        panel.show_comparison(cmp_, "")
+        labels = [row[0] for row in panel.rows()]
+        assert "Largest drop on the rail, mV above -1 V (toward 0 V)" in labels, labels
+        assert "U1: drop at its worst pin (mV)" in labels, labels
+    ''')
