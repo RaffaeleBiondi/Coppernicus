@@ -406,6 +406,33 @@ def run_review_fixes(window, check: Checks, args, out: Path):
         window.measure.setChecked(False)
 
 
+def run_open_asks(window, check: Checks, out: Path):
+    """Opening another board or project from the menu asks before dropping unsaved edits;
+    Cancel keeps everything and shows no file dialog."""
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    window.open_board(out / "pins.kipi.json.gz")
+    QApplication.processEvents()
+    window.nets.set_marked("OTHER", True)                     # an unsaved edit
+    shown = []
+    real_open, real_question = QFileDialog.getOpenFileName, QMessageBox.question
+    QFileDialog.getOpenFileName = staticmethod(lambda *a, **k: (shown.append(a[1]), ("", ""))[1])
+    try:
+        for action in (window.open_board_dialog, window.open_project_dialog):
+            before = len(DIALOGS)
+            action()
+            check(f"{action.__name__} asks before dropping unsaved edits",
+                  any(k == "question" for k, _ in DIALOGS[before:]), str(DIALOGS[before:]))
+        QMessageBox.question = staticmethod(lambda *a, **k: (DIALOGS.append(("question", a[1])),
+                                                             QMessageBox.Cancel)[1])
+        n = len(shown)
+        window.open_board_dialog()
+        check("Cancel keeps the edits and shows no file dialog",
+              len(shown) == n and window.project.marked_rails == ["OTHER"] and window.dirty)
+    finally:
+        QFileDialog.getOpenFileName, QMessageBox.question = real_open, real_question
+    window.dirty = False
+
+
 def run_close_asks(window, check: Checks, out: Path):
     """Closing with only hand-marked rails asks to save (the dialog answers Discard)."""
     from PySide6.QtWidgets import QApplication
@@ -491,6 +518,7 @@ def main(argv=None) -> int:
         if args.local and args.rail:
             run_local(window, check, args, out)
         run_review_fixes(window, check, args, out)
+        run_open_asks(window, check, out)
         run_close_asks(window, check, out)
     finally:
         if window.isVisible():

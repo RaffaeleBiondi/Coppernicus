@@ -164,14 +164,33 @@ class MainWindow(QMainWindow):
             self.open_board(path)
 
     def open_board_dialog(self):
+        if not self.confirm_discard("opening another board"):
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Open board", "", board_file_filter())
         if path:
             self.open_board(path)
 
     def open_project_dialog(self):
+        if not self.confirm_discard("opening another project"):
+            return
         path, _ = QFileDialog.getOpenFileName(self, "Open project", "", PROJECT_FILTER)
         if path:
             self.open_project(path)
+
+    def confirm_discard(self, before: str = "closing") -> bool:
+        """Before the project is dropped (closing, opening another board or project): offer
+        to save unsaved edits. True to go on; False to stay, on Cancel or when the save did
+        not happen (its dialog was cancelled or it failed)."""
+        if not (self.dirty and (self.project.rails or self.project.path or self.project.marked_rails)):
+            return True
+        answer = QMessageBox.question(self, "Unsaved changes", f"Save the project before {before}?",
+                                      QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        if answer == QMessageBox.Cancel:
+            return False
+        if answer == QMessageBox.Save:
+            self.save_project()
+            return not self.dirty
+        return True
 
     def open_board(self, path, project: Optional[Project] = None) -> bool:
         self.statusBar().showMessage(f"Reading {Path(path).name}…")
@@ -509,14 +528,9 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ closing
     def closeEvent(self, event):
-        if self.dirty and (self.project.rails or self.project.path or self.project.marked_rails):
-            answer = QMessageBox.question(self, "Unsaved changes", "Save the project before closing?",
-                                          QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
-            if answer == QMessageBox.Cancel:
-                event.ignore()
-                return
-            if answer == QMessageBox.Save:
-                self.save_project()
+        if not self.confirm_discard("closing"):
+            event.ignore()
+            return
         if self.worker is not None and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait(5000)
