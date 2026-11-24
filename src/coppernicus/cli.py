@@ -289,7 +289,7 @@ def _cmd_solve_tree(args) -> int:
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / f"{safe_name(Path(args.project).stem)}_tree_summary.json"
-    doc["summary_file"] = str(summary_path)
+    doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
     summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
                             encoding="utf-8")
     if quiet:
@@ -313,7 +313,7 @@ def _print_rail(res, problems):
     for t in res.loads:
         pct = res.drop_pct(t)                   # NaN on a 0 V net: no percentage there
         pct_text = f"{pct:5.2f} %" if math.isfinite(pct) else "  n/a"
-        print(f"  load   {t.name:14s} {t.v_min:8.4f} V  draws    {t.current:7.3f} A  "
+        print(f"  load   {t.name:14s} {res.worst_v(t):8.4f} V  draws    {t.current:7.3f} A  "
               f"drop {res.drop(t) * 1e3:8.2f} mV ({pct_text})")
     shares = res.loss_breakdown()
     total = sum(shares.values()) or 1.0

@@ -823,8 +823,8 @@ class Session:
         connected = math.isfinite(v)
         out.update({
             "on_copper": True, "connected": connected, "voltage_v": v,
-            "drop_mv": (res.v_ref - v) * 1e3,
-            "drop_pct": 100.0 * (res.v_ref - v) / abs(res.v_ref) if res.v_ref else None,
+            "drop_mv": float(res.drop_at(v)) * 1e3,         # toward 0 V on a negative rail
+            "drop_pct": 100.0 * float(res.drop_at(v)) / abs(res.v_ref) if res.v_ref else None,
             "j_a_mm2": float(lf.current_density[k]), "j_vector_a_mm2": jv[k],
             "assumptions": ["Voltage is interpolated linearly in the mesh triangle; |J| is constant "
                             "per triangle and uniform through the copper thickness."],

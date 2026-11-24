@@ -48,8 +48,8 @@ def find_problems(result: RailResult, limits: Optional[Limits] = None,
     """Every load, then at most ``top`` current-crowding spots and ``top`` vias (more when
     they exceed a limit). Fails first."""
     limits = limits or Limits()
-    out = (_rise(result, limits) + _loads(result, limits) + _hotspots(result, limits, top)
-           + _vias(result, limits, top))
+    rise = _rise(result, limits) if not result.v_ref else []    # a ground-rise limit: 0 V nets only
+    out = rise + _loads(result, limits) + _hotspots(result, limits, top) + _vias(result, limits, top)
     order = {"rise": 0, "load": 0, "hotspot": 1, "via": 2}
     return sorted(out, key=lambda p: (p.severity != FAIL, order[p.kind], -p.value))
 
@@ -61,14 +61,16 @@ def _loads(result: RailResult, limits: Limits) -> List[Problem]:
         fail = limits.max_drop_pct is not None and pct > limits.max_drop_pct
         x, y = t.positions[0] if t.positions else (np.nan, np.nan)
         limit = f"limit {limits.max_drop_pct:g} %" if limits.max_drop_pct is not None else "no limit set"
+        share = f", {pct:.2f} %" if np.isfinite(pct) else ""        # none at 0 V
+        word = "below" if result.sign > 0 else "above"
         out.append(Problem(
             FAIL if fail else INFO, "load",
-            f"{t.name}: {t.v_min:.4f} V at its worst pin ({mv:.2f} mV, {pct:.2f} % below "
+            f"{t.name}: {result.worst_v(t):.4f} V at its worst pin ({mv:.2f} mV{share} {word} "
             f"{result.v_ref:g} V)",
             f"{t.ref}, {len(t.pad_ids)} pin(s), {t.current:g} A; {limit}.",
             pct, float(x), float(y),
             data={"name": t.name, "ref": t.ref, "drop_mv": mv, "drop_pct": pct,
-                  "v_min_v": t.v_min, "current_a": t.current}))
+                  "v_min_v": t.v_min, "v_worst_v": result.worst_v(t), "current_a": t.current}))
     return out
 
 
@@ -171,14 +173,38 @@ LIMIT_KEYS = {"max_drop_pct": "max_drop_pct", "max_current_density_a_mm2": "max_
               "max_via_current_a": "max_via_current", "max_ground_rise_mv": "max_ground_rise_mv"}
 
 
-def limits_dict(limits: Optional[Limits], kind: str = "rail") -> Dict[str, float]:
-    """The limits that apply to a group of ``kind``, keyed with their units. A ground has
-    no nominal voltage, so a drop limit does not apply to it."""
+GROUND_ONLY = "applies to nets at 0 V (grounds) only"
+SUPPLY_ONLY = "0 V nominal: a % drop limit does not apply (set max_ground_rise_mv)"
+
+
+def limits_dict(limits: Optional[Limits], kind: str = "rail",
+                v_ref: Optional[float] = None) -> Dict[str, float]:
+    """The limits that apply to a net or group, keyed with their units. One rule, by the
+    reference voltage: ``max_ground_rise_mv`` applies to a net at 0 V (a ground group, or a
+    rail driven at 0 V: ``v_ref`` 0), ``max_drop_pct`` to a net with a nonzero nominal; a
+    ground group has no nominal at all. Copper limits apply to both."""
     limits = limits or Limits()
     out = {key: getattr(limits, attr) for key, attr in LIMIT_KEYS.items()
            if getattr(limits, attr) is not None}
-    # A ground has no nominal voltage for a drop limit; a supply rail of a tree has no rise.
-    out.pop("max_drop_pct" if kind == "ground" else "max_ground_rise_mv", None)
+    if kind == "ground":
+        out.pop("max_drop_pct", None)
+    elif v_ref is None or v_ref != 0:
+        out.pop("max_ground_rise_mv", None)
+    return out
+
+
+def inapplicable_limits(net: str, limits: Optional[Limits], v_ref: float,
+                        kind: str = "rail") -> List[Dict[str, str]]:
+    """The limits set on ``net`` that do not apply to it (:func:`limits_dict`), as not-judged
+    entries ``{item, limit, reason}``: a ground-rise limit on a net with a nonzero nominal, a
+    drop limit on a ground group. (A drop limit on a rail driven at 0 V is listed load by
+    load: "0 V nominal".)"""
+    limits = limits or Limits()
+    out = []
+    if limits.max_ground_rise_mv is not None and kind != "ground" and v_ref != 0:
+        out.append({"item": net, "limit": "max_ground_rise_mv", "reason": GROUND_ONLY})
+    if limits.max_drop_pct is not None and kind == "ground":
+        out.append({"item": net, "limit": "max_drop_pct", "reason": SUPPLY_ONLY})
     return out
 
 
@@ -220,6 +246,8 @@ def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = 
                  + _returns(res, None, per_net))
     else:
         first = _tree_loads(tree, group, res, per_net) + _tree_inputs(tree, group, res, per_net)
+        if not res.v_ref:                                   # a rail driven at 0 V
+            first += _rise(res, glim, source("max_ground_rise_mv"))
     out = (first + _hotspots(res, glim, top, source("max_current_density"))
            + _vias(res, glim, top, source("max_via_current")))
     order = {"rise": 0, "load": 0, "return": 0, "hotspot": 1, "via": 2}
@@ -332,10 +360,10 @@ def from_0v(volts: float) -> str:
 
 def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:
     """With a ``max_ground_rise_mv`` limit: the largest deviation of the net's copper from
-    its reference, and where it is. On a ground group of a power tree it is signed (below
-    0 V under a negative rail), judged by its magnitude; on a net solved alone it is the
-    magnitude (that solve draws every load current out of the copper, so its sign is not
-    the physical one)."""
+    its reference, and where it is, signed (a ground below 0 V under a negative rail) and
+    judged by its magnitude. Where the load current is drawn out of the copper
+    (``drop_sign`` +1: a rail at 0 V inside a power tree, whose sign is the opposite of a
+    ground's), it is the magnitude."""
     limit = limits.max_ground_rise_mv
     if limit is None:
         return []
@@ -348,11 +376,11 @@ def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:
         if abs(dev[i]) > abs(best[0]):
             best = (float(dev[i]), float(lf.points[i, 0]), float(lf.points[i, 1]), lf.name)
     volts, x, y, layer = best
-    if res.kind != "ground":
+    if res.sign > 0:
         volts = abs(volts)
     mv = volts * 1e3
     where = f" on {layer}" if layer else ""
-    title = (f"{res.net}: largest ground rise {from_0v(volts)}{where}" if res.kind == "ground"
+    title = (f"{res.net}: largest ground rise {from_0v(volts)}{where}" if res.sign < 0
              else f"{res.net}: largest ground rise {mv:.2f} mV{where}")
     return [Problem(
         FAIL if abs(mv) > limit else INFO, "rise", _against(title, abs(mv) > limit, limit, "mV", source),

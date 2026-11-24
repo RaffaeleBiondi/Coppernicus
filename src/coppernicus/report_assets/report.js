@@ -68,7 +68,7 @@ function lutFor(ri, li, field) {
     lut[1] = rgba(0xb4b4b4);
     for (let c = 2; c < 65536; c++) {
       const v = rail.v_lo_v + (c - 2) * step;
-      lut[c] = pick(field === "drop" ? (rail.drop_max_mv > 0 ? ((rail.v_ref_v - v) * 1e3) / rail.drop_max_mv : 0)
+      lut[c] = pick(field === "drop" ? (rail.drop_max_mv > 0 ? (dropSign(rail) * (rail.v_ref_v - v) * 1e3) / rail.drop_max_mv : 0)
                                      : (span > 0 ? (v - rail.v_lo_v) / span : 0));
     }
   }
@@ -166,7 +166,7 @@ async function readout(ev) {
   const J = (cj - 1) * jstep;
   let text;
   if (cv === 1) text = `${where}: copper with no path to a source (no voltage); |J| = 0.`;
-  else { const V = rail.v_lo_v + (cv - 2) * vstep, drop = (rail.v_ref_v - V) * 1e3;
+  else { const V = rail.v_lo_v + (cv - 2) * vstep, drop = dropSign(rail) * (rail.v_ref_v - V) * 1e3;
     text = `${where}: V = ${sig(V, 7)} V · drop = ${sig(drop, 4)} mV (${rail.v_ref_v ? sig(100 * drop / 1e3 / Math.abs(rail.v_ref_v), 3) : "n/a"} %) · |J| = ${sig(J, 4)} A/mm²`; }
   out.textContent = "";
   out.append(text, el("br"), el("span", { class: "muted small" },
@@ -175,13 +175,18 @@ async function readout(ev) {
 }
 
 // ---------------------------------------------------------------- colour bar and notes
+// drop = drop_sign · (v_ref − V): +1 on a positive rail, −1 on a negative one (toward 0 V)
+// and at 0 V (a rise); reports written before the field have +1.
+function dropSign(rail) { return rail.drop_sign === -1 ? -1 : 1; }
+
 function bar() {
   const rail = R(), lay = L(), cb = $("bar"), c2 = cb.getContext("2d");
   const cm = S.field === "current" ? M.cmaps.magma : M.cmaps.viridis;
   for (let i = 0; i < 256; i++) { const rgb = cm[255 - i]; c2.fillStyle = `rgb(${rgb >> 16},${(rgb >> 8) & 255},${rgb & 255})`; c2.fillRect(0, i, 18, 1); }
   let top, bottom, unit, note;
-  if (S.field === "drop") { top = sig(rail.drop_max_mv, 4); bottom = "0"; unit = `mV below ${sig(rail.v_ref_v, 4)} V`;
-    note = "Drop below the source voltage. Same scale on every layer of the rail."; }
+  if (S.field === "drop") { top = sig(rail.drop_max_mv, 4); bottom = "0"; unit = rail.drop_unit || `mV below ${sig(rail.v_ref_v, 4)} V`;
+    note = (dropSign(rail) < 0 ? (rail.v_ref_v ? "Drop toward 0 V from the source voltage (a negative rail)." : "Rise above 0 V (a ground).")
+                              : "Drop below the source voltage.") + " Same scale on every layer of the rail."; }
   else if (S.field === "voltage") { top = sig(rail.v_hi_v, 7); bottom = sig(rail.v_lo_v, 7); unit = "V";
     note = "Same scale on every layer of the rail."; }
   else { top = "≥ " + sig(lay.j_scale_a_mm2, 4); bottom = "0"; unit = "A/mm²";
@@ -225,7 +230,7 @@ function panels() {
   v.append(el("strong", {}, rail.label), " ", badge(rail.verdict), " ", el("span", {}, verdictText(rail)));
   if (rail.nets.length > 1) v.append(el("div", { class: "muted small" }, "Solved together through net ties: " + rail.nets.join(", ")));
   const cards = $("worst"); cards.textContent = "";
-  if (w.load) cards.append(card("Worst load", `${w.load.name}: ${sig(w.load.drop_mv, 4)} mV`, `${sig(w.load.drop_pct, 3)} % below ${sig(rail.v_ref_v, 4)} V`));
+  if (w.load) cards.append(card("Worst load", `${w.load.name}: ${sig(w.load.drop_mv, 4)} mV`, `${sig(w.load.drop_pct, 3)} % ${dropSign(rail) < 0 ? "above" : "below"} ${sig(rail.v_ref_v, 4)} V`));
   cards.append(card("Largest drop on the copper", `${sig(w.max_drop_mv, 4)} mV`, `${sig(w.max_drop_pct, 3)} %`));
   cards.append(card("Copper loss", `${sig(w.power_loss_w * 1e3, 4)} mW`, w.busiest_layer ? `most on ${w.busiest_layer}` : null));
   if (w.hotspot) cards.append(card("Strongest current crowding", `${sig(w.hotspot.mean_j_a_mm2, 4)} A/mm² mean`,
@@ -238,8 +243,8 @@ function panels() {
       if (p.layer) { const li = rail.layers.findIndex((l) => l.name === p.layer); if (li >= 0) setLayer(li, false); }
       S.mark = [p.x_mm, p.y_mm]; zoomTo(p.x_mm, p.y_mm, 8); $("map").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
   const lim = rail.limits.max_drop_pct;
-  table("loads", [["Load", ""], ["Ref", ""], ["Pins", "num"], ["Current (A)", "num"], ["V min (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"], [lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""]],
-    rail.loads.map((t) => [[t.estimated ? el("span", { title: "estimated at nominal voltages, without copper losses" }, t.name, " ", el("span", { class: "muted small" }, "estimated draw")) : t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"], [sig(t.v_min_v, 7), "num"], [sig(t.drop_mv, 4), "num"],
+  table("loads", [["Load", ""], ["Ref", ""], ["Pins", "num"], ["Current (A)", "num"], ["V at worst pin (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"], [lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""]],
+    rail.loads.map((t) => [[t.estimated ? el("span", { title: "estimated at nominal voltages, without copper losses" }, t.name, " ", el("span", { class: "muted small" }, "estimated draw")) : t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"], [sig(t.v_worst_v ?? t.v_min_v, 7), "num"], [sig(t.drop_mv, 4), "num"],
       [sig(t.drop_pct, 3), "num"], [t.exceeds === null ? (lim ? "not judged" : "no limit set") : (t.exceeds ? el("span", { class: "badge fail" }, "FAIL") : "within"), ""]]));
   table("sources", [["Source", ""], ["Ref", ""], ["Pins", "num"], ["Voltage (V)", "num"], ["Current (A)", "num"]],
     rail.sources.map((t) => [[t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.v_v, 6), "num"], [sig(t.current_a, 4), "num"]]));

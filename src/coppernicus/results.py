@@ -81,14 +81,49 @@ class RailResult:
     # ground sinks below 0 V, as under a negative rail).
     kind: str = "rail"
     converged: bool = True         # False: a power-tree group whose iteration did not converge
+    # Which way the load current flows, so drop = drop_sign · (v_ref − V) at any point:
+    # +1, out of the copper (a positive rail: the copper falls below v_ref); −1, into it (a
+    # negative rail, where the copper moves toward 0 V, a net at 0 V solved alone, and a
+    # ground group, where it rises). Not derivable from v_ref: a rail group at 0 V inside a
+    # power tree draws (+1), a net at 0 V solved alone does not.
+    drop_sign: float = 1.0
 
     # ------------------------------------------------------------------ helpers
     def layer(self, name: str) -> Optional[LayerField]:
         return next((lf for lf in self.layers if lf.name == name), None)
 
+    @property
+    def sign(self) -> float:
+        """``drop_sign``; always -1 on a ground group (its drop is its signed rise)."""
+        return -1.0 if self.kind == "ground" else self.drop_sign
+
+    def worst_v(self, t: TerminalResult) -> float:
+        """The voltage of the terminal's worst pad: its lowest when the load current flows
+        out of the copper, its highest when it flows in (``drop_sign``)."""
+        return t.v_max if self.sign < 0 else t.v_min
+
     def drop(self, t: TerminalResult) -> float:
-        """Volts below ``v_ref`` at the terminal's worst pad."""
-        return self.v_ref - t.v_min
+        """Volts lost from ``v_ref`` at the terminal's worst pad: below it on a positive rail,
+        toward 0 V on a negative one, the rise of a net at 0 V."""
+        return self.sign * (self.v_ref - self.worst_v(t))
+
+    def drop_at(self, v):
+        """The drop (V) at voltages ``v`` (a number or an array): ``drop_sign · (v_ref − v)``."""
+        return self.sign * (self.v_ref - np.asarray(v, dtype=float))
+
+    def is_rise(self) -> bool:
+        """Whether the drop is a ground's rise above 0 V (a ground group, or a net at 0 V
+        solved alone)."""
+        return self.kind == "ground" or (self.v_ref == 0 and self.drop_sign < 0)
+
+    def drop_unit(self) -> str:
+        """What the drop is measured as, for map labels: "mV below 3.3 V", "mV above
+        -3.3 V (toward 0 V)", "mV above 0 V (ground rise)"."""
+        if self.is_rise():
+            return "mV above 0 V (ground rise)"
+        if self.sign < 0:
+            return f"mV above {self.v_ref:g} V (toward 0 V)"
+        return f"mV below {self.v_ref:g} V"
 
     def drop_pct(self, t: TerminalResult) -> float:
         """The drop as a share of |v_ref| (positive on a negative rail too)."""

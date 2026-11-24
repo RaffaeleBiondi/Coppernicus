@@ -195,11 +195,25 @@ def apply_limits(tree, project: Project) -> None:
     judge_loads(tree)
 
 
-def unsolved_limits(tree) -> List[str]:
-    """The nets with a limit set that the power tree did not solve (excluded, or not set up),
-    as not-judged items."""
-    return [f"{net}: not solved in the power tree" for net, lim in tree.limits.items()
-            if tree.group_of(net) is None and any(v is not None for v in vars(lim).values())]
+def unjudged(item: str, net: str, limit: str, reason: str) -> Dict[str, str]:
+    """A not-judged entry: what (a load, a regulator input ``"U2 (input)"``, a return pin, or
+    the net itself), on which net, which limit (keyed with its unit) and why."""
+    return {"item": item, "net": net, "limit": limit, "reason": reason}
+
+
+def not_judged_text(items: Sequence[Dict[str, str]]) -> str:
+    """The entries as one line: "U3 on +1V8 (max_drop_pct): VRM OUT OF REGULATION; …"."""
+    return "; ".join((u["item"] if u["item"] == u.get("net", u["item"]) else f"{u['item']} on {u['net']}")
+                     + f" ({u['limit']}): {u['reason']}" for u in items)
+
+
+def unsolved_limits(tree) -> List[Dict[str, str]]:
+    """Each limit set on a net the power tree did not solve (excluded, or not set up), as a
+    not-judged entry."""
+    from coppernicus.problems import LIMIT_KEYS
+    return [unjudged(net, net, key, "not solved in the power tree")
+            for net, lim in tree.limits.items() if tree.group_of(net) is None
+            for key, attr in LIMIT_KEYS.items() if getattr(lim, attr) is not None]
 
 
 def judge_loads(tree) -> None:
@@ -223,7 +237,7 @@ def judge_loads(tree) -> None:
 def _why_not(status: str, nominal: Optional[float]) -> str:
     if status:
         return status
-    return "0 V nominal: no drop percentage" if not nominal else "not solved"
+    return "0 V nominal: a % drop limit does not apply" if not nominal else "not solved"
 
 
 @dataclass
@@ -235,21 +249,24 @@ class GroupVerdict:
     failed: int
     limits: Dict[str, float]               # the strictest of each kind, keyed with units
     origin: Dict[str, str]                 # limit key -> the net it came from
-    not_judged: List[str] = field(default_factory=list)
+    not_judged: List[Dict[str, str]] = field(default_factory=list)   # see unjudged()
     problems: list = field(default_factory=list)
 
 
 def group_verdict(tree, key: str, top: int = 5) -> GroupVerdict:
-    from coppernicus.problems import FAIL, LIMIT_KEYS, find_tree_problems, limits_dict
+    from coppernicus.problems import FAIL, LIMIT_KEYS, find_tree_problems, inapplicable_limits, limits_dict
     res = tree.groups[key]
     problems = find_tree_problems(tree, key, top=top)
     failed = sum(p.severity == FAIL for p in problems)
     glim, gorigin = group_limits(tree, key)
-    checked = limits_dict(glim, res.kind)
+    checked = limits_dict(glim, res.kind, res.v_ref)
     origin = {k: gorigin[a] for k, a in LIMIT_KEYS.items() if k in checked}
     missing, judged = [], 0
+    for net in dict.fromkeys([key] + list(res.nets)):        # a limit of the wrong kind
+        missing += [unjudged(u["item"], net, u["limit"], u["reason"])
+                    for u in inapplicable_limits(net, tree.limits.get(net), res.v_ref, res.kind)]
     if checked and not res.converged:
-        missing.append(f"{key}: its iteration did not converge")
+        missing += [unjudged(key, key, k, "its iteration did not converge") for k in checked]
     elif checked:
         if "max_drop_pct" in checked:
             items = [(ld.name, ld.net or key, ld.passed, ld.status, ld.nominal_v)
@@ -259,17 +276,23 @@ def group_verdict(tree, key: str, top: int = 5) -> GroupVerdict:
             applies = [it for it in items if net_limits(tree, it[1], key)[0].max_drop_pct is not None]
             for name, net, passed, status, nominal in applies:
                 if passed is None:
-                    missing.append(f"{name} on {net}: {_why_not(status, nominal)}")
+                    missing.append(unjudged(name, net, "max_drop_pct", _why_not(status, nominal)))
             judged += sum(it[2] is not None for it in applies)
             if not applies:
-                missing.append(f"{key}: max_drop_pct judges no load or regulator input")
+                missing.append(unjudged(key, key, "max_drop_pct", "no load or regulator input to judge"))
         if res.kind == "ground" and "max_ground_rise_mv" in checked:
             for t in res.loads:
                 if not (math.isfinite(t.v_max) and math.isfinite(t.v_min)):
-                    missing.append(f"{t.name} on {t.net or key}: not solved")
+                    missing.append(unjudged(t.name, t.net or key, "max_ground_rise_mv", "not solved"))
         judged += any(k != "max_drop_pct" for k in checked)       # the copper is judged
     verdict = "fail" if failed else "not_judged" if missing or not judged else "pass"
     return GroupVerdict(verdict, failed, checked, origin, missing, problems)
+
+
+def has_limits(gv: GroupVerdict) -> bool:
+    """Whether the user set a limit on this group: one that applies, or one that does not
+    (and is listed as not judged)."""
+    return bool(gv.limits or gv.not_judged)
 
 
 def tree_verdicts(tree, top: int = 5) -> Tuple[str, Dict[str, GroupVerdict]]:
@@ -279,7 +302,7 @@ def tree_verdicts(tree, top: int = 5) -> Tuple[str, Dict[str, GroupVerdict]]:
     groups = {key: group_verdict(tree, key, top) for key in tree.groups}
     if any(v.verdict == "fail" for v in groups.values()):
         overall = "fail"
-    elif any(v.limits and v.verdict == "not_judged" for v in groups.values()) or unsolved_limits(tree):
+    elif any(has_limits(v) and v.verdict == "not_judged" for v in groups.values()) or unsolved_limits(tree):
         overall = "not_judged"
     else:
         overall = "pass" if any(v.verdict == "pass" for v in groups.values()) else "not_judged"
@@ -293,7 +316,7 @@ def own_limits(tree) -> Dict[str, Dict[str, float]]:
     out = {}
     for net, lim in tree.limits.items():
         key = tree.group_of(net)
-        d = (limits_dict(lim, tree.groups[key].kind) if key else
+        d = (limits_dict(lim, tree.groups[key].kind, tree.groups[key].v_ref) if key else
              {k: getattr(lim, a) for k, a in LIMIT_KEYS.items() if getattr(lim, a) is not None})
         if d:
             out[net] = d
@@ -303,13 +326,14 @@ def own_limits(tree) -> Dict[str, Dict[str, float]]:
 def verdict_note(tree, groups: Dict[str, GroupVerdict]) -> str:
     """One line on what was judged against what, and what was not."""
     own = own_limits(tree)
-    if not own:
-        return "No limits set: nothing is judged, problems are ranked only."
-    note = "Judged only against the limits you set: " + ", ".join(
-        f"{net}: {k} = {v:g}" for net, d in own.items() for k, v in d.items())
     missing = [x for v in groups.values() for x in v.not_judged] + unsolved_limits(tree)
+    if not own and not missing:
+        return "No limits set: nothing is judged, problems are ranked only."
+    note = ("Judged only against the limits you set: " + ", ".join(
+        f"{net}: {k} = {v:g}" for net, d in own.items() for k, v in d.items())
+        if own else "No limit you set applies to what it is set on")
     if missing:
-        note += ". Not judged: " + "; ".join(missing)
+        note += ". Not judged: " + not_judged_text(missing)
     return note
 
 
@@ -342,7 +366,7 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         gv = verdicts[key]
         failed += gv.failed
         v_ref = res.v_ref
-        by_net = {net: limits_dict(net_limits(tree, net, key)[0], res.kind) for net in res.nets}
+        by_net = {net: limits_dict(net_limits(tree, net, key)[0], res.kind, res.v_ref) for net in res.nets}
         groups.append({
             "group": key, "kind": res.kind, "nets": list(res.nets), "v_ref_v": v_ref,
             ("max_rise_mv" if res.kind == "ground" else "max_drop_mv"): res.max_drop * 1e3,

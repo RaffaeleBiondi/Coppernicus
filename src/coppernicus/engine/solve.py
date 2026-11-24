@@ -158,12 +158,15 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
         raise EngineError(str(e)) from None
     if not rail.loads and not draws:
         raise EngineError(f"{rail.net}: add at least one load before solving")
+    sign = load_sign(rail)
     src_names = _unique([s.label for s in rail.sources])
     names = _unique([ld.label for ld in rail.loads] + [d.name for d in draws])
     load_names = names[:len(rail.loads)]
     sources = [VoltageSource(name, [p.id for p in board.pads(nets, s.ref, s.pins)], s.voltage)
                for name, s in zip(src_names, rail.sources)]
-    loads = [CurrentLoad(name, [p.id for p in board.pads(nets, ld.ref, ld.pins)], ld.current)
+    # KiPI: amps leaving the copper at the pads. A load on a negative rail or on a net at 0 V
+    # returns its current into the copper, as in the power tree (#220).
+    loads = [CurrentLoad(name, [p.id for p in board.pads(nets, ld.ref, ld.pins)], sign * ld.current)
              for name, ld in zip(load_names, rail.loads)]
     for name, d in zip(names[len(rail.loads):], draws):
         try:
@@ -176,7 +179,7 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
                 raise EngineError(
                     f"Load {spec.label} on {rail.net} draws from pins that also carry {d.what}: "
                     f"its current would be counted twice; remove the load or {what}")
-        loads.append(CurrentLoad(name, pad_ids, d.current_a))
+        loads.append(CurrentLoad(name, pad_ids, sign * d.current_a))
     links = [SeriesLink(f"net tie {t.ref}", [t.pad_a], [t.pad_b], 0.0) for t in ties]
 
     solve_settings, assumptions = engine_settings(settings)
@@ -185,7 +188,7 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
     if settings.copper_temp_c != REF_TEMP_C:
         t_c = float(settings.copper_temp_c)
         problem.temperature = lambda xy: np.full(len(np.atleast_2d(xy)), t_c)
-    assumptions += tree_only_fields(rail) + estimate_note(draws)
+    assumptions += tree_only_fields(rail) + estimate_note(draws) + sign_note(rail, sign)
     assumptions += thickness_note(thickness, board.file_thickness_mm)
     if ties:
         assumptions.append("Net ties solved as shorts: " + ", ".join(
@@ -201,7 +204,7 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
     seconds = time.perf_counter() - t0
 
     out = _convert(board, rail, nets, result, src_names, names,
-                   extra_refs={n: d.ref for n, d in zip(names[len(rail.loads):], draws)})
+                   extra_refs={n: d.ref for n, d in zip(names[len(rail.loads):], draws)}, sign=sign)
     out.assumptions = assumptions
     out.stats["seconds"] = seconds
     return out
@@ -227,8 +230,32 @@ def mesh_fields(board: Board, result) -> Tuple[List[LayerField], List[ViaCurrent
     return layers, vias
 
 
+def load_sign(rail: Rail) -> float:
+    """Which way a rail's load current flows, from its sources' set voltages: +1 out of the
+    copper (all above 0 V), -1 into it (all at or below 0 V: a negative rail, or a net at
+    0 V, a ground, whose loads return their current into it). Raises for sources on both
+    sides of 0 V."""
+    up = [s.label for s in rail.sources if s.voltage > 0]
+    down = [s.label for s in rail.sources if s.voltage <= 0]
+    if up and down:
+        raise EngineError(f"{rail.net}: sources {', '.join(up)} (above 0 V) and {', '.join(down)} "
+                          "(at or below 0 V) drive the same rail: set them all on one side of 0 V")
+    return -1.0 if down else 1.0
+
+
+def sign_note(rail: Rail, sign: float) -> List[str]:
+    """The assumption line for a rail whose loads return their current into the copper."""
+    if sign > 0:
+        return []
+    if all(s.voltage == 0 for s in rail.sources):
+        return [f"{rail.net} is driven at 0 V: its loads return their current into the copper "
+                "(a ground), so it rises above 0 V toward them."]
+    return [f"{rail.net} is a negative rail: its loads' current flows into the copper, so the "
+            "voltage at the loads moves toward 0 V; drops are measured toward 0 V."]
+
+
 def _convert(board: Board, rail: Rail, nets: List[str], result, src_names, load_names,
-             extra_refs: Optional[Dict[str, str]] = None) -> RailResult:
+             extra_refs: Optional[Dict[str, str]] = None, sign: float = 1.0) -> RailResult:
     sol, fields = result.solution, result.fields
     layers, vias = mesh_fields(board, result)
     terms = {t.name: t for t in fields.terminals}
@@ -236,8 +263,8 @@ def _convert(board: Board, rail: Rail, nets: List[str], result, src_names, load_
             **{n: ld.ref for n, ld in zip(load_names, rail.loads)}, **(extra_refs or {})}
 
     def terminal(name: str, kind: str) -> TerminalResult:
-        t = terms[name]
-        return TerminalResult(name, kind, refs[name], float(t.current), float(t.v_min),
+        t = terms[name]        # current as drawn (load) or delivered (source), whatever the sign
+        return TerminalResult(name, kind, refs[name], float(sign * t.current), float(t.v_min),
                               float(t.v_max), list(t.pad_ids),
                               [tuple(board.pad(pid).position) for pid in t.pad_ids])
 
@@ -249,13 +276,14 @@ def _convert(board: Board, rail: Rail, nets: List[str], result, src_names, load_
         net=rail.net, nets=list(nets), v_ref=float(fields.v_ref), layers=layers,
         sources=[terminal(n, "source") for n in src_names],
         loads=[terminal(n, "load") for n in load_names],
-        vias=vias, max_drop=float(sm["max_drop"]), j_max=float(sm["j_max"]),
+        vias=vias, max_drop=float(sm["max_boost"] if sign < 0 else sm["max_drop"]),
+        j_max=float(sm["j_max"]),
         power_loss=float(sm["power_loss"]),
         energy_balance_error=float(sm["energy_balance_error"]),
         loss_vias=float(sum(v.power for v in fields.vias)),
         loss_series=float(sum(s.power for s in fields.series if np.isfinite(s.power))),
         stats={"triangles": float(sol.stats["n_tris"]), "unknowns": float(sol.stats["n_unknowns"])},
-        warnings=warnings,
+        warnings=warnings, drop_sign=sign,
     )
 
 

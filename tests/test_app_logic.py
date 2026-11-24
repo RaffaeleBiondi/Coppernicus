@@ -75,3 +75,13 @@ def test_rail_index_skips_rows_without_a_part():
     has_part = [True, False, True]
     assert [rail_index(has_part, r) for r in range(3)] == [0, None, 1]
     assert rail_index(has_part, -1) is None and rail_index(has_part, 5) is None
+
+
+def test_the_drop_map_of_a_negative_rail_is_positive_toward_0_v():
+    from coppernicus.app.board_view import drop_mv
+    from coppernicus.results import RailResult
+    neg = RailResult("VEE", ["VEE"], -3.3, [], [], [], [], 0.0, 0.0, 0.0, 0.0, drop_sign=-1.0)
+    assert np.allclose(drop_mv(neg, np.array([-3.29, -3.3])), [10.0, 0.0])
+    assert "toward 0 V" in neg.drop_unit()
+    gnd_alone = RailResult("GND", ["GND"], 0.0, [], [], [], [], 0.0, 0.0, 0.0, 0.0, drop_sign=-1.0)
+    assert np.allclose(drop_mv(gnd_alone, np.array([0.002])), [2.0]) and gnd_alone.is_rise()

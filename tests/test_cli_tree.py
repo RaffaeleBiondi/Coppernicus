@@ -22,7 +22,7 @@ def test_tree_prints_vrm_load_and_group_tables(chain, tmp_path, capsys):
     for word in ("VRMs", "Loads", "Groups", "U1", "smps", "U3", "across", "GND", "rise",
                  "not_judged", "assumption"):
         assert word in out, word
-    doc = json.loads((out_dir / "chain.coppernicus_tree_summary.json").read_text())
+    doc = json.loads((out_dir / "chain.coppernicus_tree_summary.json").read_text(encoding="utf-8"))
     assert doc["kind"] == "power_tree" and doc["summary_file"].endswith("_tree_summary.json")
 
 
@@ -66,3 +66,26 @@ def test_tree_text_names_what_was_not_judged_and_regulator_input_drops(chain, tm
     assert "not_judged" in verdict and "U3" in verdict and "OUT OF REGULATION" in verdict
     u1 = next(line for line in out.splitlines() if line.strip().startswith("U1 "))
     assert "input drop" in u1
+
+
+def test_tree_summary_file_is_written_with_forward_slashes(chain, tmp_path, capsys):
+    assert main(["solve", str(chain), "--tree", "--json", "--out", str(tmp_path / "o")]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
+    assert "\\" not in doc["summary_file"] and doc["summary_file"].endswith("_tree_summary.json")
+
+
+def test_solve_prints_a_negative_rail_load_at_its_worst_pin(tmp_path, capsys):
+    """On a negative rail the worst pin of a three-pin load is its highest (toward 0 V)."""
+    from coppernicus.engine import Board, solve_rail
+    from coppernicus.engine.synthetic import pins_board
+    from coppernicus.project import Load, Project, Rail, Source
+    save_snapshot(pins_board(), tmp_path / "pins.kipi.json.gz")
+    project = Project(board="pins.kipi.json.gz", rails=[Rail("VCC", sources=[Source("J1", -3.3)],
+                                                             loads=[Load("U1", 1.0)])])
+    path = project.save(tmp_path / "neg.coppernicus.yml")
+    res = solve_rail(Board(pins_board()), project.rails[0])
+    [u1] = res.loads
+    assert u1.v_max - u1.v_min > 1e-4
+    assert main(["solve", str(path), "--no-maps", "--out", str(tmp_path / "o")]) == EXIT_OK
+    [line] = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("  load   U1")]
+    assert f"{u1.v_max:8.4f} V" in line

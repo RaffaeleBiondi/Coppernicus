@@ -264,9 +264,20 @@ Which limit judges what (`power_tree.LIMITS_RULE`, also an assumption line of ev
   across their input and ground pins, as the tree's loads are. VIN solved alone judges the
   estimated input on the input pins only (no ground in a single-rail solve); both fail the
   same tight limit on the example.
-- `max_drop_pct` does not apply to a ground, which has no nominal voltage;
-  `max_ground_rise_mv` does not apply to a supply rail in the tree. On a ground it judges
-  each return pin's rise and the copper's largest rise, by magnitude (signed values shown).
+- **Which limit applies to which net: one rule, by the reference voltage (T7.1), in the tree
+  and for a rail solved alone** (`problems.limits_dict`, `problems.inapplicable_limits`).
+  `max_ground_rise_mv` judges a net at 0 V: a ground group, or a net driven at 0 V (solved
+  alone, or a 0 V rail group of the tree). `max_drop_pct` judges a net with a nonzero
+  nominal. Copper limits apply to both. A limit set on the other kind is a not-judged entry,
+  never dropped or judged as something else: "+3V3 (max_ground_rise_mv): applies to nets at
+  0 V (grounds) only"; on a ground group, "GND (max_drop_pct): 0 V nominal: a % drop limit
+  does not apply". On a rail driven at 0 V a drop limit is listed load by load ("0 V
+  nominal"), as the per-rail service always did. So `+3V3` solved alone with
+  `max_ground_rise_mv` no longer fails on its deviation: it is not judged. The rail panel
+  disables the field that does not apply to the shown net (kept editable while it holds a
+  value, so a value read from the file can be cleared).
+- On a ground, `max_ground_rise_mv` judges each return pin's rise and the copper's largest
+  rise, by magnitude (signed values shown).
 
 The verdict of a group (`power_tree.group_verdict`):
 - `fail` when a limit is exceeded;
@@ -276,15 +287,23 @@ The verdict of a group (`power_tree.group_verdict`):
   to judge, when the group did not converge, or when no limit applies;
 - `pass` only when everything a limit applies to was judged and passed.
 
+Each not-judged entry is an object `{"item", "net", "limit", "reason"}` (T7.1; the per-rail
+service's entries are `{"item", "limit", "reason"}`, plus `"rail"` at project level):
+`item` is the load, the regulator input `"U2 (input)"`, the return pin, or the net itself
+for net-level entries (a wrong-kind limit, a net not solved, a group that did not converge,
+a drop limit with nothing to judge); `limit` is the limit's key with its unit; `reason` is
+text. The verdict note stays text: "Not judged: U3 on +1V8 (max_drop_pct): VRM OUT OF
+REGULATION; …".
+
 Overall (`power_tree.tree_verdicts`): `fail` if a group fails; otherwise `not_judged` if a
-group with limits is `not_judged`, or a limit is set on a net the tree does not solve
+group with limits (or with a limit of the wrong kind) is `not_judged`, or a limit is set on a net the tree does not solve
 (excluded, or not set up); otherwise `pass` if something was judged; `not_judged` when no
 limit is set. Groups without limits do not stop a pass ("judged only against the limits you
 set"). `solve --tree` exits 0 for `not_judged`, as the per-rail solve does; its text output
 names the not-judged items on the `Verdict:` line.
-- A net solved on its own with `max_ground_rise_mv` set gets one "rise" problem: the copper
-  furthest from its source voltage, in mV, against the limit. It is meant for a ground net
-  solved alone.
+- A net driven at 0 V solved on its own with `max_ground_rise_mv` set gets one "rise"
+  problem: the copper furthest from 0 V, signed, judged by magnitude. On a net with a
+  nonzero nominal the limit does not apply (above).
 - The field is omitted from the project file while it is unset, so older files round-trip
   unchanged.
 - The Problems list of a tree group ranks its loads by `drop_pct` (supply minus ground), not by
@@ -319,12 +338,35 @@ and the agent interface will reuse it. It has:
   inputs are among a rail group's problems as kind `"load"`, named `"U1 (input)"`;
 - `assumptions` and `warnings`.
 
-### Known limitation: negative rails solved alone (predates Task 7, a separate task)
+### Which way the load current flows (T7.1): negative rails and nets at 0 V
 
-A rail solved on its own draws every load current out of the copper, so on a negative rail
-the voltages it shows are mirrored around the source voltage: a 40 mm strip at −3.3 V with
-1 A shows the load at −3.3379 V, where the power tree (KiPI flows a negative rail's load
-current into the copper, #220) gives −3.2621 V. Drops, current densities, losses and via
-currents are exact by linearity, and `RailResult.drop_pct` divides by |v_ref|, so the drop
-limit judges it correctly. Only the voltage shown is wrong. Fixing it means flipping the
-load current in `solve_rail` together with every `v_ref − V` in the service, report and maps.
+A load takes its current from a positive rail, so the copper falls below the source toward
+the loads. On a negative rail, and on a net at 0 V (a ground), it returns its current into
+the copper: a negative rail's copper moves toward 0 V, and a ground rises above it. KiPI's
+power tree does this (`_Tree.sign`, #220). `solve_rail` does the same: each load's (and
+estimated draw's) current is given the sign of its rail, from the sources' set voltages
+(`engine.solve.load_sign`: all above 0 V → out of the copper; all at or below 0 V → into
+it; sources on both sides of 0 V are refused), and an assumption line says so.
+
+On the 40 mm strip with 1 A: at −3.3 V the load reads −3.262072 V alone as in the tree (it
+read −3.337928 V before T7.1); at 0 V it reads +37.928 mV, as the ground group of a tree
+reads its return pin. Node by node V(−3.3 V) = −V(+3.3 V) and V(0 V) = 3.3 V − V(+3.3 V);
+current densities, losses, via currents and drops are unchanged, and positive rails are
+identical to the last digit (power chain and a real project checked).
+
+`RailResult.drop_sign` (new field, default +1) records the direction, because it cannot be
+told from `v_ref`: a rail group at 0 V inside KiPI's tree (no ground pins named) still
+draws its loads' current (KiPI's sign is −1 only below 0 V). Everything measures the drop
+as `drop = drop_sign · (v_ref − V)` (`RailResult.drop_at`), its worst pin by the same sign
+(`worst_v`: the highest pin when the current flows in), and its label with `drop_unit`
+("mV below 3.3 V", "mV above -3.3 V (toward 0 V)", "mV above 0 V (ground rise)"). A ground
+group is always a rise (`RailResult.sign` is −1 there).
+
+| Where | What |
+|---|---|
+| `RailResult.drop`, `drop_pct`, `max_drop` | Toward 0 V on a negative rail, the rise at 0 V (KiPI's `max_boost` when the current flows in); `drop_pct` of |v_ref|. |
+| GUI map, isolines, colour bar, double-click readout, Δ drop vs baseline | `drop_at`; label `drop_unit`; "rise =" at 0 V. |
+| `maps.py` PNG maps | `drop_at`; label "drop, …" or "rise, …". |
+| Service: rail summary `drop_sign`, layers' `max_drop_mv`, `probe` `drop_mv` / `drop_pct` | `drop_at`. `v_min_v` / `v_max_v` stay the lowest and highest pin: on a negative rail or at 0 V the worst pin is `v_max_v`. |
+| Report: meta `drop_sign`, `drop_unit`, `drop_max_mv`, layers' `max_drop_mv`; `report.js` lut, readout, colour bar, worst card | the same formula in JS (`dropSign(rail)`; reports written before the field read +1). |
+| Tree: a 0 V rail group (no ground pins named) | `drop_sign` +1, and a warning in `tree.warnings` and the group's notes: "… is solved as a 0 V rail (no ground pins named): KiPI draws its loads' current out of it, so its voltages are shown with the opposite sign to a ground's; name ground pins on it to solve it as a ground." |

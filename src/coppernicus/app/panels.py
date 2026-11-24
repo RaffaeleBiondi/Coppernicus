@@ -5,6 +5,7 @@ engine directly; the main window wires them together."""
 from __future__ import annotations
 
 import copy
+import html
 from typing import Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
@@ -329,7 +330,7 @@ class TerminalTable(QWidget):
         self.table.setCellWidget(r, 2, pins_edit)
         spin = DecimalSpinBox()
         spin.setDecimals(4)
-        spin.setRange(0.0, 1e4)
+        spin.setRange(-1e4 if self._unit == "V" else 0.0, 1e4)   # a negative rail's source
         spin.setValue(float(value))
         spin.setSuffix(f" {self._unit}")
         spin.valueChanged.connect(lambda *_: self.changed.emit())
@@ -512,6 +513,8 @@ class RailPanel(QWidget):
                                  "on its group in Solve power tree, and when this net is solved alone.")
         for e in (self.max_drop, self.max_j, self.max_via, self.max_rise):
             e.setValidator(DecimalValidator(0.0, 1e9, 6))
+        self.max_drop.setToolTip("For a supply net: the largest load drop, % of the source voltage.")
+        self._tips = {e: e.toolTip() for e in (self.max_drop, self.max_rise)}
         form = QFormLayout(limits)
         form.addRow("Max drop (%)", self.max_drop)
         form.addRow("Max current density (A/mm²)", self.max_j)
@@ -616,6 +619,20 @@ class RailPanel(QWidget):
                 table.table.setCurrentCell(0, 0)
         self._show_source(0 if rail.sources else -1)
         self._show_load(0 if rail.loads else -1)
+
+    def set_net_kind(self, at_0v: Optional[bool]):
+        """Disable the limit that does not apply to the shown net (one rule, by its reference
+        voltage): the ground rise on a net with a nonzero nominal, the % drop on a net at 0 V.
+        ``None`` (not set up yet): both stay editable. A value read from the file stays shown
+        and editable, so it can be cleared; it is reported as not judged."""
+        off = {True: self.max_drop, False: self.max_rise}.get(at_0v)
+        why = {True: "Applies to nets with a nonzero nominal only: this net is at 0 V (a ground), "
+                     "so a value here is not judged. Use Max ground rise.",
+               False: "Applies to nets at 0 V (grounds) only: this net has a nonzero nominal, so "
+                      "a value here is not judged."}.get(at_0v, "")
+        for edit in (self.max_drop, self.max_rise):
+            edit.setEnabled(edit is not off or bool(edit.text().strip()))
+            edit.setToolTip(why if edit is off else self._tips[edit])
 
     # ------------------------------------------------------------------ power-tree fields
     def select_source(self, row: int):
@@ -957,6 +974,8 @@ class TreePanel(QWidget):
         self.loads = self._table(self.LOAD_HEADERS)
         self.links = QLabel()
         self.links.setWordWrap(True)
+        self.notes = QLabel()                    # the tree's warnings, e.g. a 0 V rail's sign
+        self.notes.setWordWrap(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.summary)
@@ -965,6 +984,7 @@ class TreePanel(QWidget):
         layout.addWidget(QLabel("<b>Loads</b> (the voltage across their supply and ground pins)"))
         layout.addWidget(self.loads, 3)
         layout.addWidget(self.links)
+        layout.addWidget(self.notes)
 
     def _table(self, headers):
         table = QTableWidget(0, len(headers))
@@ -999,6 +1019,7 @@ class TreePanel(QWidget):
         self._fill(self.vrms, [])
         self._fill(self.loads, [])
         self.links.clear()
+        self.notes.clear()
 
     def set_tree(self, tree, verdict_html: str = ""):
         vrms = [(v.name, v.kind, v.group, f"{v.v_set_v:g}", _cell(v.v_out_v, ".5f"),
@@ -1031,6 +1052,8 @@ class TreePanel(QWidget):
             f"{k['name']} {k['resistance_ohm']:g} Ω, {' ↔ '.join(k['nets'])}: {k['current_a']:.4f} A, "
             f"{k['power_w'] * 1e3:.3g} mW" for k in tree.links if not k["name"].startswith("net tie "))
             if any(not k["name"].startswith("net tie ") for k in tree.links) else "")
+        self.notes.setText("<span style='color:#b9770e'><b>Warnings</b></span>: " + " · ".join(
+            html.escape(w) for w in tree.warnings) if tree.warnings else "")
         groups = ", ".join(f"{k} ({r.kind})" for k, r in tree.groups.items())
         self.summary.setText(f"<b>Power tree</b>: {len(tree.groups)} groups ({groups}) solved in "
                              f"{tree.stats.get('seconds', 0.0):.1f} s · {verdict_html}")

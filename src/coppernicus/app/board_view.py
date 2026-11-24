@@ -145,10 +145,9 @@ class ColorBar(QWidget):
 
 
 def drop_mv(result: RailResult, v: np.ndarray) -> np.ndarray:
-    """The 'drop' map's values in mV: below the source voltage on a rail, the rise above
-    0 V on a ground net of a power-tree solve."""
-    v = np.asarray(v, dtype=float)
-    return (v - result.v_ref) * 1e3 if result.kind == "ground" else (result.v_ref - v) * 1e3
+    """The 'drop' map's values in mV: below the source voltage on a positive rail, toward
+    0 V on a negative one, the rise above 0 V on a ground (``RailResult.drop_at``)."""
+    return result.drop_at(v) * 1e3
 
 
 class BoardView(QWidget):
@@ -250,8 +249,7 @@ class BoardView(QWidget):
                 clim = [lo, hi]
         self.plotter.add_mesh(mesh, scalars=title, cmap=cmap, clim=clim, nan_color="#dddddd",
                               show_edges=False, name="field", show_scalar_bar=False)
-        units = {"drop": ("mV above 0 V (ground rise)" if result.kind == "ground"
-                          else "mV below source"), "voltage": "V", "current": "A/mm²",
+        units = {"drop": result.drop_unit(), "voltage": "V", "current": "A/mm²",
                  "difference": "mV of drop, current − baseline (red: more)"}[field]
         note = f"\ntop clipped at {J_CLIP_PERCENTILE:g}th pct" if field == "current" else ""
         if field == "difference" and difference_note:
@@ -475,7 +473,7 @@ class BoardView(QWidget):
                 delta = (f", Δ drop vs baseline = {d:+.3f} mV" if np.isfinite(d)
                          else ", Δ drop vs baseline: no baseline copper here")
             self.probed.emit(f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: V = {p.voltage_v:.5f} V, "
-                             f"{'rise' if self._result.kind == 'ground' else 'drop'} = "
+                             f"{'rise' if self._result.is_rise() else 'drop'} = "
                              f"{float(drop_mv(self._result, p.voltage_v)):.3f} mV, "
                              f"|J| = {p.current_density_a_mm2:.2f} A/mm²{delta}")
 
