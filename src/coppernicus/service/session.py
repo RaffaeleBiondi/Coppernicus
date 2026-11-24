@@ -646,44 +646,7 @@ class Session:
     def compare_results(self, result_a: str, result_b: str) -> Dict[str, Any]:
         """Per-load and per-layer deltas, b − a (works on evicted results too)."""
         a, b = self._record(result_a, heavy=False), self._record(result_b, heavy=False)
-        sa, sb = a.summary, b.summary
-        warnings = []
-        if sa["net"] != sb["net"]:
-            warnings.append(f"Different rails: {sa['net']} vs {sb['net']}.")
-        if a.board_id != b.board_id:
-            warnings.append(f"Different board ids: {a.board_id} vs {b.board_id}.")
-        la = {d["name"]: d for d in sa["loads"]}
-        lb = {d["name"]: d for d in sb["loads"]}
-        loads = []
-        for name in [*la, *[n for n in lb if n not in la]]:
-            da, db = la.get(name), lb.get(name)
-            row = {"name": name, "drop_mv_a": da and da["drop_mv"], "drop_mv_b": db and db["drop_mv"],
-                   "drop_pct_a": da and da["drop_pct"], "drop_pct_b": db and db["drop_pct"]}
-            if da and db:
-                row["delta_drop_mv"] = _delta(db["drop_mv"], da["drop_mv"])
-                row["delta_drop_pct"] = _delta(db["drop_pct"], da["drop_pct"])
-            else:
-                warnings.append(f"Load {name} is only in result {'a' if da else 'b'}.")
-            loads.append(row)
-        pa, pb = sa["loss_breakdown_w"], sb["loss_breakdown_w"]
-        losses = [{"name": k, "power_w_a": pa.get(k), "power_w_b": pb.get(k),
-                   "delta_power_w": _delta(pb.get(k), pa.get(k))}
-                  for k in [*pa, *[k for k in pb if k not in pa]]]
-        changed = {k: {"a": sa["settings"].get(k), "b": sb["settings"].get(k)}
-                   for k in sorted({*sa["settings"], *sb["settings"]})
-                   if sa["settings"].get(k) != sb["settings"].get(k)}
-        return C.jsonable({
-            "result_a": a.id, "result_b": b.id, "net_a": sa["net"], "net_b": sb["net"],
-            "settings_changed": changed,
-            "max_drop_mv": {"a": sa["max_drop_mv"], "b": sb["max_drop_mv"],
-                            "delta": _delta(sb["max_drop_mv"], sa["max_drop_mv"])},
-            "power_loss_w": {"a": sa["power_loss_w"], "b": sb["power_loss_w"],
-                             "delta": _delta(sb["power_loss_w"], sa["power_loss_w"])},
-            "loads": loads, "losses": losses,
-            "verdict_a": sa["verdict"], "verdict_b": sb["verdict"],
-            "assumptions": ["Deltas are b − a. Loads are matched by name, losses by layer name."],
-            "warnings": warnings,
-        })
+        return compare_summaries(a.summary, b.summary)
 
     # ================================================================== misc
     def out_dir(self) -> Path:
@@ -695,6 +658,50 @@ class Session:
                 self._out_dir = Path(tempfile.gettempdir()).resolve() / "coppernicus" / stamp
             self._out_dir.mkdir(parents=True, exist_ok=True)
             return self._out_dir
+
+
+def compare_summaries(summary_a: Dict[str, Any], summary_b: Dict[str, Any]) -> Dict[str, Any]:
+    """Per-load and per-layer deltas, b − a, of two rail summaries as built by
+    :func:`coppernicus.service.convert.rail_summary` (what :meth:`Session.compare_results`
+    returns for two result ids). Usable without a Session, e.g. by the app."""
+    sa, sb = summary_a, summary_b
+    warnings = []
+    if sa["net"] != sb["net"]:
+        warnings.append(f"Different rails: {sa['net']} vs {sb['net']}.")
+    if sa["board_id"] != sb["board_id"]:
+        warnings.append(f"Different board ids: {sa['board_id']} vs {sb['board_id']}.")
+    la = {d["name"]: d for d in sa["loads"]}
+    lb = {d["name"]: d for d in sb["loads"]}
+    loads = []
+    for name in [*la, *[n for n in lb if n not in la]]:
+        da, db = la.get(name), lb.get(name)
+        row = {"name": name, "drop_mv_a": da and da["drop_mv"], "drop_mv_b": db and db["drop_mv"],
+               "drop_pct_a": da and da["drop_pct"], "drop_pct_b": db and db["drop_pct"]}
+        if da and db:
+            row["delta_drop_mv"] = _delta(db["drop_mv"], da["drop_mv"])
+            row["delta_drop_pct"] = _delta(db["drop_pct"], da["drop_pct"])
+        else:
+            warnings.append(f"Load {name} is only in result {'a' if da else 'b'}.")
+        loads.append(row)
+    pa, pb = sa["loss_breakdown_w"], sb["loss_breakdown_w"]
+    losses = [{"name": k, "power_w_a": pa.get(k), "power_w_b": pb.get(k),
+               "delta_power_w": _delta(pb.get(k), pa.get(k))}
+              for k in [*pa, *[k for k in pb if k not in pa]]]
+    changed = {k: {"a": sa["settings"].get(k), "b": sb["settings"].get(k)}
+               for k in sorted({*sa["settings"], *sb["settings"]})
+               if sa["settings"].get(k) != sb["settings"].get(k)}
+    return C.jsonable({
+        "result_a": sa["result_id"], "result_b": sb["result_id"], "net_a": sa["net"], "net_b": sb["net"],
+        "settings_changed": changed,
+        "max_drop_mv": {"a": sa["max_drop_mv"], "b": sb["max_drop_mv"],
+                        "delta": _delta(sb["max_drop_mv"], sa["max_drop_mv"])},
+        "power_loss_w": {"a": sa["power_loss_w"], "b": sb["power_loss_w"],
+                         "delta": _delta(sb["power_loss_w"], sa["power_loss_w"])},
+        "loads": loads, "losses": losses,
+        "verdict_a": sa["verdict"], "verdict_b": sb["verdict"],
+        "assumptions": ["Deltas are b − a. Loads are matched by name, losses by layer name."],
+        "warnings": warnings,
+    })
 
 
 def _delta(b, a):
