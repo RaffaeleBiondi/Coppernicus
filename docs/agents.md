@@ -506,4 +506,4 @@ setting with the others.
   fields yet.
 - **Tested** on macOS, with synthetic boards and the SDK's own client (in memory and over stdio).
   Registration in Claude Code and Claude Desktop follows their documented commands but has not
-  been run in those hosts yet. Windows runs in CI as an informative job.
+  been run in those hosts yet. The tests run in CI on Ubuntu, macOS and Windows, all required.
