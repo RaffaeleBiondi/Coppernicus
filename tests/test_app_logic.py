@@ -35,3 +35,11 @@ def test_arrow_glyphs_point_along_the_vector_and_scale_with_sqrt_j():
     for head in segs[1:3]:                                     # head strokes start at the tip, go back
         assert np.allclose(head[0], [1.0, 0.0]) and head[1, 0] < 1.0
     assert arrow_glyphs(np.zeros((0, 2)), np.zeros((0, 2)), 1.0).shape == (0, 2, 2)
+
+
+def test_rail_filter_joins_heuristic_marked_and_configured_nets():
+    from coppernicus.app.panels import rail_nets
+    nets = ["+3V3", "GND", "SDA", "VBUS_X", "VIN_SNS"]
+    out = rail_nets(nets, heuristic=["+3V3", "GND"], marked=["VBUS_X"], configured=["VIN_SNS"])
+    assert out == ["+3V3", "GND", "VBUS_X", "VIN_SNS"]          # board order kept, SDA left out
+    assert rail_nets(nets, [], ["NOT_ON_BOARD"], []) == []

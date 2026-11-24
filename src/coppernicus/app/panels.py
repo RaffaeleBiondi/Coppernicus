@@ -4,7 +4,7 @@ engine directly; the main window wires them together."""
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QDoubleValidator
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QTableWidget,
@@ -37,17 +38,31 @@ from coppernicus.project import Limits, Load, Rail, Settings, Source, parse_pins
 # ---------------------------------------------------------------------- nets
 
 
+def rail_nets(nets: Iterable[str], heuristic: Iterable[str], marked: Iterable[str],
+              configured: Iterable[str]) -> List[str]:
+    """The nets the "Rails only" filter shows, in board order: power and ground nets found by
+    the name/zone heuristic, nets marked as rails by hand, and nets with sources or loads."""
+    keep = set(heuristic) | set(marked) | set(configured)
+    return [n for n in nets if n in keep]
+
+
 class NetPanel(QWidget):
     net_selected = Signal(str)
+    marked_changed = Signal(list)       # the nets marked as rails by hand
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._board: Optional[Board] = None
         self._configured: set = set()
+        self._marked: List[str] = []
         self.filter = QLineEdit(placeholderText="Filter nets…")
-        self.power_only = QCheckBox("Power && ground only")
+        self.power_only = QCheckBox("Rails only")
+        self.power_only.setToolTip("Power and ground nets found by name and zones, nets you marked "
+                                   "as rails (right-click a net), and nets with sources or loads")
         self.power_only.setChecked(True)
         self.list = QListWidget()
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._context_menu)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.filter)
@@ -57,10 +72,38 @@ class NetPanel(QWidget):
         self.power_only.toggled.connect(self._refill)
         self.list.currentTextChanged.connect(self._emit)
 
-    def set_board(self, board: Optional[Board], configured: List[str] = ()):
+    def set_board(self, board: Optional[Board], configured: List[str] = (), marked: List[str] = ()):
         self._board = board
         self._configured = set(configured)
+        self._marked = list(marked)
         self._refill()
+
+    @property
+    def marked(self) -> List[str]:
+        return list(self._marked)
+
+    def set_marked(self, net: str, on: bool):
+        """Mark ``net`` as a rail by hand, or unmark it; emits :attr:`marked_changed`."""
+        if on == (net in self._marked):
+            return
+        self._marked = [*self._marked, net] if on else [n for n in self._marked if n != net]
+        self._refill(keep=True)
+        self.marked_changed.emit(list(self._marked))
+
+    def _context_menu(self, pos):
+        item = self.list.itemAt(pos)
+        if item is None or self._board is None:
+            return
+        net = item.text()
+        menu = QMenu(self)
+        if net in self._marked:
+            menu.addAction("Unmark as rail", lambda: self.set_marked(net, False))
+        elif self._board.net_kind(net) in ("power", "ground"):
+            found = menu.addAction(f"Rail ({self._board.net_kind(net)}, found by name and zones)")
+            found.setEnabled(False)
+        else:
+            menu.addAction("Mark as rail", lambda: self.set_marked(net, True))
+        menu.exec(self.list.viewport().mapToGlobal(pos))
 
     def mark_configured(self, nets: List[str]):
         self._configured = set(nets)
@@ -80,18 +123,26 @@ class NetPanel(QWidget):
         self.list.blockSignals(True)
         self.list.clear()
         if self._board is not None:
-            nets = self._board.power_nets() if self.power_only.isChecked() else self._board.nets()
+            nets = self._board.nets()
+            if self.power_only.isChecked():
+                nets = rail_nets(nets, self._board.power_nets(), self._marked, self._configured)
             text = self.filter.text().strip().lower()
             for n in nets:
                 if text and text not in n.lower():
                     continue
                 self.list.addItem(n)
                 item = self.list.item(self.list.count() - 1)
+                f = item.font()
+                tips = []
                 if n in self._configured:
-                    f = item.font()
                     f.setBold(True)
-                    item.setFont(f)
-                    item.setToolTip("Has sources/loads in this project")
+                    tips.append("has sources/loads in this project")
+                if n in self._marked:
+                    f.setItalic(True)
+                    tips.append("marked as a rail by hand")
+                item.setFont(f)
+                if tips:
+                    item.setToolTip("; ".join(tips).capitalize())
             if current:
                 found = self.list.findItems(current, Qt.MatchExactly)
                 if found:

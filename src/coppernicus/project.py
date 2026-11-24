@@ -106,6 +106,9 @@ class Project:
     rails: List[Rail] = field(default_factory=list)
     settings: Settings = field(default_factory=Settings)
     path: Optional[Path] = None               # where it was loaded from / saved to; not saved
+    # Nets the user marked as rails by hand, where the name/zone heuristic missed them.
+    # Saved only when not empty, so files written before this field stay identical.
+    marked_rails: List[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------ queries
     def board_path(self) -> Path:
@@ -146,7 +149,10 @@ class Project:
             if not r.follow_net_ties:
                 rd["follow_net_ties"] = False
             rails.append(rd)
-        return {"board": self.board, "settings": dict(vars(self.settings)), "rails": rails}
+        out: Dict[str, Any] = {"board": self.board, "settings": dict(vars(self.settings)), "rails": rails}
+        if self.marked_rails:
+            out["marked_rails"] = list(self.marked_rails)
+        return out
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], path: Optional[Path] = None) -> "Project":
@@ -167,9 +173,13 @@ class Project:
                     limits=Limits(**(rd.get("limits") or {})),
                     follow_net_ties=bool(rd.get("follow_net_ties", True)),
                 ))
+            marked = data.get("marked_rails") or []
+            if not isinstance(marked, list):
+                raise ValueError("marked_rails must be a list of net names")
         except (KeyError, TypeError, ValueError) as e:
             raise ProjectError(f"invalid project file: {e}") from e
-        return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path)
+        return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path,
+                   marked_rails=[str(n) for n in marked])
 
     @classmethod
     def load(cls, path) -> "Project":

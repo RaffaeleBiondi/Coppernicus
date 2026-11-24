@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Open a board (.kicad_pcb) or a project to start")
 
         self.nets.net_selected.connect(self.select_net)
+        self.nets.marked_changed.connect(self._marked_edited)
         self.rail_panel.rail_changed.connect(self._rail_edited)
         self.rail_panel.limits_changed.connect(self._limits_edited)
         self.rail_panel.settings_changed.connect(self._settings_edited)
@@ -181,7 +182,8 @@ class MainWindow(QMainWindow):
         self._candidates.clear()
         self.rail_panel.set_pick("")
         self.rail_panel.set_settings(self.project.settings)
-        self.nets.set_board(board, [r.net for r in self.project.rails if r.sources or r.loads])
+        self.nets.set_board(board, [r.net for r in self.project.rails if r.sources or r.loads],
+                            self.project.marked_rails)
         self.problems.clear()
         self.dirty = project is None
         self._update_title()
@@ -288,6 +290,11 @@ class MainWindow(QMainWindow):
         res = self.results.get(rail.net)
         if res is not None:                                        # re-rank; the solve is still valid
             self._show_problems(res)
+
+    def _marked_edited(self, nets):
+        self.project.marked_rails = list(nets)
+        self.dirty = True
+        self._update_title()
 
     def _settings_edited(self):
         self.dirty = True

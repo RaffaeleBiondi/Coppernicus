@@ -8,8 +8,8 @@
 Offscreen, Qt has no OpenGL context, so the app's own view draws nothing: the check covers
 the app logic (pads picked, rows, solve, ΔV, arrow geometry) and renders the view's scene
 with a separate off-screen VTK window into ``--out`` (``*_scene.png``). With ``--window`` it
-also sends mouse presses and releases to the view. It never saves a project and never
-writes next to a board. Exit code 0 when every check passes, 1 otherwise.
+also sends mouse presses and releases to the view. It saves projects only into ``--out``
+and never writes next to a board. Exit code 0 when every check passes, 1 otherwise.
 """
 
 from __future__ import annotations
@@ -271,6 +271,28 @@ def run_other_net(window, check: Checks, out: Path):
     window.rail_panel.set_pick("")
 
 
+def run_marked(window, check: Checks, out: Path):
+    """Task 4: mark a signal net as a rail, save the project in ``out``, reopen it."""
+    from PySide6.QtWidgets import QApplication
+
+    def listed():
+        return [window.nets.list.item(i).text() for i in range(window.nets.list.count())]
+    window.open_board(out / "pins.kipi.json.gz")             # written by run_other_net
+    QApplication.processEvents()
+    check("OTHER is not a rail by the heuristic", "OTHER" not in listed(), str(listed()))
+    window.nets.set_marked("OTHER", True)
+    check("marking OTHER lists it", "OTHER" in listed() and window.project.marked_rails == ["OTHER"])
+    check("marking makes the project dirty", window.dirty)
+    path = out / "marked.coppernicus.yml"
+    window._save(path)
+    check("saved with marked_rails", "marked_rails" in path.read_text())
+    window.open_project(path)
+    QApplication.processEvents()
+    check("reopened: OTHER still marked and listed", window.nets.marked == ["OTHER"] and "OTHER" in listed())
+    window.nets.set_marked("OTHER", False)
+    check("unmarking hides it again", "OTHER" not in listed() and window.project.marked_rails == [])
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
@@ -296,6 +318,7 @@ def main(argv=None) -> int:
     check = Checks()
     try:
         run_other_net(window, check, out)
+        run_marked(window, check, out)
         run_demo(window, check, args, out)
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:
