@@ -10,6 +10,27 @@ from typing import Optional
 os.environ.setdefault("QT_API", "pyside6")
 
 ICON = Path(__file__).resolve().parent / "resources" / "icon.png"
+APP_NAME = "Coppernicus"
+
+
+def set_macos_app_name(name: str = APP_NAME) -> bool:
+    """Make the macOS menu bar show ``name`` instead of "Python": set ``CFBundleName`` in the
+    main bundle's info dictionary, which must happen before the QApplication exists.
+
+    Uses pyobjc's Foundation, which pyvista already installs on macOS. Purely cosmetic: on
+    other systems, or if anything fails, it returns ``False`` and changes nothing."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        from Foundation import NSBundle
+        bundle = NSBundle.mainBundle()
+        info = bundle.localizedInfoDictionary() or bundle.infoDictionary()
+        if info is None:
+            return False
+        info["CFBundleName"] = name
+        return True
+    except Exception:                                   # noqa: BLE001 - never block start-up
+        return False
 
 
 def run(path: Optional[str] = None, screenshot: Optional[str] = None, solve_net: Optional[str] = None,
@@ -23,8 +44,10 @@ def run(path: Optional[str] = None, screenshot: Optional[str] = None, solve_net:
 
     from coppernicus.app.main_window import MainWindow
 
+    if QApplication.instance() is None:
+        set_macos_app_name()
     app = QApplication.instance() or QApplication(sys.argv[:1])
-    app.setApplicationName("Coppernicus")
+    app.setApplicationName(APP_NAME)
     app.setWindowIcon(QIcon(str(ICON)))
     window = MainWindow()
     window.show()

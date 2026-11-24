@@ -4,7 +4,7 @@ engine directly; the main window wires them together."""
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QDoubleValidator
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QTableWidget,
@@ -34,20 +35,57 @@ from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.problems import FAIL, Problem
 from coppernicus.project import Limits, Load, Rail, Settings, Source, parse_pins, pins_text
 
+# ---------------------------------------------------------------------- numbers
+
+
+class DecimalSpinBox(QDoubleSpinBox):
+    """A spin box that reads a typed comma as the decimal sign. Numbers are shown with a dot
+    (the app uses the C locale), where a comma would otherwise be taken as a thousands
+    separator and dropped, turning 3,3 into 33."""
+
+    def validate(self, text, pos):
+        return super().validate(text.replace(",", "."), pos)
+
+    def valueFromText(self, text):
+        return super().valueFromText(text.replace(",", "."))
+
+
+class DecimalValidator(QDoubleValidator):
+    """A validator for decimal fields that reads a typed comma as the decimal sign (see
+    :class:`DecimalSpinBox`)."""
+
+    def validate(self, text, pos):
+        return super().validate(text.replace(",", "."), pos)
+
+
 # ---------------------------------------------------------------------- nets
+
+
+def rail_nets(nets: Iterable[str], heuristic: Iterable[str], marked: Iterable[str],
+              configured: Iterable[str]) -> List[str]:
+    """The nets the "Rails only" filter shows, in board order: power and ground nets found by
+    the name/zone heuristic, nets marked as rails by hand, and nets with sources or loads."""
+    keep = set(heuristic) | set(marked) | set(configured)
+    return [n for n in nets if n in keep]
 
 
 class NetPanel(QWidget):
     net_selected = Signal(str)
+    marked_changed = Signal(list)       # the nets marked as rails by hand
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._board: Optional[Board] = None
         self._configured: set = set()
+        self._marked: List[str] = []
         self.filter = QLineEdit(placeholderText="Filter nets…")
-        self.power_only = QCheckBox("Power && ground only")
+        self.power_only = QCheckBox("Rails only")
+        self.power_only.setToolTip("Power and ground nets found by name and zones, nets you marked "
+                                   "as rails (right-click a net), and nets with sources or loads")
         self.power_only.setChecked(True)
         self.list = QListWidget()
+        self.list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list.customContextMenuRequested.connect(self._context_menu)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.filter)
@@ -57,10 +95,40 @@ class NetPanel(QWidget):
         self.power_only.toggled.connect(self._refill)
         self.list.currentTextChanged.connect(self._emit)
 
-    def set_board(self, board: Optional[Board], configured: List[str] = ()):
+    def set_board(self, board: Optional[Board], configured: List[str] = (), marked: List[str] = ()):
+        """A new board: nothing is selected, so selecting any net afterwards (even one with
+        the same name as before) emits :attr:`net_selected`."""
         self._board = board
         self._configured = set(configured)
-        self._refill()
+        self._marked = list(marked)
+        self._refill(keep=False)
+
+    @property
+    def marked(self) -> List[str]:
+        return list(self._marked)
+
+    def set_marked(self, net: str, on: bool):
+        """Mark ``net`` as a rail by hand, or unmark it; emits :attr:`marked_changed`."""
+        if on == (net in self._marked):
+            return
+        self._marked = [*self._marked, net] if on else [n for n in self._marked if n != net]
+        self._refill(keep=True)
+        self.marked_changed.emit(list(self._marked))
+
+    def _context_menu(self, pos):
+        item = self.list.itemAt(pos)
+        if item is None or self._board is None:
+            return
+        net = item.text()
+        menu = QMenu(self)
+        if net in self._marked:
+            menu.addAction("Unmark as rail", lambda: self.set_marked(net, False))
+        elif self._board.net_kind(net) in ("power", "ground"):
+            found = menu.addAction(f"Rail ({self._board.net_kind(net)}, found by name and zones)")
+            found.setEnabled(False)
+        else:
+            menu.addAction("Mark as rail", lambda: self.set_marked(net, True))
+        menu.exec(self.list.viewport().mapToGlobal(pos))
 
     def mark_configured(self, nets: List[str]):
         self._configured = set(nets)
@@ -80,18 +148,26 @@ class NetPanel(QWidget):
         self.list.blockSignals(True)
         self.list.clear()
         if self._board is not None:
-            nets = self._board.power_nets() if self.power_only.isChecked() else self._board.nets()
+            nets = self._board.nets()
+            if self.power_only.isChecked():
+                nets = rail_nets(nets, self._board.power_nets(), self._marked, self._configured)
             text = self.filter.text().strip().lower()
             for n in nets:
                 if text and text not in n.lower():
                     continue
                 self.list.addItem(n)
                 item = self.list.item(self.list.count() - 1)
+                f = item.font()
+                tips = []
                 if n in self._configured:
-                    f = item.font()
                     f.setBold(True)
-                    item.setFont(f)
-                    item.setToolTip("Has sources/loads in this project")
+                    tips.append("has sources/loads in this project")
+                if n in self._marked:
+                    f.setItalic(True)
+                    tips.append("marked as a rail by hand")
+                item.setFont(f)
+                if tips:
+                    item.setToolTip("; ".join(tips).capitalize())
             if current:
                 found = self.list.findItems(current, Qt.MatchExactly)
                 if found:
@@ -203,7 +279,7 @@ class TerminalTable(QWidget):
                              "of the part on this net")
         pins_edit.editingFinished.connect(self.changed.emit)
         self.table.setCellWidget(r, 2, pins_edit)
-        spin = QDoubleSpinBox()
+        spin = DecimalSpinBox()
         spin.setDecimals(4)
         spin.setRange(0.0, 1e4)
         spin.setValue(float(value))
@@ -241,19 +317,19 @@ class RailPanel(QWidget):
         self.max_j = QLineEdit(placeholderText="A/mm²")
         self.max_via = QLineEdit(placeholderText="A")
         for e in (self.max_drop, self.max_j, self.max_via):
-            e.setValidator(QDoubleValidator(0.0, 1e9, 6))
+            e.setValidator(DecimalValidator(0.0, 1e9, 6))
         form = QFormLayout(limits)
         form.addRow("Max drop (%)", self.max_drop)
         form.addRow("Max current density (A/mm²)", self.max_j)
         form.addRow("Max via current (A)", self.max_via)
 
         settings = QGroupBox("Solve settings (whole project)")
-        self.max_edge = QDoubleSpinBox(decimals=3, minimum=0.02, maximum=5.0, singleStep=0.1, suffix=" mm")
+        self.max_edge = DecimalSpinBox(decimals=3, minimum=0.02, maximum=5.0, singleStep=0.1, suffix=" mm")
         self.plating = QLineEdit(placeholderText="engine defaults (IPC-6012 Class 2)")
-        self.plating.setValidator(QDoubleValidator(0.1, 1000.0, 3))
+        self.plating.setValidator(DecimalValidator(0.1, 1000.0, 3))
         self.plating.setToolTip("Via barrel plating in µm for every plated hole. Empty: the engine's "
                                 "table (micro 12, buried 13, others 20 µm). Ask your fabricator.")
-        self.temp = QDoubleSpinBox(decimals=1, minimum=-55.0, maximum=250.0, suffix=" °C")
+        self.temp = DecimalSpinBox(decimals=1, minimum=-55.0, maximum=250.0, suffix=" °C")
         self.temp.setToolTip("Copper temperature; resistivity is referenced to 20 °C")
         sform = QFormLayout(settings)
         sform.addRow("Largest mesh edge", self.max_edge)
@@ -331,6 +407,20 @@ class RailPanel(QWidget):
         for edit, value in ((self.max_drop, lim.max_drop_pct), (self.max_j, lim.max_current_density),
                             (self.max_via, lim.max_via_current)):
             edit.setText("" if value is None else f"{value:g}")
+        self._loading = False
+
+    def clear_rail(self):
+        """No net selected (a new board was opened)."""
+        self._loading = True
+        self._rail = None
+        self.title.setText("<i>Pick a net</i>")
+        self.sources.set_rows([])
+        self.loads.set_rows([])
+        for edit in (self.max_drop, self.max_j, self.max_via):
+            edit.clear()
+        self.ties.setVisible(False)
+        self.follow_ties.setVisible(False)
+        self.setEnabled(False)
         self._loading = False
 
     # ------------------------------------------------------------------ write back

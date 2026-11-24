@@ -11,7 +11,8 @@ no arrows, no isolines.
 from __future__ import annotations
 
 import warnings
-from typing import List, Sequence, Tuple
+from dataclasses import dataclass
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -92,6 +93,38 @@ def isolines(layer: LayerField, values: np.ndarray, levels: Sequence[float]) -> 
         warnings.simplefilter("ignore")             # "no contour levels within the data range"
         cs = ax.tricontour(tri, z, levels=levels)
     return [np.asarray(seg, dtype=float) for segs in cs.allsegs for seg in segs if len(seg) >= 2]
+
+
+def drop_levels(max_drop_mv: float, count: int = 10) -> List[float]:
+    """``count`` (at most 20) evenly spaced isoline levels strictly inside (0, max_drop_mv):
+    the same levels on every layer, since the drop range is the rail's. Empty for a range
+    that is zero or not finite."""
+    count = max(0, min(int(count), 20))
+    if not np.isfinite(max_drop_mv) or max_drop_mv <= 0 or count == 0:
+        return []
+    return [float(v) for v in np.linspace(0.0, max_drop_mv, count + 2)[1:-1]]
+
+
+@dataclass
+class Probe:
+    """The field at a point of a layer's copper."""
+    x_mm: float
+    y_mm: float
+    triangle: int
+    voltage_v: float               # NaN on copper with no path to a source
+    current_density_a_mm2: float
+
+
+def probe(layer: LayerField, locator: "TriangleLocator", x: float, y: float) -> Optional[Probe]:
+    """Voltage (interpolated linearly inside the triangle) and |J| at (x, y) mm, or ``None``
+    off the layer's copper. A NaN voltage is returned as NaN, never raised."""
+    k = locator.locate(x, y)
+    if k < 0:
+        return None
+    w = locator.weights(k, x, y)
+    nodes = layer.voltage[layer.tris[k]]
+    v = float(w @ nodes) if np.isfinite(nodes).all() else float("nan")
+    return Probe(float(x), float(y), k, v, float(layer.current_density[k]))
 
 
 class TriangleLocator:

@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QLocale, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -43,6 +43,10 @@ PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 
 class MainWindow(QMainWindow):
     def __init__(self):
+        # One number format whatever the system locale: a dot for decimals and no group
+        # separators, as in the limits, the problems list and the project file. Must be set
+        # before any numeric widget exists.
+        QLocale.setDefault(QLocale.c())
         super().__init__()
         self.setWindowTitle(f"Coppernicus {__version__}")
         self.resize(1500, 920)
@@ -54,6 +58,7 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self.last_render_s = 0.0
         self._candidates: Dict[Tuple, List[str]] = {}      # pickable pad ids per set of nets
+        self._generation = 0          # +1 per opened board: a solve started before is stale
 
         # Centre: pickers + view.
         self.view = BoardView()
@@ -63,6 +68,13 @@ class MainWindow(QMainWindow):
             self.field_box.addItem(label, key)
         self.show_vias = QCheckBox("Vias")
         self.show_vias.setChecked(True)
+        self.show_isolines = QCheckBox("Isolines")
+        self.show_isolines.setToolTip("Lines of equal voltage drop, the same levels on every layer")
+        self.show_arrows = QCheckBox("Arrows")
+        self.show_arrows.setToolTip("Direction of the current; arrow length grows with √|J|")
+        self.measure = QPushButton("Measure ΔV")
+        self.measure.setCheckable(True)
+        self.measure.setToolTip("Click A, then B: ΔV A→B = V(A) − V(B). Esc stops measuring.")
         fit = QPushButton("Fit")
         fit.clicked.connect(self.view.reset_view)
         bar = QHBoxLayout()
@@ -72,6 +84,10 @@ class MainWindow(QMainWindow):
         bar.addWidget(QLabel("Show"))
         bar.addWidget(self.field_box)
         bar.addWidget(self.show_vias)
+        bar.addWidget(self.show_isolines)
+        bar.addWidget(self.show_arrows)
+        bar.addSpacing(12)
+        bar.addWidget(self.measure)
         bar.addStretch(1)
         bar.addWidget(QLabel("<small>drag: pan · wheel: zoom · double-click: read values</small>"))
         bar.addWidget(fit)
@@ -95,6 +111,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Open a board (.kicad_pcb) or a project to start")
 
         self.nets.net_selected.connect(self.select_net)
+        self.nets.marked_changed.connect(self._marked_edited)
         self.rail_panel.rail_changed.connect(self._rail_edited)
         self.rail_panel.limits_changed.connect(self._limits_edited)
         self.rail_panel.settings_changed.connect(self._settings_edited)
@@ -103,10 +120,13 @@ class MainWindow(QMainWindow):
         self.layer_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.field_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.show_vias.toggled.connect(lambda *_: self.refresh_view())
+        self.show_isolines.toggled.connect(lambda *_: self.refresh_view())
+        self.show_arrows.toggled.connect(lambda *_: self.refresh_view())
+        self.measure.toggled.connect(self._measure_toggled)
         self.view.probed.connect(lambda text: self.statusBar().showMessage(text))
         self.view.pad_picked.connect(self.pick_pad)
         self.rail_panel.pick_changed.connect(self._pick_mode_changed)
-        QShortcut(QKeySequence(Qt.Key_Escape), self, activated=lambda: self.rail_panel.set_pick(""))
+        QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self.stop_clicking)
 
     def _dock(self, title, widget, area):
         dock = QDockWidget(title, self)
@@ -166,8 +186,19 @@ class MainWindow(QMainWindow):
         self.results.clear()
         self._candidates.clear()
         self.rail_panel.set_pick("")
+        self.measure.setChecked(False)
+        self.net, self._rail_draft = None, None          # nothing of the previous board survives
+        self._generation += 1
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.cancel()                         # and _solved ignores it if it ends
+        self.rail_panel.clear_rail()
+        self.view.reset()
+        self.layer_box.blockSignals(True)
+        self.layer_box.clear()
+        self.layer_box.blockSignals(False)
         self.rail_panel.set_settings(self.project.settings)
-        self.nets.set_board(board, [r.net for r in self.project.rails if r.sources or r.loads])
+        self.nets.set_board(board, [r.net for r in self.project.rails if r.sources or r.loads],
+                            self.project.marked_rails)
         self.problems.clear()
         self.dirty = project is None
         self._update_title()
@@ -275,6 +306,11 @@ class MainWindow(QMainWindow):
         if res is not None:                                        # re-rank; the solve is still valid
             self._show_problems(res)
 
+    def _marked_edited(self, nets):
+        self.project.marked_rails = list(nets)
+        self.dirty = True
+        self._update_title()
+
     def _settings_edited(self):
         self.dirty = True
         self._update_title()
@@ -296,7 +332,9 @@ class MainWindow(QMainWindow):
                     ("load", [i for t in res.loads for i in t.pad_ids])]
             self.view.show_field(res, res.layer(layer_name), self.field_box.currentData(),
                                  self.board.outline(), self.show_vias.isChecked(), fit=fit,
-                                 pad_outlines=self._pad_outlines(rail, pads, lid))
+                                 pad_outlines=self._pad_outlines(rail, pads, lid),
+                                 isolines=self.show_isolines.isChecked(),
+                                 arrows=self.show_arrows.isChecked())
         else:
             rings = copper_rings(self.board.copper(self.net, lid)) if lid is not None else []
             src, lds = self._terminal_pads(rail)
@@ -344,11 +382,29 @@ class MainWindow(QMainWindow):
                                      for p in self.board.pads(net, part.ref)]
         return self._candidates[key]
 
-    # ------------------------------------------------------------------ picking pads
+    # ------------------------------------------------------------------ clicks on the view
+    def stop_clicking(self):
+        """Esc: leave pick and measure modes."""
+        self.rail_panel.set_pick("")
+        self.measure.setChecked(False)
+
+    def _measure_toggled(self, on: bool):
+        if on:
+            self.rail_panel.set_pick("")                  # one click mode at a time
+            self.view.set_click_mode("measure")
+            self.statusBar().showMessage("Click point A, then point B · Esc to stop")
+        elif self.view.click_mode == "measure":
+            self.view.set_click_mode(None)
+
     def _pick_mode_changed(self, kind: str):
-        self.view.set_click_mode("pick" if kind else None)
         if kind:
+            self.measure.blockSignals(True)
+            self.measure.setChecked(False)
+            self.measure.blockSignals(False)
+            self.view.set_click_mode("pick")
             self.statusBar().showMessage(f"Click pads to add them to the {kind}s · Esc to stop")
+        elif self.view.click_mode == "pick":
+            self.view.set_click_mode(None)
         self.refresh_view()
 
     def pick_pad(self, x: float, y: float) -> str:
@@ -388,13 +444,20 @@ class MainWindow(QMainWindow):
         self.rail_panel.solve.setEnabled(False)
         self.problems.clear(f"<b>{self.net}</b>: solving…")
         self.worker = SolveWorker(self.board, rail, self.project.settings, self)
+        self.worker.generation = self._generation
         self.worker.message.connect(lambda m: self.statusBar().showMessage(m))
         self.worker.succeeded.connect(self._solved)
         self.worker.failed.connect(self._solve_failed)
         self.worker.finished.connect(lambda: self.rail_panel.solve.setEnabled(True))
         self.worker.start()
 
+    def _is_stale(self) -> bool:
+        """True in a solve slot when the solve was started on a board that is closed now."""
+        return getattr(self.sender(), "generation", self._generation) != self._generation
+
     def _solved(self, res: RailResult):
+        if self._is_stale():
+            return
         self.results[res.net] = res
         if res.net == self.net:
             self._show_problems(res)
@@ -411,6 +474,8 @@ class MainWindow(QMainWindow):
             f"drawn in {self.last_render_s:.2f} s")
 
     def _solve_failed(self, message: str):
+        if self._is_stale():
+            return
         self.problems.clear(f"<b>{self.net}</b>: cannot solve")
         self.problems.notes.setPlainText(message)
         QMessageBox.warning(self, "Cannot solve", message)
@@ -444,7 +509,7 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------------ closing
     def closeEvent(self, event):
-        if self.dirty and (self.project.rails or self.project.path):
+        if self.dirty and (self.project.rails or self.project.path or self.project.marked_rails):
             answer = QMessageBox.question(self, "Unsaved changes", "Save the project before closing?",
                                           QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
             if answer == QMessageBox.Cancel:

@@ -52,3 +52,16 @@ def test_ensure_rail():
     p = Project()
     r = p.ensure_rail("+5V")
     assert p.ensure_rail("+5V") is r and p.rail("+5V") is r and p.rail("GND") is None
+
+
+def test_marked_rails_round_trip(tmp_path):
+    p = Project(board="b.kicad_pcb", marked_rails=["VBUS_X"])
+    path = p.save(tmp_path / "m.coppernicus.yml")
+    assert "marked_rails" in path.read_text()
+    assert Project.load(path).marked_rails == ["VBUS_X"]
+    # Without the key (every file written before it existed) the list is empty, and an
+    # empty list is not written, so old files stay byte-identical on save.
+    old = Project(board="b.kicad_pcb", rails=[Rail("VCC")])
+    path = old.save(tmp_path / "old.coppernicus.yml")
+    assert "marked_rails" not in path.read_text()
+    assert Project.load(path).marked_rails == []

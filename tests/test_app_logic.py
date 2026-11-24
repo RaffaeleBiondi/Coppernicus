@@ -21,3 +21,40 @@ def test_copper_rings_of_a_polygon_with_a_hole():
     rings = copper_rings(box(0, 0, 10, 10).difference(box(4, 4, 6, 6)))
     assert len(rings) == 2 and all(r.shape[1] == 2 for r in rings)
     assert copper_rings(None) == []
+
+
+def test_arrow_glyphs_point_along_the_vector_and_scale_with_sqrt_j():
+    from coppernicus.app.board_view import arrow_glyphs
+    pts = np.array([[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]])
+    vec = np.array([[4.0, 0.0], [0.0, 1.0], [0.0, 0.0]])      # KiCad frame: +y is down
+    segs = arrow_glyphs(pts, vec, length_mm=2.0)
+    assert segs.shape == (6, 2, 2)                             # 3 strokes per arrow, zero vector dropped
+    shaft1, shaft2 = segs[0], segs[3]
+    assert np.allclose(shaft1, [[-1.0, 0.0], [1.0, 0.0]])      # centred, full length, tip at +x
+    assert np.allclose(shaft2, [[10.0, -0.5], [10.0, 0.5]])    # √(1/4) of the length, tip toward +y
+    for head in segs[1:3]:                                     # head strokes start at the tip, go back
+        assert np.allclose(head[0], [1.0, 0.0]) and head[1, 0] < 1.0
+    assert arrow_glyphs(np.zeros((0, 2)), np.zeros((0, 2)), 1.0).shape == (0, 2, 2)
+
+
+def test_rail_filter_joins_heuristic_marked_and_configured_nets():
+    from coppernicus.app.panels import rail_nets
+    nets = ["+3V3", "GND", "SDA", "VBUS_X", "VIN_SNS"]
+    out = rail_nets(nets, heuristic=["+3V3", "GND"], marked=["VBUS_X"], configured=["VIN_SNS"])
+    assert out == ["+3V3", "GND", "VBUS_X", "VIN_SNS"]          # board order kept, SDA left out
+    assert rail_nets(nets, [], ["NOT_ON_BOARD"], []) == []
+
+
+def test_macos_app_name_is_written_to_the_main_bundle():
+    import sys
+
+    import pytest
+
+    from coppernicus.app import set_macos_app_name
+    if sys.platform != "darwin":
+        assert set_macos_app_name("Coppernicus") is False
+        return
+    pytest.importorskip("Foundation")
+    from Foundation import NSBundle
+    assert set_macos_app_name("Coppernicus") is True
+    assert NSBundle.mainBundle().infoDictionary()["CFBundleName"] == "Coppernicus"
