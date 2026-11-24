@@ -79,6 +79,8 @@ follow the hint. `result_evicted` means you must solve again.
   YAML takes `settings: {max_edge_mm, via_plating_um, copper_temp_c, copper_thickness_mm?}`;
   `copper_thickness_mm: {B.Cu: 0.07}` is the optional what-if of step 7.
 - Write the YAML and the outputs outside the board's folder.
+- Exit codes: 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit that was set
+  could not judge something (report each `not_judged` item), 2 an error.
 - stdout and the file named by `summary_file` hold the same document. Its `problems` lists every
   load plus the top N spots and vias (`--top N`, default 5).
 - A project rail also draws the regulator inputs and links it feeds, estimated at nominal

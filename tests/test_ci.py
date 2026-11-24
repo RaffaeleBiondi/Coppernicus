@@ -145,3 +145,21 @@ def test_the_helper_itself_crashing_exits_2(monkeypatch, capsys):
     monkeypatch.setattr(ci, "solve_all", boom)
     assert ci.main(["solve", "--out", "out", "x.coppernicus.yml"]) == 2
     assert capsys.readouterr().err == "error: internal error: ZeroDivisionError: forced for the test\n"
+
+
+def test_tree_input_adds_the_power_tree_tables_to_the_summary(tmp_path, monkeypatch):
+    """With tree, each project is also solved as a whole power tree and its VRM and load
+    tables go into the job summary; the tree's verdict is shown but does not set the exit
+    code (the rails' solve does)."""
+    chain = Path(__file__).resolve().parents[1] / "examples" / "power_chain"
+    shutil.copytree(chain, tmp_path / "chain")
+    monkeypatch.chdir(tmp_path)
+    index = ci.solve_all(["chain/*.coppernicus.yml"], Path("out"), html=False, tree=True)
+    [entry] = index["projects"]
+    assert entry["tree"]["kind"] == "power_tree" and index["exit_code"] == entry["exit_code"]
+    md = ci.summary_markdown(index)
+    assert "### Power tree: `chain/power_chain.coppernicus.yml`" in md
+    assert "| VRM | Kind | Group |" in md and "| U1 | smps | +3V3 |" in md
+    assert "| Load | Group |" in md and "| U3 | +1V8 |" in md
+    plain = ci.solve_all(["chain/*.coppernicus.yml"], Path("out2"), html=False)
+    assert "tree" not in plain["projects"][0] and "Power tree" not in ci.summary_markdown(plain)

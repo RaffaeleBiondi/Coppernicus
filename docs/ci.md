@@ -49,9 +49,11 @@ a 0 V net (use `max_ground_rise_mv` there) or on a load with no voltage at its p
 of the wrong kind for the net (`max_ground_rise_mv` judges nets at 0 V only, `max_drop_pct`
 nets with a nonzero nominal; a rise limit on a supply rail used to fail and is now not
 judged), or a rail that was not solved (skipped), whose every limit is listed. The summary
-lists each item with its reason, and the overall verdict is then `not_judged`. This does not
-fail the check (exit code 0, as for a pass); a limit exceeded elsewhere still fails it. A via
-or current-density limit with nothing to judge (no vias, say) passes.
+lists each item with its reason, and the overall verdict is then `not_judged`. **This fails
+the check** (exit code 3), so a limit you wrote never passes silently; set
+`fail-on-not-judged: false` to report it in the job summary only. A limit exceeded elsewhere
+gives exit code 1 instead. With no limit at all nothing is judged and nothing fails (exit
+code 0). A via or current-density limit with nothing to judge (no vias, say) passes.
 
 A rail that feeds a regulator's input or a link (`links:`) also draws that current,
 estimated at nominal voltages without copper losses, as the desktop app does. It is listed as
@@ -88,6 +90,8 @@ setting out to check the board as designed.
 | `html` | `true` | Also write the interactive offline HTML report of each project. |
 | `top` | `5` | Current-crowding spots and vias listed per rail. Every load is always listed. |
 | `fail-on-limit` | `true` | Fail when a limit is exceeded. Set it to `false` to report only. A project that cannot be solved fails the step either way. |
+| `fail-on-not-judged` | `true` | Fail when a limit that was set could not judge something (NOT JUDGED in the summary). Set it to `false` to report only. |
+| `tree` | `false` | Also solve each project's whole power tree (`coppernicus solve --tree`) and add its VRM and load tables to the job summary. The tree's verdict is shown there; it does not set the exit code. |
 | `python-version` | `3.12` | Python used to run Coppernicus (3.12 or 3.13). |
 | `uv-version` | latest | uv version to install. |
 | `upload-artifact` | `true` | Upload the results folder as an artifact. |
@@ -98,7 +102,7 @@ setting out to check the board as designed.
 | Output | Meaning |
 |---|---|
 | `verdict` | `pass`, `fail`, `not_judged`, `pass_partially_judged` or `error`, over every project |
-| `exit-code` | `0` no limit exceeded, `1` a limit exceeded, `2` an error (a crash included: it never exits 1) |
+| `exit-code` | `0` no limit exceeded (or none set), `1` a limit exceeded, `3` a limit that was set could not judge something, `2` an error (a crash included: it never exits 1). Precedence 2, 1, 3, 0. |
 | `results-dir` | Absolute path of the results folder |
 | `artifact-url` | Download URL of the uploaded results |
 

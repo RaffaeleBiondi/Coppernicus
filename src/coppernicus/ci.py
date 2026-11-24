@@ -66,8 +66,12 @@ def _board_folder(project: Path) -> Optional[Path]:
         return None
 
 
-def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool = True) -> Dict[str, Any]:
-    """Solve every matching project; return the index written to ``out_dir/INDEX``."""
+def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool = True,
+              tree: bool = False) -> Dict[str, Any]:
+    """Solve every matching project; return the index written to ``out_dir/INDEX``. With
+    ``tree``, each project is also solved as a whole power tree (``solve --tree --json``):
+    its document goes into the entry's ``tree``, for the summary's tables; it does not set
+    the exit code."""
     out_dir = Path(out_dir)
     projects, unmatched = find_projects(patterns)
     boards = {p: _board_folder(p) for p in projects}
@@ -113,6 +117,8 @@ def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool =
             entry["exit_code"] = EXIT_ERROR
         else:
             entry["doc"] = doc
+        if tree and "doc" in entry:
+            entry["tree"] = _solve_tree(project, folder, top, env)
         entries.append(entry)
     exit_code = EXIT_ERROR if unmatched else overall_exit_code(entries)
     verdict = "error" if unmatched else overall_verdict(entries)
@@ -154,6 +160,52 @@ def overall_verdict(entries: Sequence[Dict[str, Any]]) -> str:
 
 
 # ---------------------------------------------------------------------- the summary
+
+def _solve_tree(project: Path, folder: Path, top: int, env) -> Dict[str, Any]:
+    """The power-tree document of a project (``coppernicus solve --tree --json``), or its
+    error."""
+    cmd = [sys.executable, "-m", "coppernicus", "solve", str(project), "--tree", "--json",
+           "--out", str(folder), "--top", str(top)]
+    print(f"coppernicus: solving the power tree of {project.as_posix()}", file=sys.stderr, flush=True)
+    run = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
+    if run.stderr:
+        sys.stderr.write(run.stderr)
+    try:
+        return json.loads(run.stdout)
+    except json.JSONDecodeError:
+        return {"error": {"code": "internal_error",
+                          "message": f"coppernicus solve --tree exited with {run.returncode} and no JSON",
+                          "hint": "see the log above"}}
+
+
+def tree_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
+    """The VRM and load tables of a power-tree document, for the job summary."""
+    lines = ["", f"### Power tree: `{_cell(project)}`", ""]
+    if "error" in doc:
+        return lines + [f"**Error:** {_cell(doc['error'].get('message', ''))}"]
+    lines += [f"Verdict: **{_cell(doc.get('verdict'))}**. {_cell(doc.get('verdict_note', ''))}", "",
+              "| VRM | Kind | Group | V set (V) | V out (V) | I out (A) | V in (V) | I in (A) "
+              "| Loss (mW) | |",
+              "|---|---|---|---:|---:|---:|---:|---:|---:|---|"]
+    for v in doc.get("vrms", []):
+        loss = v.get("p_loss_w")
+        loss_mw = loss * 1e3 if loss is not None else None
+        lines.append(f"| {_cell(v['name'])} | {_cell(v['kind'])} | {_cell(v['group'])} | "
+                     f"{_num(v.get('v_set_v'), '.4g')} | {_num(v.get('v_out_v'), '.5g')} | "
+                     f"{_num(v.get('i_out_a'), '.4g')} | {_num(v.get('v_in_v'), '.5g')} | "
+                     f"{_num(v.get('i_in_a'), '.4g')} | {_num(loss_mw, '.3g')} | "
+                     f"{_cell(v.get('regulation') or '')} |")
+    lines += ["", "| Load | Group | I (A) | Nominal (V) | Across (V) | Drop (mV) | Drop (%) | Verdict |",
+              "|---|---|---:|---:|---:|---:|---:|---|"]
+    for ld in doc.get("loads", []):
+        ex = ld.get("exceeds_drop_limit")
+        verdict = ld.get("status") or ("**FAIL**" if ex else "pass" if ex is False else "not judged")
+        lines.append(f"| {_cell(ld['name'])} | {_cell(ld['group'])} | {_num(ld.get('current_a'), '.4g')} | "
+                     f"{_num(ld.get('nominal_v'), '.4g')} | {_num(ld.get('v_across_v'), '.5g')} | "
+                     f"{_num(ld.get('drop_mv'), '.3g')} | {_num(ld.get('drop_pct'), '.3g')} | "
+                     f"{_cell(verdict)} |")
+    return lines
+
 
 def _cell(text: Any) -> str:
     """Text safe inside a Markdown table cell."""
@@ -267,6 +319,9 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
         lines += ["", "**Warnings (KiCad footprint fields):**", ""]
         lines += [f"- {_cell(w)}" for w in field_warnings]
     lines += details
+    for e in entries:                         # the power tree of each project, when asked
+        if "tree" in e:
+            lines += tree_markdown(e["project"], e["tree"])
     if assumptions:
         lines += ["", "<details><summary>Assumptions</summary>", ""]
         lines += [f"- {_cell(a)}" for a in assumptions]
@@ -291,6 +346,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--out", required=True, help="results folder")
     p.add_argument("--top", type=int, default=5, help="hotspots and vias listed per rail")
     p.add_argument("--no-html", action="store_true", help="skip the HTML reports")
+    p.add_argument("--tree", action="store_true",
+                   help="also solve each project's power tree; its tables go into the summary")
     p = sub.add_parser("summary", help="print the Markdown summary of a solve")
     p.add_argument("--out", required=True, help="results folder of the solve")
     p.add_argument("--artifact-url", default="", help="link to the uploaded results")
@@ -308,7 +365,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
 def _run(args) -> int:
     if args.command == "solve":
-        index = solve_all(args.patterns, Path(args.out), top=args.top, html=not args.no_html)
+        index = solve_all(args.patterns, Path(args.out), top=args.top, html=not args.no_html,
+                          tree=args.tree)
         if "error" in index:
             print(f"error: {index['error']['message']}", file=sys.stderr)
         return index["exit_code"]

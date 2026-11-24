@@ -305,7 +305,8 @@ Problem kinds, in `problems` of every summary and of `get_problems`:
   included, so a limit never drops out of the verdict), and its verdict is
   `not_judged` when any rail has such items (`pass_partially_judged` stays for "the rails with
   limits pass, others have none"). The CLI text and the CI job summary print each item as
-  "NOT JUDGED …". Exit code 0, as for `pass`.
+  "NOT JUDGED …". `coppernicus solve` (and `--tree`) exits 3 then, so CI fails on it (the
+  Action's `fail-on-not-judged`); with no limit at all it exits 0.
 
   Coppernicus invents no thresholds, and an agent should not either.
 - **`assumptions` and `warnings` come with every answer.** Read them. They say:
@@ -455,8 +456,9 @@ Exit codes:
 
 | Code | Meaning |
 |---|---|
-| 0 | Done, and no limit you set was exceeded. |
+| 0 | Done, and no limit you set was exceeded (or none was set). |
 | 1 | `solve` only: a limit you set was exceeded on some rail. |
+| 3 | `solve` only: a limit you set could not judge something (the `not_judged` items). Precedence: 2, 1, 3, 0. |
 | 2 | Error, including a crash (a bug: code `internal_error`). stdout holds `{"error": {"code", "message", "hint"}}` with `--json`, and stderr a one-line message. A crash never exits 1. |
 
 `solve` writes the PNG maps and `<project>_summary.json` to `--out`, with or without `--json`.

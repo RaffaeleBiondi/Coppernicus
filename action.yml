@@ -27,6 +27,17 @@ inputs:
       Fail the step when a limit written in a project file is exceeded. Errors (a project that
       cannot be solved) always fail it.
     default: "true"
+  fail-on-not-judged:
+    description: >-
+      Fail the step when a limit written in a project file could not judge something (a % limit
+      on a 0 V net, a limit of the wrong kind, a rail not solved; listed as NOT JUDGED in the
+      summary). false: report it in the job summary only. Without any limit, nothing fails.
+    default: "true"
+  tree:
+    description: >-
+      Also solve each project's whole power tree and add its VRM and load tables to the job
+      summary. The tree's verdict is shown there; it does not set the exit code.
+    default: "false"
   python-version:
     description: Python used to run Coppernicus (3.12 or 3.13).
     default: "3.12"
@@ -47,7 +58,9 @@ outputs:
       against the limits written in the project files.
     value: ${{ steps.solve.outputs.verdict }}
   exit-code:
-    description: 0 (no limit exceeded), 1 (a limit exceeded) or 2 (an error).
+    description: >-
+      0 (no limit exceeded, or none set), 1 (a limit exceeded), 3 (a limit that was set could not
+      judge something) or 2 (an error). Precedence 2, 1, 3, 0.
     value: ${{ steps.solve.outputs.exit-code }}
   results-dir:
     description: Absolute path of the results folder.
@@ -79,15 +92,18 @@ runs:
         COPPERNICUS_OUT: ${{ inputs.output-dir }}
         COPPERNICUS_TOP: ${{ inputs.top }}
         COPPERNICUS_HTML: ${{ inputs.html }}
+        COPPERNICUS_TREE: ${{ inputs.tree }}
       run: |
         # The results go to their own folder; nothing is written next to a board and nothing
         # is committed.
         html_flag=""
         if [ "$COPPERNICUS_HTML" != "true" ]; then html_flag="--no-html"; fi
+        tree_flag=""
+        if [ "$COPPERNICUS_TREE" = "true" ]; then tree_flag="--tree"; fi
         index="$COPPERNICUS_OUT/coppernicus-ci.json"
         rm -f "$index"
         uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -m coppernicus.ci solve \
-          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag "$COPPERNICUS_PROJECTS" || true
+          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag $tree_flag "$COPPERNICUS_PROJECTS" || true
         # The exit code and verdict come from the index the helper writes: a crash also exits
         # with 1, which must not read as "limit exceeded". No index means an error.
         result=$(uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -c \
@@ -130,6 +146,7 @@ runs:
       env:
         CODE: ${{ steps.solve.outputs.exit-code }}
         FAIL_ON_LIMIT: ${{ inputs.fail-on-limit }}
+        FAIL_ON_NOT_JUDGED: ${{ inputs.fail-on-not-judged }}
       run: |
         case "$CODE" in
           0) echo "Coppernicus: no limit exceeded." ;;
@@ -138,6 +155,11 @@ runs:
                exit 1
              fi
              echo "::warning title=Coppernicus::A limit set in a project file is exceeded (fail-on-limit is false)." ;;
+          3) if [ "$FAIL_ON_NOT_JUDGED" = "true" ]; then
+               echo "::error title=Coppernicus::A limit set in a project file could not judge something (NOT JUDGED). See the job summary."
+               exit 1
+             fi
+             echo "::warning title=Coppernicus::A limit set in a project file could not judge something (fail-on-not-judged is false)." ;;
           *) echo "::error title=Coppernicus::A project could not be solved (exit code ${CODE:-none}). See the log above."
              exit 2 ;;
         esac
