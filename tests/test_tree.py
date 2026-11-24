@@ -452,6 +452,26 @@ def test_an_excluded_ground_rail_is_not_said_to_be_solved_as_a_ground(board):
     assert not any("solved as a ground" in w for w in tree.warnings)
 
 
+@pytest.mark.parametrize("excluded, present, absent", [
+    ([], ["at the ground pins of J1;", "U2 holds 1.8 V at U3 pins 1 on +1V8 (remote sense), above U3 pins 2 "
+          "on GND.", "Link FB1:"], []),
+    # U2's output is not solved: it is an estimated load on +3V3_F, its remote sense is gone
+    (["+1V8"], ["at the ground pins of J1;", "Link FB1:"], ["U2 holds"]),
+    # no ground solved: no 0 V reference, no ground sense
+    (["GND"], ["U2 holds 1.8 V at U3 pins 1 on +1V8 (remote sense)."], ["Ground nets are held", "on GND"]),
+    # FB1's group is not solved; U2, fed from it, is an ideal source and references the ground
+    (["+3V3_F"], ["at the ground pins of J1, U2;"], ["Link FB1"]),
+    # J1 drives VIN, not solved: U1, fed from it, is the source referencing the ground
+    (["VIN"], ["at the ground pins of U1;"], ["of J1"]),
+])
+def test_tree_assumptions_name_only_parts_that_are_solved(board, excluded, present, absent):
+    project = power_chain_project()
+    project.engine_options = {"excluded_nets": excluded}
+    text = "\n".join(solve_project_tree(board, project).assumptions)
+    assert all(p in text for p in present), text
+    assert not any(a in text for a in absent), text
+
+
 def test_a_ground_below_0_v_is_a_rise_by_its_magnitude():
     """Under a negative rail the ground sinks below 0 V: the group's largest rise, the rise
     problem and the return pins all give |V| from 0 V, and the limit judges it (finding 9)."""
