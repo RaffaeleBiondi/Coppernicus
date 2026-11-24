@@ -39,7 +39,7 @@ from coppernicus.app.worker import ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
-from coppernicus.power_tree import apply_limits, group_verdict, tree_verdicts
+from coppernicus.power_tree import apply_limits, group_verdict, tree_verdicts, unsolved_limits
 from coppernicus.problems import FAIL, find_problems, from_0v
 from coppernicus.project import Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
@@ -464,7 +464,7 @@ class MainWindow(QMainWindow):
 
     def _limits_edited(self):
         rail = self._adopt_draft()
-        if self.tree is not None and self.tree.group_of(rail.net) is not None:   # re-judge, no re-solve
+        if self.tree is not None:                                  # re-judge, no re-solve
             apply_limits(self.tree, self.project)
             self.tree_panel.set_tree(self.tree, self._tree_verdict())
         group = self.group_box.currentData()
@@ -720,9 +720,10 @@ class MainWindow(QMainWindow):
         if self.tree is None:
             return ""
         overall, groups = tree_verdicts(self.tree)
+        unsolved = unsolved_limits(self.tree)
         return verdict_html(overall, sum(v.failed for v in groups.values()),
-                            [x for v in groups.values() for x in v.not_judged],
-                            any(v.limits for v in groups.values()))
+                            [x for v in groups.values() for x in v.not_judged] + unsolved,
+                            any(v.limits for v in groups.values()) or bool(unsolved))
 
     def _drop_tree(self, reason: str):
         """The power-tree result no longer matches the project (or the board)."""

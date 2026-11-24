@@ -584,3 +584,33 @@ def test_limits_can_be_applied_again_without_solving(board):
     project.rail("+3V3").limits = Limits()
     apply_limits(tree, project)
     assert _load(tree, "U4").passed is None and _vrm(tree, "U2").input_passed is None
+
+
+def test_a_group_that_did_not_converge_is_not_judged():
+    """Nothing in a group whose iteration did not converge is judged, copper included."""
+    from coppernicus.power_tree import group_verdict
+    from coppernicus.results import LoadReport, RailResult, TreeResult, ViaCurrent
+    res = RailResult(net="VCC", nets=["VCC"], v_ref=3.3, layers=[], sources=[], loads=[],
+                     vias=[ViaCurrent("v1", "via", (0.0, 0.0), 0.3, 5.0, 0.01)], max_drop=0.1,
+                     j_max=1.0, power_loss=0.1, energy_balance_error=0.0, converged=False)
+    tree = TreeResult(groups={"VCC": res}, loads=[LoadReport(
+        "U1", "VCC", 1.0, 3.3, 3.2, 3.2, None, 3.2, 3.2, 0.1, 3.03, status="NOT CONVERGED",
+        net="VCC")], limits={"VCC": Limits(max_drop_pct=1.0, max_via_current=1.0)})
+    gv = group_verdict(tree, "VCC")
+    assert gv.verdict == "not_judged" and gv.failed == 0
+    assert any("did not converge" in x for x in gv.not_judged)
+    res.converged = True
+    assert group_verdict(tree, "VCC").verdict == "fail"          # the via over 1 A
+
+
+def test_a_limit_on_a_net_the_tree_does_not_solve_is_not_judged(board):
+    from coppernicus.power_tree import tree_summary
+    from coppernicus.project import Rail
+    project = power_chain_project()
+    project.rail("+1V8").limits = Limits(max_drop_pct=50.0)
+    project.rails.append(Rail("+5V", limits=Limits(max_drop_pct=1.0)))     # picked, not set up
+    doc = tree_summary(solve_project_tree(board, project))
+    assert doc["verdict"] == "not_judged" and any("+5V" in x for x in doc["not_judged"])
+    assert "+5V" in doc["verdict_note"]
+    project.rails.pop()
+    assert tree_summary(solve_project_tree(board, project))["verdict"] == "pass"
