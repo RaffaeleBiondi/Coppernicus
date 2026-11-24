@@ -409,15 +409,12 @@ def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:
         if abs(dev[i]) > abs(best[0]):
             best = (float(dev[i]), float(lf.points[i, 0]), float(lf.points[i, 1]), lf.name)
     volts, x, y, layer = best
+    what, side = drop_words(volts, res.v_ref, res.sign, True)   # its side, from the signed value
     if res.sign > 0:
         volts = abs(volts)
     mv = volts * 1e3
     where = f" on {layer}" if layer else ""
-    if res.sign < 0:
-        what, side = drop_words(volts, res.v_ref, res.sign, True)
-        title = f"{res.net}: largest {what} {abs(mv):.2f} mV {side}{where}"
-    else:
-        title = f"{res.net}: largest ground rise {mv:.2f} mV{where}"
+    title = f"{res.net}: largest {what} {abs(mv):.2f} mV {side}{where}"
     return [Problem(
         FAIL if abs(mv) > limit else INFO, "rise", _against(title, abs(mv) > limit, limit, "mV", source),
         f"Copper furthest from the {res.v_ref:g} V reference; limit {limit:g} mV.",

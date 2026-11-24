@@ -827,6 +827,17 @@ def test_a_rail_driven_at_0_v_in_the_tree_takes_a_ground_rise_limit():
     assert any(p.kind == "rise" and p.severity == FAIL for p in probs)
 
 
+def test_a_rail_driven_at_0_v_in_the_tree_names_the_side_of_its_ground_shift():
+    """The tree draws the load current out of a 0 V rail, so its copper sits below 0 V: the
+    rise problem says so ("ground shift … below 0 V"), as its loads' titles do."""
+    from coppernicus.engine.synthetic import Strip, strip_board
+    tree = solve_project_tree(Board(strip_board()),
+                              _strip_project(0.0, limits=Limits(max_ground_rise_mv=1.0)))
+    [rise] = [p for p in find_tree_problems(tree, Strip.NET) if p.kind == "rise"]
+    assert rise.title.startswith(f"{Strip.NET}: largest ground shift 37.93 mV below 0 V on ")
+    assert rise.data["rise_mv"] == pytest.approx(37.93, abs=0.01)     # its magnitude, as before
+
+
 def test_a_ground_rise_limit_on_a_supply_rail_solved_alone_is_not_judged(tmp_path):
     """The same rule for a rail solved alone: no rise problem on a 3.3 V rail, and the
     service lists the limit as not judged instead of failing it."""
