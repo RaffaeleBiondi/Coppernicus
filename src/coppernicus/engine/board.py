@@ -6,6 +6,7 @@ the board (nets, layers, parts and pins, net ties, outline, copper) is asked her
 
 from __future__ import annotations
 
+import dataclasses
 import fnmatch
 import logging
 from dataclasses import dataclass
@@ -14,8 +15,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from kipi.core.geometry.copper import net_layer_copper
-from kipi.core.model.board import BoardSnapshot, Pad
+from kipi.core.model.board import BoardSnapshot, CopperLayer, Pad
 from kipi.core.model.nets import classify_nets
+from kipi.core.model.stackup import restack, stack_order
 from kipi.sources import registry
 from shapely import STRtree
 from shapely.geometry import Point, Polygon
@@ -130,6 +132,26 @@ class Board:
 
     def power_nets(self) -> List[str]:
         return [n for n in self.nets() if self.net_kind(n) in ("power", "ground")]
+
+    def counts(self) -> Dict[str, int]:
+        """How many nets, parts, pads, vias, tracks and zones the board has."""
+        s = self._snap
+        return {"nets": len(self.nets()), "parts": len(s.footprints), "pads": len(s.pads),
+                "vias": len(s.vias), "tracks": len(s.tracks), "zones": len(s.zones)}
+
+    def with_copper_thickness(self, thickness_mm: Dict[str, float]) -> "Board":
+        """A what-if copy of this board with some copper layers (by name) set to another
+        thickness, the stack rebuilt around them. The board file is not touched."""
+        copper = {c.name for c in self._snap.stackup.copper}
+        unknown = [n for n in thickness_mm if n not in copper]
+        if unknown:
+            raise EngineError(f"No copper layer {', '.join(unknown)} on this board "
+                              f"(copper layers: {', '.join(c.name for c in self.layers())})")
+        stack = self._snap.stackup
+        new_mm = [float(thickness_mm.get(e.name, e.thickness_mm)) if isinstance(e, CopperLayer)
+                  else e.thickness_mm for e in stack_order(stack)]
+        snap = dataclasses.replace(self._snap, stackup=restack(stack, new_mm, edited=True))
+        return Board(snap, self.path, self.warnings)
 
     # ------------------------------------------------------------------ parts and pins
     def parts_on_net(self, net: str) -> List[PartPins]:
