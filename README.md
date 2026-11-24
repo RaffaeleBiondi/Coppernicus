@@ -307,10 +307,10 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Drop isolines (the same levels on every layer) and current-flow arrows (length ∝ √\|J\|) | ✅ |
 | ΔV between two clicked points ("Measure ΔV") | ✅ |
 | Nets marked as rails by hand, saved in the project (right-click a net) | ✅ |
-| Command line with exit codes for scripts and CI | ✅ (a crash exits 2, never 1) |
+| Command line with exit codes for scripts and CI | ✅ 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit you set could not judge something, 2 an error (a crash too) |
 | AI-agent interface: MCP server (with `solve_tree` for the whole power tree) and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
-| Offline interactive HTML report (`solve --html`, MCP `report` tool) | ✅ (tested in Chromium and Chrome; Safari and Firefox not yet) |
-| GitHub Action for KiCad repositories (`uses: RaffaeleBiondi/Coppernicus@main`), job summary, artifacts | ✅ |
+| Offline interactive HTML report (`solve --html`, MCP `report` tool); `solve --tree --html` for the whole power tree | ✅ (tested in Chromium and Chrome; Safari and Firefox not yet) |
+| GitHub Action for KiCad repositories (`uses: RaffaeleBiondi/Coppernicus@main`), job summary, artifacts; `fail-on-not-judged` (default on) fails on a limit that could not judge; opt-in `tree` adds the power tree's tables to the job summary | ✅ |
 | Sources, loads, converters and links defined in KiCad footprint fields (`PI_RAIL`, `PI_SOURCE`, `PI_LOAD`, `PI_KIND`, `PI_INPUT`, `PI_GND`, `PI_LINK`…) | ✅ read by default from `.kicad_pcb` in the CLI, MCP and Action; KiCad wins over a project rail unless `override_board_fields: true`; the app comes next ([fields](docs/agents.md#kicad-footprint-fields)) |
 | Before/after comparison: "Pin as baseline", Compare tab (per-load, total and per-layer deltas, settings that changed), "Δ drop vs baseline" map | ✅ |
 | Copper loss by layer as a chart (baseline beside current) | ✅ |
@@ -325,12 +325,12 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Verdicts list what a set limit could not judge (`not_judged`, with the reason), in JSON, CLI text, report and CI summary | ✅ |
 | Power-tree verdicts: a group passes only when everything its limits apply to was judged. Items that cannot be judged (disconnected, behind a regulator out of regulation, not converged, 0 V nominal, a limit on a net the tree does not solve) give "not judged" and are named | ✅ |
 | Regulator inputs judged as loads on the rail feeding them (across input and ground pins); limits per net, a net without its own limit takes its group's main rail's; copper judged against the strictest limit in the group, and a fail names whose limit it used | ✅ |
-| What-if copper thickness per layer (`copper_thickness_mm`, optional) | ✅ (project file and MCP; an app field comes next) |
+| What-if copper thickness per layer (`copper_thickness_mm`, optional, at most 1 mm per layer) | ✅ (project file and MCP; an app field comes next) |
 | Board temperature (electro-thermal) | 🔄 next |
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
 | Standalone `.app` / `.exe` that needs no uv | ⏳ later |
 
-Tested on macOS. The test suite also passes in CI on Ubuntu and on Windows (an informative job); the desktop app itself has not been tried on Windows yet. The engine also reads ODB++
+Tested on macOS. The test suite runs in CI on Ubuntu, macOS and Windows, all required; the desktop app itself has not been tried on Windows yet. The engine also reads ODB++
 and HyperLynx files, which have not been tried through Coppernicus yet.
 
 ## More documentation
