@@ -424,10 +424,28 @@ def _input_text(v: Dict[str, Any]) -> str:
     return f"  input drop on {v['input_net']} {drop}: {verdict}"
 
 
-def tree_text(doc: Dict[str, Any]) -> List[str]:
-    """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
+def _group_worst(gr: Dict[str, Any]) -> str:
+    """A group's worst copper for its :func:`tree_text` line, worded as
+    :func:`coppernicus.problems.max_drop_text`: "max drop 12.345 mV (0.374 %) below 3.3 V",
+    "max drop 12.345 mV (0.374 %) above -3.3 V (toward 0 V)", "max drop 1.234 mV below 0 V"
+    (a rail at 0 V: no %), "max ground rise 5.678 mV above 0 V" or "max ground shift 5.678 mV
+    below 0 V". The side comes from the summary alone, as the tree solves it: a ground is a
+    rise, a rail below 0 V draws toward 0 V, any other rail (one at 0 V too) below its
+    nominal."""
     from coppernicus.problems import drop_words
 
+    rise = gr["kind"] == "ground"
+    mv = gr["max_rise_mv"] if rise else gr["max_drop_mv"]
+    if mv is None:
+        return f"max {'ground rise' if rise else 'drop'} —"
+    v_ref = gr["v_ref_v"] or 0.0
+    what, where = drop_words(mv, v_ref, -1.0 if rise or v_ref < 0 else 1.0, rise)
+    pct = "" if gr["max_drop_pct"] is None else f" ({gr['max_drop_pct']:.3f} %)"
+    return f"max {what} {abs(mv) if rise else mv:.3f} mV{pct} {where}"
+
+
+def tree_text(doc: Dict[str, Any]) -> List[str]:
+    """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
     lines = ["VRMs (sources and regulators)",
              f"  {'name':<14} {'kind':<6} {'group':<10} {'V set':>8} {'V out':>9} {'I out':>9} "
              f"{'V in':>9} {'I in':>9} {'P loss':>9}"]
@@ -450,18 +468,10 @@ def tree_text(doc: Dict[str, Any]) -> List[str]:
                      f"{_fmt(ld['v_ground_v'], 9, '.2f', 'mV', 1e3)} {_fmt(ld['v_across_v'], 9, '.5f', 'V')} "
                      f"{drop:>14}  {ld['status'] or verdict}")
     lines.append("Groups")
-    for gr in doc["groups"]:
-        if gr["kind"] == "ground":
-            rise = gr["max_rise_mv"]
-            if rise is None:
-                worst = "max ground rise —"
-            else:
-                what, where = drop_words(rise, 0.0, -1.0, True)
-                worst = f"max {what} {abs(rise):.3f} mV {where}"
-        else:
-            worst = (f"max drop {_fmt(gr['max_drop_mv'], 0, '.3f', ' mV').strip()} "
-                     f"({_fmt(gr['max_drop_pct'], 0, '.3f', ' %').strip()})")
-        lines.append(f"  {gr['group']:<10} {gr['kind']:<6} {' + '.join(gr['nets']):<22} {worst}, "
+    worsts = [_group_worst(gr) + "," for gr in doc["groups"]]
+    width = max(map(len, worsts), default=0)
+    for gr, worst in zip(doc["groups"], worsts):
+        lines.append(f"  {gr['group']:<10} {gr['kind']:<6} {' + '.join(gr['nets']):<22} {worst:<{width}} "
                      f"copper loss {_fmt(gr['power_loss_w'], 0, '.3g', ' mW', 1e3).strip()}: "
                      f"{gr['verdict']}")
     for k in doc["links"]:

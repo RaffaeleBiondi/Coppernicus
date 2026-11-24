@@ -402,6 +402,40 @@ def test_tree_text_prints_a_rail_at_0_v_without_a_percentage():
     assert "—" in lines and Strip.NET in lines
 
 
+def _group_lines(doc):
+    from coppernicus.power_tree import tree_text
+    lines = tree_text(doc)
+    keys = {gr["group"] for gr in doc["groups"]}
+    return {line.split()[0]: line for line in lines[lines.index("Groups") + 1:]
+            if line.split() and line.split()[0] in keys}
+
+
+def test_tree_text_names_the_side_of_each_group_s_reference(tree):
+    """A group's worst reads as the summaries do: below the nominal on a positive rail,
+    above it (toward 0 V) on a negative one, a rise or shift from 0 V on a ground; the
+    copper loss stays in one column."""
+    from coppernicus.engine.synthetic import Strip, strip_board
+    from coppernicus.power_tree import tree_summary
+    doc = tree_summary(tree)
+    lines = _group_lines(doc)
+    for gr in doc["groups"]:
+        if gr["kind"] == "rail":
+            want = (f"max drop {gr['max_drop_mv']:.3f} mV ({gr['max_drop_pct']:.3f} %) "
+                    f"below {gr['v_ref_v']:g} V,")
+        else:
+            want = f"max ground rise {gr['max_rise_mv']:.3f} mV above 0 V,"
+        assert want in lines[gr["group"]], lines[gr["group"]]
+    assert len({line.index("copper loss") for line in lines.values()}) == 1, lines
+    neg = tree_summary(solve_project_tree(Board(strip_board()), _strip_project(-3.3)))
+    [gr] = neg["groups"]
+    assert (f"max drop {gr['max_drop_mv']:.3f} mV ({gr['max_drop_pct']:.3f} %) above -3.3 V "
+            "(toward 0 V),") in _group_lines(neg)[Strip.NET]
+    zero = tree_summary(solve_project_tree(Board(strip_board()), _strip_project(0.0)))
+    [gr] = zero["groups"]
+    line = _group_lines(zero)[Strip.NET]
+    assert f"max drop {gr['max_drop_mv']:.3f} mV below 0 V," in line and "—" not in line, line
+
+
 def _mv_in(title, words):
     """The mV figure of a problem title that ends "(<mV> mV <words>)"."""
     import re
