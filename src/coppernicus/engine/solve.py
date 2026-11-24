@@ -25,7 +25,8 @@ from kipi.dc.solver.setup import REF_TEMP_C, RHO_CU_OHM_MM
 from kipi.dc.solver.via_barrel import ViaRule, default_via_rules
 
 from coppernicus.engine.board import Board, EngineError, NetTie
-from coppernicus.project import SOURCE_PIN_REFS, Rail, Settings, pins_text
+from coppernicus.power_tree import EstimateError, estimate_note, estimated_draws
+from coppernicus.project import SOURCE_PIN_REFS, Project, Rail, Settings, pins_text
 from coppernicus.results import LayerField, RailResult, TerminalResult, ViaCurrent
 
 TCR_CU = 0.00393     # per °C, copper; KiPI's default (kipi/dc/solver/setup.py)
@@ -124,20 +125,41 @@ def _unique(names: List[str]) -> List[str]:
 
 def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
                progress: Optional[Callable[[str], None]] = None,
-               cancelled: Callable[[], bool] = lambda: False) -> RailResult:
+               cancelled: Callable[[], bool] = lambda: False,
+               project: Optional[Project] = None) -> RailResult:
+    """Solve one rail on its own. With ``project``, the rail also delivers the currents of
+    the regulator inputs and links it feeds, estimated at nominal voltages
+    (:func:`coppernicus.power_tree.estimated_draws`); without it, only its own loads."""
     settings = settings or Settings()
     if not rail.sources:
         raise EngineError(f"{rail.net}: add a source (the regulator output) before solving")
-    if not rail.loads:
-        raise EngineError(f"{rail.net}: add at least one load before solving")
 
     nets, ties = tied_nets(board, rail.net) if rail.follow_net_ties else ([rail.net], [])
+    try:
+        draws = estimated_draws(project, nets) if project is not None else []
+    except EstimateError as e:
+        raise EngineError(str(e)) from None
+    if not rail.loads and not draws:
+        raise EngineError(f"{rail.net}: add at least one load before solving")
     src_names = _unique([s.label for s in rail.sources])
-    load_names = _unique([ld.label for ld in rail.loads])
+    names = _unique([ld.label for ld in rail.loads] + [d.name for d in draws])
+    load_names = names[:len(rail.loads)]
     sources = [VoltageSource(name, [p.id for p in board.pads(nets, s.ref, s.pins)], s.voltage)
                for name, s in zip(src_names, rail.sources)]
     loads = [CurrentLoad(name, [p.id for p in board.pads(nets, ld.ref, ld.pins)], ld.current)
              for name, ld in zip(load_names, rail.loads)]
+    for name, d in zip(names[len(rail.loads):], draws):
+        try:
+            pad_ids = [p.id for p in board.pads([d.net], d.ref, d.pins)]
+        except EngineError as e:
+            raise EngineError(f"{d.what}: {e}") from None
+        for ld, spec in zip(loads, rail.loads):
+            if set(ld.pad_ids) & set(pad_ids):
+                what = "the link" if "(link," in d.name else "the VRM input"
+                raise EngineError(
+                    f"Load {spec.label} on {rail.net} draws from pins that also carry {d.what}: "
+                    f"its current would be counted twice; remove the load or {what}")
+        loads.append(CurrentLoad(name, pad_ids, d.current_a))
     links = [SeriesLink(f"net tie {t.ref}", [t.pad_a], [t.pad_b], 0.0) for t in ties]
 
     solve_settings, assumptions = engine_settings(settings)
@@ -146,7 +168,7 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
     if settings.copper_temp_c != REF_TEMP_C:
         t_c = float(settings.copper_temp_c)
         problem.temperature = lambda xy: np.full(len(np.atleast_2d(xy)), t_c)
-    assumptions += tree_only_fields(rail)
+    assumptions += tree_only_fields(rail) + estimate_note(draws)
     if ties:
         assumptions.append("Net ties solved as shorts: " + ", ".join(
             f"{t.ref} ({t.net_a} ↔ {t.net_b})" for t in ties) + ".")
@@ -160,15 +182,16 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
         raise EngineError(str(e)) from e
     seconds = time.perf_counter() - t0
 
-    out = _convert(board, rail, nets, result, src_names, load_names)
+    out = _convert(board, rail, nets, result, src_names, names,
+                   extra_refs={n: d.ref for n, d in zip(names[len(rail.loads):], draws)})
     out.assumptions = assumptions
     out.stats["seconds"] = seconds
     return out
 
 
-def _convert(board: Board, rail: Rail, nets: List[str], result, src_names, load_names) -> RailResult:
+def mesh_fields(board: Board, result) -> Tuple[List[LayerField], List[ViaCurrent]]:
+    """The solved copper of one KiPI net result, per layer, and its via currents."""
     mesh, sol, fields = result.mesh, result.solution, result.fields
-
     layers = []
     for lid in mesh.layers:
         mask = mesh.tri_layer == lid
@@ -181,10 +204,18 @@ def _convert(board: Board, rail: Rail, nets: List[str], result, src_names, load_
             tris=local.reshape(tris.shape).astype(np.int64), voltage=sol.node_v[used],
             current_density=fields.j_density[mask], tri_power=fields.tri_power[mask],
             tri_area=fields.tri_area[mask]))
+    vias = [ViaCurrent(v.owner_id, v.kind, tuple(v.position), v.drill_mm, float(v.current),
+                       float(v.power)) for v in fields.vias]
+    return layers, vias
 
+
+def _convert(board: Board, rail: Rail, nets: List[str], result, src_names, load_names,
+             extra_refs: Optional[Dict[str, str]] = None) -> RailResult:
+    sol, fields = result.solution, result.fields
+    layers, vias = mesh_fields(board, result)
     terms = {t.name: t for t in fields.terminals}
     refs = {**{n: s.ref for n, s in zip(src_names, rail.sources)},
-            **{n: ld.ref for n, ld in zip(load_names, rail.loads)}}
+            **{n: ld.ref for n, ld in zip(load_names, rail.loads)}, **(extra_refs or {})}
 
     def terminal(name: str, kind: str) -> TerminalResult:
         t = terms[name]
@@ -192,8 +223,6 @@ def _convert(board: Board, rail: Rail, nets: List[str], result, src_names, load_
                               float(t.v_max), list(t.pad_ids),
                               [tuple(board.pad(pid).position) for pid in t.pad_ids])
 
-    vias = [ViaCurrent(v.owner_id, v.kind, tuple(v.position), v.drill_mm, float(v.current),
-                       float(v.power)) for v in fields.vias]
     sm = fields.summary
     warnings = list(sol.warnings) + [
         f"Load {name}: pins with no copper path to a source draw nothing: {', '.join(pads)}"

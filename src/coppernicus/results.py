@@ -7,7 +7,7 @@ Coordinates are millimetres in KiCad's frame (x right, **y down**).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -74,6 +74,9 @@ class RailResult:
     stats: Dict[str, float] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     assumptions: List[str] = field(default_factory=list)   # inputs the engine filled in
+    # "rail", or "ground" for a ground net of a power-tree solve: v_ref is then its 0 V
+    # reference and max_drop the largest rise above it.
+    kind: str = "rail"
 
     # ------------------------------------------------------------------ helpers
     def layer(self, name: str) -> Optional[LayerField]:
@@ -93,3 +96,68 @@ class RailResult:
         if self.loss_series:
             out["series links"] = self.loss_series
         return out
+
+
+# ---------------------------------------------------------------------- power tree
+
+DISCONNECTED = "DISCONNECTED"                     # no copper path to its source: not solved
+NOT_CONVERGED = "NOT CONVERGED"
+OUT_OF_REGULATION = "VRM OUT OF REGULATION"       # its regulator cannot hold its voltage
+
+
+@dataclass
+class VrmReport:
+    """A source or regulator after a power-tree solve. Powers are across its own pins
+    (from its ground pins); input values are ``None`` for a plain source."""
+    name: str
+    kind: str                      # "source", "ldo", "smps"
+    group: str                     # the TreeResult.groups key of the rail it drives
+    v_set_v: float
+    v_out_v: float                 # mean over its output pins
+    i_out_a: float
+    v_in_v: Optional[float] = None
+    i_in_a: Optional[float] = None
+    p_out_w: float = 0.0
+    p_in_w: Optional[float] = None
+    p_loss_w: Optional[float] = None
+    v_ground_v: Optional[float] = None
+    v_sense_v: Optional[float] = None
+    v_ground_sense_v: Optional[float] = None
+    regulation: str = ""           # why it cannot hold its voltage; "" when it can
+
+
+@dataclass
+class LoadReport:
+    """A load after a power-tree solve: the voltage it sees is across its supply and ground
+    pins, so the ground's rise counts in its drop."""
+    name: str
+    group: str
+    current_a: float
+    nominal_v: float               # the set voltage of the source driving its rail
+    v_supply_v: float              # mean over its supply pins
+    v_supply_min_v: float
+    v_ground_v: Optional[float]    # mean over its ground pins; None without ground pins
+    v_across_v: float              # v_supply_v - (v_ground_v or 0)
+    v_worst_v: float               # lowest supply pin - highest ground pin (or the boost side)
+    drop_v: float                  # nominal_v - v_worst_v (negative: a boost)
+    drop_pct: float
+    status: str = ""               # DISCONNECTED, NOT_CONVERGED or OUT_OF_REGULATION
+    passed: Optional[bool] = None  # against its rail's max_drop_pct; None without a limit
+
+
+@dataclass
+class TreeResult:
+    """A whole power tree: every rail and ground group, its sources and regulators, its
+    loads, and the limits each group is judged against (only the user's)."""
+    groups: Dict[str, RailResult] = field(default_factory=dict)
+    vrms: List[VrmReport] = field(default_factory=list)
+    loads: List[LoadReport] = field(default_factory=list)
+    links: List[Dict[str, Any]] = field(default_factory=list)   # name, nets, resistance, current
+    limits: Dict[str, Any] = field(default_factory=dict)        # group key -> project Limits
+    assumptions: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    stats: Dict[str, float] = field(default_factory=dict)
+
+    def group_of(self, net: str) -> Optional[str]:
+        """The key of the group ``net`` was solved in, or None."""
+        return next((k for k, r in self.groups.items() if net in r.nets), None)

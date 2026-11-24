@@ -20,7 +20,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
 from coppernicus.project import Limits
-from coppernicus.results import LayerField, RailResult
+from coppernicus.results import DISCONNECTED, NOT_CONVERGED, LayerField, RailResult, TreeResult
 
 FAIL, INFO = "fail", "info"
 HOTSPOT_TOP_SHARE = 0.01      # without a limit: the top 1 % of a layer's copper area by |J|
@@ -153,4 +153,81 @@ def _vias(result: RailResult, limits: Limits, top: int) -> List[Problem]:
             v.current, float(v.position[0]), float(v.position[1]),
             data={"via_id": v.owner_id, "via_kind": v.kind, "current_a": v.current,
                   "power_w": v.power, "drill_mm": v.drill_mm}))
+    return out
+
+
+# ---------------------------------------------------------------------- power tree
+
+# Limit keys as the agent interface names them (units in the key).
+LIMIT_KEYS = {"max_drop_pct": "max_drop_pct", "max_current_density_a_mm2": "max_current_density",
+              "max_via_current_a": "max_via_current"}
+
+
+def limits_dict(limits: Optional[Limits], kind: str = "rail") -> Dict[str, float]:
+    """The limits that apply to a group of ``kind``, keyed with their units. A ground has
+    no nominal voltage, so a drop limit does not apply to it."""
+    limits = limits or Limits()
+    out = {key: getattr(limits, attr) for key, attr in LIMIT_KEYS.items()
+           if getattr(limits, attr) is not None}
+    if kind == "ground":
+        out.pop("max_drop_pct", None)
+    return out
+
+
+def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = None,
+                       top: int = 5) -> List[Problem]:
+    """The problems of one group of a power-tree solve, fails first. On a rail: its loads,
+    ranked by the drop across their supply and ground pins (``LoadReport.drop_pct``). On a
+    ground: its return pins, ranked by their rise above 0 V (no drop limit applies to a
+    ground). Then current-crowding spots and vias, as on a single rail."""
+    res = tree.groups[group]
+    limits = limits or Limits()
+    first = _returns(res) if res.kind == "ground" else _tree_loads(tree, group, res, limits)
+    out = first + _hotspots(res, limits, top) + _vias(res, limits, top)
+    order = {"load": 0, "return": 0, "hotspot": 1, "via": 2}
+    return sorted(out, key=lambda p: (p.severity != FAIL, order[p.kind], -p.value))
+
+
+def _tree_loads(tree: TreeResult, group: str, res: RailResult, limits: Limits) -> List[Problem]:
+    terms = {t.name: t for t in res.loads}
+    out = []
+    for ld in (ld for ld in tree.loads if ld.group == group):
+        t = terms.get(ld.name)
+        x, y = t.positions[0] if t is not None and t.positions else (np.nan, np.nan)
+        limit = f"limit {limits.max_drop_pct:g} %" if limits.max_drop_pct is not None else "no limit set"
+        if ld.status in (DISCONNECTED, NOT_CONVERGED):
+            title, value = f"{ld.name}: {ld.status}", float("inf")
+        else:
+            word = "below" if ld.drop_v >= 0 else "above"
+            title = (f"{ld.name}: {ld.v_worst_v:.4f} V across its supply and ground pins "
+                     f"({abs(ld.drop_v) * 1e3:.2f} mV, {abs(ld.drop_pct):.2f} % {word} "
+                     f"{ld.nominal_v:g} V)")
+            value = ld.drop_pct
+        ground = ("no ground pins" if ld.v_ground_v is None
+                  else f"ground at {ld.v_ground_v * 1e3:.2f} mV")
+        status = f" {ld.status}." if ld.status and ld.status not in title else ""
+        out.append(Problem(
+            FAIL if ld.passed is False else INFO, "load", title,
+            f"{ld.current_a:g} A, supply {ld.v_supply_v:.4f} V, {ground}; {limit}.{status}",
+            value, float(x), float(y),
+            data={"name": ld.name, "drop_mv": ld.drop_v * 1e3, "drop_pct": ld.drop_pct,
+                  "v_across_v": ld.v_across_v, "v_worst_v": ld.v_worst_v,
+                  "current_a": ld.current_a, "status": ld.status}))
+    return out
+
+
+def _returns(res: RailResult) -> List[Problem]:
+    """Ground pins ranked by rise: where the return current lifts the ground most. Not
+    judged: a ground has no nominal voltage to take a drop limit from."""
+    out = []
+    for t in res.loads:
+        rise = t.v_max - res.v_ref
+        if not np.isfinite(rise):
+            continue
+        x, y = t.positions[0] if t.positions else (np.nan, np.nan)
+        out.append(Problem(
+            INFO, "return", f"{t.name}: ground {rise * 1e3:.2f} mV above 0 V",
+            f"{t.ref}, {len(t.pad_ids)} pin(s), {abs(t.current):g} A; not judged (no ground limit).",
+            rise * 1e3, float(x), float(y),
+            data={"name": t.name, "ref": t.ref, "rise_mv": rise * 1e3, "current_a": t.current}))
     return out
