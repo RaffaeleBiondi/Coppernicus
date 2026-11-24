@@ -34,6 +34,8 @@ FIELDS = {
     "drop": ("Voltage drop (mV)", "viridis"),
     "voltage": ("Voltage (V)", "viridis"),
     "current": ("Current density (A/mm²)", "magma"),
+    # Before/after: two hues and a light neutral midpoint (no change).
+    "difference": ("Δ drop vs baseline (mV)", "RdBu_r"),
 }
 J_CLIP_PERCENTILE = 99.5
 SOURCE_COLOR, LOAD_COLOR, OUTLINE_COLOR, COPPER_COLOR = "#1a9850", "#d73027", "#555555", "#b87333"
@@ -41,7 +43,7 @@ CANDIDATE_COLOR = "#7a4a1d"       # outlines of the pads that can be picked
 PAD_STYLE = {"source": (SOURCE_COLOR, 3.0), "load": (LOAD_COLOR, 3.0), "candidate": (CANDIDATE_COLOR, 1.0)}
 CLICK_SLOP_PX = 3                 # a press and release closer than this is a click, not a pan
 # Isolines: dark on the drop/voltage map (viridis), light on the current map (magma, dark).
-ISOLINE_COLOR = {"drop": "#111111", "voltage": "#111111", "current": "#e8e8e8"}
+ISOLINE_COLOR = {"drop": "#111111", "voltage": "#111111", "current": "#e8e8e8", "difference": "#111111"}
 ARROW_COLOR, ARROW_HALO, MEASURE_COLOR = "#ffffff", "#111111", "#0b62d6"
 ISOLINE_COUNT = 10
 MAX_ARROWS = 2000
@@ -200,9 +202,12 @@ class BoardView(QWidget):
     def show_field(self, result: RailResult, layer: LayerField, field: str,
                    outline: Sequence[np.ndarray], show_vias: bool = True, fit: bool = False,
                    pad_outlines: Sequence[Tuple[str, Sequence[np.ndarray]]] = (),
-                   isolines: bool = False, arrows: bool = False):
-        """A colour map of ``field`` ('drop', 'voltage' or 'current') on ``layer``, with drop
-        isolines (the same levels on every layer) and current-flow arrows if asked."""
+                   isolines: bool = False, arrows: bool = False,
+                   difference_mv: Optional[np.ndarray] = None, difference_note: str = ""):
+        """A colour map of ``field`` ('drop', 'voltage', 'current' or 'difference') on
+        ``layer``, with drop isolines (the same levels on every layer) and current-flow arrows
+        if asked. For 'difference', ``difference_mv`` holds the change of drop per node of
+        ``layer`` (current − baseline, mV) and ``difference_note`` how it was obtained."""
         self.clear()
         if result is not self._measure_result:          # a measurement belongs to one result
             self._measure, self._measure_result = [], result
@@ -215,6 +220,12 @@ class BoardView(QWidget):
             mesh.cell_data[title] = values
             top = float(np.percentile(values, J_CLIP_PERCENTILE)) if values.size else 1.0
             clim = [0.0, max(top, 1e-12)]
+        elif field == "difference":
+            values = np.asarray(difference_mv, dtype=float)
+            mesh.point_data[title] = values
+            finite = np.abs(values[np.isfinite(values)])
+            top = float(finite.max()) if finite.size else 0.0
+            clim = [-max(top, 1e-9), max(top, 1e-9)]             # symmetric: white = no change
         else:
             v = layer.voltage
             values = (result.v_ref - v) * 1e3 if field == "drop" else v
@@ -226,8 +237,11 @@ class BoardView(QWidget):
             clim = [0.0, max((result.v_ref - lo) * 1e3, 1e-9)] if field == "drop" else [lo, hi]
         self.plotter.add_mesh(mesh, scalars=title, cmap=cmap, clim=clim, nan_color="#dddddd",
                               show_edges=False, name="field", show_scalar_bar=False)
-        units = {"drop": "mV below source", "voltage": "V", "current": "A/mm²"}[field]
+        units = {"drop": "mV below source", "voltage": "V", "current": "A/mm²",
+                 "difference": "mV of drop, current − baseline (red: more)"}[field]
         note = f"\ntop clipped at {J_CLIP_PERCENTILE:g}th pct" if field == "current" else ""
+        if field == "difference" and difference_note:
+            note += "\n" + difference_note
         if isolines:
             step = self._add_isolines(result, layer, ISOLINE_COLOR[field])
             note += f"\nisolines every {step:.3g} mV" if step else ""

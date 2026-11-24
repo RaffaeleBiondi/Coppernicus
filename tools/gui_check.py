@@ -433,6 +433,88 @@ def run_open_asks(window, check: Checks, out: Path):
     window.dirty = False
 
 
+def run_compare(window, check: Checks, args, out: Path):
+    """Task 5: pin a baseline, change a load, the settings, then the board; read the deltas,
+    the difference map and the loss chart."""
+    import shutil
+
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.engine import tied_nets
+    demo = ROOT / "examples" / "demo" / "demo.coppernicus.yml"
+    window.open_project(demo)
+    QApplication.processEvents()
+    base = solve_and_wait(window, args.timeout)
+    check("before a baseline the Compare tab says how to start", "No baseline" in window.compare.info.text())
+    check("the loss chart shows the current result", window.losses.series == ["current"])
+    window.pin_baseline()
+    check("pinning: the shown result is the baseline", "is the baseline" in window.compare.info.text(),
+          window.compare.info.text())
+
+    rail = window.project.rail("+3V3")
+    rail.loads[0].current = 4.0                              # U1: 2 A → 4 A
+    window.rail_panel.set_rail(window.board, rail, tied_nets(window.board, rail.net)[1])
+    window._rail_edited()
+    now = solve_and_wait(window, args.timeout)
+    rows = {r[0]: r for r in window.compare.rows()}
+    u1 = rows.get("U1: drop at its worst pin (mV)")
+    want = (now.drop(now.loads[0]) - base.drop(base.loads[0])) * 1e3
+    check("U1's delta is the change of its drop", u1 is not None and abs(float(u1[3]) - want) < 2e-3,
+          f"{u1}; expected {want:+.3f}")
+    check("the loss chart shows baseline and current", window.losses.series == ["baseline", "current"])
+    if args.window:
+        window.results_tabs.setCurrentWidget(window.compare)
+        QApplication.processEvents()
+        window.grab().save(str(out / "t5_compare_window.png"))
+        window.results_tabs.setCurrentWidget(window.losses)
+        QApplication.processEvents()
+        window.grab().save(str(out / "t5_losses_window.png"))
+    window.field_box.setCurrentIndex(window.field_box.findData("difference"))
+    QApplication.processEvents()
+    title = window.view.colorbar._title
+    check("the difference map is exact on the same mesh",
+          window.field_box.currentData() == "difference" and "exact" in title, title)
+    if args.window:
+        window.view.screenshot(out / "t5_difference_view.png")
+
+    window.rail_panel.max_edge.setValue(0.4)                 # another mesh
+    QApplication.processEvents()
+    solve_and_wait(window, args.timeout)
+    window.field_box.setCurrentIndex(window.field_box.findData("difference"))
+    QApplication.processEvents()
+    title = window.view.colorbar._title
+    check("on another mesh the map says it is interpolated", "interpolated" in title, title)
+    check("the changed setting is listed", "max_edge_mm" in window.compare.notes.toPlainText())
+    window.rail_panel.max_edge.setValue(0.5)
+
+    copy = out / "demo_edited.kipi.json.gz"                  # the board "edited": another file
+    shutil.copy(ROOT / "examples" / "demo" / "demo.kipi.json.gz", copy)
+    window.open_board(copy)
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    window.rail_panel.set_pick("source")
+    window.pick_pad(6.0, 20.0)
+    window.rail_panel.set_pick("load")
+    window.pick_pad(50.0, 10.0)
+    window.rail_panel.set_pick("")
+    r = window._rail_draft
+    r.sources[0].voltage, r.loads[0].current = 3.3, 2.0
+    window.rail_panel.set_rail(window.board, r, [])
+    window._rail_edited()
+    solve_and_wait(window, args.timeout)
+    check("after the board changed the loads are still compared",
+          any(row[0].startswith("U1") for row in window.compare.rows())
+          and "board file changed" in window.compare.notes.toPlainText())
+    window.field_box.setCurrentIndex(window.field_box.findData("difference"))
+    QApplication.processEvents()
+    status = window.statusBar().currentMessage()
+    check("... but the difference map is refused",
+          window.field_box.currentData() == "drop" and "board file changed" in status, status)
+    window.clear_baseline()
+    check("clearing the baseline", window.baseline is None and "No baseline" in window.compare.info.text())
+    window.dirty = False
+
+
 def run_close_asks(window, check: Checks, out: Path):
     """Closing with only hand-marked rails asks to save (the dialog answers Discard)."""
     from PySide6.QtWidgets import QApplication
@@ -518,6 +600,7 @@ def main(argv=None) -> int:
         if args.local and args.rail:
             run_local(window, check, args, out)
         run_review_fixes(window, check, args, out)
+        run_compare(window, check, args, out)
         run_open_asks(window, check, out)
         run_close_asks(window, check, out)
     finally:

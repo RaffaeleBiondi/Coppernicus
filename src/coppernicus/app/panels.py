@@ -511,3 +511,153 @@ class ProblemsPanel(QWidget):
         i = item.data(0, Qt.UserRole)
         if i is not None:
             self.problem_activated.emit(self._problems[int(i)])
+
+
+# ---------------------------------------------------------------------- losses and comparison
+
+# Chart colours (the dataviz reference palette, validated for colour-vision deficiency):
+# the current result is always categorical slot 1, the baseline always slot 2, so a colour
+# never changes meaning when the baseline appears.
+CURRENT_COLOR, BASELINE_COLOR = "#2a78d6", "#eb6834"
+CHART_SURFACE, INK, INK_2, INK_MUTED = "#fcfcfb", "#0b0b0b", "#52514e", "#898781"
+GRID, AXIS = "#e1e0d9", "#c3c2b7"
+
+
+class LossChart(QWidget):
+    """Copper loss per layer (and vias, series links) as horizontal bars in mW, with the
+    baseline beside the current result when one is pinned for the same rail."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure
+        # "constrained" re-fits the labels at every draw, so they survive a resized dock.
+        self.figure = Figure(figsize=(6, 2.6), facecolor=CHART_SURFACE, layout="constrained")
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.addWidget(self.canvas)
+        self.series: List[str] = []
+        self.set_losses(None)
+
+    def set_losses(self, current, baseline=None, title: str = ""):
+        """``current`` / ``baseline``: {name: W} as :meth:`RailResult.loss_breakdown` gives."""
+        import numpy as np
+        fig = self.figure
+        fig.clear()
+        ax = fig.add_subplot()
+        ax.set_facecolor(CHART_SURFACE)
+        if not current:
+            ax.axis("off")
+            ax.text(0.5, 0.5, "Solve a rail to see where its copper loss is", ha="center",
+                    va="center", color=INK_MUTED, transform=ax.transAxes)
+            self.series = []
+            self.canvas.draw_idle()
+            return
+        names = list(current) + [k for k in (baseline or {}) if k not in current]
+        y = np.arange(len(names))
+        cur = np.array([current.get(n, 0.0) * 1e3 for n in names])
+        bars = []
+        if baseline:
+            base = np.array([baseline.get(n, 0.0) * 1e3 for n in names])
+            h = 0.36
+            bars.append(ax.barh(y - h / 2 - 0.02, base, height=h, color=BASELINE_COLOR, label="baseline"))
+            bars.append(ax.barh(y + h / 2 + 0.02, cur, height=h, color=CURRENT_COLOR, label="current"))
+            self.series = ["baseline", "current"]
+        else:
+            bars.append(ax.barh(y, cur, height=0.5, color=CURRENT_COLOR))
+            self.series = ["current"]
+        top = max(float(max((b.datavalues.max() for b in bars), default=0.0)), 1e-12)
+        for b in bars:
+            ax.bar_label(b, labels=[f"{v:.3g}" for v in b.datavalues], padding=3, color=INK_2, fontsize=8)
+        ax.set_yticks(y, names, color=INK_2, fontsize=8)
+        ax.invert_yaxis()                                   # layers top to bottom, as stacked
+        ax.set_xlim(0, top * 1.18)
+        ax.set_xlabel("Copper loss (mW)", color=INK_MUTED, fontsize=8)
+        ax.tick_params(axis="x", colors=INK_MUTED, labelsize=8)
+        ax.tick_params(axis="y", length=0)
+        ax.grid(axis="x", color=GRID, linewidth=0.6)
+        ax.set_axisbelow(True)
+        for side in ("top", "right", "bottom"):
+            ax.spines[side].set_visible(False)
+        ax.spines["left"].set_color(AXIS)
+        if title:
+            ax.set_title(title, loc="left", color=INK, fontsize=9)
+        if baseline:
+            ax.legend(frameon=False, fontsize=8, labelcolor=INK_2, loc="lower right")
+        self.canvas.draw_idle()
+
+
+class ComparePanel(QWidget):
+    """Before/after of a rail: pin a solved result as the baseline, solve again, read the
+    deltas (current − baseline) per load, for the whole rail and per layer."""
+    pin_requested = Signal()
+    clear_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.pin = QPushButton("Pin as baseline")
+        self.pin.setToolTip("Keep the shown result as the 'before' to compare later solves with")
+        self.clear_baseline = QPushButton("Clear baseline")
+        self.info = QLabel()
+        self.info.setWordWrap(True)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["", "Baseline", "Current", "Δ current − baseline"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for col in (1, 2, 3):
+            self.table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.notes = QPlainTextEdit(readOnly=True)
+        self.notes.setMaximumHeight(72)
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.pin)
+        buttons.addWidget(self.clear_baseline)
+        buttons.addStretch(1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.addLayout(buttons)
+        layout.addWidget(self.info)
+        layout.addWidget(self.table, 1)
+        layout.addWidget(self.notes)
+        self.pin.clicked.connect(self.pin_requested.emit)
+        self.clear_baseline.clicked.connect(self.clear_requested.emit)
+        self.show_message("")
+
+    def show_message(self, text: str):
+        self.info.setText(text)
+        self.table.setRowCount(0)
+        self.notes.clear()
+
+    def rows(self):
+        """The table as (label, baseline, current, delta) strings, for scripts and tests."""
+        return [tuple(self.table.item(r, c).text() if self.table.item(r, c) else ""
+                      for c in range(4)) for r in range(self.table.rowCount())]
+
+    def show_comparison(self, cmp_: dict, info: str, notes: List[str] = ()):
+        """``cmp_``: what :func:`coppernicus.service.session.compare_summaries` returns."""
+        def num(v, scale=1.0, fmt="{:.3f}"):
+            return "" if v is None else fmt.format(v * scale)
+
+        rows = []
+        for d in cmp_["loads"]:
+            rows.append((f"{d['name']}: drop at its worst pin (mV)", num(d["drop_mv_a"]),
+                         num(d["drop_mv_b"]), num(d.get("delta_drop_mv"), fmt="{:+.3f}")))
+        md, pl = cmp_["max_drop_mv"], cmp_["power_loss_w"]
+        rows.append(("Largest drop on the rail (mV)", num(md["a"]), num(md["b"]),
+                     num(md["delta"], fmt="{:+.3f}")))
+        rows.append(("Copper loss, total (mW)", num(pl["a"], 1e3), num(pl["b"], 1e3),
+                     num(pl["delta"], 1e3, "{:+.3f}")))
+        for d in cmp_["losses"]:
+            rows.append((f"  {d['name']} (mW)", num(d["power_w_a"], 1e3), num(d["power_w_b"], 1e3),
+                         num(d["delta_power_w"], 1e3, "{:+.3f}")))
+        self.table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, text in enumerate(row):
+                item = QTableWidgetItem(text)
+                if c:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.table.setItem(r, c, item)
+        self.info.setText(info)
+        changed = [f"Changed setting {k}: {v['a']} → {v['b']}" for k, v in cmp_["settings_changed"].items()]
+        self.notes.setPlainText("\n".join([*notes, *changed, *cmp_["warnings"], *cmp_["assumptions"]]))

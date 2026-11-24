@@ -7,6 +7,7 @@ top), the rail setup on the right, problems and notes at the bottom.
 
 from __future__ import annotations
 
+import copy
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -23,15 +24,18 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from coppernicus import __version__
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
-from coppernicus.app.panels import NetPanel, ProblemsPanel, RailPanel
+from coppernicus.app.comparing import Run, compare_runs
+from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel
 from coppernicus.app.picking import add_picked_pin, pick_nets
 from coppernicus.app.worker import SolveWorker
+from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
 from coppernicus.problems import FAIL, find_problems
@@ -59,6 +63,10 @@ class MainWindow(QMainWindow):
         self.last_render_s = 0.0
         self._candidates: Dict[Tuple, List[str]] = {}      # pickable pad ids per set of nets
         self._generation = 0          # +1 per opened board: a solve started before is stale
+        self.runs: Dict[str, Run] = {}            # the latest solve per net, with its inputs
+        self.baseline: Optional[Run] = None       # pinned "before"; survives opening a board
+        self._board_stamp = ""                    # which board file, and which version of it
+        self._diff_cache: Tuple = ((), None)
 
         # Centre: pickers + view.
         self.view = BoardView()
@@ -102,9 +110,15 @@ class MainWindow(QMainWindow):
         self.nets = NetPanel()
         self.rail_panel = RailPanel()
         self.problems = ProblemsPanel()
+        self.losses = LossChart()
+        self.compare = ComparePanel()
+        self.results_tabs = QTabWidget()
+        self.results_tabs.addTab(self.problems, "Problems")
+        self.results_tabs.addTab(self.losses, "Loss by layer")
+        self.results_tabs.addTab(self.compare, "Compare")
         self._dock("Nets", self.nets, Qt.LeftDockWidgetArea)
         self._dock("Rail setup", self.rail_panel, Qt.RightDockWidgetArea)
-        problems_dock = self._dock("Problems", self.problems, Qt.BottomDockWidgetArea)
+        problems_dock = self._dock("Results", self.results_tabs, Qt.BottomDockWidgetArea)
         self.resizeDocks([problems_dock], [300], Qt.Vertical)
 
         self._actions()
@@ -125,6 +139,8 @@ class MainWindow(QMainWindow):
         self.measure.toggled.connect(self._measure_toggled)
         self.view.probed.connect(lambda text: self.statusBar().showMessage(text))
         self.view.pad_picked.connect(self.pick_pad)
+        self.compare.pin_requested.connect(self.pin_baseline)
+        self.compare.clear_requested.connect(self.clear_baseline)
         self.rail_panel.pick_changed.connect(self._pick_mode_changed)
         QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self.stop_clicking)
 
@@ -146,6 +162,7 @@ class MainWindow(QMainWindow):
                                      ("Save project as…", QKeySequence.SaveAs, self.save_project_as),
                                      (None, None, None),
                                      ("Solve", "F5", self.solve),
+                                     ("Pin as baseline", "Ctrl+B", self.pin_baseline),
                                      ("Export maps…", "Ctrl+E", self.export_maps)):
             if text is None:
                 tb.addSeparator()
@@ -202,7 +219,11 @@ class MainWindow(QMainWindow):
             return False
         self.board = board
         self.project = project or Project(board=str(Path(path).resolve()))
+        resolved = Path(path).resolve()
+        modified = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(resolved.stat().st_mtime))
+        self._board_stamp = f"{resolved.name} (file modified {modified})"
         self.results.clear()
+        self.runs.clear()
         self._candidates.clear()
         self.rail_panel.set_pick("")
         self.measure.setChecked(False)
@@ -301,6 +322,7 @@ class MainWindow(QMainWindow):
             self._show_problems(res)
         else:
             self.problems.clear(f"<b>{net}</b>: add a source and a load, then Solve (F5)")
+        self._refresh_results()
         self.refresh_view(fit=True)
 
     def _adopt_draft(self):
@@ -315,8 +337,10 @@ class MainWindow(QMainWindow):
 
     def _rail_edited(self):
         rail = self._adopt_draft()
+        self.runs.pop(rail.net, None)
         if self.results.pop(rail.net, None) is not None:          # the old result no longer applies
             self.problems.clear(f"<b>{rail.net}</b>: setup changed since the last solve — press Solve (F5)")
+            self._refresh_results()
         self.refresh_view()
 
     def _limits_edited(self):
@@ -335,7 +359,9 @@ class MainWindow(QMainWindow):
         self._update_title()
         if self.results:                                           # every result used the old settings
             self.results.clear()
+            self.runs.clear()
             self.problems.clear("Solve settings changed — press Solve (F5) to recompute")
+            self._refresh_results()
             self.refresh_view()
 
     def refresh_view(self, fit: bool = False):
@@ -349,11 +375,21 @@ class MainWindow(QMainWindow):
         if res is not None and res.layer(layer_name) is not None:
             pads = [("source", [i for t in res.sources for i in t.pad_ids]),
                     ("load", [i for t in res.loads for i in t.pad_ids])]
-            self.view.show_field(res, res.layer(layer_name), self.field_box.currentData(),
+            field, diff_mv, diff_note = self.field_box.currentData(), None, ""
+            if field == "difference":
+                diff_mv, diff_note, why = self._difference(res, layer_name)
+                if diff_mv is None:                  # not available: say why, show the drop
+                    self.statusBar().showMessage(why)
+                    field = "drop"
+                    self.field_box.blockSignals(True)
+                    self.field_box.setCurrentIndex(self.field_box.findData("drop"))
+                    self.field_box.blockSignals(False)
+            self.view.show_field(res, res.layer(layer_name), field,
                                  self.board.outline(), self.show_vias.isChecked(), fit=fit,
                                  pad_outlines=self._pad_outlines(rail, pads, lid),
                                  isolines=self.show_isolines.isChecked(),
-                                 arrows=self.show_arrows.isChecked())
+                                 arrows=self.show_arrows.isChecked(),
+                                 difference_mv=diff_mv, difference_note=diff_note)
         else:
             rings = copper_rings(self.board.copper(self.net, lid)) if lid is not None else []
             src, lds = self._terminal_pads(rail)
@@ -464,6 +500,9 @@ class MainWindow(QMainWindow):
         self.problems.clear(f"<b>{self.net}</b>: solving…")
         self.worker = SolveWorker(self.board, rail, self.project.settings, self)
         self.worker.generation = self._generation
+        # What produced the result, as it is now (the user may edit while it runs).
+        self.worker.run_inputs = (copy.deepcopy(rail), copy.deepcopy(self.project.settings),
+                                  self._board_stamp)
         self.worker.message.connect(lambda m: self.statusBar().showMessage(m))
         self.worker.succeeded.connect(self._solved)
         self.worker.failed.connect(self._solve_failed)
@@ -478,6 +517,12 @@ class MainWindow(QMainWindow):
         if self._is_stale():
             return
         self.results[res.net] = res
+        inputs = getattr(self.sender(), "run_inputs", None)
+        rail, settings, board = inputs or (self.project.rail(res.net) or Rail(res.net),
+                                           self.project.settings, self._board_stamp)
+        self.runs[res.net] = Run(res, rail, settings, board)
+        if res.net == self.net:
+            self._refresh_results()
         if res.net == self.net:
             self._show_problems(res)
             # Open on the layer where the rail loses the most power: where the drop happens.
@@ -491,6 +536,83 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{res.net} solved in {res.stats['seconds']:.1f} s · {int(res.stats['triangles']):,} triangles · "
             f"drawn in {self.last_render_s:.2f} s")
+
+    # ------------------------------------------------------------------ before / after
+    def pin_baseline(self):
+        """Keep the shown rail's latest result as the baseline ("before")."""
+        run = self.runs.get(self.net) if self.net else None
+        if run is None:
+            self.statusBar().showMessage("Solve the rail first, then pin its result as the baseline")
+            return
+        self.baseline = run
+        self._refresh_results()
+        self.statusBar().showMessage(f"Baseline: {self.net} on {run.board}. Change something and solve again "
+                                     "to compare (Compare tab, 'Δ drop vs baseline' map)")
+
+    def clear_baseline(self):
+        self.baseline = None
+        if self.field_box.currentData() == "difference":
+            self.field_box.setCurrentIndex(self.field_box.findData("drop"))
+        self._refresh_results()
+
+    def _comparable(self):
+        """(baseline, current run) of the shown net, or a reason why there is nothing to compare."""
+        run = self.runs.get(self.net) if self.net else None
+        base = self.baseline
+        if base is None:
+            return None, None, ("No baseline yet. Solve, press 'Pin as baseline', change the loads, the "
+                                "settings or the board, and solve again.")
+        if base.rail.net != self.net:
+            return None, None, f"The baseline is a result of {base.rail.net}: select that net to compare."
+        if run is None:
+            return None, None, f"Baseline pinned (solved on {base.board}). Solve {self.net} to compare."
+        if run is base:
+            return None, None, "The shown result is the baseline. Change something and solve again."
+        return base, run, ""
+
+    def _refresh_results(self):
+        """The 'Loss by layer' chart and the 'Compare' tab, for the shown net."""
+        run = self.runs.get(self.net) if self.net else None
+        base, current, why = self._comparable()
+        self.compare.pin.setEnabled(run is not None)
+        self.compare.clear_baseline.setEnabled(self.baseline is not None)
+        self.losses.set_losses(run.result.loss_breakdown() if run else None,
+                               base.result.loss_breakdown() if base else None,
+                               f"{self.net}: copper loss by layer" if run else "")
+        if base is None:
+            self.compare.show_message(why)
+            return
+        notes = []
+        if base.board != current.board:
+            notes.append("The board file changed between the two solves: loads are matched by name; "
+                         "the difference map is not available.")
+        self.compare.show_comparison(
+            compare_runs(base, current),
+            f"<b>{self.net}</b>: current − baseline. Baseline solved on {base.board}; current on "
+            f"{current.board}.", notes)
+
+    def _difference(self, res: RailResult, layer_name: str):
+        """(Δ drop per node in mV on the shown layer, how it was obtained, why not) for the
+        'Δ drop vs baseline' map; the values are None when it is not available."""
+        base, run, why = self._comparable()
+        if base is None:
+            return None, "", why
+        if base.board != run.board:
+            return None, "", ("The board file changed between the two solves: the difference map needs the "
+                              "same copper. The Compare tab still compares the loads.")
+        base_layer, layer = base.result.layer(layer_name), res.layer(layer_name)
+        if base_layer is None or layer is None:
+            return None, "", f"The baseline has no copper of {self.net} on {layer_name}"
+        key = (id(base), id(run), layer_name)
+        if self._diff_cache[0] != key:
+            diff = difference_layer(layer, base_layer)          # V_base − V_current per node
+            # Δ drop = (V_ref − V)_current − (V_ref − V)_baseline
+            mv = (diff.voltage + (res.v_ref - base.result.v_ref)) * 1e3
+            note = ("exact: same mesh" if same_mesh(layer, base_layer)
+                    else "interpolated: the two solves have different meshes")
+            self._diff_cache = (key, (mv, note))
+        mv, note = self._diff_cache[1]
+        return mv, note, ""
 
     def _solve_failed(self, message: str):
         if self._is_stale():
