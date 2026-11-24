@@ -30,6 +30,24 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
 
 1. **Phase 1:** service layer, CLI `--json`, MCP server (`coppernicus mcp`), tests, and how to
    register the server in Claude Code / Claude Desktop.
+   **Status (2026-11-24): done on `feat/mcp`, awaiting review.**
+   - `src/coppernicus/service/`: a `Session` with boards and results by id, and an LRU bound on
+     result arrays that keeps summaries.
+   - Ten MCP tools on `mcp` 2.3.0: `open_board`, `list_nets`, `net_parts`, `solve_rail`,
+     `get_problems`, `render_map`, `probe`, `cut_current`, `compare_results`, `solve_project`.
+   - `--json` on `nets`, `parts` and `solve`.
+   - Additive changes to existing modules:
+     - `Board.counts()` and `Board.with_copper_thickness()`, a what-if copy;
+     - `Problem.data`;
+     - `maps.render_layer_map()`.
+   - Tests use synthetic boards only:
+     - closed-form cuts (strip; demo neck, 7 mm and 3.5 A);
+     - the brief's acceptance test through the SDK client;
+     - a real stdio subprocess round trip.
+   - Checked by hand: the engine's mesh process pool runs under `coppernicus mcp` over stdio
+     (a synthetic 1.2 M-triangle board).
+   - The app keeps its own `TriangleLocator`. `service/fields.py` holds a non-GUI copy that the
+     GUI can switch to when it moves onto the service layer.
 2. **Phase 2:** interactive offline HTML report per rail (zoom/pan, drop and current maps per
    layer, loads, problems, assumptions), `solve --html` / `--open`, and per-rail worst values
    summarised.

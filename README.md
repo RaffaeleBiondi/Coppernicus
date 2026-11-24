@@ -61,6 +61,7 @@ macOS; Windows is a target but has not been tested yet.
 | Sources and loads picked by clicking pads on the board | ⏳ |
 | Drop isolines, current-flow arrows, point-to-point ΔV | ⏳ |
 | Before/after comparison, HTML/PDF report | ⏳ |
+| Drivable by AI agents: an MCP server and `--json` output on the CLI ([below](#use-it-from-an-ai-agent-mcp)) | ✅ first version |
 
 ## Quick start
 
@@ -127,6 +128,79 @@ rails:
     max_drop_pct: 0.25            # optional; also max_current_density, max_via_current
 ```
 
+## Use it from an AI agent (MCP)
+
+`coppernicus mcp` runs an [MCP](https://modelcontextprotocol.io) server over stdio, so an agent
+(Claude Code, Claude Desktop or any MCP client) can run the same analyses as the app and reason
+about the results. It opens no network port. It keeps opened boards and solved results in
+memory between calls, addressed by id (`b1`, `r1`, ...).
+
+| Tool | What it does |
+|---|---|
+| `open_board` | Opens a board read-only: board id, copper layers and thickness, counts, outline, import warnings |
+| `list_nets` | Power / ground / all nets, with the layers each is on |
+| `net_parts` | Parts and pins on a net (to choose sources and loads), net ties |
+| `solve_rail` | Solves one rail; returns a result id, load drops, loss per layer, top problems, verdict |
+| `get_problems` | Re-ranks a result's problems, optionally against other limits, without solving again |
+| `render_map` | Drop, voltage or current-density map of a layer as an image (and a PNG file), optionally zoomed |
+| `probe` | V, drop and current density at a point |
+| `cut_current` | Cross-section along a segment: copper width, current through it, mean and max \|J\| |
+| `compare_results` | What-if deltas between two results, per load and per layer |
+| `solve_project` | Solves the rails of a `*.coppernicus.yml` project |
+
+Every answer has units in its key names (`_v`, `_mv`, `_a`, `_a_mm2`, `_mm`, `_w`, `_pct`) and
+carries `assumptions` and `warnings`. Coordinates are mm in KiCad's frame (y down). A verdict
+exists only against limits the user gives. Errors come back as
+`{"error": {"code", "message", "hint"}}`, and the hint says what to do. Example: the hint for
+`part_not_on_net` lists the parts on the net. `solve_rail` takes what-if settings: copper
+thickness per layer (`copper_thickness_mm`), via plating and copper temperature.
+
+**Claude Code.** Register the server once. `-s user` makes it available in every project.
+Use absolute paths:
+
+```sh
+claude mcp add -s user coppernicus -- \
+  uv run --project /absolute/path/to/Coppernicus coppernicus mcp --out /absolute/path/to/coppernicus-maps
+```
+
+Then run `/mcp` in a Claude Code session to check that it is connected.
+
+**Claude Desktop.** Add an entry to `claude_desktop_config.json`, then fully quit Claude Desktop
+and reopen it. The file is in `~/Library/Application Support/Claude/` on macOS and in
+`%APPDATA%\Claude\` on Windows. Claude Desktop starts the server with a minimal `PATH`, so give
+the absolute path to `uv` (`which uv`):
+
+```json
+{
+  "mcpServers": {
+    "coppernicus": {
+      "command": "/absolute/path/to/uv",
+      "args": ["run", "--project", "/absolute/path/to/Coppernicus", "coppernicus", "mcp",
+               "--out", "/absolute/path/to/coppernicus-maps"]
+    }
+  }
+}
+```
+
+Options:
+- `--out DIR`: where maps are written. The default is a new folder under the system temp
+  directory. Maps never go next to a board.
+- `--log-file FILE`: write the server log to a file instead of stderr.
+- `--max-results N` and `--max-result-mb MB` (default 8 and 2048): how many solved results keep
+  their fields in memory. A big rail's result can take about 1 GB. An older result keeps its
+  summary, so `compare_results` still works, and asks to be solved again for maps, probes and
+  cuts.
+
+**Without MCP**, an agent with a shell can use the CLI. `nets`, `parts` and `solve` take
+`--json`, print one JSON document on stdout (the same data as the tools) and keep their exit
+codes:
+
+```sh
+uv run coppernicus nets board.kicad_pcb --json
+uv run coppernicus parts board.kicad_pcb +3V3 --json
+uv run coppernicus solve project.coppernicus.yml --out results --json    # exit 1: a limit exceeded
+```
+
 ## How it works
 
 ```mermaid
@@ -138,6 +212,9 @@ flowchart LR
     R --> Q["problems<br/>ranked, judged only vs. limits"]
     R --> V["app (Qt + VTK) · maps (PNG) · CLI report"]
     Q --> V
+    R --> SV["service.Session<br/>JSON in/out, ids, probe, cut"]
+    Q --> SV
+    SV --> M["MCP server · CLI --json"]
 ```
 
 **Engine.** The DC solver is [KiPI](https://github.com/drewsum/KiPI)'s engine, pinned to its
@@ -170,7 +247,9 @@ Coppernicus/
 │   ├── results.py       # solve results as plain arrays
 │   ├── problems.py      # ranking and limit checks
 │   ├── maps.py          # per-layer PNG maps
-│   ├── cli.py           # command line
+│   ├── service/         # Session: boards and results by id, JSON functions, probe, cross-section cut
+│   ├── mcp_server.py    # MCP tools over the service (coppernicus mcp)
+│   ├── cli.py           # command line (--json goes through the service)
 │   └── app/             # desktop app: main window, panels, board view, background solve
 ├── tests/               # synthetic boards with closed-form answers; boards_local/ tests skip if absent
 ├── examples/demo/       # synthetic demo board and project
@@ -190,7 +269,11 @@ Real boards go in `boards_local/`. That folder is git-ignored, and any
 - the temperature scaling (1 + α·ΔT);
 - current balance and energy balance;
 - net ties solved as shorts;
-- clear errors for missing sources, loads and pins.
+- clear errors for missing sources, loads and pins;
+- the cross-section cut: copper width and current across the strip (1 A) and through the demo
+  board's neck (7 mm, 3.5 A);
+- the MCP tools through the SDK's own client, in memory and as a real stdio subprocess,
+  including an agent-style analysis of the demo board done with the tools alone.
 
 During stage 1, KiPI's import was compared with KiCad's own `pcbnew` on three real boards. The
 worst difference in per-net, per-layer copper area was 1.04 %, and its sign flips when pcbnew's arc
@@ -206,6 +289,7 @@ suite (DC, AC, coupled noise) passes on macOS.
 | 2 | Architecture: new app on top of KiPI's engine | ✅ decided |
 | 3 | Engine adapter, project file, problem ranking, CLI, PNG maps | ✅ first version |
 | 4 | Desktop app: draft done; next: pick pads on the board, isolines, arrows, reports | 🔄 |
+| 4b | Agent interface: service layer, MCP server, CLI `--json`; next: HTML report, CI action | 🔄 phase 1 done |
 | 5 | Packaging for macOS (`.app`) and Windows (`.exe`) | ⏳ |
 | Later | Ground return path, electro-thermal (KiPI's engine already has both) | 💡 |
 | Later | AC / PDN impedance with decoupling capacitors and target impedance (in KiPI's engine) | 💡 |
