@@ -128,7 +128,8 @@ def test_tree_problems_rank_loads_by_across_drop_and_grounds_by_rise(board):
     project = power_chain_project()
     project.rail("+3V3").limits = Limits(max_drop_pct=0.01)
     tree = solve_project_tree(board, project)
-    [u4] = [p for p in find_tree_problems(tree, "+3V3", project.rail("+3V3").limits) if p.kind == "load"]
+    [u4] = [p for p in find_tree_problems(tree, "+3V3", project.rail("+3V3").limits)
+            if p.kind == "load" and p.data["name"] == "U4"]
     assert u4.severity == FAIL and u4.data["drop_pct"] == pytest.approx(_load(tree, "U4").drop_pct)
     ground = find_tree_problems(tree, "GND", Limits(max_drop_pct=1.0))
     pins = [p for p in ground if p.kind == "return"]
@@ -450,3 +451,136 @@ def strip_board_with_ground():
     b.track("VCC", F, 0.5, (0.0, 0.0), (40.0, 0.0))
     b.track("GND", F, 0.5, (0.0, 5.0), (40.0, 5.0))
     return Board(b.snapshot())
+
+
+def _group_doc(doc, key):
+    return next(gr for gr in doc["groups"] if gr["group"] == key)
+
+
+def test_a_limit_with_an_item_it_cannot_judge_is_not_a_pass(board):
+    """A group says pass only when everything its limits apply to was judged and passed
+    (review finding 1a, 1c): a load behind a regulator out of regulation, or disconnected,
+    makes the group and the overall verdict not_judged, and the note names it."""
+    from coppernicus.power_tree import tree_summary
+    project = power_chain_project()
+    project.rail("+1V8").sources[0].voltage = 3.4                       # an LDO cannot boost
+    project.rail("+1V8").limits = Limits(max_drop_pct=1.0)
+    doc = tree_summary(solve_project_tree(board, project))
+    row = _group_doc(doc, "+1V8")
+    assert row["verdict"] == "not_judged" and any("U3" in x for x in row["not_judged"])
+    assert doc["verdict"] == "not_judged" and "U3" in doc["verdict_note"]
+    assert any("U3" in x for x in doc["not_judged"])
+
+    project = power_chain_project()
+    project.rail("+3V3").loads = [Load("U9", 0.1, ["1"], ground_pins=["2"], ground_net="GND")]
+    project.rail("+3V3").limits = Limits(max_drop_pct=50.0)
+    doc = tree_summary(solve_project_tree(Board(power_chain_board(island=True)), project))
+    row = _group_doc(doc, "+3V3")
+    assert row["verdict"] == "not_judged" and any("U9" in x and "DISCONNECTED" in x
+                                                    for x in row["not_judged"])
+    assert doc["verdict"] == "not_judged"
+
+
+def test_regulator_inputs_are_judged_on_the_rail_feeding_them(board):
+    """A regulator's input is a load on the rail that feeds it: judged against that rail's
+    drop limit, across its input and ground pins, as VIN solved alone judges U1's estimated
+    input (review finding 1b)."""
+    from coppernicus.power_tree import tree_summary
+    project = power_chain_project()
+    project.rail("VIN").limits = Limits(max_drop_pct=0.001)
+    tree = solve_project_tree(board, project)
+    u1 = _vrm(tree, "U1")
+    h = _hand()
+    assert u1.input_net == "VIN" and u1.input_group == "VIN"
+    assert u1.v_in_worst_v == pytest.approx(h["U1.v_in"] - h["U1.gnd"], abs=2e-6)
+    assert u1.input_drop_v == pytest.approx(g.V_SRC - (h["U1.v_in"] - h["U1.gnd"]), abs=2e-6)
+    assert u1.input_drop_pct == pytest.approx(100 * u1.input_drop_v / g.V_SRC)
+    assert u1.input_passed is False and u1.input_status == ""
+    [p] = [p for p in find_tree_problems(tree, "VIN") if p.kind == "load"]
+    assert p.data["name"] == "U1 (input)" and p.severity == FAIL
+    doc = tree_summary(tree)
+    assert _group_doc(doc, "VIN")["verdict"] == "fail" and doc["verdict"] == "fail"
+    row = next(v for v in doc["vrms"] if v["name"] == "U1")
+    assert row["input_net"] == "VIN" and row["input_exceeds_drop_limit"] is True
+    assert row["input_drop_mv"] == pytest.approx(u1.input_drop_v * 1e3)
+    # VIN solved alone fails the same limit on U1's estimated input.
+    from coppernicus.problems import find_problems
+    alone = solve_rail(board, project.rail("VIN"), project.settings, project=project)
+    assert any(p.severity == FAIL for p in find_problems(alone, project.rail("VIN").limits)
+               if p.kind == "load")
+    project.rail("VIN").limits = Limits(max_drop_pct=1.0)
+    doc = tree_summary(solve_project_tree(board, project))
+    assert _group_doc(doc, "VIN")["verdict"] == "pass"
+    assert next(v for v in doc["vrms"] if v["name"] == "J1")["input_exceeds_drop_limit"] is None
+
+
+def test_limits_are_looked_up_per_net_with_the_driving_net_as_default(board):
+    """Each net's limits judge what is on it: U2's input on +3V3_F by +3V3_F's limit, and
+    a net without its own limit takes its group's driving net's (review finding 6)."""
+    from coppernicus.project import Rail
+    project = power_chain_project()
+    project.rails.append(Rail("+3V3_F", limits=Limits(max_drop_pct=0.01)))
+    tree = solve_project_tree(board, project)
+    u2 = _vrm(tree, "U2")
+    assert u2.input_net == "+3V3_F" and u2.input_group == "+3V3" and u2.input_passed is False
+    assert _load(tree, "U4").passed is None                       # +3V3 itself has no limit
+    # The limit only on the driven net judges the far side of the ferrite too.
+    project = power_chain_project()
+    project.rail("+3V3").limits = Limits(max_drop_pct=0.01)
+    tree = solve_project_tree(board, project)
+    assert _vrm(tree, "U2").input_passed is False and _load(tree, "U4").passed is False
+    assert any("driving net" in a for a in tree.assumptions)
+    assert any("strictest" in a for a in tree.assumptions)
+
+
+def _two_grounds_board():
+    """GND and AGND joined by the net tie NT1; J1 returns on GND, U1 on AGND."""
+    from coppernicus.engine.synthetic import F, SyntheticBoard, two_layer_stackup
+    b = SyntheticBoard("two_gnd", two_layer_stackup())
+    lib = "NetTie:NetTie-2_SMD_Pad0.5mm"
+    b.square_pad("J1", "1", "VCC", 0.0, 0.0, 1.5)
+    b.square_pad("U1", "1", "VCC", 40.0, 0.0, 1.5)
+    b.track("VCC", F, 0.5, (0.0, 0.0), (40.0, 0.0))
+    b.square_pad("J1", "2", "GND", 0.0, 5.0, 1.5)
+    b.square_pad("NT1", "1", "GND", 19.5, 5.0, 0.5, value="NetTie_2", lib_id=lib)
+    b.square_pad("NT1", "2", "AGND", 20.5, 5.0, 0.5, value="NetTie_2", lib_id=lib)
+    b.square_pad("U1", "2", "AGND", 40.0, 5.0, 1.5)
+    b.track("GND", F, 0.5, (0.0, 5.0), (19.5, 5.0))
+    b.track("AGND", F, 0.5, (20.5, 5.0), (40.0, 5.0))
+    return Board(b.snapshot())
+
+
+@pytest.mark.parametrize("net", ["AGND", "GND"])
+def test_a_ground_rise_limit_on_either_tied_ground_net_is_judged(net):
+    from coppernicus.power_tree import tree_summary
+    from coppernicus.project import Project, Rail
+    project = Project(rails=[
+        Rail("VCC", sources=[Source("J1", 3.3, ["1"], ground_pins=["2"], ground_net="GND")],
+             loads=[Load("U1", 1.0, ["1"], ground_pins=["2"], ground_net="AGND")]),
+        Rail(net, limits=Limits(max_ground_rise_mv=1.0))])
+    tree = solve_project_tree(_two_grounds_board(), project)
+    assert set(tree.groups["GND"].nets) == {"GND", "AGND"}
+    probs = find_tree_problems(tree, "GND")
+    pin = next(p for p in probs if p.kind == "return" and p.data["name"] == "U1 (return)")
+    rise = next(p for p in probs if p.kind == "rise")
+    assert pin.severity == FAIL and rise.severity == FAIL
+    # A copper problem names the limit it used and the net it came from.
+    assert f"1 mV from {net}" in rise.title and "strictest in group" in rise.title
+    doc = tree_summary(tree)
+    assert _group_doc(doc, "GND")["verdict"] == "fail" and doc["verdict"] == "fail"
+    assert f"{net}: max_ground_rise_mv = 1" in doc["verdict_note"]
+
+
+def test_limits_can_be_applied_again_without_solving(board):
+    """The GUI re-judges a solved tree when a limit changes (or changed while it solved):
+    apply_limits reads the project's current limits."""
+    from coppernicus.power_tree import apply_limits
+    project = power_chain_project()
+    tree = solve_project_tree(board, project)
+    assert _load(tree, "U4").passed is None
+    project.rail("+3V3").limits = Limits(max_drop_pct=0.01)
+    apply_limits(tree, project)
+    assert _load(tree, "U4").passed is False and _vrm(tree, "U2").input_passed is False
+    project.rail("+3V3").limits = Limits()
+    apply_limits(tree, project)
+    assert _load(tree, "U4").passed is None and _vrm(tree, "U2").input_passed is None

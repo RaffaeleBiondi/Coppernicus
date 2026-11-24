@@ -12,8 +12,8 @@ depends on the mesh.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -105,7 +105,12 @@ def _top_share_threshold(layer: LayerField, share: float) -> float:
     return float(layer.current_density[order[min(k, len(order) - 1)]])
 
 
-def _hotspots(result: RailResult, limits: Limits, top: int) -> List[Problem]:
+def _against(title: str, fail: bool, value: Optional[float], unit: str, source: str) -> str:
+    """A copper fail's title, naming the limit it used and the net it came from."""
+    return f"{title} (limit {value:g} {unit} {source})" if fail and source else title
+
+
+def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "") -> List[Problem]:
     found = []
     for layer in result.layers:
         if layer.current_density.size == 0 or not np.any(layer.current_density > 0):
@@ -123,7 +128,8 @@ def _hotspots(result: RailResult, limits: Limits, top: int) -> List[Problem]:
             fail = limits.max_current_density is not None and mean_j > limits.max_current_density
             found.append(Problem(
                 FAIL if fail else INFO, "hotspot",
-                f"Current crowding on {layer.name}: {mean_j:.1f} A/mm² mean over {area:.3g} mm²",
+                _against(f"Current crowding on {layer.name}: {mean_j:.1f} A/mm² mean over {area:.3g} mm²",
+                         fail, limits.max_current_density, "A/mm²", source),
                 f"Peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners); {why}.",
                 mean_j, float(x), float(y), layer.name,
                 data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area}))
@@ -132,7 +138,7 @@ def _hotspots(result: RailResult, limits: Limits, top: int) -> List[Problem]:
     return fails + [p for p in found if p.severity != FAIL][:max(0, top - len(fails))]
 
 
-def _vias(result: RailResult, limits: Limits, top: int) -> List[Problem]:
+def _vias(result: RailResult, limits: Limits, top: int, source: str = "") -> List[Problem]:
     vias = sorted(result.vias, key=lambda v: -v.current)
     # Vias carrying a numerically zero current (solver round-off, ~1e-21 W) are not listed.
     # This is display noise, not a verdict: below VIA_NOISE_SHARE of the rail's current.
@@ -149,7 +155,8 @@ def _vias(result: RailResult, limits: Limits, top: int) -> List[Problem]:
                  else "no limit set")
         out.append(Problem(
             FAIL if fail else INFO, "via",
-            f"{what} carrying {v.current:.3f} A (drill {v.drill_mm:g} mm)",
+            _against(f"{what} carrying {v.current:.3f} A (drill {v.drill_mm:g} mm)",
+                     fail, limits.max_via_current, "A", source),
             f"{v.power * 1e3:.3g} mW in the barrel; {limit}.",
             v.current, float(v.position[0]), float(v.position[1]),
             data={"via_id": v.owner_id, "via_kind": v.kind, "current_a": v.current,
@@ -175,37 +182,76 @@ def limits_dict(limits: Optional[Limits], kind: str = "rail") -> Dict[str, float
     return out
 
 
+NetLimits = Callable[[str], Tuple[Limits, Dict[str, str]]]
+
+
 def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = None,
                        top: int = 5) -> List[Problem]:
-    """The problems of one group of a power-tree solve, fails first. On a rail: its loads,
-    ranked by the drop across their supply and ground pins (``LoadReport.drop_pct``). On a
-    ground: its return pins, ranked by their rise above 0 V (no drop limit applies to a
-    ground). Then current-crowding spots and vias, as on a single rail."""
+    """The problems of one group of a power-tree solve, fails first. On a rail: its loads
+    and the inputs of the regulators it feeds, ranked by the drop across their supply (input)
+    and ground pins. On a ground: its return pins, ranked by their rise from 0 V (no drop
+    limit applies to a ground). Then current-crowding spots and vias, as on a single rail.
+
+    Limits per net (:data:`coppernicus.power_tree.LIMITS_RULE`): each pin by its net's,
+    the copper by the strictest of the group's. ``limits``, if given, stands for the limits
+    set on the group's driving net (its key) in this call. A group whose iteration did not
+    converge is not judged."""
+    from coppernicus.power_tree import group_limits, net_limits
+    if limits is not None:
+        tree = replace(tree, limits={**tree.limits, group: limits})
     res = tree.groups[group]
-    limits = limits or Limits()
-    if res.kind == "ground":
-        first = _rise(res, limits) + _returns(res, limits)
+    if res.converged:
+        glim, gorigin = group_limits(tree, group)
+
+        def per_net(net):
+            return net_limits(tree, net or group, group)
     else:
-        first = _tree_loads(tree, group, res, limits)
-    out = first + _hotspots(res, limits, top) + _vias(res, limits, top)
+        glim, gorigin = Limits(), {}
+
+        def per_net(net):
+            return Limits(), {}
+
+    def source(attr):        # where a copper limit came from, for the titles of its fails
+        if attr not in gorigin:
+            return ""
+        return f"from {gorigin[attr]}" + (", strictest in group" if len(res.nets) > 1 else "")
+    if res.kind == "ground":
+        first = (_rise(res, glim, source("max_ground_rise_mv"))
+                 + _returns(res, None, per_net))
+    else:
+        first = _tree_loads(tree, group, res, per_net) + _tree_inputs(tree, group, res, per_net)
+    out = (first + _hotspots(res, glim, top, source("max_current_density"))
+           + _vias(res, glim, top, source("max_via_current")))
     order = {"rise": 0, "load": 0, "return": 0, "hotspot": 1, "via": 2}
     return sorted(out, key=lambda p: (p.severity != FAIL, order[p.kind], -p.value))
 
 
-def _tree_loads(tree: TreeResult, group: str, res: RailResult, limits: Limits) -> List[Problem]:
+def _limit_text(value: Optional[float], unit: str, origin: str, own: str) -> str:
+    """"limit 1 %", "limit 1 % (from +3V3)" when it comes from another net, or "no limit set"."""
+    if value is None:
+        return "no limit set"
+    return f"limit {value:g} {unit}" + (f" (from {origin})" if origin and origin != own else "")
+
+
+def _word(drop: float, nominal: float) -> str:
+    """Which side of the nominal a pin that lost ``drop`` toward 0 V sits on."""
+    return "below" if (drop >= 0) == (nominal >= 0) else "above"
+
+
+def _tree_loads(tree: TreeResult, group: str, res: RailResult, per_net: NetLimits) -> List[Problem]:
     terms = {t.name: t for t in res.loads}
     out = []
     for ld in (ld for ld in tree.loads if ld.group == group):
         t = terms.get(ld.name)
         x, y = t.positions[0] if t is not None and t.positions else (np.nan, np.nan)
-        limit = f"limit {limits.max_drop_pct:g} %" if limits.max_drop_pct is not None else "no limit set"
+        lim, org = per_net(ld.net)
+        limit = _limit_text(lim.max_drop_pct, "%", org.get("max_drop_pct", ""), ld.net or group)
         if ld.status in (DISCONNECTED, NOT_CONVERGED):
             title, value = f"{ld.name}: {ld.status}", float("inf")
         else:
-            word = "below" if ld.drop_v >= 0 else "above"
             title = (f"{ld.name}: {ld.v_worst_v:.4f} V across its supply and ground pins "
-                     f"({abs(ld.drop_v) * 1e3:.2f} mV, {abs(ld.drop_pct):.2f} % {word} "
-                     f"{ld.nominal_v:g} V)")
+                     f"({abs(ld.drop_v) * 1e3:.2f} mV, {abs(ld.drop_pct):.2f} % "
+                     f"{_word(ld.drop_v, ld.nominal_v)} {ld.nominal_v:g} V)")
             value = ld.drop_pct
         ground = ("no ground pins" if ld.v_ground_v is None
                   else f"ground at {ld.v_ground_v * 1e3:.2f} mV")
@@ -220,18 +266,52 @@ def _tree_loads(tree: TreeResult, group: str, res: RailResult, limits: Limits) -
     return out
 
 
-def _returns(res: RailResult, limits: Optional[Limits] = None) -> List[Problem]:
+def _tree_inputs(tree: TreeResult, group: str, res: RailResult, per_net: NetLimits) -> List[Problem]:
+    """The inputs of the regulators this rail feeds, judged as its loads."""
+    terms = {t.name: t for t in res.loads}
+    out = []
+    for v in (v for v in tree.vrms if v.input_group == group):
+        name = f"{v.name} (input)"
+        t = terms.get(name)
+        x, y = t.positions[0] if t is not None and t.positions else (np.nan, np.nan)
+        lim, org = per_net(v.input_net)
+        limit = _limit_text(lim.max_drop_pct, "%", org.get("max_drop_pct", ""), v.input_net)
+        if v.input_status in (DISCONNECTED, NOT_CONVERGED) or v.input_drop_v is None:
+            title, value = f"{name}: {v.input_status or 'not solved'}", float("inf")
+        else:
+            pct = v.input_drop_pct if v.input_drop_pct is not None else float("nan")
+            title = (f"{name}: {v.v_in_worst_v:.4f} V across its input and ground pins "
+                     f"({abs(v.input_drop_v) * 1e3:.2f} mV, {abs(pct):.2f} % "
+                     f"{_word(v.input_drop_v, v.input_nominal_v or 0.0)} {v.input_nominal_v:g} V)")
+            value = pct
+        status = f" {v.input_status}." if v.input_status and v.input_status not in title else ""
+        amps = f"{v.i_in_a:g} A in" if v.i_in_a is not None else "input current not known"
+        out.append(Problem(
+            FAIL if v.input_passed is False else INFO, "load", title,
+            f"Input of {v.kind} {v.name} on {v.input_net}, {amps}; {limit}.{status}",
+            value, float(x), float(y),
+            data={"name": name, "drop_mv": None if v.input_drop_v is None else v.input_drop_v * 1e3,
+                  "drop_pct": v.input_drop_pct, "v_across_v": v.v_in_worst_v,
+                  "v_worst_v": v.v_in_worst_v, "current_a": v.i_in_a, "status": v.input_status}))
+    return out
+
+
+def _returns(res: RailResult, limits: Optional[Limits] = None,
+             per_net: Optional[NetLimits] = None) -> List[Problem]:
     """Ground pins ranked by rise: where the return current lifts the ground most, judged
-    only against the user's ``max_ground_rise_mv`` (a drop limit does not apply)."""
-    limit = (limits or Limits()).max_ground_rise_mv
+    only against the user's ``max_ground_rise_mv`` (a drop limit does not apply): each pin
+    by its net's (``per_net``), else by ``limits``."""
     out = []
     for t in res.loads:
         rise = _signed_max(t.v_max - res.v_ref, t.v_min - res.v_ref)   # its worst pin
         if not np.isfinite(rise):
             continue
         x, y = t.positions[0] if t.positions else (np.nan, np.nan)
+        lim, org = per_net(t.net) if per_net else (limits or Limits(), {})
+        limit = lim.max_ground_rise_mv
         fail = limit is not None and abs(rise) * 1e3 > limit
-        note = f"limit {limit:g} mV" if limit is not None else "no ground-rise limit set"
+        note = (_limit_text(limit, "mV", org.get("max_ground_rise_mv", ""), t.net or res.net)
+                if limit is not None else "no ground-rise limit set")
         out.append(Problem(
             FAIL if fail else INFO, "return", f"{t.name}: ground {from_0v(rise)}",
             f"{t.ref}, {len(t.pad_ids)} pin(s), {abs(t.current):g} A; {note}.",
@@ -250,7 +330,7 @@ def from_0v(volts: float) -> str:
     return f"{abs(volts) * 1e3:.2f} mV {'above' if volts >= 0 else 'below'} 0 V"
 
 
-def _rise(res: RailResult, limits: Limits) -> List[Problem]:
+def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:
     """With a ``max_ground_rise_mv`` limit: the largest deviation of the net's copper from
     its reference, and where it is. On a ground group of a power tree it is signed (below
     0 V under a negative rail), judged by its magnitude; on a net solved alone it is the
@@ -275,6 +355,6 @@ def _rise(res: RailResult, limits: Limits) -> List[Problem]:
     title = (f"{res.net}: largest ground rise {from_0v(volts)}{where}" if res.kind == "ground"
              else f"{res.net}: largest ground rise {mv:.2f} mV{where}")
     return [Problem(
-        FAIL if abs(mv) > limit else INFO, "rise", title,
+        FAIL if abs(mv) > limit else INFO, "rise", _against(title, abs(mv) > limit, limit, "mV", source),
         f"Copper furthest from the {res.v_ref:g} V reference; limit {limit:g} mV.",
         abs(mv), x, y, layer, data={"rise_mv": mv, "limit_mv": limit})]

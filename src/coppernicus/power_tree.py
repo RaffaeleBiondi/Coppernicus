@@ -4,17 +4,22 @@
   the regulators and links it feeds, estimated at nominal voltages without copper losses,
   as KiPI's ``_estimated_input`` and ``link_bias`` estimate it. The power-tree solve computes
   the same currents exactly.
+* :func:`apply_limits`, :func:`net_limits`, :func:`group_limits`, :func:`tree_verdicts`:
+  which of the user's limits judge what in a power tree, and the verdicts (see
+  :data:`LIMITS_RULE`).
 * :func:`tree_summary`: a power-tree result as a plain, JSON-ready dict (units in every
   key), for the CLI and the agent interface.
 """
 
 from __future__ import annotations
 
+import copy
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from coppernicus.project import PinSpec, Project, Source
+from coppernicus.project import Limits, PinSpec, Project, Source
+from coppernicus.results import DISCONNECTED, NOT_CONVERGED, OUT_OF_REGULATION
 
 SWITCHING = ("smps",)
 REGULATING = ("ldo", "smps")
@@ -134,17 +139,170 @@ def estimate_note(draws: Sequence[Draw]) -> List[str]:
             f"voltages, without copper losses; the power-tree solve computes it exactly: {items}."]
 
 
+# ---------------------------------------------------------------------- limits
+
+LIMIT_FIELDS = ("max_drop_pct", "max_current_density", "max_via_current", "max_ground_rise_mv")
+UNJUDGED = (DISCONNECTED, NOT_CONVERGED, OUT_OF_REGULATION)
+
+LIMITS_RULE = (
+    "Limits are looked up per net: a load by its supply net, a regulator's input by its input "
+    "net (judged as a load on the rail feeding it: nominal − (lowest input pin − highest "
+    "ground pin)), a return pin by its ground net. A limit not set on a net comes, field by "
+    "field, from its group's driving net (a rail's: the net its source drives; a ground's: the "
+    "first ground net the project names). The copper of a group (largest ground rise, current "
+    "crowding, vias) is judged against the strictest limit set on any of its nets, as the "
+    "solve does not keep which net each piece of copper belongs to. A link is not judged as a "
+    "point of its own: it joins its nets into one group, whose loads and regulator inputs are "
+    "judged.")
+
+
+def net_limits(tree, net: str, group: Optional[str] = None) -> Tuple[Limits, Dict[str, str]]:
+    """The limits that judge what is on ``net``: field by field its own (``tree.limits``),
+    else those of its group's driving net (the group's key). Also returns, per field set,
+    the net the value came from."""
+    key = group or tree.group_of(net) or net
+    vals, origin = {}, {}
+    for f in LIMIT_FIELDS:
+        for src in dict.fromkeys((net, key)):
+            v = getattr(tree.limits.get(src), f, None)
+            if v is not None:
+                vals[f], origin[f] = v, src
+                break
+    return Limits(**vals), origin
+
+
+def group_limits(tree, key: str) -> Tuple[Limits, Dict[str, str]]:
+    """The limits that judge the copper of group ``key``: per field the strictest (lowest)
+    of its nets' (:func:`net_limits`), with the net it came from."""
+    vals, origin = {}, {}
+    for net in dict.fromkeys([key] + list(tree.groups[key].nets)):
+        lim, org = net_limits(tree, net, key)
+        for f in LIMIT_FIELDS:
+            v = getattr(lim, f)
+            if v is not None and (f not in vals or v < vals[f]):
+                vals[f], origin[f] = v, org[f]
+    return Limits(**vals), origin
+
+
+def apply_limits(tree, project: Project) -> None:
+    """Read the project's current limits into ``tree.limits`` (every solved net the project
+    has a rail for) and judge the loads and regulator inputs again; no solve needed."""
+    tree.limits = {}
+    for res in tree.groups.values():
+        for net in res.nets:
+            rail = project.rail(net)
+            if rail is not None:
+                tree.limits[net] = copy.copy(rail.limits)
+    judge_loads(tree)
+
+
 def judge_loads(tree) -> None:
-    """Set each load's verdict against the drop limit of its group (``tree.limits``), only
-    the user's: ``None`` without a limit, or for a load that was not solved."""
+    """Set each load's and each regulator input's verdict against the drop limit of its net
+    (:func:`net_limits`), only the user's: ``None`` without a limit, or for one that has no
+    physical voltage to judge (not solved, not converged, or behind a regulator that cannot
+    hold its voltage: the engine still holds that output at its set point)."""
     for ld in tree.loads:
-        limits = tree.limits.get(ld.group)
-        limit = getattr(limits, "max_drop_pct", None)
-        # A load behind a regulator that cannot hold its voltage has no physical voltage to
-        # judge (the engine still holds that output at its set point).
-        ok = (ld.status not in ("DISCONNECTED", "NOT CONVERGED", "VRM OUT OF REGULATION")
-              and math.isfinite(ld.drop_pct))
+        limit = net_limits(tree, ld.net or ld.group, ld.group)[0].max_drop_pct
+        ok = ld.status not in UNJUDGED and math.isfinite(ld.drop_pct)
         ld.passed = None if limit is None or not ok else bool(ld.drop_pct <= limit)
+    for v in tree.vrms:
+        if not v.input_group:
+            continue
+        limit = net_limits(tree, v.input_net, v.input_group)[0].max_drop_pct
+        ok = (v.input_status not in UNJUDGED and v.input_drop_pct is not None
+              and math.isfinite(v.input_drop_pct))
+        v.input_passed = None if limit is None or not ok else bool(v.input_drop_pct <= limit)
+
+
+def _why_not(status: str, nominal: Optional[float]) -> str:
+    if status:
+        return status
+    return "0 V nominal: no drop percentage" if not nominal else "not solved"
+
+
+@dataclass
+class GroupVerdict:
+    """The verdict of one group: ``fail`` when a limit is exceeded; otherwise ``not_judged``
+    when a limit set applies to something that could not be judged (or there is nothing for
+    it to judge), or when no limit applies; ``pass`` only when everything was judged."""
+    verdict: str
+    failed: int
+    limits: Dict[str, float]               # the strictest of each kind, keyed with units
+    origin: Dict[str, str]                 # limit key -> the net it came from
+    not_judged: List[str] = field(default_factory=list)
+    problems: list = field(default_factory=list)
+
+
+def group_verdict(tree, key: str, top: int = 5) -> GroupVerdict:
+    from coppernicus.problems import FAIL, LIMIT_KEYS, find_tree_problems, limits_dict
+    res = tree.groups[key]
+    problems = find_tree_problems(tree, key, top=top)
+    failed = sum(p.severity == FAIL for p in problems)
+    glim, gorigin = group_limits(tree, key)
+    checked = limits_dict(glim, res.kind)
+    origin = {k: gorigin[a] for k, a in LIMIT_KEYS.items() if k in checked}
+    missing, judged = [], 0
+    if checked and not res.converged:
+        missing.append(f"{key}: its iteration did not converge")
+    elif checked:
+        if "max_drop_pct" in checked:
+            items = [(ld.name, ld.net or key, ld.passed, ld.status, ld.nominal_v)
+                     for ld in tree.loads if ld.group == key]
+            items += [(f"{v.name} (input)", v.input_net, v.input_passed, v.input_status,
+                       v.input_nominal_v) for v in tree.vrms if v.input_group == key]
+            applies = [it for it in items if net_limits(tree, it[1], key)[0].max_drop_pct is not None]
+            for name, net, passed, status, nominal in applies:
+                if passed is None:
+                    missing.append(f"{name} on {net}: {_why_not(status, nominal)}")
+            judged += sum(it[2] is not None for it in applies)
+            if not applies:
+                missing.append(f"{key}: max_drop_pct judges no load or regulator input")
+        if res.kind == "ground" and "max_ground_rise_mv" in checked:
+            for t in res.loads:
+                if not (math.isfinite(t.v_max) and math.isfinite(t.v_min)):
+                    missing.append(f"{t.name} on {t.net or key}: not solved")
+        judged += any(k != "max_drop_pct" for k in checked)       # the copper is judged
+    verdict = "fail" if failed else "not_judged" if missing or not judged else "pass"
+    return GroupVerdict(verdict, failed, checked, origin, missing, problems)
+
+
+def tree_verdicts(tree, top: int = 5) -> Tuple[str, Dict[str, GroupVerdict]]:
+    """Every group's verdict and the overall one: ``fail`` if a group fails; otherwise
+    ``not_judged`` if a group with limits could not be judged in full; ``pass`` if something
+    was judged; ``not_judged`` when no limit is set."""
+    groups = {key: group_verdict(tree, key, top) for key in tree.groups}
+    if any(v.verdict == "fail" for v in groups.values()):
+        overall = "fail"
+    elif any(v.limits and v.verdict == "not_judged" for v in groups.values()):
+        overall = "not_judged"
+    else:
+        overall = "pass" if any(v.verdict == "pass" for v in groups.values()) else "not_judged"
+    return overall, groups
+
+
+def own_limits(tree) -> Dict[str, Dict[str, float]]:
+    """The limits set on each solved net, keyed with units (what the user typed)."""
+    from coppernicus.problems import limits_dict
+    out = {}
+    for net, lim in tree.limits.items():
+        key = tree.group_of(net)
+        d = limits_dict(lim, tree.groups[key].kind) if key else {}
+        if d:
+            out[net] = d
+    return out
+
+
+def verdict_note(tree, groups: Dict[str, GroupVerdict]) -> str:
+    """One line on what was judged against what, and what was not."""
+    own = own_limits(tree)
+    if not own:
+        return "No limits set: nothing is judged, problems are ranked only."
+    note = "Judged only against the limits you set: " + ", ".join(
+        f"{net}: {k} = {v:g}" for net, d in own.items() for k, v in d.items())
+    missing = [x for v in groups.values() for x in v.not_judged]
+    if missing:
+        note += ". Not judged: " + "; ".join(missing)
+    return note
 
 
 # ---------------------------------------------------------------------- summary
@@ -168,17 +326,15 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
     """A power-tree result (``coppernicus.results.TreeResult``) as a JSON-ready dict: units
     in every key, the assumptions and warnings, the verdict (only against the user's limits,
     per group) and the VRM, load, link and group tables."""
-    from coppernicus.problems import FAIL, find_tree_problems, limits_dict
+    from coppernicus.problems import limits_dict
 
-    groups, failed, judged = [], 0, {}
+    overall, verdicts = tree_verdicts(tree, top)
+    groups, failed = [], 0
     for key, res in tree.groups.items():
-        limits = tree.limits.get(key)
-        problems = find_tree_problems(tree, key, limits, top=top)
-        checked = limits_dict(limits, res.kind)
-        fails = [p for p in problems if p.severity == FAIL]
-        failed += len(fails)
-        judged.update({f"{key}: {k}": v for k, v in checked.items()})
+        gv = verdicts[key]
+        failed += gv.failed
         v_ref = res.v_ref
+        by_net = {net: limits_dict(net_limits(tree, net, key)[0], res.kind) for net in res.nets}
         groups.append({
             "group": key, "kind": res.kind, "nets": list(res.nets), "v_ref_v": v_ref,
             ("max_rise_mv" if res.kind == "ground" else "max_drop_mv"): res.max_drop * 1e3,
@@ -186,23 +342,26 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
             "power_loss_w": res.power_loss, "loss_breakdown_w": res.loss_breakdown(),
             "j_point_max_a_mm2": res.j_max,
             "via_current_max_a": max((v.current for v in res.vias), default=0.0),
-            "verdict": "fail" if fails else ("pass" if checked else "not_judged"),
-            "limits": checked, "failed": len(fails),
+            "verdict": gv.verdict, "limits": gv.limits, "failed": gv.failed,
+            "limits_by_net": {n: d for n, d in by_net.items() if d},
+            "not_judged": list(gv.not_judged),
             "problems": [{"severity": p.severity, "kind": p.kind, "title": p.title, **p.data}
-                         for p in problems],
+                         for p in gv.problems],
         })
-    verdict = "fail" if failed else ("pass" if judged else "not_judged")
-    note = ("Judged only against the limits you set: " + ", ".join(f"{k} = {v:g}" for k, v in judged.items())
-            if judged else "No limits set: nothing is judged, problems are ranked only.")
     return _clean({
         "kind": "power_tree",
-        "verdict": verdict, "verdict_note": note, "failed": failed,
+        "verdict": overall, "verdict_note": verdict_note(tree, verdicts), "failed": failed,
+        "not_judged": [x for v in verdicts.values() for x in v.not_judged],
         "vrms": [{"name": v.name, "kind": v.kind, "group": v.group, "v_set_v": v.v_set_v,
                   "v_out_v": v.v_out_v, "i_out_a": v.i_out_a, "v_in_v": _num(v.v_in_v),
                   "i_in_a": _num(v.i_in_a), "p_out_w": v.p_out_w, "p_in_w": _num(v.p_in_w),
                   "p_loss_w": _num(v.p_loss_w), "v_ground_v": _num(v.v_ground_v),
                   "v_sense_v": _num(v.v_sense_v), "v_ground_sense_v": _num(v.v_ground_sense_v),
-                  "regulation": v.regulation} for v in tree.vrms],
+                  "regulation": v.regulation, "input_net": v.input_net or None,
+                  "input_drop_mv": None if _num(v.input_drop_v) is None else v.input_drop_v * 1e3,
+                  "input_drop_pct": _num(v.input_drop_pct), "input_status": v.input_status,
+                  "input_exceeds_drop_limit": None if v.input_passed is None else not v.input_passed}
+                 for v in tree.vrms],
         "loads": [{"name": ld.name, "group": ld.group, "current_a": ld.current_a,
                    "nominal_v": ld.nominal_v, "v_supply_v": _num(ld.v_supply_v),
                    "v_supply_min_v": _num(ld.v_supply_min_v), "v_ground_v": _num(ld.v_ground_v),
@@ -222,6 +381,17 @@ def _fmt(x: Optional[float], width: int, spec: str, unit: str, scale: float = 1.
     return f"{'—' if x is None else f'{x * scale:{spec}}{unit}':>{width}}"
 
 
+def _input_text(v: Dict[str, Any]) -> str:
+    """A regulator's input judged on the rail feeding it, for its VRM row."""
+    if not v.get("input_net"):
+        return ""
+    exceeds = v.get("input_exceeds_drop_limit")
+    verdict = v.get("input_status") or ("FAIL" if exceeds else "pass" if exceeds is False else "not judged")
+    drop = ("—" if v.get("input_drop_mv") is None else
+            f"{v['input_drop_mv']:.2f} mV ({_fmt(v.get('input_drop_pct'), 0, '.2f', ' %').strip()})")
+    return f"  input drop on {v['input_net']} {drop}: {verdict}"
+
+
 def tree_text(doc: Dict[str, Any]) -> List[str]:
     """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
     lines = ["VRMs (sources and regulators)",
@@ -232,7 +402,7 @@ def tree_text(doc: Dict[str, Any]) -> List[str]:
                      f"{_fmt(v['v_out_v'], 9, '.5f', 'V')} {_fmt(v['i_out_a'], 9, '.4f', 'A')} "
                      f"{_fmt(v['v_in_v'], 9, '.5f', 'V')} {_fmt(v['i_in_a'], 9, '.4f', 'A')} "
                      f"{_fmt(v['p_loss_w'], 9, '.1f', 'mW', 1e3)}"
-                     + (f"  {v['regulation']}" if v["regulation"] else ""))
+                     + (f"  {v['regulation']}" if v["regulation"] else "") + _input_text(v))
     lines += ["Loads (the voltage across supply and ground pins)",
               f"  {'name':<14} {'group':<10} {'I':>8} {'nominal':>8} {'supply':>9} {'ground':>9} "
               f"{'across':>9} {'drop':>14}  verdict"]

@@ -44,6 +44,7 @@ class TerminalResult:
     v_max: float
     pad_ids: List[str] = field(default_factory=list)
     positions: List[Tuple[float, float]] = field(default_factory=list)
+    net: str = ""                  # the net of its pads, when known (power-tree groups)
 
 
 @dataclass
@@ -79,6 +80,7 @@ class RailResult:
     # reference and max_drop the rise with the largest magnitude, signed (negative: the
     # ground sinks below 0 V, as under a negative rail).
     kind: str = "rail"
+    converged: bool = True         # False: a power-tree group whose iteration did not converge
 
     # ------------------------------------------------------------------ helpers
     def layer(self, name: str) -> Optional[LayerField]:
@@ -127,6 +129,15 @@ class VrmReport:
     v_sense_v: Optional[float] = None
     v_ground_sense_v: Optional[float] = None
     regulation: str = ""           # why it cannot hold its voltage; "" when it can
+    # Its input, judged as a load on the rail that feeds it (regulators only):
+    input_net: str = ""
+    input_group: str = ""          # the TreeResult.groups key of that rail
+    input_nominal_v: Optional[float] = None    # the set voltage of the source driving it
+    v_in_worst_v: Optional[float] = None       # lowest input pin - highest ground pin
+    input_drop_v: Optional[float] = None       # input_nominal_v - v_in_worst_v (toward 0 V)
+    input_drop_pct: Optional[float] = None
+    input_status: str = ""         # DISCONNECTED, NOT_CONVERGED or OUT_OF_REGULATION
+    input_passed: Optional[bool] = None        # against its input net's max_drop_pct
 
 
 @dataclass
@@ -145,7 +156,8 @@ class LoadReport:
     drop_v: float                  # nominal_v - v_worst_v (negative: a boost)
     drop_pct: float
     status: str = ""               # DISCONNECTED, NOT_CONVERGED or OUT_OF_REGULATION
-    passed: Optional[bool] = None  # against its rail's max_drop_pct; None without a limit
+    passed: Optional[bool] = None  # against its net's max_drop_pct; None without a limit
+    net: str = ""                  # its supply net
 
 
 @dataclass
@@ -156,7 +168,9 @@ class TreeResult:
     vrms: List[VrmReport] = field(default_factory=list)
     loads: List[LoadReport] = field(default_factory=list)
     links: List[Dict[str, Any]] = field(default_factory=list)   # name, nets, resistance, current
-    limits: Dict[str, Any] = field(default_factory=dict)        # group key -> project Limits
+    # net -> project Limits, for every solved net the project has a rail for (a group's
+    # key is its driving net; see coppernicus.power_tree.net_limits)
+    limits: Dict[str, Any] = field(default_factory=dict)
     assumptions: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     stats: Dict[str, float] = field(default_factory=dict)

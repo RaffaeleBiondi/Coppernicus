@@ -24,9 +24,12 @@ from kipi.dc.solver.setup import REF_TEMP_C
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import ground_nets, ground_rails, terminal_names, to_pisetup
 from coppernicus.engine.solve import Cancelled, _Progress, engine_settings, mesh_fields, thickness_note
-from coppernicus.power_tree import judge_loads
-from coppernicus.project import Project, pin_ref, pins_text
+from coppernicus.power_tree import LIMITS_RULE, apply_limits
+from coppernicus.project import Project, Source, pin_ref, pins_text
 from coppernicus.results import (
+    DISCONNECTED,
+    NOT_CONVERGED,
+    OUT_OF_REGULATION,
     LoadReport,
     RailResult,
     TerminalResult,
@@ -70,6 +73,7 @@ def _assumptions(project: Project, setup) -> List[str]:
         "Loads draw their current split equally across their supply pins and return it "
         "through their ground pins; a regulator returns I_out − I_in at its ground pins.",
         "A load's drop counts its ground: nominal − (lowest supply pin − highest ground pin).",
+        LIMITS_RULE,
     ]
     refs = [v.name for v in setup.vrms if v.kind == "source" and v.ground]
     if refs:
@@ -97,7 +101,8 @@ def _terminals(board: Board, fields):
         pads = list(t.pad_ids)
         ref = board.pad(pads[0]).footprint if pads else ""
         out = TerminalResult(t.name, t.kind, ref, float(t.current), float(t.v_min), float(t.v_max),
-                             pads, [tuple(board.pad(pid).position) for pid in pads])
+                             pads, [tuple(board.pad(pid).position) for pid in pads],
+                             net=board.pad(pads[0]).net if pads else "")
         (sources if t.kind == "source" else loads).append(out)
     return sources, loads
 
@@ -131,7 +136,7 @@ def _group(board: Board, key: str, g, assumptions: List[str]) -> RailResult:
         loss_series=float(sum(s.power for s in fields.series if np.isfinite(s.power))),
         stats={"triangles": float(sol.stats["n_tris"]), "unknowns": float(sol.stats["n_unknowns"]),
                "iterations": float(g.iterations)},
-        warnings=warnings, assumptions=list(assumptions), kind=g.kind)
+        warnings=warnings, assumptions=list(assumptions), kind=g.kind, converged=bool(g.converged))
 
 
 def solve_project_tree(board: Board, project: Project,
@@ -175,9 +180,6 @@ def solve_project_tree(board: Board, project: Project,
                      stats={"seconds": seconds, "groups": float(len(kt.groups))})
     for label, g in kt.groups.items():
         out.groups[key_of[label]] = _group(board, key_of[label], g, assumptions)
-        rail = project.rail(key_of[label])
-        if rail is not None:
-            out.limits[key_of[label]] = rail.limits
         for s in g.result.fields.series:
             k = next((k for k in setup.links if k.name == s.name), None)
             if k is not None:
@@ -192,7 +194,12 @@ def solve_project_tree(board: Board, project: Project,
             v_out_v=float(v.v_out), i_out_a=float(v.i_out), v_in_v=v.v_in, i_in_a=v.i_in,
             p_out_w=float(v.p_out), p_in_w=v.p_in, p_loss_w=v.p_loss, v_ground_v=v.v_ground,
             v_sense_v=v.v_sense, v_ground_sense_v=v.v_ground_sense, regulation=v.regulation))
+    sources = {name: project.rail(net).sources[i]
+               for (what, net, i), name in names.items() if what == "source"}
+    for v in out.vrms:
+        _judge_input(out, v, sources.get(v.name))
 
+    load_net = {name: net for (what, net, _i), name in names.items() if what == "load"}
     for ld in kt.loads:
         key = key_of.get(ld.group, ld.group)
         # The pin that has lost the most toward 0 V: the lowest on a positive rail, the
@@ -207,6 +214,41 @@ def solve_project_tree(board: Board, project: Project,
             name=ld.name, group=key, current_a=float(ld.current), nominal_v=float(ld.nominal),
             v_supply_v=float(ld.v_supply), v_supply_min_v=float(ld.v_supply_min),
             v_ground_v=ld.v_ground, v_across_v=float(across), v_worst_v=float(v_worst),
-            drop_v=float(drop), drop_pct=float(pct), status=ld.status))
-    judge_loads(out)
+            drop_v=float(drop), drop_pct=float(pct), status=ld.status, net=load_net.get(ld.name, "")))
+    apply_limits(out, project)
     return out
+
+
+def _judge_input(tree: TreeResult, v: VrmReport, s: Optional[Source]) -> None:
+    """Fill in regulator ``v``'s input as a load on the rail feeding it: its worst input pin
+    across its ground pins (the lowest input pin minus the highest ground pin; on a negative
+    rail the highest minus the lowest), its drop toward 0 V from the set voltage of the
+    source driving that rail, and why it cannot be judged, if so."""
+    if s is None or s.kind not in REGULATING or not s.input_net:
+        return
+    v.input_net = s.input_net
+    key = tree.group_of(s.input_net)
+    if key is None:                                  # its input rail is not solved (excluded)
+        return
+    v.input_group, res = key, tree.groups[key]
+    driver = next((u for u in tree.vrms if u.group == key), None)
+    nominal = driver.v_set_v if driver is not None else None
+    v.input_nominal_v = nominal
+    term = next((t for t in res.loads if t.name == f"{v.name} (input)"), None)
+    gkey = tree.group_of(s.ground_net) if s.ground_net else None
+    gterm = next((t for t in tree.groups[gkey].loads if t.name == f"{v.name} (gnd)"), None) if gkey else None
+    if term is None or not (math.isfinite(term.v_min) and math.isfinite(term.v_max)):
+        v.input_status = DISCONNECTED
+        return
+    if not res.converged:
+        v.input_status = NOT_CONVERGED
+    elif driver is not None and driver.regulation:
+        v.input_status = OUT_OF_REGULATION
+    sign = -1.0 if (nominal or 0.0) < 0 else 1.0
+    ground = 0.0
+    if gterm is not None and math.isfinite(gterm.v_max) and math.isfinite(gterm.v_min):
+        ground = gterm.v_max if sign > 0 else gterm.v_min
+    v.v_in_worst_v = (term.v_min if sign > 0 else term.v_max) - ground
+    if nominal is not None:
+        v.input_drop_v = sign * (nominal - v.v_in_worst_v)
+        v.input_drop_pct = 100.0 * v.input_drop_v / abs(nominal) if nominal else math.nan
