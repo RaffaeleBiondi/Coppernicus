@@ -32,7 +32,7 @@ def read_board_fields(path, prefix: str = PREFIX) -> BoardFields:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as e:
         raise EngineError(f"{path.name}: {e}") from None
-    if not re.search(r'\(property\s+"' + re.escape(prefix), text, re.IGNORECASE):
+    if not re.search(r'\(property\s+"?' + re.escape(prefix), text, re.IGNORECASE):
         return BoardFields()
     try:
         root = load_tree(path)

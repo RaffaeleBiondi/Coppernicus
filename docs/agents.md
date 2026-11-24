@@ -143,9 +143,9 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
 
 - **Several rails on one part** give one value per rail, by position, separated by `;`, in
   every per-rail field. An empty value skips that rail: a dual-output regulator is
-  `PI_RAIL=+3V3;+1V8`, `PI_SOURCE=3.3V;1.8V`, `PI_KIND=smps;ldo`, `PI_INPUT=VIN;+3V3`. A
-  regulator draws its input through `PI_INPUT`; a `PI_LOAD` on that same net is refused as
-  counted twice.
+  `PI_RAIL=+3V3;+1V8`, `PI_SOURCE=3.3V;1.8V`, `PI_KIND=smps;ldo`, `PI_EFF=90%;`,
+  `PI_INPUT=VIN;+3V3`. A regulator draws its input through `PI_INPUT`; a `PI_LOAD` on that same
+  net is refused as counted twice.
 - **Units are required:** a bare number (`2`), a comma (`2,5A`) or a KiCad-style value
   (`3V3`) is refused, with the part, the field and the text in the message. An unknown `PI_*`
   name (a typo such as `PI_LOADS`, or `pi_load` in lower case) is refused too. A blank field
@@ -167,7 +167,9 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
   `board_fields_overridden`, and its assumptions say so.
 - **Limits:** `PI_LIMIT_DROP` wins over the project's `max_drop_pct` on that net (a warning when
   they differ). `max_current_density`, `max_via_current` and `max_ground_rise_mv` come only
-  from the project file, and they apply to the fields' rail. Settings stay project-only.
+  from the project file, and they apply to the fields' rail: give them on a project rail with
+  only `limits:` (no sources, no loads), which is not compared with the fields and gives no
+  warning. Settings stay project-only.
 - **Remote sense** stays in the project file: when the fields replace a project rail, the
   sense pins of its sources are carried over by part, and the assumptions say so.
 - **Links:** a `PI_LINK` part replaces a project link on the same part (a warning when they

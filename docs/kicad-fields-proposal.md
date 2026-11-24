@@ -125,7 +125,8 @@ So the custom fields are parsed with the rest of the file and then dropped.
      `overrides_board_fields: true`, with the KiCad values it overrode.
    - `PI_LIMIT_DROP` wins over the project's `max_drop_pct` on that net (a warning when they
      differ; the strictest field value when several parts give one). The other limits come
-     only from the project file and apply to the fields' rail. Settings stay project-only.
+     only from the project file and apply to the fields' rail; a project rail with only
+     `limits:` (no sources, no loads) adds them and is not compared. Settings stay project-only.
    - The merge is a pure function for the app: `board_fields.merge(project, fields,
      pad_nets)` returns the merged project (a copy), each net's origin (`fields`, `project` or
      `overridden`, with its notes, warnings and the fields' rail as plain data) and all the

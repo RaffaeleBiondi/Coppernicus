@@ -529,7 +529,8 @@ def _from_fields(fr: FieldRail, own: Optional[Rail]) -> Tuple[Rail, Origin]:
     origin = Origin(fr.net, "fields", [fr.note()], board_fields=fr.listing())
     if own is None:
         return rail, origin
-    diffs = _differences(rail, own)
+    # A project rail with no sources and no loads only adds limits: nothing to compare.
+    diffs = _differences(rail, own) if own.sources or own.loads else []
     if diffs:
         origin.warnings.append(f"project file rail {fr.net} ignored: KiCad fields define it "
                                f"({'; '.join(diffs)}); set override_board_fields: true on the rail "
@@ -621,8 +622,15 @@ def _key_text(t) -> str:
 
 
 def _same_link(a: Link, b: Link) -> bool:
-    return (a.net_a, a.pins_a, a.net_b, a.pins_b) == (b.net_a, b.pins_a, b.net_b, b.pins_b) \
-        and math.isclose(a.resistance_ohm, b.resistance_ohm, rel_tol=1e-9, abs_tol=1e-15)
+    """The same link, whichever side is called a, and with "all" pins (None) equal to any
+    list: a field link names all of its part's pads on each net."""
+    def side(net, pins, other_net, other_pins):
+        return net == other_net and (pins is None or other_pins is None
+                                     or sorted(pins) == sorted(other_pins))
+    ab = side(a.net_a, a.pins_a, b.net_a, b.pins_a) and side(a.net_b, a.pins_b, b.net_b, b.pins_b)
+    ba = side(a.net_a, a.pins_a, b.net_b, b.pins_b) and side(a.net_b, a.pins_b, b.net_a, b.pins_a)
+    return (ab or ba) and math.isclose(a.resistance_ohm, b.resistance_ohm, rel_tol=1e-9,
+                                       abs_tol=1e-15)
 
 
 def _link_text(k: Link) -> str:

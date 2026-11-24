@@ -7,6 +7,7 @@ reader, the pure merge, and every solve path that takes them. The board is a syn
 import copy
 import json
 import os
+import re
 from pathlib import Path
 
 import anyio
@@ -235,7 +236,38 @@ def test_merge_never_changes_the_loaded_project():
     assert project == before
 
 
+def test_a_limits_only_project_rail_adds_its_limits_without_a_warning():
+    """The way to give a field rail the limits that only the project file can hold: a rail
+    with no sources and no loads is not compared with the fields."""
+    merged = merge(Project(rails=[Rail("VCC", limits=Limits(max_via_current=2.0))]), FIELDS)
+    [rail] = merged.project.rails
+    origin = merged.origins["VCC"]
+    assert origin.source == "fields" and origin.warnings == [] and merged.warnings == []
+    assert rail.limits.max_via_current == 2.0 and rail.limits.max_drop_pct == 2.0
+    assert [ld.ref for ld in rail.loads] == ["U1"]
+
+
+@pytest.mark.parametrize("change", ["all pins", "sides swapped"])
+def test_an_equal_link_written_another_way_gives_no_warning(change):
+    project = Project.load(CHAIN)
+    k = project.links[0]
+    if change == "all pins":
+        k.pins_a, k.pins_b = None, None
+    else:
+        k.pins_a, k.net_a, k.pins_b, k.net_b = k.pins_b, k.net_b, k.pins_a, k.net_a
+    assert merge(project, CHAIN_FIELDS, CHAIN_PADS).warnings == []
+
+
 # ---------------------------------------------------------------------- the reader
+
+def test_reader_finds_field_names_written_without_quotes(board):
+    """KiCad writes some property names bare (``(property ki_fp_filters "...")`` in its own
+    templates): the scan before the parse must not skip them."""
+    bare = re.sub(r'\(property "(PI_[A-Z_]+)"', r"(property \1", board.read_text(encoding="utf-8"))
+    assert "(property PI_RAIL " in bare
+    board.write_text(bare, encoding="utf-8")
+    assert read_part_fields(board) == FIELDS
+
 
 def test_reader_returns_only_pi_fields_and_the_pads_nets(board, tmp_path, monkeypatch):
     assert read_part_fields(board) == FIELDS
