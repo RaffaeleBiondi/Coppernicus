@@ -614,3 +614,46 @@ def test_a_limit_on_a_net_the_tree_does_not_solve_is_not_judged(board):
     assert "+5V" in doc["verdict_note"]
     project.rails.pop()
     assert tree_summary(solve_project_tree(board, project))["verdict"] == "pass"
+
+
+def test_a_copper_fail_names_the_limit_of_a_net_joined_by_a_link(board):
+    """A current-density limit only on +3V3_F (beyond FB1) judges the copper of the whole
+    +3V3 group, the strictest of its nets, and its fails say so (finding 6)."""
+    from coppernicus.project import Rail
+    project = power_chain_project()
+    project.rails.append(Rail("+3V3_F", limits=Limits(max_current_density=1.0)))
+    tree = solve_project_tree(board, project)
+    probs = find_tree_problems(tree, "+3V3")
+    spots = [p for p in probs if p.kind == "hotspot" and p.severity == FAIL]
+    assert spots and all("limit 1 A/mm² from +3V3_F, strictest in group" in p.title for p in spots)
+
+
+def test_a_via_fail_names_the_limit_of_a_net_joined_by_a_net_tie():
+    """VCC → NT1 → VCC_B, which changes layer through a via: a via limit only on VCC_B
+    judges the group's vias, and the fail says where the limit came from."""
+    from coppernicus.engine.synthetic import B, F, SyntheticBoard, two_layer_stackup
+    from coppernicus.project import Project, Rail
+    b = SyntheticBoard("tie_via", two_layer_stackup())
+    lib = "NetTie:NetTie-2_SMD_Pad0.5mm"
+    b.square_pad("J1", "1", "VCC", 0.0, 0.0, 1.5)
+    b.square_pad("NT1", "1", "VCC", 9.5, 0.0, 0.5, value="NetTie_2", lib_id=lib)
+    b.square_pad("NT1", "2", "VCC_B", 10.5, 0.0, 0.5, value="NetTie_2", lib_id=lib)
+    b.square_pad("U1", "1", "VCC_B", 30.0, 0.0, 1.5, layers=(B,))
+    b.track("VCC", F, 0.5, (0.0, 0.0), (9.5, 0.0))
+    b.track("VCC_B", F, 0.5, (10.5, 0.0), (20.0, 0.0))
+    b.via("VCC_B", 20.0, 0.0)
+    b.track("VCC_B", B, 0.5, (20.0, 0.0), (30.0, 0.0))
+    project = Project(rails=[Rail("VCC", sources=[Source("J1", 3.3)], loads=[Load("U1", 1.0)]),
+                             Rail("VCC_B", limits=Limits(max_via_current=0.5))])
+    tree = solve_project_tree(Board(b.snapshot()), project)
+    assert set(tree.groups["VCC"].nets) == {"VCC", "VCC_B"} and tree.groups["VCC"].vias
+    [via] = [p for p in find_tree_problems(tree, "VCC") if p.kind == "via"]
+    assert via.severity == FAIL and "limit 0.5 A from VCC_B, strictest in group" in via.title
+
+
+def test_a_drop_limit_on_a_rail_at_0_v_is_not_judged():
+    from coppernicus.engine.synthetic import Strip, strip_board
+    from coppernicus.power_tree import group_verdict
+    tree = solve_project_tree(Board(strip_board()), _strip_project(0.0, limits=Limits(max_drop_pct=1.0)))
+    gv = group_verdict(tree, Strip.NET)
+    assert gv.verdict == "not_judged" and any("0 V nominal" in x for x in gv.not_judged)

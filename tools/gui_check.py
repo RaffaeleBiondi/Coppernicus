@@ -901,6 +901,22 @@ def run_power_tree(window, check: Checks, args, out: Path):
     check("... saved: the limits-only GND rail keeps its ground-rise limit",
           saved.rail("GND") is not None and saved.rail("GND").limits.max_ground_rise_mv == 10.0
           and window.project.rail("GND") is not None)
+    window.nets.select("+1V8")                            # an LDO set above its input…
+    QApplication.processEvents()
+    window.rail_panel.sources.table.cellWidget(0, 3).setValue(3.4)
+    window.rail_panel.max_drop.setText("1")
+    window.rail_panel.max_drop.editingFinished.emit()
+    QApplication.processEvents()
+    tree = solve_tree_and_wait(window, args.timeout)
+    summary = window.tree_panel.summary.text()
+    check("power tree: a load behind a regulator out of regulation is named as not judged",
+          tree is not None and "not judged" in summary and "U3" in summary
+          and "no limits exceeded" not in summary, summary[-160:])
+    window.show_group("+1V8")
+    QApplication.processEvents()
+    header = window.problems.summary.text()
+    check("... and the +1V8 group's Problems header says so", "not judged" in header and "U3" in header
+          and "no limits exceeded" not in header, header[-160:])
     assert g.I_U4 == 0.5       # the example itself is unchanged
 
 
