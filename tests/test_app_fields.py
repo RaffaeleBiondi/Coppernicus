@@ -142,3 +142,30 @@ def test_an_ignored_project_rail_warns_in_the_result_and_the_kicad_values_are_so
     [warning] = [w for w in res.warnings if w.startswith("project file rail VCC ignored")]
     assert "KiCad U1 1 A pins 1, project U1 3 A" in warning
     assert warning in window.problems.notes.toPlainText()
+
+
+# ---------------------------------------------------------------------- a field that cannot be used
+
+OFF_SWITCH = "; or turn them off: Project → Use KiCad footprint fields"
+
+
+@pytest.mark.parametrize("fields, extra", [
+    ({"U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}}, ()),                       # merge: no PI_SOURCE
+    ({"J1": FIELDS["J1"], "U1": FIELDS["U1"]}, [("U1", 20.0, 3.0, "VCC")])])  # read: two U1
+def test_a_field_error_refuses_f5_and_ctrl_t_with_the_cli_text(window, dialogs, tmp_path, capsys,
+                                                              fields, extra):
+    write_strip_board(tmp_path / "strip.kicad_pcb", fields, extra_parts=extra)
+    project = Project(board="strip.kicad_pcb").save(tmp_path / "strip.coppernicus.yml")
+    assert main(["solve", str(project), "--no-maps", "--out", str(tmp_path / "cli")]) == 2
+    printed = capsys.readouterr().err.strip()
+    assert printed.startswith("error: ")
+    refusal = printed.removeprefix("error: ") + OFF_SWITCH
+    open_net(window, project)
+    assert solve(window) is None and window.results == {}
+    assert dialogs[-1][2] == refusal
+    assert solve_tree(window) is None and window.tree is None
+    assert dialogs[-1][2] == refusal
+    assert refusal in window.rail_panel.banner.error.text()                  # the red line
+    assert refusal in window.problems.notes.toPlainText()
+    window.nets.select("GND" if "GND" in window.board.nets() else "VCC")     # survives a net change
+    assert refusal in window.problems.notes.toPlainText()

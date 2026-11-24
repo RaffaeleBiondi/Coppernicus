@@ -328,6 +328,7 @@ class MainWindow(QMainWindow):
         self.project = project or Project(board=str(Path(path).resolve()))
         self._read_board_fields(board)
         self._remerge()
+        self._show_fields_error()
         resolved = Path(path).resolve()
         modified = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(resolved.stat().st_mtime))
         self._board_stamp = f"{resolved.name} (file modified {modified})"
@@ -359,7 +360,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{board.name}: {len(board.nets())} nets, "
                                      f"{len(board.layers())} copper layers{warn}")
         if board.warnings:
-            self.problems.notes.setPlainText("Board import:\n" + "\n".join(board.warnings))
+            self.problems.set_notes(["Board import:", *board.warnings])
         first = next((r.net for r in self.merged.project.rails), None)
         if first:
             self.nets.select(first)
@@ -405,6 +406,25 @@ class MainWindow(QMainWindow):
                 self.fields_error = f"{where}{e} ({FIELD_HINT})"
         self.merged = merged
         self.last_remerge_s = time.perf_counter() - t0
+
+    def _fields_refusal(self) -> str:
+        """What a solve says when a KiCad field cannot be used: the CLI's text, and the
+        app's own off switch."""
+        return f"{self.fields_error}; or turn them off: Project → Use KiCad footprint fields"
+
+    def _show_fields_error(self):
+        """The fields error (or none) in the rail panel's red line and the Problems notes."""
+        text = self._fields_refusal() if self.fields_error else ""
+        self.rail_panel.banner.set_error(text)
+        self.problems.pin_note(f"KiCad footprint fields: {text}" if text else "")
+
+    def _refuse_fields(self, title: str) -> bool:
+        """True (and say why) when a KiCad field cannot be used: never solve without them."""
+        if not self.fields_error:
+            return False
+        self.statusBar().showMessage("Cannot solve: a KiCad footprint field cannot be used (see Problems)")
+        QMessageBox.warning(self, title, self._fields_refusal())
+        return True
 
     def _configured_nets(self) -> List[str]:
         return [r.net for r in self.merged.project.rails if r.sources or r.loads]
@@ -558,6 +578,7 @@ class MainWindow(QMainWindow):
         if self.project.rail(rail.net) is None and has_content:
             self.project.rails.append(rail)
         self._remerge()
+        self._show_fields_error()
         self.nets.mark_configured(self._configured_nets())
         self.dirty = True
         self._update_title()
@@ -751,6 +772,8 @@ class MainWindow(QMainWindow):
     def solve(self):
         if self.board is None or not self.net:
             return
+        if self._refuse_fields("Cannot solve"):
+            return
         if self.worker is not None and self.worker.isRunning():
             self.statusBar().showMessage("A solve is already running")
             return
@@ -804,6 +827,8 @@ class MainWindow(QMainWindow):
     def solve_tree(self):
         """Solve every rail and ground of the project together (Ctrl+T)."""
         if self.board is None:
+            return
+        if self._refuse_fields("Cannot solve the power tree"):
             return
         if self.tree_worker is not None and self.tree_worker.isRunning():
             self.statusBar().showMessage("The power tree is already being solved")
@@ -1011,7 +1036,7 @@ class MainWindow(QMainWindow):
         if self._is_stale():
             return
         self.problems.clear(f"<b>{self.net}</b>: cannot solve")
-        self.problems.notes.setPlainText(message)
+        self.problems.set_notes([message])
         QMessageBox.warning(self, "Cannot solve", message)
 
     def _show_problems(self, res: RailResult):

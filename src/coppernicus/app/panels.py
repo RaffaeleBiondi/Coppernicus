@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from coppernicus.app.copper_thickness import CopperThicknessDialog, thickness_summary
+from coppernicus.app.fields_view import FieldsBanner
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.problems import FAIL, Problem
 from coppernicus.project import (
@@ -494,6 +495,7 @@ class RailPanel(QWidget):
         self._loaded = ([], [])        # the rail's sources and loads as set_rail got them
         self._loading = False
         self.title = QLabel("<i>Open a board and pick a net</i>")
+        self.banner = FieldsBanner()           # where the rail comes from (KiCad fields)
         self.sources = TerminalTable("Sources (regulator outputs)", "Voltage", "V")
         self.loads = TerminalTable("Loads (current split equally across pins)", "Current", "A")
         self.ties = QLabel()
@@ -551,8 +553,8 @@ class RailPanel(QWidget):
         self.solve.setMinimumHeight(34)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        for w in (self.title, self.sources, self.source_box, self.loads, self.load_box, self.ties,
-                  self.follow_ties, limits, settings, self.solve):
+        for w in (self.title, self.banner, self.sources, self.source_box, self.loads, self.load_box,
+                  self.ties, self.follow_ties, limits, settings, self.solve):
             layout.addWidget(w)
         layout.addStretch(1)
 
@@ -796,11 +798,23 @@ class ProblemsPanel(QWidget):
         layout.addWidget(self.notes)
         self.tree.itemClicked.connect(self._activated)
         self._problems: List[Problem] = []
+        self._pinned = ""
+        self._notes: List[str] = []
+
+    def pin_note(self, text: str):
+        """A note kept above the others, whatever is shown, until it is changed ("" for
+        none): a KiCad footprint field the solves cannot use."""
+        self._pinned = text
+        self.set_notes(self._notes)
+
+    def set_notes(self, notes: List[str]):
+        self._notes = list(notes)
+        self.notes.setPlainText("\n".join(([self._pinned] if self._pinned else []) + self._notes))
 
     def clear(self, text: str = "<i>No results yet</i>"):
         self.summary.setText(text)
         self.tree.clear()
-        self.notes.clear()
+        self.set_notes([])
         self._problems = []
 
     def set_result(self, summary: str, problems: List[Problem], notes: List[str]):
@@ -819,7 +833,7 @@ class ProblemsPanel(QWidget):
                 f.setBold(True)
                 item.setFont(0, f)
             self.tree.addTopLevelItem(item)
-        self.notes.setPlainText("\n".join(notes))
+        self.set_notes(notes)
 
     def _activated(self, item: QTreeWidgetItem, _col: int):
         i = item.data(0, Qt.UserRole)
