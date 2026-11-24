@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 
 from coppernicus.problems import FAIL, Problem
+from coppernicus.problems import LIMIT_KEYS as PROBLEM_LIMIT_KEYS
 from coppernicus.project import Limits, ProjectError, Settings, check_copper_thickness, parse_pins, pins_text
 from coppernicus.results import RailResult
 from coppernicus.service import errors as E
@@ -29,10 +30,9 @@ RAIL_CAVEATS = [
 NET_KIND_CAVEAT = ("Net kind (power / ground / signal) is a name-and-zone heuristic, not a "
                    "certainty.")
 
-# Limits: our unit-keyed names <-> project.Limits fields.
-LIMIT_KEYS = {"max_drop_pct": "max_drop_pct",
-              "max_current_density_a_mm2": "max_current_density",
-              "max_via_current_a": "max_via_current"}
+# Limits: our unit-keyed names <-> project.Limits fields (one table, problems.LIMIT_KEYS,
+# so a limit added to the model is accepted, judged and named everywhere at once).
+LIMIT_KEYS = PROBLEM_LIMIT_KEYS
 SETTING_KEYS = ("max_edge_mm", "via_plating_um", "copper_temp_c", "copper_thickness_mm")
 
 

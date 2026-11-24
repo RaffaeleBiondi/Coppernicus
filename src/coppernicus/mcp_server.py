@@ -74,6 +74,10 @@ class LimitsSpec(BaseModel):
                                                        "current density, A/mm².")
     max_via_current_a: Optional[float] = Field(None, gt=0, description="Largest allowed current "
                                                                        "per via, A.")
+    max_ground_rise_mv: Optional[float] = Field(None, gt=0, description="For a ground net solved on "
+                                                "its own (a 0 V source, its return pins as loads): "
+                                                "largest allowed rise of its copper above the "
+                                                "source, mV.")
 
 
 class SettingsSpec(BaseModel):

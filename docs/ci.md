@@ -40,7 +40,9 @@ The results (PNG maps, HTML report, JSON) are attached to the run as the
 `coppernicus-results` artifact.
 
 Without limits in the project file, nothing is judged: the numbers are reported and the check
-passes. Coppernicus has no built-in thresholds.
+passes. Coppernicus has no built-in thresholds. The limits are `max_drop_pct`,
+`max_current_density`, `max_via_current` and, for a ground net solved on its own,
+`max_ground_rise_mv`; the summary names the ones that were set ("ground rise ≤ 10 mV").
 
 A rail with no loads is shown as "skipped: no loads". In a power tree this is a rail that only
 feeds a regulator's input. It is not an error and does not fail the check.

@@ -110,7 +110,20 @@ no meaning there: `max_drop_pct` and `drop_pct` are `null`. Give the drops in mV
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;
 - `max_current_density_a_mm2`;
-- `max_via_current_a`.
+- `max_via_current_a`;
+- `max_ground_rise_mv`: for a ground net solved on its own (a 0 V source at the reference
+  point, its return pins as loads), the largest allowed rise of its copper above the source,
+  in mV. A single-rail solve judges it on any net it is set on. In the power tree
+  (`coppernicus solve --tree`) it judges ground groups only, and is ignored on a supply rail.
+
+Problem kinds, in `problems` of every summary and of `get_problems`:
+- `load`: a load's drop at its worst pin (`drop_mv`, `drop_pct`);
+- `hotspot`: a current-crowding spot (`mean_j_a_mm2`, `peak_j_a_mm2`, `area_mm2`);
+- `via`: a via or plated hole by barrel current (`current_a`);
+- `rise`: only with `max_ground_rise_mv` set, the copper furthest from the source voltage
+  (`rise_mv`, `limit_mv`), with its layer and x/y;
+- `return`: in a power-tree ground group, one ground return pin and its rise above 0 V
+  (`rise_mv`, `current_a`), judged against `max_ground_rise_mv`.
 
 ## Conventions
 

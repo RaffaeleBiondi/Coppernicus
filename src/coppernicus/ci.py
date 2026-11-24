@@ -162,6 +162,8 @@ def _limits_text(limits: Dict[str, Any]) -> str:
         parts.append(f"|J| ≤ {limits['max_current_density_a_mm2']:g} A/mm²")
     if limits.get("max_via_current_a") is not None:
         parts.append(f"via ≤ {limits['max_via_current_a']:g} A")
+    if limits.get("max_ground_rise_mv") is not None:
+        parts.append(f"ground rise ≤ {limits['max_ground_rise_mv']:g} mV")
     return ", ".join(parts)
 
 

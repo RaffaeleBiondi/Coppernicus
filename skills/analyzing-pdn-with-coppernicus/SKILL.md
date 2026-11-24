@@ -32,7 +32,11 @@ why, and ask for what is missing.
      - at fixed temperature the drops add up: drop_k = Σ_j R_kj · I_j.
 4. `solve_rail(board_id, net, sources=[{ref, voltage_v, pins?}], loads=[{ref, current_a, pins?}], limits?)`.
    Pass `limits` only if the user gave them.
-5. `get_problems(result_id, limits?)` re-judges without re-solving.
+5. `get_problems(result_id, limits?)` re-judges without re-solving. Limits:
+   `max_drop_pct`, `max_current_density_a_mm2`, `max_via_current_a`, and
+   `max_ground_rise_mv` for a ground net solved on its own (0 V source, return pins as loads).
+   Problem kinds: `load`, `hotspot`, `via`; `rise` (the copper furthest from the source,
+   only with `max_ground_rise_mv`); `return` (a ground return pin in the power tree).
 6. Explain with `render_map` (field `drop`, `current` or `voltage`; `region_mm` zooms; look at the
    image), `probe(layer, x_mm, y_mm)` and `cut_current(layer, x1, y1, x2, y2)`. Use the cut to
    **measure** a neck or track width and the current through it. Do not back-compute widths
