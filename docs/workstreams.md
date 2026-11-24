@@ -123,7 +123,15 @@ First make Coppernicus functional; efficiency and packaging come afterwards.
 - Efficiency: PARDISO and solver work, mesh and factorization caching, coarsening far from
   current paths.
 
-- Decide on Triangle; then packaging (`.app` / `.exe`, signing / notarization).
+- Packaging, owner's decision (2026-11-24): a `.dmg` (macOS) and an installer or `.zip`
+  (Windows) holding the complete app **except Triangle**. On first start the app fetches the
+  `triangle` package from PyPI into the user's folder, once, before the engine loads. Triangle's
+  licence allows telling users how to obtain it for free; bundling it in a GPL-3 app is not
+  compatible. Unsigned builds first (macOS asks once: right-click → Open). It can start before
+  T11, since it does not depend on the analyses.
+- Also on the table: a permission request to Triangle's author (draft by the coordinator, sent
+  by the owner), and an experiment with our own clean-room mesher (Delaunay refinement from the
+  literature, never reading Triangle's source), benchmarked like gmsh.
 - First test run on Windows.
 - GitHub Actions CI for the repository's own tests (synthetic boards only).
 
