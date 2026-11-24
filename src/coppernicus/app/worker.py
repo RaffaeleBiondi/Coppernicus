@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import traceback
-from typing import Optional
+from typing import Optional, Sequence
 
 from PySide6.QtCore import QThread, Signal
 
@@ -18,12 +18,16 @@ class SolveWorker(QThread):
     failed = Signal(str)
 
     def __init__(self, board: Board, rail: Rail, settings: Settings, parent=None,
-                 project: Optional[Project] = None):
+                 project: Optional[Project] = None, notes: Sequence[str] = (),
+                 warnings: Sequence[str] = ()):
         super().__init__(parent)
         # Copies: the user may keep editing while the solve runs.
         self._board, self._rail, self._settings = board, copy.deepcopy(rail), copy.deepcopy(settings)
         # With the project, the rail also delivers the regulator inputs and links it feeds.
         self._project = copy.deepcopy(project)
+        # Where the rail came from (the KiCad footprint fields...): added to the result's
+        # assumptions and warnings, as the service adds them.
+        self._notes, self._warnings = list(notes), list(warnings)
         self._cancel = False
 
     def cancel(self):
@@ -40,6 +44,8 @@ class SolveWorker(QThread):
         except Exception:                                   # noqa: BLE001 - shown to the user
             self.failed.emit("Unexpected error:\n" + traceback.format_exc())
         else:
+            result.assumptions.extend(self._notes)
+            result.warnings.extend(self._warnings)
             self.succeeded.emit(result)
 
 

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from coppernicus import __version__
+from coppernicus import board_fields as BF
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel, TreePanel
@@ -39,6 +40,7 @@ from coppernicus.app.worker import ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
+from coppernicus.engine.kicad_fields import read_board_fields
 from coppernicus.engine.pisetup import ground_nets
 from coppernicus.power_tree import (
     apply_limits,
@@ -52,6 +54,7 @@ from coppernicus.problems import FAIL, find_problems, max_drop_text
 from coppernicus.project import Limits, Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
 from coppernicus.service.convert import not_judged_items
+from coppernicus.service.session import FIELD_HINT
 
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 
@@ -134,6 +137,16 @@ class MainWindow(QMainWindow):
         self.tree: Optional[TreeResult] = None          # the last power-tree solve, if still valid
         self._revision = 0            # +1 per edit of the setup: a tree solved before is stale
         self.tree_worker: Optional[TreeWorker] = None
+        self._rail_draft: Optional[Rail] = None       # the shown net's rail while it is set up
+        # The board's KiCad footprint fields (read at open) and the project merged with them,
+        # as the CLI merges them: what is solved, drawn and judged. self.project stays the
+        # user's own project, the only thing saved.
+        self.board_fields: Optional[BF.BoardFields] = None
+        self._fields_read_error: Optional[str] = None
+        self.fields_error: Optional[str] = None      # set: solves refuse, with this text
+        self.merged = BF.Merged(self.project)
+        self.last_remerge_s = 0.0
+        self.last_fields_read_s = 0.0
 
         # Centre: pickers + view.
         self.view = BoardView()
@@ -313,6 +326,8 @@ class MainWindow(QMainWindow):
             return False
         self.board = board
         self.project = project or Project(board=str(Path(path).resolve()))
+        self._read_board_fields(board)
+        self._remerge()
         resolved = Path(path).resolve()
         modified = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(resolved.stat().st_mtime))
         self._board_stamp = f"{resolved.name} (file modified {modified})"
@@ -336,8 +351,7 @@ class MainWindow(QMainWindow):
         self.layer_box.blockSignals(False)
         self._refresh_results()                       # no net yet: nothing of the old board shown
         self.rail_panel.set_settings(self.project.settings)
-        self.nets.set_board(board, [r.net for r in self.project.rails if r.sources or r.loads],
-                            self.project.marked_rails)
+        self.nets.set_board(board, self._configured_nets(), self.project.marked_rails)
         self.problems.clear()
         self.dirty = project is None
         self._update_title()
@@ -346,7 +360,7 @@ class MainWindow(QMainWindow):
                                      f"{len(board.layers())} copper layers{warn}")
         if board.warnings:
             self.problems.notes.setPlainText("Board import:\n" + "\n".join(board.warnings))
-        first = next((r.net for r in self.project.rails), None)
+        first = next((r.net for r in self.merged.project.rails), None)
         if first:
             self.nets.select(first)
         else:
@@ -360,6 +374,58 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Cannot open project", str(e))
             return False
         return self.open_board(project.board_path(), project)
+
+    # ------------------------------------------------------------------ KiCad footprint fields
+    def _read_board_fields(self, board: Board):
+        """Read the board's KiCad footprint fields (``.kicad_pcb`` only: another format has
+        none). An unreadable file is kept as the error the solves refuse with."""
+        t0 = time.perf_counter()
+        self.board_fields, self._fields_read_error = None, None
+        try:
+            self.board_fields = read_board_fields(board.path) if board.path is not None else None
+        except EngineError as e:
+            self._fields_read_error = f"{e} ({FIELD_HINT})"       # as the CLI prints it
+        self.last_fields_read_s = time.perf_counter() - t0
+
+    def _remerge(self):
+        """Merge the project with the board's fields into ``self.merged``, as the CLI does
+        (``board_fields.apply``: off, or a board without fields, leaves the project as it
+        is). Called after every change of the project. A field that cannot be used leaves
+        the project unmerged and sets ``fields_error``: the solves then refuse."""
+        t0 = time.perf_counter()
+        self.fields_error = None
+        merged = BF.Merged(self.project)
+        if self.project.use_board_fields and self._fields_read_error:
+            self.fields_error = self._fields_read_error
+        elif self.board_fields is not None:
+            try:
+                merged = BF.apply(self.project, lambda: self.board_fields)
+            except BF.FieldError as e:          # as `coppernicus solve` prints it
+                where = f"{self.project.path.name}: " if self.project.path else ""
+                self.fields_error = f"{where}{e} ({FIELD_HINT})"
+        self.merged = merged
+        self.last_remerge_s = time.perf_counter() - t0
+
+    def _configured_nets(self) -> List[str]:
+        return [r.net for r in self.merged.project.rails if r.sources or r.loads]
+
+    def _solved_rail(self, net: str) -> Rail:
+        """The rail of ``net`` that is solved, drawn and judged: the merged one, or the draft
+        being set up."""
+        draft = self._rail_draft if self._rail_draft is not None and self._rail_draft.net == net else None
+        return self.merged.project.rail(net) or self.project.rail(net) or draft or Rail(net)
+
+    def _rail_warnings(self, net: str) -> Tuple[List[str], List[str]]:
+        """(notes, warnings) of where the rail of ``net`` came from, for its result: the
+        origin's, and the warnings about links on that net."""
+        origin = self.merged.origins.get(net)
+        if origin is None:
+            return [], []
+        own = {w for o in self.merged.origins.values() for w in o.warnings}
+        refs = [k.ref for k in self.merged.project.links if net in (k.net_a, k.net_b)]
+        links = [w for w in self.merged.warnings
+                 if w not in own and any(f"link {ref} " in w for ref in refs)]
+        return list(origin.notes), list(origin.warnings) + links
 
     def save_project(self):
         if self.project.path is None:
@@ -395,7 +461,7 @@ class MainWindow(QMainWindow):
             return
         from coppernicus.maps import save_layer_maps
         res = self.results[self.net]
-        rail = self.project.rail(self.net) or Rail(self.net)
+        rail = self._solved_rail(self.net)
         written = save_layer_maps(res, self.board.outline(), folder, find_problems(res, rail.limits))
         self.statusBar().showMessage(f"Wrote {len(written)} maps to {folder}")
 
@@ -420,7 +486,7 @@ class MainWindow(QMainWindow):
         path = Path(path)
         if path.suffix.lower() not in (".html", ".htm"):
             path = path.with_name(path.name + ".html")
-        self.report_worker = ReportWorker(self.results.values(), copy.deepcopy(self.project), path,
+        self.report_worker = ReportWorker(self.results.values(), copy.deepcopy(self.merged.project), path,
                                           self.board.outline(), self.board.name, self)
         self.report_worker.succeeded.connect(self._report_written)
         self.report_worker.failed.connect(self._report_failed)
@@ -491,7 +557,8 @@ class MainWindow(QMainWindow):
         has_content = rail.sources or rail.loads or any(v is not None for v in vars(rail.limits).values())
         if self.project.rail(rail.net) is None and has_content:
             self.project.rails.append(rail)
-        self.nets.mark_configured([r.net for r in self.project.rails if r.sources or r.loads])
+        self._remerge()
+        self.nets.mark_configured(self._configured_nets())
         self.dirty = True
         self._update_title()
         return rail
@@ -499,7 +566,7 @@ class MainWindow(QMainWindow):
     def _net_at_0v(self, rail: Rail) -> Optional[bool]:
         """True for a net at 0 V (named as a ground, or driven at 0 V), False for one with a
         nonzero nominal, None while it has neither: which limits apply to it."""
-        if rail.net in ground_nets(self.project):
+        if rail.net in ground_nets(self.merged.project):
             return True
         return (rail.sources[0].voltage == 0) if rail.sources else None
 
@@ -524,7 +591,7 @@ class MainWindow(QMainWindow):
         rail = self._adopt_draft()
         self.rail_panel.set_net_kind(self._net_at_0v(rail))       # a cleared field may close
         if self.tree is not None:                                  # re-judge, no re-solve
-            apply_limits(self.tree, self.project)
+            apply_limits(self.tree, self.merged.project)
             self.tree_panel.set_tree(self.tree, self._tree_verdict())
         group = self.group_box.currentData()
         if group and self.tree is not None and group in self.tree.groups:
@@ -538,6 +605,7 @@ class MainWindow(QMainWindow):
         self._update_title()
 
     def _settings_edited(self):
+        self._remerge()                           # the merged project holds a copy of them
         self.dirty = True
         self._update_title()
         self._revision += 1
@@ -557,7 +625,7 @@ class MainWindow(QMainWindow):
         lid = self.layer_box.currentData()
         group = self.group_box.currentData()
         res = self.tree.groups.get(group) if group and self.tree else self.results.get(self.net)
-        rail = None if group else self.project.rail(self.net) or getattr(self, "_rail_draft", None)
+        rail = None if group else self._solved_rail(self.net)
         t0 = time.perf_counter()
         self._fallback_reason = ""
         if res is not None and res.layer(layer_name) is not None:
@@ -686,13 +754,16 @@ class MainWindow(QMainWindow):
         if self.worker is not None and self.worker.isRunning():
             self.statusBar().showMessage("A solve is already running")
             return
-        rail = self.project.rail(self.net) or self._rail_draft
+        rail = self._solved_rail(self.net)
+        project = self.merged.project
+        notes, warnings = self._rail_warnings(self.net)
         self.rail_panel.solve.setEnabled(False)
         self.problems.clear(f"<b>{self.net}</b>: solving…")
-        self.worker = SolveWorker(self.board, rail, self.project.settings, self, project=self.project)
+        self.worker = SolveWorker(self.board, rail, project.settings, self, project=project,
+                                  notes=notes, warnings=warnings)
         self.worker.generation = self._generation
         # What produced the result, as it is now (the user may edit while it runs).
-        self.worker.run_inputs = (copy.deepcopy(rail), copy.deepcopy(self.project.settings),
+        self.worker.run_inputs = (copy.deepcopy(rail), copy.deepcopy(project.settings),
                                   self._board_stamp)
         self.worker.message.connect(lambda m: self.statusBar().showMessage(m))
         self.worker.succeeded.connect(self._solved)
@@ -709,8 +780,8 @@ class MainWindow(QMainWindow):
             return
         self.results[res.net] = res
         inputs = getattr(self.sender(), "run_inputs", None)
-        rail, settings, board = inputs or (self.project.rail(res.net) or Rail(res.net),
-                                           self.project.settings, self._board_stamp)
+        rail, settings, board = inputs or (self._solved_rail(res.net), self.merged.project.settings,
+                                           self._board_stamp)
         self.runs[res.net] = Run(res, rail, settings, board)
         if res.net == self.net:
             self._refresh_results()
@@ -739,7 +810,8 @@ class MainWindow(QMainWindow):
             return
         self.tree_panel.clear("<b>Power tree</b>: solving…")
         self.results_tabs.setCurrentWidget(self.tree_panel)
-        self.tree_worker = TreeWorker(self.board, self.project, self)
+        self.tree_worker = TreeWorker(self.board, self.merged.project, self)
+        self.tree_worker.merged = self.merged          # its notes and warnings, for the result
         self.tree_worker.generation = self._generation
         self.tree_worker.revision = self._revision
         self.tree_worker.message.connect(lambda m: self.statusBar().showMessage(m))
@@ -755,9 +827,12 @@ class MainWindow(QMainWindow):
             self.tree_panel.clear(msg)
             self.statusBar().showMessage(msg)
             return
+        merged = getattr(self.sender(), "merged", None)
+        if merged is not None:
+            merged.annotate(tree)                   # where the rails came from, as the CLI says
         # Limits do not change the solve: judge it by the ones set now (one may have been
         # edited while it solved, on the copy the worker took).
-        apply_limits(tree, self.project)
+        apply_limits(tree, self.merged.project)
         self.tree = tree
         self.tree_panel.set_tree(tree, self._tree_verdict())
         self.group_box.blockSignals(True)
@@ -940,7 +1015,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Cannot solve", message)
 
     def _show_problems(self, res: RailResult):
-        rail = self.project.rail(res.net) or Rail(res.net)
+        rail = self._solved_rail(res.net)
         problems = find_problems(res, rail.limits)
         self.problems.set_result(rail_header_html(res, rail.limits, problems), problems,
                                  res.warnings + res.assumptions)
