@@ -186,7 +186,10 @@ Before solving, it raises `EngineError` for:
 - KiPI's `validate()` messages (a VRM whose input is its own output, an LDO without input
   pins, a ground with no 0 V reference, a loop…);
 - a load without ground pins while a ground net is solved;
-- an LDO or switcher without ground pins while a ground net is solved.
+- an LDO or switcher without ground pins while a ground net is solved. Plain sources may go
+  without. The message names every such part and says "add its ground pins (ground) or
+  exclude the ground net (engine_options: excluded_nets)". A ground net listed in
+  `excluded_nets` is not solved and asks for nothing.
 
 KiPI's own `SolveError`s become `EngineError` too.
 
@@ -230,10 +233,10 @@ KiPI's own `SolveError`s become `EngineError` too.
 | `v_supply`, `v_supply_min` | `v_supply_v` (mean over the supply pins), `v_supply_min_v` | V | |
 | `v_ground` | `v_ground_v` (mean, `None` without ground pins) | V | |
 | `v_effective` | `v_across_v` = `v_supply_v − (v_ground_v or 0)` | V | |
-| `v_worst` | `v_worst_v` | V | Lowest supply pin minus highest ground pin (or the boost side when that is further from nominal). |
+| `v_low` (else `v_worst`) | `v_worst_v` | V | Lowest supply pin minus highest ground pin: the worst case for a drop limit. |
 | — | `drop_v` = `nominal_v − v_worst_v`, `drop_pct` | V, % | The ground's rise counts in the drop: this is the voltage the part sees. |
 | `status` | `status` | — | `DISCONNECTED`, `NOT CONVERGED` or `VRM OUT OF REGULATION`, as KiPI reports them. |
-| `passed` | `passed` | — | **Coppernicus's own verdict:** `drop_pct ≤ max_drop_pct` of the rail the load is on, `None` without a limit. KiPI's `passed` is ignored, since no tolerance is passed to it. |
+| `passed` | `passed` | — | **Coppernicus's own verdict** (`power_tree.judge_loads`): `drop_pct ≤ max_drop_pct` of the group's rail; `None` without a limit, or for a load that is disconnected or not converged. KiPI's `passed` is ignored, since no tolerance is passed to it. When a limit changes after the solve, the GUI judges again without solving. |
 
 ### Verdicts (only against the user's limits, per group)
 
@@ -263,3 +266,11 @@ line names the regulators, their η and I_q, and says "estimated at nominal volt
 power-tree solve computes it exactly". A switcher without η raises. A load already on those
 pins raises the same double-counting error as the tree. Without `project`, `solve_rail` is
 unchanged.
+
+`tree_summary(tree)` (`coppernicus.power_tree`) is the JSON form of a `TreeResult`. It is
+printed by `coppernicus solve --tree --json` and written to `<project>_tree_summary.json`,
+and the agent interface will reuse it. It has:
+- `verdict` and `verdict_note`, judged per group against the user's limits only;
+- `vrms`, `loads`, `links` and `groups` tables, with units in every key (a ground group has
+  `max_rise_mv`; its `max_drop_pct` is `null`);
+- `assumptions` and `warnings`.
