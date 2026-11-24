@@ -120,12 +120,12 @@ def _cmd_solve(args) -> int:
     JSON document) goes to stdout; the same document is written to ``*_summary.json``; with
     ``--html`` an offline report is written too, rail by rail, so only one rail's full result
     is in memory at a time."""
-    from coppernicus.maps import safe_name
+    from coppernicus.maps import safe_file_name
     from coppernicus.problems import find_problems
     from coppernicus.service import ServiceError, Session
 
     quiet = args.json
-    stem = safe_name(Path(args.project).stem)
+    stem = safe_file_name(Path(args.project).stem)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     html_path = None
     if args.html is not None or args.open:

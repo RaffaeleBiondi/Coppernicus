@@ -26,8 +26,15 @@ J_CLIP_PERCENTILE = 99.5      # colour scale top for |J|: point maxima at corner
 
 
 def safe_name(text: str) -> str:
+    """A net name as a file name: "+3V3" -> "P3V3", "-5V" -> "N5V"."""
     text = text.replace("+", "P").replace("-", "N")
     return re.sub(r"[^A-Za-z0-9_.]+", "_", text).strip("_") or "net"
+
+
+def safe_file_name(text: str) -> str:
+    """Any other name (a project file's stem) as a file name, keeping letters, digits, ".",
+    "_" and "-": "demo-relaxed.coppernicus" stays as it is."""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("._-") or "project"
 
 
 def _triangulation(layer: LayerField) -> Triangulation:

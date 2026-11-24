@@ -69,6 +69,18 @@ def test_html_off_errors_and_no_match(repo):
     assert none["exit_code"] == 2 and none["error"]["code"] == "file_not_found"
     assert "No project file matched" in ci.summary_markdown(none)
 
+    # A typo next to a good pattern must not pass unnoticed.
+    typo = ci.solve_all(["hw/demo-relaxed.coppernicus.yml\nhw/demo-relaxd.coppernicus.yml"], Path("out4"))
+    assert typo["exit_code"] == 2 and typo["unmatched"] == ["hw/demo-relaxd.coppernicus.yml"]
+    assert typo["projects"][0]["exit_code"] == 0                       # the good one still ran
+    md = ci.summary_markdown(typo)
+    assert "No project file matched: hw/demo-relaxd.coppernicus.yml" in md and "PASS (drop" in md
+
+    # The results folder itself must not be a board's folder (the index would land there).
+    near = ci.solve_all(["hw/demo-relaxed.coppernicus.yml"], Path("hw"))
+    assert near["exit_code"] == 2 and "holds a board file" in near["error"]["message"]
+    assert not (repo / "hw" / ci.INDEX).exists()
+
 
 def test_refuses_to_write_into_the_board_folder(repo):
     # A project whose results subfolder would be the board's own folder.

@@ -21,9 +21,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from coppernicus.maps import safe_name
+from coppernicus.maps import safe_file_name
 
 INDEX = "coppernicus-ci.json"
 EXIT_OK, EXIT_LIMIT, EXIT_ERROR = 0, 1, 2
@@ -31,23 +31,27 @@ EXIT_OK, EXIT_LIMIT, EXIT_ERROR = 0, 1, 2
 
 # ---------------------------------------------------------------------- solving
 
-def find_projects(patterns: Sequence[str]) -> List[Path]:
+def find_projects(patterns: Sequence[str]) -> Tuple[List[Path], List[str]]:
     """Project files matching the patterns (globs, ``**`` allowed; one per line or
-    argument), relative to the current folder, sorted and without duplicates."""
+    argument), relative to the current folder, sorted and without duplicates; and the
+    patterns that matched nothing (a mistyped path must not pass unnoticed)."""
     found: List[Path] = []
+    unmatched: List[str] = []
     for raw in patterns:
         for pattern in (line.strip() for line in str(raw).splitlines()):
             if not pattern:
                 continue
             hits = sorted(glob.glob(pattern, recursive=True)) if glob.has_magic(pattern) else (
                 [pattern] if Path(pattern).is_file() else [])
-            found.extend(Path(h) for h in hits if Path(h).is_file())
-    return list(dict.fromkeys(found))
+            hits = [Path(h) for h in hits if Path(h).is_file()]
+            if not hits:
+                unmatched.append(pattern)
+            found.extend(hits)
+    return list(dict.fromkeys(found)), unmatched
 
 
 def _subfolder(project: Path) -> str:
-    rel = project.with_suffix("").as_posix()
-    return safe_name(rel.replace("/", "_")) or "project"
+    return safe_file_name(project.with_suffix("").as_posix().replace("/", "_"))
 
 
 def _board_folder(project: Path) -> Optional[Path]:
@@ -61,13 +65,21 @@ def _board_folder(project: Path) -> Optional[Path]:
 def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool = True) -> Dict[str, Any]:
     """Solve every matching project; return the index written to ``out_dir/INDEX``."""
     out_dir = Path(out_dir)
+    projects, unmatched = find_projects(patterns)
+    boards = {p: _board_folder(p) for p in projects}
+    if out_dir.resolve() in {b for b in boards.values() if b is not None}:
+        # The index itself would land next to a board.
+        index = {"patterns": [str(p) for p in patterns], "projects": [], "unmatched": unmatched,
+                 "exit_code": EXIT_ERROR, "verdict": "error", "top": top,
+                 "error": {"code": "invalid_input", "message": f"{out_dir} holds a board file",
+                           "hint": "choose an output folder away from the board files"}}
+        return index
     out_dir.mkdir(parents=True, exist_ok=True)
-    projects = find_projects(patterns)
     entries: List[Dict[str, Any]] = []
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     for project in projects:
         folder = out_dir / _subfolder(project)
-        board_dir = _board_folder(project)
+        board_dir = boards[project]
         if board_dir is not None and folder.resolve() == board_dir:
             entries.append({"project": project.as_posix(), "exit_code": EXIT_ERROR,
                             "error": {"code": "invalid_input",
@@ -99,12 +111,15 @@ def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool =
             entry["doc"] = doc
         entries.append(entry)
     codes = [e["exit_code"] for e in entries]
-    exit_code = (EXIT_ERROR if not entries or EXIT_ERROR in codes or any(c not in (0, 1) for c in codes)
+    exit_code = (EXIT_ERROR if not entries or unmatched or EXIT_ERROR in codes
+                 or any(c not in (0, 1) for c in codes)
                  else EXIT_LIMIT if EXIT_LIMIT in codes else EXIT_OK)
-    index = {"patterns": [str(p) for p in patterns], "projects": entries, "exit_code": exit_code,
-             "verdict": overall_verdict(entries), "top": top}
-    if not entries:
-        index["error"] = {"code": "file_not_found", "message": "No project file matched the patterns",
+    verdict = "error" if unmatched else overall_verdict(entries)
+    index = {"patterns": [str(p) for p in patterns], "projects": entries, "unmatched": unmatched,
+             "exit_code": exit_code, "verdict": verdict, "top": top}
+    if unmatched:
+        index["error"] = {"code": "file_not_found",
+                          "message": ("No project file matched: " + ", ".join(unmatched)),
                           "hint": "give the path or a glob of *.coppernicus.yml files, relative to the "
                                   "repository root"}
     (out_dir / INDEX).write_text(json.dumps(index, indent=1, ensure_ascii=False), encoding="utf-8")
@@ -164,9 +179,10 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
     where the files are."""
     lines = ["## Coppernicus: DC power integrity", ""]
     entries = index.get("projects", [])
-    if index.get("error") and not entries:
+    if index.get("error"):
         lines += [f"**Error:** {_cell(index['error']['message'])}. {_cell(index['error']['hint'])}.", ""]
-        return "\n".join(lines) + "\n"
+        if not entries:
+            return "\n".join(lines) + "\n"
     verdict = index.get("verdict", "error")
     headline = {"fail": "**FAIL**: a limit set in a project file is exceeded.",
                 "pass": "PASS: every rail is within the limits set in its project file.",
