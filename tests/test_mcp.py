@@ -174,7 +174,7 @@ def test_stdio_subprocess_round_trip(tmp_path):
     map_path = Path(picture.structured_content["path"])
     assert map_path.exists() and map_path.parent.parent == (tmp_path / "maps").resolve()
     assert map_path.parent.name.startswith("session-")             # one folder per server run
-    assert "MCP server on stdio" in log.read_text()
+    assert "MCP server on stdio" in log.read_text(encoding="utf-8")
     assert progress                     # delivered beside the response; may still be arriving
 
 

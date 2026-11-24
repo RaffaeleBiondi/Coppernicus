@@ -1,6 +1,7 @@
 """The command line on a synthetic board saved as a snapshot."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -32,7 +33,7 @@ def test_solve_writes_maps_and_summary(demo_project, tmp_path, capsys):
     pngs = sorted(p.name for p in out_dir.glob("*.png"))
     assert pngs == ["P3V3_B.Cu_current.png", "P3V3_B.Cu_drop.png",
                     "P3V3_F.Cu_current.png", "P3V3_F.Cu_drop.png"]
-    summary = json.loads((out_dir / "demo.coppernicus_summary.json").read_text())
+    summary = json.loads((out_dir / "demo.coppernicus_summary.json").read_text(encoding="utf-8"))
     [rail] = summary["rails"]
     assert rail["net"] == "+3V3" and len(rail["loads"]) == 2
     assert rail["energy_balance_rel_error"] < 1e-6
@@ -81,7 +82,7 @@ def test_html_report_and_open(demo_project, tmp_path, capsys, monkeypatch):
     doc = json.loads(capsys.readouterr().out)
     assert doc["report_file"] == str(custom) and custom.exists()
     assert opened == [custom.resolve().as_uri()]
-    summary = json.loads((out_dir / "demo.coppernicus_summary.json").read_text())
+    summary = json.loads((out_dir / "demo.coppernicus_summary.json").read_text(encoding="utf-8"))
     assert summary["report_file"] == str(custom)
     # Without --out, everything goes to results/ next to the project, never next to a board
     # elsewhere.
@@ -119,10 +120,10 @@ def test_json_solve_prints_only_json_and_keeps_files(demo_project, tmp_path, cap
     [rail] = doc["rails"]
     assert rail["net"] == "+3V3" and rail["verdict"] == "not_judged" and doc["verdict"] == "not_judged"
     assert [ld["name"] for ld in rail["loads"]] == ["U1", "U3"]
-    assert sorted(p.rsplit("/", 1)[-1] for p in rail["maps"]) == [
+    assert sorted(Path(p).name for p in rail["maps"]) == [
         "P3V3_B.Cu_current.png", "P3V3_B.Cu_drop.png", "P3V3_F.Cu_current.png", "P3V3_F.Cu_drop.png"]
     # The summary file is the same document as stdout.
-    summary = json.loads((out_dir / "demo.coppernicus_summary.json").read_text())
+    summary = json.loads((out_dir / "demo.coppernicus_summary.json").read_text(encoding="utf-8"))
     assert summary == doc
     assert doc["summary_file"].endswith("demo.coppernicus_summary.json")
     # Every problem is there: all loads, then the top hotspots and the top vias.

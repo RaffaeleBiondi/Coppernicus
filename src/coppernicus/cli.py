@@ -292,10 +292,24 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def _utf8_output() -> None:
+    """Reports and JSON hold Ω, ρ, µ, ≤...: write stdout and stderr as UTF-8 even where the
+    locale says otherwise (Windows pipes and files default to cp1252 and would fail)."""
+    for stream in (sys.stdout, sys.stderr):
+        encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+        if encoding != "utf8" and hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):        # a stream that cannot change: leave it
+                pass
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if not getattr(args, "func", None):
         args = build_parser().parse_args(["gui", *(argv or [])])
+    if args.command != "mcp":                    # under MCP, stdout belongs to the SDK
+        _utf8_output()
     from coppernicus.engine import EngineError
     from coppernicus.project import ProjectError
     try:

@@ -268,7 +268,7 @@ def _configure_logging(log_file: Optional[str], level: str) -> None:
     """Everything to stderr (or a file), never stdout: stdout is the protocol."""
     fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     if log_file:
-        logging.basicConfig(filename=log_file, level=level, format=fmt)
+        logging.basicConfig(filename=log_file, level=level, format=fmt, encoding="utf-8")
     else:
         logging.basicConfig(stream=sys.stderr, level=level, format=fmt)
     logging.captureWarnings(True)
