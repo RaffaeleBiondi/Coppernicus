@@ -12,7 +12,8 @@
 
 Real boards used for testing are not described beyond what the results need: **board P** is
 a small 2-layer power board, **board C** a dense 6-layer board with many vias, arc tracks and
-filled zones.
+filled zones, **board K** a very dense 10-layer mixed-signal board (BGA, thousands of vias, net
+ties) — the most complex board available.
 
 ## TL;DR for the gate
 
@@ -73,8 +74,14 @@ a KiCad 9 copy. Handles numbered nets (≤ 9) and nets by name (10).
   spokes and islands are whatever KiCad saved). Unfilled zone → no copper + warning.
   Keepouts/rule areas skipped. Live-KiCad (IPC) import can refill first.
 - Copper graphics with a net become zones; graphics without a net are dropped with a warning.
-- Not handled: copper text (never copper), net ties (no code), unknown pad shapes (silently
-  no copper), arcs without a mid point (dropped). Teardrops are saved by KiCad as zones, so
+- Not handled: copper text (never copper), unknown pad shapes (silently no copper), arcs
+  without a mid point (dropped).
+- **Net ties are not handled.** KiCad saves a tie's copper bridge as a footprint graphic with
+  no net, so KiPI drops it (only the generic "copper graphic shapes have no net" warning) and
+  the two nets it joins look disconnected. To solve across a tie it must be added by hand as a
+  0 Ω series link. Seen on board K: the two no-net shapes reported are exactly the bridges of
+  its two net ties, both on return paths. *For Coppernicus:* detect net-tie footprints and
+  create the short automatically, with a visible note. Teardrops are saved by KiCad as zones, so
   they should pass through as zones (inferred, not tested).
 - Footprints: rotation via a frame; no explicit mirror step (KiCad stores flipped pads
   already mirrored); verified by tests against the KiCad API.
@@ -105,15 +112,17 @@ new UI rather than by rewriting the importer.
 |---|---|---|---|
 | P | 0.14 s | 2 copper layers, thickness and εr from the board | small: hundreds of tracks and pads, few vias, filled zones |
 | C | 0.51 s | 6 copper layers, per-layer thickness, 5 dielectrics with their own εr | dense: thousands of tracks and pads, arc tracks, many vias and filled zones |
+| K | 1.70 s | 10 copper layers, per-layer thickness, 9 dielectrics with their own εr | very dense: thousands of tracks, pads and vias, BGA, many filled zones, 2 net ties |
 
-**Geometry check against KiCad.** For 4 nets on board P and 5 on board C (power rails and
-ground), the per-layer copper union computed by KiPI (`net_layer_copper`, drills not cut) was
+**Geometry check against KiCad.** For 4 nets on board P, 5 on board C and 6 on board K (power rails
+and ground), the per-layer copper union computed by KiPI (`net_layer_copper`, drills not cut) was
 compared with the same union built by KiCad 10's `pcbnew` from tracks, vias, pads, copper
 graphics and stored zone fills (drills not cut):
 
 | Board | Net × layer pairs | Worst difference | Notes |
 |---|---|---|---|
 | P | 8 | 0.005 % | |
+| K | 60 | 1.04 % | Same pattern: largest where a net has only via rings on a layer; with the refined tolerance the worst becomes −0.71 %. |
 | C | 30 | 0.70 % | Largest on inner layers that hold only via rings. With pcbnew's arc tolerance refined from 5 µm to 0.5 µm the difference flips sign (−0.5 %): it is circle discretisation, and the true area lies between the two. |
 
 Drill subtraction and pad-shape details are covered by KiPI's own reader tests, which compare
@@ -216,6 +225,16 @@ meshing runs in worker processes.
 | Power rail A | 6 | 87 k | 38 k | 0.2 s | 0.3 GB |
 | Power rail B | 2 | 31 k | 16 k | 0.1 s | 0.3 GB |
 | Ground | 6 | 3.1 M | 1.5 M | 14 s | 3.4 GB |
+
+**Solver smoke test on board K** (real regulator outputs as sources — the output inductor's
+rail-side pad — and real loads, but **assumed currents**, so drops are not design values):
+
+| Rail | Load set | Triangles | Unknowns | Time | Energy balance | Warnings |
+|---|---|---|---|---|---|---|
+| Rail 1 | BGA core pins | 33 k | 17 k | 0.1 s | 3·10⁻¹² | 0 |
+| Rail 2 | BGA auxiliary pins | 21 k | 11 k | 0.1 s | 8·10⁻¹³ | 0 |
+| Rail 3 | BGA I/O pins + memory + 16 connectors | 387 k | 206 k | 3.2 s | 4·10⁻¹² | 0 |
+| Rail 4 | 16 connectors | 142 k | 72 k | 0.4 s | 2·10⁻¹² | 0 |
 
 Peak RSS is the main process only; meshing worker processes are not included. Direct backend
 on this machine: SuperLU (PARDISO is x86-only), so the ground case ran on AMG-CG.
