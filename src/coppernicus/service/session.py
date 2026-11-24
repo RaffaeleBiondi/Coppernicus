@@ -506,8 +506,14 @@ class Session:
         items = []
         for lv in lives:
             used = C.settings_to_dict(lv.rec.settings, lv.rec.thickness)
-            note = "Settings of this result: " + ", ".join(
-                f"{k} = {'engine default' if v is None else v}" for k, v in used.items()) + "."
+            def shown(v):
+                if v is None:
+                    return "engine default"
+                if isinstance(v, dict):
+                    return ", ".join(f"{layer} {mm:g} mm" for layer, mm in v.items())
+                return f"{v:g}" if isinstance(v, float) else str(v)
+            note = "Settings of this result: " + "; ".join(
+                f"{k} = {shown(v)}" for k, v in used.items()) + "."
             items.append(RailReport(lv.res, lv.rec.rail.limits, label=f"{lv.res.net} ({lv.rec.id})",
                                     notes=[note]))
         builder, text = build_report(items, title=title or f"Coppernicus report: {board_name or 'rails'}",

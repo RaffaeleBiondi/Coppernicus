@@ -195,6 +195,6 @@ def test_report_tool_writes_one_offline_page(tmp_path):
     page = Path(both["path"])
     assert page.parent == tmp_path / "maps" and page.suffix == ".html"
     text = page.read_text(encoding="utf-8")
-    assert "copper_thickness_mm" in text and "https://" not in text
+    assert "copper_thickness_mm = B.Cu 0.07 mm" in text and "https://" not in text
     assert Path(one["path"]) == tmp_path / "b.html" and one["size_mb"] > 0
     assert json.loads(gone.content[0].text)["error"]["code"] == "result_not_found"
