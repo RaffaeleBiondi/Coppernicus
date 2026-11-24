@@ -274,6 +274,9 @@ The summary file **is** the document that `--json` prints, unit-keyed like the M
 path is in the document's `summary_file`, and the HTML report's path, when one is written, is
 in `report_file`.
 
+In CI, the GitHub Action (see [docs/ci.md](ci.md)) runs the same `solve --json --html` on every
+project file of a KiCad repository. It writes a job summary and fails on an exceeded limit.
+
 ## Limits of this version
 
 - **Memory.** A large rail's result can take about 1 GB. Only the `--max-results` most recently
@@ -289,8 +292,8 @@ in `report_file`.
 - **The HTML report's maps are sampled on cells** (see [HTML report](#html-report)). Features
   smaller than a cell, such as a hole or a very thin track, can look blocky or vanish in the
   map, while the numbers, the problems and the probes stay exact.
-- **Not yet available:** Phase 3, a GitHub Action for KiCad repositories, and sources and loads
-  defined inside KiCad.
+- **Sources and loads come from the project file.** Reading them from KiCad footprint fields is
+  a proposal only ([docs/kicad-fields-proposal.md](kicad-fields-proposal.md)).
 - **Tested** on macOS, with synthetic boards and the SDK's own client (in memory and over stdio).
   Registration in Claude Code and Claude Desktop follows their documented commands but has not
-  been run in those hosts yet. Windows is untested.
+  been run in those hosts yet. Windows runs in CI as an informative job.
