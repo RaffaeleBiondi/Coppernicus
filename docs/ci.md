@@ -46,7 +46,7 @@ passes. Coppernicus has no built-in thresholds.
 
 | Input | Default | Meaning |
 |---|---|---|
-| `project` | required | Path or glob of `*.coppernicus.yml`, relative to the repository root. Put several patterns on separate lines. `**` matches folders recursively. |
+| `project` | required | Path or glob of `*.coppernicus.yml`, relative to the repository root. Put several patterns on separate lines. `**` matches folders recursively. A path or pattern that matches nothing is an error, so a typo cannot pass unnoticed. |
 | `output-dir` | `coppernicus-results` | Folder for the results, relative to the repository root. Each project gets its own subfolder. Nothing is ever written next to a board, and nothing is committed. |
 | `html` | `true` | Also write the interactive offline HTML report of each project. |
 | `top` | `5` | Current-crowding spots and vias listed per rail. Every load is always listed. |
