@@ -11,7 +11,7 @@
 <p align="center">
   <img alt="Status: pre-alpha" src="https://img.shields.io/badge/status-pre--alpha-orange">
   <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776ab">
-  <img alt="Platforms: macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-blue">
+  <img alt="Tested on macOS" src="https://img.shields.io/badge/tested%20on-macOS-blue">
   <img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-green">
 </p>
 
@@ -42,8 +42,10 @@ The two results that matter most are drawn as colour maps on the board:
 - **Current density**: where the copper is crowded, from neck-downs and thin tracks to the
   copper around vias.
 
-It is a **standalone program**, not a KiCad plugin. It reads `.kicad_pcb` files directly (also
-ODB++ and HyperLynx) and does not need KiCad to be running. Board files are only ever read.
+It is a **standalone program**, not a KiCad plugin. It reads `.kicad_pcb` files directly and does
+not need KiCad to be running. Board files are only ever read. The engine also reads ODB++ and
+HyperLynx files, but those have not been tried through Coppernicus yet. Developed and tested on
+macOS; Windows is a target but has not been tested yet.
 
 ## Design goal: explain *where* and *why* a board fails
 
@@ -54,8 +56,8 @@ ODB++ and HyperLynx) and does not need KiCad to be running. Board files are only
 | **Problems panel**: every load ranked by drop, current-crowding spots and the most loaded vias. Click a row to zoom to it | ✅ |
 | Pass/fail only against limits *you* set (drop %, A/mm², A per via). Without limits, problems are ranked and never judged | ✅ |
 | Copper-loss breakdown per layer and for the vias | ✅ (summary line) |
-| Double-click probe (V, drop, \|J\|) | ✅ |
-| Net ties found automatically and solved as shorts | ✅ |
+| Double-click probe (V, drop, \|J\|) | ✅ readout tested; the mouse double-click itself not yet |
+| Net ties found automatically (checked on a real board) and solved as shorts (tested on a synthetic board) | ✅ |
 | Sources and loads picked by clicking pads on the board | ⏳ |
 | Drop isolines, current-flow arrows, point-to-point ΔV | ⏳ |
 | Before/after comparison, HTML/PDF report | ⏳ |
@@ -178,9 +180,10 @@ Real boards go in `boards_local/`. That folder is git-ignored, and any
 - net ties solved as shorts;
 - clear errors for missing sources, loads and pins.
 
-During stage 1, KiPI's import was compared with KiCad's own `pcbnew` on three real boards:
-per-net copper areas agree to within 1 %. KiPI's accuracy suite (DC, AC, coupled noise) passes on
-macOS.
+During stage 1, KiPI's import was compared with KiCad's own `pcbnew` on three real boards. The
+worst difference in per-net, per-layer copper area was 1.04 %, and its sign flips when pcbnew's arc
+tolerance is refined, so it comes from how via rings are approximated by polygons. KiPI's accuracy
+suite (DC, AC, coupled noise) passes on macOS.
 
 ## Roadmap
 
@@ -202,9 +205,10 @@ macOS.
   does the import, meshing and solving.
 - **[padne](https://github.com/atx/padne)** by Josef Gajdusek (GPL-3.0): KiCad-native 2.5D FEM
   DC voltage-drop solver. Prior art.
-- KiPI meshes with [Triangle](https://www.cs.cmu.edu/~quake/triangle.html) by J. R. Shewchuk.
-  Triangle's own notice allows free use and free redistribution, but distribution as part of a
-  commercial system needs the author's permission. See the [analysis](docs/kipi-analysis.md).
+- KiPI meshes with [Triangle](https://www.cs.cmu.edu/~quake/triangle.html) by J. R. Shewchuk,
+  whose notice reads in part: *"Private, research, and institutional use is free. […]
+  Distribution of this code as part of a commercial system is permissible ONLY BY DIRECT
+  ARRANGEMENT WITH THE AUTHOR."* The full text is quoted in the [analysis](docs/kipi-analysis.md).
 
 ## License
 

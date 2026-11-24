@@ -66,7 +66,8 @@ def engine_settings(s: Settings) -> Tuple[SolveSettings, List[str]]:
         plating = f"{s.via_plating_um:g} µm for every plated hole (user setting)"
     rho_t = RHO_CU_OHM_MM * (1 + TCR_CU * (s.copper_temp_c - REF_TEMP_C))
     assumptions = [
-        f"Via plating: {plating}. Filled vias are solved unfilled unless the board says otherwise.",
+        f"Via plating: {plating}. Via fill is counted as non-conductive: barrels conduct through "
+        "their plated wall only.",
         f"Copper at {s.copper_temp_c:g} °C: ρ = {rho_t:.4g} Ω·mm "
         f"(ρ₂₀ = {RHO_CU_OHM_MM:g} Ω·mm, α = {TCR_CU:g} /°C).",
         f"Mesh: largest edge {s.max_edge_mm:g} mm on planes, refined toward plated holes.",

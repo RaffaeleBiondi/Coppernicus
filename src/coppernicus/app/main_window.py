@@ -94,6 +94,7 @@ class MainWindow(QMainWindow):
 
         self.nets.net_selected.connect(self.select_net)
         self.rail_panel.rail_changed.connect(self._rail_edited)
+        self.rail_panel.limits_changed.connect(self._limits_edited)
         self.rail_panel.settings_changed.connect(self._settings_edited)
         self.rail_panel.solve_requested.connect(self.solve)
         self.problems.problem_activated.connect(self.go_to_problem)
@@ -244,19 +245,35 @@ class MainWindow(QMainWindow):
             self.problems.clear(f"<b>{net}</b>: add a source and a load, then Solve (F5)")
         self.refresh_view(fit=True)
 
-    def _rail_edited(self):
+    def _adopt_draft(self):
         rail = self._rail_draft
-        if self.project.rail(rail.net) is None and (rail.sources or rail.loads):
+        has_content = rail.sources or rail.loads or any(v is not None for v in vars(rail.limits).values())
+        if self.project.rail(rail.net) is None and has_content:
             self.project.rails.append(rail)
         self.nets.mark_configured([r.net for r in self.project.rails if r.sources or r.loads])
         self.dirty = True
         self._update_title()
-        if not self.results.get(rail.net):
-            self.refresh_view()
+        return rail
+
+    def _rail_edited(self):
+        rail = self._adopt_draft()
+        if self.results.pop(rail.net, None) is not None:          # the old result no longer applies
+            self.problems.clear(f"<b>{rail.net}</b>: setup changed since the last solve — press Solve (F5)")
+        self.refresh_view()
+
+    def _limits_edited(self):
+        rail = self._adopt_draft()
+        res = self.results.get(rail.net)
+        if res is not None:                                        # re-rank; the solve is still valid
+            self._show_problems(res)
 
     def _settings_edited(self):
         self.dirty = True
         self._update_title()
+        if self.results:                                           # every result used the old settings
+            self.results.clear()
+            self.problems.clear("Solve settings changed — press Solve (F5) to recompute")
+            self.refresh_view()
 
     def refresh_view(self, fit: bool = False):
         if self.board is None or not self.net:

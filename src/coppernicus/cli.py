@@ -72,7 +72,7 @@ def _cmd_solve(args) -> int:
     if not rails:
         print("No rails to solve" + (f" matching {args.rail}" if args.rail else ""), file=sys.stderr)
         return EXIT_ERROR
-    out_dir = Path(args.out) if args.out else project.board_path().parent / "results"
+    out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     summary, any_fail = [], False
     for rail in rails:
         res = solve_rail(board, rail, project.settings,
@@ -165,7 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("solve", help="solve the rails of a project file")
     p.add_argument("project")
-    p.add_argument("--out", help="folder for maps and summary (default: results/ next to the board)")
+    p.add_argument("--out", help="folder for maps and summary (default: results/ next to the project file)")
     p.add_argument("--rail", action="append", help="solve only this net (repeatable)")
     p.add_argument("--no-maps", action="store_true", help="skip the PNG maps")
     p.add_argument("-v", "--verbose", action="store_true", help="show the engine's progress")

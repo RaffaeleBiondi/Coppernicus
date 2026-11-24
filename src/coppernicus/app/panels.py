@@ -148,11 +148,11 @@ class TerminalTable(QWidget):
     def rows(self):
         out = []
         for r in range(self.table.rowCount()):
+            part, pins_edit, spin = (self.table.cellWidget(r, c) for c in (1, 2, 3))
+            if part is None or pins_edit is None or spin is None:
+                continue
             name = (self.table.item(r, 0).text() if self.table.item(r, 0) else "").strip()
-            ref = self.table.cellWidget(r, 1).currentData() or ""
-            pins = parse_pins(self.table.cellWidget(r, 2).text())
-            value = self.table.cellWidget(r, 3).value()
-            out.append((name, ref, pins, value))
+            out.append((name, part.currentData() or "", parse_pins(pins_edit.text()), spin.value()))
         return out
 
     def add_row(self):
@@ -171,6 +171,13 @@ class TerminalTable(QWidget):
         self.changed.emit()
 
     def _append(self, name, ref, pins, value):
+        blocked = self.table.blockSignals(True)     # no itemChanged before the row is complete
+        try:
+            self._build_row(name, ref, pins, value)
+        finally:
+            self.table.blockSignals(blocked)
+
+    def _build_row(self, name, ref, pins, value):
         r = self.table.rowCount()
         self.table.insertRow(r)
         self.table.setItem(r, 0, QTableWidgetItem(name))
@@ -204,7 +211,8 @@ def _optional_float(edit: QLineEdit) -> Optional[float]:
 
 class RailPanel(QWidget):
     """Setup of the selected net's rail and the project's solve settings."""
-    rail_changed = Signal()
+    rail_changed = Signal()          # sources, loads, pins, net-tie option: the result is stale
+    limits_changed = Signal()        # limits only: re-rank the problems, no solve needed
     settings_changed = Signal()
     solve_requested = Signal()
 
@@ -256,7 +264,7 @@ class RailPanel(QWidget):
         self.loads.changed.connect(self._write_rail)
         self.follow_ties.toggled.connect(self._write_rail)
         for e in (self.max_drop, self.max_j, self.max_via):
-            e.editingFinished.connect(self._write_rail)
+            e.editingFinished.connect(self._write_limits)
         self.max_edge.valueChanged.connect(self._write_settings)
         self.temp.valueChanged.connect(self._write_settings)
         self.plating.editingFinished.connect(self._write_settings)
@@ -303,9 +311,16 @@ class RailPanel(QWidget):
         self._rail.loads = [Load(ref, value, pins, name)
                             for name, ref, pins, value in self.loads.rows() if ref]
         self._rail.follow_net_ties = self.follow_ties.isChecked()
-        self._rail.limits = Limits(_optional_float(self.max_drop), _optional_float(self.max_j),
-                                   _optional_float(self.max_via))
         self.rail_changed.emit()
+
+    def _write_limits(self, *_):
+        if self._loading or self._rail is None:
+            return
+        limits = Limits(_optional_float(self.max_drop), _optional_float(self.max_j),
+                        _optional_float(self.max_via))
+        if limits != self._rail.limits:
+            self._rail.limits = limits
+            self.limits_changed.emit()
 
     def _write_settings(self, *_):
         if self._loading or self._settings is None:
