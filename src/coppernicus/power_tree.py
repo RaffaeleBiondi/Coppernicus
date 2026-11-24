@@ -180,3 +180,48 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         "groups": groups,
         "assumptions": list(tree.assumptions), "warnings": list(tree.warnings),
     }
+
+
+def _fmt(x: Optional[float], width: int, spec: str, unit: str, scale: float = 1.0) -> str:
+    """``x`` with its unit, right-aligned in ``width`` characters; "—" when there is none."""
+    return f"{'—' if x is None else f'{x * scale:{spec}}{unit}':>{width}}"
+
+
+def tree_text(doc: Dict[str, Any]) -> List[str]:
+    """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
+    lines = ["VRMs (sources and regulators)",
+             f"  {'name':<14} {'kind':<6} {'group':<10} {'V set':>8} {'V out':>9} {'I out':>9} "
+             f"{'V in':>9} {'I in':>9} {'P loss':>9}"]
+    for v in doc["vrms"]:
+        lines.append(f"  {v['name']:<14} {v['kind']:<6} {v['group']:<10} {_fmt(v['v_set_v'], 8, '.4g', 'V')} "
+                     f"{_fmt(v['v_out_v'], 9, '.5f', 'V')} {_fmt(v['i_out_a'], 9, '.4f', 'A')} "
+                     f"{_fmt(v['v_in_v'], 9, '.5f', 'V')} {_fmt(v['i_in_a'], 9, '.4f', 'A')} "
+                     f"{_fmt(v['p_loss_w'], 9, '.1f', 'mW', 1e3)}"
+                     + (f"  {v['regulation']}" if v["regulation"] else ""))
+    lines += ["Loads (the voltage across supply and ground pins)",
+              f"  {'name':<14} {'group':<10} {'I':>8} {'nominal':>8} {'supply':>9} {'ground':>9} "
+              f"{'across':>9} {'drop':>14}  verdict"]
+    for ld in doc["loads"]:
+        verdict = ("FAIL" if ld["exceeds_drop_limit"] else "pass" if ld["exceeds_drop_limit"] is False
+                   else "not judged")
+        drop = (f"{ld['drop_mv']:.2f} mV ({ld['drop_pct']:.2f} %)" if ld["drop_mv"] is not None
+                else "—")
+        lines.append(f"  {ld['name']:<14} {ld['group']:<10} {_fmt(ld['current_a'], 8, '.4g', 'A')} "
+                     f"{_fmt(ld['nominal_v'], 8, '.4g', 'V')} {_fmt(ld['v_supply_v'], 9, '.5f', 'V')} "
+                     f"{_fmt(ld['v_ground_v'], 9, '.2f', 'mV', 1e3)} {_fmt(ld['v_across_v'], 9, '.5f', 'V')} "
+                     f"{drop:>14}  {ld['status'] or verdict}")
+    lines.append("Groups")
+    for gr in doc["groups"]:
+        if gr["kind"] == "ground":
+            worst = f"max rise {gr['max_rise_mv']:.3f} mV above 0 V"
+        else:
+            worst = f"max drop {gr['max_drop_mv']:.3f} mV ({gr['max_drop_pct']:.3f} %)"
+        lines.append(f"  {gr['group']:<10} {gr['kind']:<6} {' + '.join(gr['nets']):<22} {worst}, "
+                     f"copper loss {gr['power_loss_w'] * 1e3:.3g} mW: {gr['verdict']}")
+    for k in doc["links"]:
+        lines.append(f"  link {k['name']}: {k['current_a']:.4f} A, {k['power_w'] * 1e3:.3g} mW "
+                     f"({' ↔ '.join(k['nets'])})")
+    lines.append(f"Verdict: {doc['verdict']}. {doc['verdict_note']}")
+    lines += [f"  assumption: {a}" for a in doc["assumptions"]]
+    lines += [f"  warning: {w}" for w in doc["warnings"]]
+    return lines
