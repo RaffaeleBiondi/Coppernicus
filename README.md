@@ -270,7 +270,9 @@ rails:
 | Copper loss by layer as a chart (baseline beside current) | ✅ |
 | Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
 | Readout while hovering (today: double-click) | ⏳ |
-| Power tree with ground return, board temperature | ⏳ (KiPI's engine has both) |
+| Project file v2: regulator kind (source / LDO / switcher), efficiency, quiescent current; input, ground and remote-sense pins; load ground pins; links (ferrites, sense resistors, fuses). Old project files load and save unchanged | ✅ (set in the project file; GUI editors and the power-tree solve come next) |
+| Power tree with ground return | 🔄 next |
+| Board temperature (electro-thermal) | ⏳ (KiPI's engine has it) |
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
 | Standalone `.app` / `.exe` that needs no uv | ⏳ later |
 
