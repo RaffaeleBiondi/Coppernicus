@@ -25,7 +25,17 @@ part:
 - a missing link pad;
 - a rail with several sources;
 - a switcher without an efficiency;
+- a load on a regulator's input pins, whose current KiPI would count twice: the message
+  names the load and the VRM and says to remove the load or the VRM input;
 - an unknown engine option.
+
+`validate_setup(setup)` returns KiPI's `validate()` messages. `terminal_names(project)`
+gives the name each source, load and link gets in the setup, so Task 7 can map KiPI's
+reports back to the project.
+
+A rail solved on its own (`solve_rail`) does not use the v2 fields. Its assumptions say
+which ones only the power-tree solve uses: the regulator kind, the input, ground and sense
+pins, and the loads' ground pins.
 
 ### Pin references
 
