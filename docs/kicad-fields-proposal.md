@@ -123,8 +123,11 @@ So the custom fields are parsed with the rest of the file and then dropped.
      compared) gives no warning.
    - `override_board_fields: true` on a project rail keeps it entirely; the result says
      `overrides_board_fields: true`, with the KiCad values it overrode.
-   - `PI_LIMIT_DROP` wins over the project's `max_drop_pct` on that net (a warning when they
-     differ; the strictest field value when several parts give one). The other limits come
+   - A `PI_LIMIT_DROP` always applies to its net, whether the fields' rail is complete,
+     incomplete or overridden (the coordinator's ruling after the review: limits are not
+     what-if design data, so a project rail cannot loosen a KiCad limit). It wins over the
+     project's `max_drop_pct` (a warning when they differ; the strictest field value when
+     several parts give one). The other limits come
      only from the project file and apply to the fields' rail; a project rail with only
      `limits:` (no sources, no loads) adds them and is not compared. Settings stay project-only.
    - The merge is a pure function for the app: `board_fields.merge(project, fields,
@@ -142,11 +145,15 @@ So the custom fields are parsed with the rest of the file and then dropped.
    sense pins are carried over by part. A `PI_LINK` part replaces a project link on the same
    part (a warning when they differ; links have no override yet). A regulator that also has a
    `PI_LOAD` on its `PI_INPUT` net is refused (counted twice).
-5. **A rail with a source and no load** is complete when it feeds a regulator's input or a
-   link (from the fields or the project): it draws their estimated current. A net with loads
-   and no source, or a source feeding nothing, is an error naming the missing field, unless
-   the project file defines the rail; then that rail is used, with a warning that the fields
-   are incomplete.
+5. **Completeness is per group of nets joined by links and net ties.** A rail with a source
+   and no load is complete when it feeds a regulator's input or a link (from the fields or the
+   project): it draws their estimated current. Loads on a net a net tie joins to a driven net
+   go into that rail; loads behind a link on a net with no source make a loads-only rail (per
+   rail it is skipped, its loads drawn through the link by the driven rail; the tree solves
+   it). A net with loads and no source in its group, or a source feeding nothing, is an error
+   naming the missing field, unless the project file defines the rail; then that rail is used,
+   with a warning that the fields are incomplete. Pins are compared as the pads they select.
+   A footprint with `PI_*` fields and no reference is an error that gives its position.
 6. **`coppernicus solve --tree`** reads the fields too, as the MCP `solve_tree` tool does.
 7. Confirmed from the first version: `PI_RAIL` is always required next to a per-rail field
    (nothing is guessed from net names); values per rail by position, `;`-separated, an empty

@@ -156,18 +156,27 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
   on it, a `PI_PINS` that matches nothing) says the rail came from the fields.
 - **Rails.** A net with a `PI_SOURCE` and a `PI_LOAD` is a rail. So is a net with a source and
   no load that feeds a regulator's input or a link (through net ties too): it draws their
-  estimated current.
+  estimated current. Completeness is per group of nets joined by links and net ties:
+  - loads on a net that a **net tie** joins to a driven net go into that rail (its solve joins
+    the tied copper and finds their pads there);
+  - loads behind a **link** (`PI_LINK`, a ferrite), on a net with no source of its own, make
+    a loads-only rail, as in a project file. Per rail it is skipped ("its loads are drawn
+    through link FB1 by rail +3V3", estimated there; its limits are listed as not judged),
+    and the power tree solves it with its driven net.
 - **KiCad wins.** For a net the fields define, the fields give the design data: sources,
   loads, pins and converter data. A project-file rail of the same net is **ignored**, with a
   warning that lists the differences ("project file rail +3V3 ignored: KiCad fields define it
   (KiCad U1 2 A, project U1 3 A); set override_board_fields: true on the rail to use the
   project's values"). An identical project rail gives no warning: that is the normal case once
-  the project has been saved with the fields' rails.
+  the project has been saved with the fields' rails. Pins are compared as the pads they select,
+  so `pins: [1]` on a one-pad part equals "every pin".
 - **`override_board_fields: true`** on a project rail keeps that rail entirely instead; its
   summary says `"overrides_board_fields": true` with the KiCad values it overrode in
   `board_fields_overridden`, and its assumptions say so.
-- **Limits:** `PI_LIMIT_DROP` wins over the project's `max_drop_pct` on that net (a warning when
-  they differ). `max_current_density`, `max_via_current` and `max_ground_rise_mv` come only
+- **Limits:** a `PI_LIMIT_DROP` always applies to its net, whether the fields' rail is
+  complete, incomplete (the project rail is used) or overridden: a project rail cannot loosen
+  a KiCad limit. It wins over the project's `max_drop_pct` (a warning when they differ; the
+  assumptions say so). `max_current_density`, `max_via_current` and `max_ground_rise_mv` come only
   from the project file, and they apply to the fields' rail: give them on a project rail with
   only `limits:` (no sources, no loads), which is not compared with the fields and gives no
   warning. Settings stay project-only.

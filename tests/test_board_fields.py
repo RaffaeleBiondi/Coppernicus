@@ -5,6 +5,7 @@ reader, the pure merge, and every solve path that takes them. The board is a syn
 .kicad_pcb written by tests/kicad_fixture.py."""
 
 import copy
+import dataclasses
 import json
 import os
 import re
@@ -170,7 +171,8 @@ def test_kicad_wins_over_a_different_project_rail_with_a_warning():
 def test_override_board_fields_keeps_the_project_rail_and_says_so():
     own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 0.5)], override_board_fields=True)
     merged = merge(Project(rails=[own]), FIELDS)
-    assert merged.project.rails == [own]
+    # The project rail, but the KiCad PI_LIMIT_DROP still applies to the net (the ruling).
+    assert merged.project.rails == [dataclasses.replace(own, limits=Limits(max_drop_pct=2.0))]
     origin = merged.origins["VCC"]
     assert origin.source == "overridden" and origin.warnings == []
     assert origin.board_fields["loads"][0]["current_a"] == 1.0                  # what it overrode
@@ -349,8 +351,9 @@ def test_an_overriding_project_rail_is_used_and_reported(board, tmp_path):
     assert rail["from_board_fields"] is False and rail["overrides_board_fields"] is True
     assert rail["loads"][0]["drop_mv"] == pytest.approx(DROP_MV_PER_A / 2, rel=1e-5)
     assert rail["board_fields_overridden"]["loads"][0]["current_a"] == 1.0
-    assert rail["limits"] == {} and rail["verdict"] == "not_judged"
+    assert rail["limits"] == {"max_drop_pct": 2.0} and rail["verdict"] == "pass"   # 1.9 % < 2 %
     assert any("override_board_fields" in a for a in rail["assumptions"])
+    assert any("a KiCad limit always applies to its net" in a for a in rail["assumptions"])
 
 
 def test_errors_name_the_off_switch_and_other_formats_have_no_fields(tmp_path):
@@ -446,3 +449,135 @@ def test_project_keys_round_trip(tmp_path):
     assert loaded.use_board_fields is False and loaded.rails[0].override_board_fields is True
     plain = Project(board="b.kicad_pcb", rails=[Rail("VCC")]).save(tmp_path / "q.coppernicus.yml")
     assert "board_fields" not in plain.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------- review of 4b
+
+def test_pi_limit_drop_applies_under_an_incomplete_or_overridden_rail():
+    """The coordinator's ruling: a PI_LIMIT_DROP always applies to its net. A project rail
+    cannot loosen a KiCad limit, whether the fields' rail is complete, incomplete (the
+    project rail is used) or overridden; a different project max_drop_pct gives a warning."""
+    own = Rail("VCC", [Source("J1", 3.3)], [Load("U1", 1.0)], limits=Limits(max_drop_pct=50.0))
+    incomplete = merge(Project(rails=[own]),
+                       {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A", "PI_LIMIT_DROP": "0.001%"}})
+    [rail] = incomplete.project.rails
+    assert incomplete.origins["VCC"].source == "project" and rail.limits.max_drop_pct == 0.001
+    assert any("PI_LIMIT_DROP" in w and "50" in w for w in incomplete.origins["VCC"].warnings)
+    assert any("PI_LIMIT_DROP" in n and "0.001" in n for n in incomplete.origins["VCC"].notes)
+    over = Rail("VCC", [Source("J1", 3.3)], [Load("U1", 1.0)], override_board_fields=True,
+                limits=Limits(max_via_current=10.0))
+    fields = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V"},
+              "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A", "PI_LIMIT_DROP": "0.001%"}}
+    overridden = merge(Project(rails=[over]), fields)
+    [rail] = overridden.project.rails
+    assert overridden.origins["VCC"].source == "overridden"
+    assert rail.limits.max_drop_pct == 0.001 and rail.limits.max_via_current == 10.0
+    assert any("PI_LIMIT_DROP" in n for n in overridden.origins["VCC"].notes)
+
+
+def test_a_loads_only_net_behind_a_link_or_a_net_tie_is_complete():
+    """Completeness is per group of nets joined by links and net ties: the loads behind a
+    ferrite, on a net with no source of its own, belong to the driven net's group."""
+    fields = {"J1": {"PI_RAIL": "VIN", "PI_SOURCE": "12V"},
+              "U1": {"PI_RAIL": "+3V3", "PI_SOURCE": "3.3V", "PI_KIND": "ldo", "PI_INPUT": "VIN"},
+              "FB1": {"PI_LINK": "50mOhm"},
+              "U2": {"PI_RAIL": "+3V3_F", "PI_LOAD": "1A"}}
+    merged = merge(Project(), fields, {"FB1": {"1": "+3V3", "2": "+3V3_F"}})
+    rails = {r.net: r for r in merged.project.rails}
+    assert rails["+3V3_F"] == Rail("+3V3_F", loads=[Load("U2", 1.0)])
+    # A net tie joins the copper in the per-rail solve too: the tied net's loads go into the
+    # driven rail, whose solve finds their pads on the tied net.
+    tied = {"J1": {"PI_RAIL": "V", "PI_SOURCE": "1V"}, "U2": {"PI_RAIL": "V_T", "PI_LOAD": "1A"}}
+    by_tie = merge(Project(), tied, ties=[("V", "V_T")])
+    assert by_tie.project.rails == [Rail("V", [Source("J1", 1.0)], [Load("U2", 1.0)])]
+    assert any("V_T" in n and "net tie" in n for n in by_tie.origins["V"].notes)
+    with pytest.raises(FieldError, match="V_T: loads U2 have PI_LOAD but no part"):
+        merge(Project(), tied)
+
+
+def test_pins_are_compared_as_pads_not_as_spelling():
+    project = Project(rails=[Rail("VCC", [Source("J1", 1.0, ["1"])], [Load("U1", 1.0, ["1"])])])
+    fields = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "1V"}, "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}}
+    merged = merge(project, fields, {"J1": {"1": "VCC"}, "U1": {"1": "VCC", "2": "GND"}})
+    assert merged.warnings == []
+    differs = merge(Project(rails=[Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0, ["2"])])]),
+                    fields, {"J1": {"1": "VCC"}, "U1": {"1": "VCC", "2": "VCC"}})
+    assert any("U1" in w for w in differs.warnings)
+
+
+def test_a_footprint_with_fields_but_no_reference_is_a_clear_error(tmp_path):
+    from kicad_fixture import write_board
+
+    from coppernicus.engine import EngineError
+    board = write_board(tmp_path / "noref.kicad_pcb",
+                        [(None, [("1", 12.5, 7.0, "VCC")], {"PI_RAIL": "VCC", "PI_LOAD": "1A"})],
+                        [("VCC", (0, 0), (12.5, 7.0), 0.5)])
+    with pytest.raises(EngineError, match=r"a footprint at \(0, 0\) mm has PI_\* fields but no "
+                                          r"reference: set its reference in KiCad"):
+        read_board_fields(board)
+
+
+CHAIN_TRACKS = [("VIN", (0, 0), (20, 0), 1.0), ("+3V3", (20, 5), (30, 5), 1.0),
+                ("+3V3_F", (32, 5), (40, 5), 1.0), ("GND", (0, 10), (40, 10), 1.0)]
+FERRITE_FIELDS = {
+    "J1": {"PI_RAIL": "VIN", "PI_SOURCE": "12V", "PI_GND": "GND"},
+    "U1": {"PI_RAIL": "+3V3", "PI_SOURCE": "3.3V", "PI_KIND": "smps", "PI_EFF": "90%", "PI_IQ": "5mA",
+           "PI_INPUT": "VIN", "PI_GND": "GND"},
+    "FB1": {"PI_LINK": "50mOhm"},
+    "U2": {"PI_RAIL": "+3V3_F", "PI_LOAD": "1A", "PI_GND": "GND"}}
+
+
+def ferrite_parts(fields):
+    return [("J1", [("1", 0, 0, "VIN"), ("2", 0, 10, "GND")], fields.get("J1", {})),
+            ("U1", [("1", 20, 0, "VIN"), ("2", 20, 5, "+3V3"), ("3", 20, 10, "GND")], fields.get("U1", {})),
+            ("FB1", [("1", 30, 5, "+3V3"), ("2", 32, 5, "+3V3_F")], fields.get("FB1", {})),
+            ("U2", [("1", 40, 5, "+3V3_F"), ("2", 40, 10, "GND")], fields.get("U2", {}))]
+
+
+def test_the_ferrite_chain_in_fields_solves_as_its_project_file(tmp_path):
+    """The reviewer's case: a load behind a ferrite, described in fields, gives the same
+    results as the same design in the project file, per rail and in the tree."""
+    from kicad_fixture import write_board
+
+    from coppernicus.project import Link
+    rails = [Rail("VIN", sources=[Source("J1", 12.0, ground_net="GND")]),
+             Rail("+3V3", sources=[Source("U1", 3.3, kind="smps", efficiency=0.9, quiescent_a=0.005,
+                                          input_net="VIN", ground_net="GND")]),
+             Rail("+3V3_F", loads=[Load("U2", 1.0, ground_net="GND")])]
+    docs = {}
+    for name, fields, project in (
+            ("fields", FERRITE_FIELDS, Project(board="b.kicad_pcb")),
+            ("project", {}, Project(board="b.kicad_pcb", rails=rails,
+                                    links=[Link("FB1", "FB1", None, "+3V3", None, "+3V3_F", 0.05)]))):
+        d = tmp_path / name
+        d.mkdir()
+        write_board(d / "b.kicad_pcb", ferrite_parts(fields), CHAIN_TRACKS)
+        path = project.save(d / "p.coppernicus.yml")
+        session = Session(out_dir=d / "out")
+        docs[name] = (session.solve_project(path), session.solve_tree(path))
+
+    def per_rail(doc):
+        return {r["net"]: ([(ld["name"], ld["current_a"], ld["drop_mv"]) for ld in r.get("loads", [])],
+                           r.get("error", {}).get("code")) for r in doc["rails"]}
+
+    def tree(doc):
+        return ({v["name"]: (v["v_in_v"], v["i_in_a"], v["v_out_v"]) for v in doc["vrms"]},
+                {ld["name"]: (ld["v_worst_v"], ld["drop_mv"]) for ld in doc["loads"]},
+                [(k["name"], k["current_a"]) for k in doc["links"]])
+    assert per_rail(docs["fields"][0]) == per_rail(docs["project"][0])
+    assert tree(docs["fields"][1]) == tree(docs["project"][1])
+
+
+def test_a_loads_only_rail_behind_a_link_is_skipped_not_an_error(tmp_path):
+    """Per rail, the loads behind a ferrite are drawn by the driven rail through the link
+    (estimated there): their own rail, with no source, is skipped with that said, not an
+    error that would fail a valid design (exit 2)."""
+    from kicad_fixture import write_board
+    write_board(tmp_path / "b.kicad_pcb", ferrite_parts(FERRITE_FIELDS), CHAIN_TRACKS)
+    doc = Session(out_dir=tmp_path / "out").solve_project(
+        Project(board="b.kicad_pcb").save(tmp_path / "p.coppernicus.yml"))
+    rails = {r["net"]: r for r in doc["rails"]}
+    assert "error" not in rails["+3V3_F"] and doc["verdict"] != "error"
+    message = rails["+3V3_F"]["skipped"]["message"]
+    assert "drawn through link FB1 by rail +3V3" in message
+    assert [ld["name"] for ld in rails["+3V3"]["loads"]] == ["FB1 (link, estimated)"]

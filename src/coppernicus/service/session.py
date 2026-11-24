@@ -451,16 +451,26 @@ class Session:
         for i, rail in enumerate(selected, start=1):
             if progress is not None:
                 progress(f"rail {i}/{len(selected)}: {rail.net}")
-            if not rail.loads and not (rail.sources and _feeds(entry.board, project, rail)):
+            feeders = (_fed_through_link(entry.board, project, rail)
+                       if rail.loads and not rail.sources else None)
+            if feeders or (not rail.loads and not (rail.sources and _feeds(entry.board, project, rail))):
                 # Nothing to draw: no load of its own, and no regulator input or link it feeds
-                # (or not set up at all). Skip it with a note; this is not an error and does
-                # not stop the other rails.
-                message = (f"{rail.net}: no loads, and it feeds no regulator input or link"
-                           if rail.sources else f"{rail.net}: no source and no loads, so not solved")
+                # (or not set up at all); or loads with no source of their own, drawn through a
+                # link by a driven rail. Skip it with a note; this is not an error and does not
+                # stop the other rails.
+                if feeders:
+                    links, drivers = feeders
+                    message = (f"{rail.net}: no source; its loads are drawn through link "
+                               f"{', '.join(links)} by rail {', '.join(drivers)} (estimated there)")
+                    why = (f"not solved alone: its loads are drawn through link {', '.join(links)} "
+                           f"by rail {', '.join(drivers)}; solve the power tree to judge this net")
+                else:
+                    message = (f"{rail.net}: no loads, and it feeds no regulator input or link"
+                               if rail.sources else f"{rail.net}: no source and no loads, so not solved")
+                    why = ("not solved: no loads, and it feeds no regulator input or link (add a load)"
+                           if rail.sources else "not solved alone: no source or loads (solve the "
+                           "power tree, or set up the rail)")
                 # Its limits judge nothing here: each is a not-judged item, never a silent pass.
-                why = ("not solved: no loads, and it feeds no regulator input or link (add a load)"
-                       if rail.sources else "not solved alone: no source or loads (solve the power "
-                       "tree, or set up the rail)")
                 checked = C.limits_to_dict(rail.limits)
                 out_rails.append({"net": rail.net, **self._origin_info(merged, rail.net),
                                   "limits": checked,
@@ -973,6 +983,26 @@ def compare_summaries(summary_a: Dict[str, Any], summary_b: Dict[str, Any]) -> D
         "assumptions": ["Deltas are b − a. Loads are matched by name, losses by layer name."],
         "warnings": warnings,
     })
+
+
+def _fed_through_link(board: Board, project: Project, rail: Rail):
+    """For a rail with loads and no source: the links, and the rails with a source, that the
+    project's links (and the board's net ties) join it to, as (link names, rail nets); or
+    None. Per rail, those rails draw its loads through the links, estimated."""
+    joins = [(k.net_a, k.net_b, k.name) for k in project.links]
+    joins += [(t.net_a, t.net_b, "") for t in board.net_ties()]
+    nets, todo, used = {rail.net}, [rail.net], []
+    while todo:
+        n = todo.pop()
+        for a, b, name in joins:
+            for x, y in ((a, b), (b, a)):
+                if x == n and y not in nets:
+                    nets.add(y)
+                    todo.append(y)
+                    if name:
+                        used.append(name)
+    drivers = sorted(r.net for r in project.rails if r.sources and r.net in nets - {rail.net})
+    return (list(dict.fromkeys(used)), drivers) if drivers and used else None
 
 
 def _feeds(board: Board, project: Project, rail: Rail) -> bool:

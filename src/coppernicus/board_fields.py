@@ -130,7 +130,8 @@ class FieldRail:
         """Why it is not a rail by itself (no source, no load), or None."""
         if not self.sources:
             return (f"{self.net}: loads {', '.join(t.term.ref for t in self.loads)} have PI_LOAD "
-                    "but no part on this net has PI_SOURCE (the voltage that holds the rail)")
+                    "but no part on this net has PI_SOURCE (the voltage that holds the rail), and "
+                    "no link or net tie joins it to a net that has one")
         if not self.loads:
             return (f"{self.net}: {', '.join(t.term.ref for t in self.sources)} has PI_SOURCE but "
                     "no part on this net has PI_LOAD (a current drawn from the rail), and it feeds "
@@ -468,12 +469,41 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
             link_notes.setdefault(net, []).append(note)
 
     own = {r.net: r for r in out.rails}
+    # Loads on a net that a net tie joins to a driven net go into that rail: the per-rail
+    # solve joins tied copper, and finds their pads on the tied net.
+    tie_notes: Dict[str, List[str]] = {}
+    for net in sorted(rails):
+        fr = rails[net]
+        if fr.sources or not fr.loads or net in own:
+            continue
+        drivers = sorted(n for n in _group(net, ties) - {net}
+                         if (n in rails and rails[n].sources) or (n in own and own[n].sources))
+        if not drivers:
+            continue
+        driver = drivers[0]
+        if driver in rails and rails[driver].sources:
+            rails[driver].loads += fr.loads
+            rails[driver].parts += fr.parts
+        else:
+            own[driver].loads += [copy.deepcopy(t.term) for t in fr.loads]
+        tie_notes.setdefault(driver, []).append(
+            f"Rail {driver}: loads {', '.join(t.term.ref for t in fr.loads)} on {net}, joined to it "
+            f"by a net tie (from KiCad field PI_RAIL {net}).")
+        del rails[net]
     trial = copy.deepcopy(out)                # every field rail with a source in place, to
     for net, fr in rails.items():             # see what a source-only rail feeds
         if fr.sources and not (net in own and own[net].override_board_fields):
             trial.rails = [r for r in trial.rails if r.net != net] + [fr.rail()]
-    missing = {net: (None if fr.sources and (fr.loads or _feeds(trial, net, ties)) else fr.missing())
-               for net, fr in rails.items()}
+    # Complete: a source and a load; a source feeding a regulator or a link; or loads on a
+    # net that links and net ties join to a driven net (the loads behind a ferrite).
+    joins = [(k.net_a, k.net_b) for k in trial.links] + list(ties)
+    driven = {r.net for r in trial.rails if r.sources}
+
+    def complete(net: str, fr: FieldRail) -> bool:
+        if fr.sources:
+            return bool(fr.loads) or _feeds(trial, net, ties)
+        return bool(fr.loads) and bool((_group(net, joins) - {net}) & driven)
+    missing = {net: None if complete(net, fr) else fr.missing() for net, fr in rails.items()}
 
     new_rails: List[Rail] = []
     for r in out.rails:
@@ -514,8 +544,23 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
         raise FieldError("Incomplete rails in the KiCad footprint fields: " + "; ".join(errors)
                          + ". Add the missing field, or define the rail in the project file")
     out.rails = new_rails
+    for driver, notes in tie_notes.items():
+        merged.origins[driver].notes += notes
     merged.warnings = [w for o in merged.origins.values() for w in o.warnings] + merged.warnings
     return merged
+
+
+def _group(net: str, joins: Sequence[Tuple[str, str]]) -> set:
+    """``net`` and every net the pairs in ``joins`` (links, net ties) join to it."""
+    nets, todo = {net}, [net]
+    while todo:
+        n = todo.pop()
+        for a, b in joins:
+            for x, y in ((a, b), (b, a)):
+                if x == n and y not in nets:
+                    nets.add(y)
+                    todo.append(y)
+    return nets
 
 
 def _feeds(project: Project, net: str, ties: Sequence[Tuple[str, str]] = ()) -> bool:
@@ -523,16 +568,8 @@ def _feeds(project: Project, net: str, ties: Sequence[Tuple[str, str]] = ()) -> 
     input or a link, at nominal voltages, as the per-rail solve estimates it. An estimate
     that cannot be made counts as yes: the solve reports it."""
     from coppernicus.power_tree import EstimateError, estimated_draws
-    nets, todo = {net}, [net]
-    while todo:
-        n = todo.pop()
-        for a, b in ties:
-            for x, y in ((a, b), (b, a)):
-                if x == n and y not in nets:
-                    nets.add(y)
-                    todo.append(y)
     try:
-        return bool(estimated_draws(project, sorted(nets), list(ties)))
+        return bool(estimated_draws(project, sorted(_group(net, ties)), list(ties)))
     except EstimateError:
         return True
 
