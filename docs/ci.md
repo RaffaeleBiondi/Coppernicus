@@ -45,6 +45,13 @@ passes. Coppernicus has no built-in thresholds.
 A rail with no loads is shown as "skipped: no loads". In a power tree this is a rail that only
 feeds a regulator's input. It is not an error and does not fail the check.
 
+A project file can set an optional what-if copper thickness per layer, in mm, under
+`settings: copper_thickness_mm:` (for example `B.Cu: 0.07`; 1 oz is 0.035). The check then
+solves with that copper instead of the board file's, and the summary's assumptions name the
+overridden layers. The board file is not changed. To change the real copper weight, change
+the stack-up in KiCad. A layer name the board does not have fails the step. Leave the
+setting out to check the board as designed.
+
 ## Inputs
 
 | Input | Default | Meaning |

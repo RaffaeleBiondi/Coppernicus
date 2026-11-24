@@ -84,7 +84,8 @@ class SettingsSpec(BaseModel):
     copper_temp_c: Optional[float] = Field(None, description="Copper temperature for ρ(T), °C "
                                                              "(default 20).")
     copper_thickness_mm: Optional[dict[str, float]] = Field(
-        None, description="What-if copper thickness by layer name, mm, e.g. {\"B.Cu\": 0.07}.")
+        None, description="What-if copper thickness by layer name, mm (1 oz = 0.035), e.g. "
+                          "{\"B.Cu\": 0.07}. The board file is not changed.")
 
 
 def _error_result(err: dict) -> CallToolResult:
@@ -242,9 +243,10 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                       rails: Annotated[Optional[list[str]], Field(
                           description="Nets to solve; default all.")] = None,
                       top: Annotated[int, Field(ge=1, le=50)] = 5) -> dict[str, Any]:
-        """Solve the rails of a project file with its sources, loads, limits and settings.
-        Returns one solve_rail summary (with result_id) per rail, a rail that fails reported
-        in place, and an overall verdict."""
+        """Solve the rails of a project file with its sources, loads, limits and settings
+        (including its optional what-if copper_thickness_mm, named in each rail's
+        assumptions). Returns one solve_rail summary (with result_id) per rail, a rail that
+        fails reported in place, and an overall verdict."""
         bridge = _Bridge(ctx)
         return _call("solve_project", session.solve_project, project_path, rails, top,
                      progress=bridge.progress, cancelled=bridge.cancelled)

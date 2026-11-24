@@ -77,6 +77,20 @@ def engine_settings(s: Settings) -> Tuple[SolveSettings, List[str]]:
     return SolveSettings(max_edge_mm=s.max_edge_mm, via_rules=rules), assumptions
 
 
+def thickness_note(thickness: Dict[str, float], file_mm: Dict[str, float]) -> List[str]:
+    """The assumption naming the copper layers solved at a what-if thickness (the
+    ``copper_thickness_mm`` setting), each with the board file's value; empty without one."""
+    if not thickness:
+        return []
+    layers = ", ".join(f"{name} {mm:g} mm (board file: {file_mm[name]:g} mm)" if name in file_mm
+                       else f"{name} {mm:g} mm" for name, mm in sorted(thickness.items()))
+    return [f"What-if copper thickness (the copper_thickness_mm setting): {layers}. The board "
+            "file is not changed; real changes of copper weight are made in KiCad. The stack is "
+            "rebuilt around the new thickness, so via barrels get longer when the stack thickens "
+            "(shorter when it thins): even a net with no copper on those layers changes slightly "
+            "through its vias."]
+
+
 def tree_only_fields(rail: Rail) -> List[str]:
     """An assumption naming the rail's fields that only a power-tree solve uses (regulator
     kind, input, ground and sense pins, loads' ground pins); empty for a v1 rail."""
@@ -130,6 +144,8 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
         raise EngineError(f"{rail.net}: add a source (the regulator output) before solving")
     if not rail.loads:
         raise EngineError(f"{rail.net}: add at least one load before solving")
+    thickness = dict(settings.copper_thickness_mm or {})
+    board = board.with_copper_thickness(thickness) if thickness else board
 
     nets, ties = tied_nets(board, rail.net) if rail.follow_net_ties else ([rail.net], [])
     src_names = _unique([s.label for s in rail.sources])
@@ -147,6 +163,7 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
         t_c = float(settings.copper_temp_c)
         problem.temperature = lambda xy: np.full(len(np.atleast_2d(xy)), t_c)
     assumptions += tree_only_fields(rail)
+    assumptions += thickness_note(thickness, board.file_thickness_mm)
     if ties:
         assumptions.append("Net ties solved as shorts: " + ", ".join(
             f"{t.ref} ({t.net_a} ↔ {t.net_b})" for t in ties) + ".")

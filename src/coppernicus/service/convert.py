@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 
 from coppernicus.problems import FAIL, Problem
-from coppernicus.project import Limits, Settings, parse_pins, pins_text
+from coppernicus.project import Limits, ProjectError, Settings, check_copper_thickness, parse_pins, pins_text
 from coppernicus.results import RailResult
 from coppernicus.service import errors as E
 from coppernicus.service.errors import ServiceError
@@ -104,7 +104,9 @@ def limits_to_dict(limits: Limits) -> Dict[str, float]:
 
 def settings_from_dict(data: Optional[Mapping[str, Any]], base: Optional[Settings] = None
                        ) -> Tuple[Settings, Dict[str, float]]:
-    """Solve settings and the copper-thickness overrides (layer name → mm)."""
+    """Solve settings and the copper-thickness overrides (layer name → mm), which are also
+    the returned settings' ``copper_thickness_mm``. Keys not in ``data`` keep ``base``'s
+    value; ``copper_thickness_mm`` is merged per layer over ``base``'s (a project's)."""
     data = dict(data or {})
     _check_keys(data, SETTING_KEYS, "settings")
     base = base or Settings()
@@ -117,16 +119,21 @@ def settings_from_dict(data: Optional[Mapping[str, Any]], base: Optional[Setting
                                    allow_zero=False)
     if data.get("copper_temp_c") is not None:
         s.copper_temp_c = _number(data["copper_temp_c"], "copper_temp_c")
-    thickness = {}
-    for layer, mm in (data.get("copper_thickness_mm") or {}).items():
-        thickness[str(layer)] = _number(mm, f"copper_thickness_mm[{layer}]", positive=True,
-                                        allow_zero=False)
-    return s, thickness
+    try:
+        s.copper_thickness_mm = {**base.copper_thickness_mm,
+                                 **check_copper_thickness(data.get("copper_thickness_mm"))}
+    except ProjectError as e:
+        raise ServiceError(E.INVALID_INPUT, str(e), "copper_thickness_mm maps copper layer names "
+                           "as in KiCad to mm, e.g. {\"B.Cu\": 0.07}") from None
+    return s, dict(s.copper_thickness_mm)
 
 
-def settings_to_dict(s: Settings, thickness: Mapping[str, float]) -> Dict[str, Any]:
+def settings_to_dict(s: Settings, thickness: Optional[Mapping[str, float]] = None) -> Dict[str, Any]:
+    """The settings as plain data; ``copper_thickness_mm`` (``thickness``, else the
+    settings' own) only when set."""
     out: Dict[str, Any] = {"max_edge_mm": s.max_edge_mm, "via_plating_um": s.via_plating_um,
                            "copper_temp_c": s.copper_temp_c}
+    thickness = thickness or s.copper_thickness_mm
     if thickness:
         out["copper_thickness_mm"] = dict(thickness)
     return out

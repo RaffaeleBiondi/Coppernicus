@@ -223,3 +223,50 @@ def test_carry_over_by_row_keeps_each_rows_own_fields():
     # A new row (no origin) starts from the defaults; a deleted row shifts nothing.
     assert carry_over(loaded, [Load("U1", 0.2, ["2"]), Load("U1", 0.3)], [1, None]) == [
         loaded[1], Load("U1", 0.3)]
+
+
+# ---------------------------------------------------------------------- copper_thickness_mm
+
+EXAMPLES = sorted((Path(__file__).resolve().parents[1] / "examples").glob("*/*.coppernicus.yml"))
+
+
+@pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.name)
+def test_files_without_thickness_round_trip_byte_identical(example, tmp_path):
+    """The optional setting writes nothing while empty: a project file saved again is
+    the same bytes (line ends aside: on Windows the checkout and a save may use CRLF)."""
+    copy = tmp_path / example.parent.name / example.name
+    copy.parent.mkdir()
+    copy.write_bytes(example.read_bytes())
+    project = Project.load(copy)
+    assert project.settings.copper_thickness_mm == {}
+    project.save()
+
+    def lf(path):
+        return path.read_bytes().replace(b"\r\n", b"\n")
+
+    assert lf(copy) == lf(example)
+
+
+def test_copper_thickness_round_trip(tmp_path):
+    p = Project.load(DEMO)
+    p.settings.copper_thickness_mm = {"B.Cu": 0.07, "F.Cu": 0.035}
+    out = p.save(tmp_path / "what-if.coppernicus.yml")
+    text = out.read_text(encoding="utf-8")
+    assert "  copper_thickness_mm:\n    B.Cu: 0.07\n    F.Cu: 0.035\n" in text
+    assert Project.load(out).settings.copper_thickness_mm == {"B.Cu": 0.07, "F.Cu": 0.035}
+    p.settings.copper_thickness_mm = {}
+    p.save()
+    assert "copper_thickness_mm" not in out.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("value", [35, 0, -0.035, float("nan"), float("inf"), "thick", True, None])
+def test_copper_thickness_values_are_checked(value, tmp_path):
+    path = tmp_path / "bad.coppernicus.yml"
+    path.write_text(yaml.safe_dump({"board": "x.kicad_pcb",
+                                    "settings": {"copper_thickness_mm": {"B.Cu": value}}}),
+                    encoding="utf-8")
+    with pytest.raises(ProjectError) as e:
+        Project.load(path)
+    assert "copper_thickness_mm[B.Cu]" in str(e.value) and "1 oz copper is 0.035, not 35" in str(e.value)
+    with pytest.raises(ProjectError, match="map copper layer names to mm"):
+        Settings(copper_thickness_mm=[0.035])

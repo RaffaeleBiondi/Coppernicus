@@ -170,3 +170,31 @@ def test_a_rail_without_loads_is_skipped_not_an_error(tmp_path, capsys):
     assert solved and doc["verdict"] != "error"
     assert main(["solve", str(project), "--no-maps", "--out", str(tmp_path)]) == EXIT_OK
     assert "Rail VIN: skipped. VIN: no loads, so not solved" in capsys.readouterr().out
+
+
+def test_project_copper_thickness_in_text_json_and_report(demo_project, tmp_path, capsys):
+    """copper_thickness_mm in the project file: the solve uses it and every output says so,
+    the human text, the JSON document and the HTML report's settings."""
+    out_dir = tmp_path / "out"
+    assert main(["solve", str(demo_project), "--no-maps", "--out", str(out_dir), "--json"]) == EXIT_OK
+    before = json.loads(capsys.readouterr().out)["rails"][0]
+    p = Project.load(demo_project)
+    p.settings.copper_thickness_mm = {"B.Cu": 0.07}
+    p.save()
+    assert main(["solve", str(demo_project), "--no-maps", "--out", str(out_dir), "--json",
+                 "--html"]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
+    [rail] = doc["rails"]
+    assert rail["settings"]["copper_thickness_mm"] == {"B.Cu": 0.07}
+    assert rail["max_drop_mv"] < before["max_drop_mv"]       # the demo's current runs on B.Cu
+    assert any(a.startswith("What-if copper thickness") and "B.Cu 0.07 mm" in a
+               for a in rail["assumptions"])
+    html = Path(doc["report_file"]).read_text(encoding="utf-8")
+    assert '"copper_thickness_mm":"B.Cu 0.07 mm"' in html             # the settings list
+    assert "What-if copper thickness (the copper_thickness_mm setting): B.Cu 0.07 mm" in html
+    assert main(["solve", str(demo_project), "--no-maps", "--out", str(out_dir)]) == EXIT_OK
+    assert "assumption: What-if copper thickness" in capsys.readouterr().out
+    p.settings.copper_thickness_mm = {"In1.Cu": 0.07}
+    p.save()
+    assert main(["solve", str(demo_project), "--no-maps", "--out", str(out_dir)]) == EXIT_ERROR
+    assert "copper layers: F.Cu, B.Cu" in capsys.readouterr().err
