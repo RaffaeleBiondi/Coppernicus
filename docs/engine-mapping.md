@@ -205,9 +205,10 @@ KiPI's own `SolveError`s become `EngineError` too.
 | `kind` (`"rail"` / `"ground"`) | `RailResult.kind` (new field, default `"rail"`) | Additive. Per-rail results keep `"rail"`. |
 | `result.mesh / solution / fields` | layers, vias, power loss, `j_max`: through the per-rail `_convert` | The same arrays as a per-rail result, so maps, isolines, arrows, Measure and Compare work unchanged. |
 | `fields.v_ref` (rail: the VRM's set point above the ground it regulates against; ground: 0 V) | `RailResult.v_ref` | Drops on a rail are measured from the set point, as in KiPI. A remote-sensed VRM lifts its output pins above it: a boost, shown as a negative drop. |
-| `fields.summary["max_drop"]` | `RailResult.max_drop` | On a ground group, `max_drop` is the largest **rise** above 0 V (`summary["max_boost"]`), and the map field becomes "Ground rise (mV)". |
+| `fields.summary["max_drop"]` | `RailResult.max_drop` | On a negative rail, the voltage lost toward 0 V (`summary["max_boost"]`). On a ground group, the **rise** with the largest magnitude, signed: `max_boost` above 0 V, or `−max_drop` when the ground sinks below 0 V (under a negative rail). The same signed number is in the rise problem, the return pins, the map and the double-click readout; limits judge its magnitude. |
 | `fields.terminals` | `RailResult.sources` / `loads` | Every terminal of the group: VRM outputs, setup loads, the inputs of the VRMs it feeds (`"U1 (input)"`), sense pins (0 A), ground references (`"J1 (gnd)"`), returns (`"U3 (return)"`), VRM grounds (`"U1 (gnd)"`). `ref` = the footprint of the first pad. |
-| `iterations`, `converged` | `RailResult.stats["iterations"]`, a warning when not converged | |
+| `iterations`, `converged` | `RailResult.stats["iterations"]`, `RailResult.converged` (new field, default `True`), a warning when not converged | Nothing in a group that did not converge is judged, copper included. |
+| terminal pads | `TerminalResult.net` (new field, default `""`) | The net of its first pad: return pins are judged by their own net's limits. |
 
 ### VRMs → `TreeResult.vrms: List[VrmReport]` (new, `results.py`)
 
@@ -225,6 +226,7 @@ KiPI's own `SolveError`s become `EngineError` too.
 | `v_ground_sense` | `v_ground_sense_v` | V |
 | `regulation` | `regulation` | — | KiPI's reason it cannot hold its voltage (an LDO with less than its dropout across it; the dropout defaults to 0 V, so this means its input fell below its output). |
 | `current_limit_a`, `passed`, `phases`, `load_line_mohm`, `v_droop` | — | | Not exposed (no current limit, single phase, no load line). |
+| terminal `"U1 (input)"` of the feeding group, `"U1 (gnd)"` of the ground group | `input_net`, `input_group`, `input_nominal_v`, `v_in_worst_v`, `input_drop_v`, `input_drop_pct`, `input_status`, `input_passed` | V, % | New (second review). A regulator's input judged as a load on the rail feeding it: `v_in_worst_v` = lowest input pin − highest ground pin (on a negative rail the highest minus the lowest), `input_drop_v` = toward 0 V from the set voltage of the source driving that rail. `input_status`: `DISCONNECTED`, `NOT CONVERGED`, or `VRM OUT OF REGULATION` when that source cannot hold its voltage. |
 
 ### Loads → `TreeResult.loads: List[LoadReport]` (new, `results.py`)
 
@@ -236,24 +238,50 @@ KiPI's own `SolveError`s become `EngineError` too.
 | `v_supply`, `v_supply_min` | `v_supply_v` (mean over the supply pins), `v_supply_min_v` | V | |
 | `v_ground` | `v_ground_v` (mean, `None` without ground pins) | V | |
 | `v_effective` | `v_across_v` = `v_supply_v − (v_ground_v or 0)` | V | |
-| `v_low` (else `v_worst`) | `v_worst_v` | V | Lowest supply pin minus highest ground pin: the worst case for a drop limit. |
-| — | `drop_v` = `nominal_v − v_worst_v`, `drop_pct` | V, % | The ground's rise counts in the drop: this is the voltage the part sees. |
+| `v_low` (else `v_worst`) | `v_worst_v` | V | Lowest supply pin minus highest ground pin: the worst case for a drop limit (on a negative rail `v_high`, the pin that lost the most toward 0 V). |
+| — | `drop_v` = `nominal_v − v_worst_v` (toward 0 V), `drop_pct` = `drop_v / |nominal_v|` | V, % | The ground's rise counts in the drop: this is the voltage the part sees. No percentage at 0 V nominal (`NaN`, `null` in JSON, "—" in tables): not judged. |
+| — | `net` (new field) | — | Its supply net, for the per-net limits. |
 | `status` | `status` | — | `DISCONNECTED`, `NOT CONVERGED` or `VRM OUT OF REGULATION`, as KiPI reports them. |
-| `passed` | `passed` | — | **Coppernicus's own verdict** (`power_tree.judge_loads`): `drop_pct ≤ max_drop_pct` of the group's rail; `None` without a limit, or for a load that is disconnected or not converged. KiPI's `passed` is ignored, since no tolerance is passed to it. When a limit changes after the solve, the GUI judges again without solving. |
+| `passed` | `passed` | — | **Coppernicus's own verdict** (`power_tree.judge_loads`): `drop_pct ≤ max_drop_pct` of its net (per-net rule below); `None` without a limit, or for a load that is disconnected, not converged, behind a regulator out of regulation, or at 0 V nominal. KiPI's `passed` is ignored, since no tolerance is passed to it. When a limit changes after the solve, or changed while it solved, the GUI judges again without solving (`power_tree.apply_limits` reads the project's current limits). |
 
-### Verdicts (only against the user's limits, per group)
+### Verdicts (only against the user's limits; second review, coordinator-approved)
 
-- A rail group uses the limits of the project rail it is keyed by (`max_drop_pct` on its loads'
-  `drop_pct`; `max_current_density` and `max_via_current` on its copper and vias, as in the
-  per-rail solve).
-- A ground group uses the limits of a project rail with the ground's net, if the user set
-  limits on it (select `GND` in the net list and type a limit).
-  - `max_drop_pct` does not apply to a ground, which has no nominal voltage: it is reported
-    as not judged.
-  - `max_ground_rise_mv` judges each return pin's rise and the copper's
-    largest rise above 0 V.
-  - The other two limits apply as on a rail.
-  - `max_ground_rise_mv` set on a supply rail does not apply in the tree.
+Which limit judges what (`power_tree.LIMITS_RULE`, also an assumption line of every tree):
+- **Per net.** A load is judged by its supply net's limits, a regulator's input by its input
+  net's, a return pin by its ground net's. A limit not set on a net comes, field by field,
+  from its group's driving net: a rail group's key (the net its source drives), or a ground
+  group's key (the first ground net the project names). So a limit on `+3V3` also judges
+  `U2 (input)` on `+3V3_F` beyond FB1, unless `+3V3_F` has its own.
+- **Copper per group, strictest.** The largest ground rise, current crowding and vias of a
+  group are judged against the strictest (lowest) value set on any of its nets, because the
+  solve does not keep which net each triangle belongs to. This is conservative: it may fail
+  copper of a net against a tighter limit of another net of the group, never pass it falsely.
+  A copper fail names the limit and where it came from: "(limit 1 mV from AGND, strictest in
+  group)". Per-net copper attribution is a known limitation.
+- **Links** are not judged as points of their own: a link joins its nets into one group,
+  whose loads and regulator inputs are judged directly.
+- **Regulator inputs** are judged as loads on the rail feeding them (`VrmReport.input_*`),
+  across their input and ground pins, as the tree's loads are. VIN solved alone judges the
+  estimated input on the input pins only (no ground in a single-rail solve); both fail the
+  same tight limit on the example.
+- `max_drop_pct` does not apply to a ground, which has no nominal voltage;
+  `max_ground_rise_mv` does not apply to a supply rail in the tree. On a ground it judges
+  each return pin's rise and the copper's largest rise, by magnitude (signed values shown).
+
+The verdict of a group (`power_tree.group_verdict`):
+- `fail` when a limit is exceeded;
+- otherwise `not_judged` when a limit set applies to an item that could not be judged
+  (`DISCONNECTED`, `NOT CONVERGED`, `VRM OUT OF REGULATION`, 0 V nominal for a drop
+  percentage, a return pin not solved), when `max_drop_pct` has no load or regulator input
+  to judge, when the group did not converge, or when no limit applies;
+- `pass` only when everything a limit applies to was judged and passed.
+
+Overall (`power_tree.tree_verdicts`): `fail` if a group fails; otherwise `not_judged` if a
+group with limits is `not_judged`, or a limit is set on a net the tree does not solve
+(excluded, or not set up); otherwise `pass` if something was judged; `not_judged` when no
+limit is set. Groups without limits do not stop a pass ("judged only against the limits you
+set"). `solve --tree` exits 0 for `not_judged`, as the per-rail solve does; its text output
+names the not-judged items on the `Verdict:` line.
 - A net solved on its own with `max_ground_rise_mv` set gets one "rise" problem: the copper
   furthest from its source voltage, in mV, against the limit. It is meant for a ground net
   solved alone.
@@ -282,7 +310,21 @@ unchanged.
 `tree_summary(tree)` (`coppernicus.power_tree`) is the JSON form of a `TreeResult`. It is
 printed by `coppernicus solve --tree --json` and written to `<project>_tree_summary.json`,
 and the agent interface will reuse it. It has:
-- `verdict` and `verdict_note`, judged per group against the user's limits only;
+- `verdict` and `verdict_note`, judged against the user's limits only (rules above);
+  `not_judged`: the items a limit set could not judge, with the reason;
 - `vrms`, `loads`, `links` and `groups` tables, with units in every key (a ground group has
-  `max_rise_mv`; its `max_drop_pct` is `null`);
+  `max_rise_mv`, signed; its `max_drop_pct` is `null`). Each VRM has `input_net`,
+  `input_drop_mv`, `input_drop_pct`, `input_status`, `input_exceeds_drop_limit`; each group
+  has `limits` (the strictest of each kind), `limits_by_net` and `not_judged`. Regulator
+  inputs are among a rail group's problems as kind `"load"`, named `"U1 (input)"`;
 - `assumptions` and `warnings`.
+
+### Known limitation: negative rails solved alone (predates Task 7, a separate task)
+
+A rail solved on its own draws every load current out of the copper, so on a negative rail
+the voltages it shows are mirrored around the source voltage: a 40 mm strip at −3.3 V with
+1 A shows the load at −3.3379 V, where the power tree (KiPI flows a negative rail's load
+current into the copper, #220) gives −3.2621 V. Drops, current densities, losses and via
+currents are exact by linearity, and `RailResult.drop_pct` divides by |v_ref|, so the drop
+limit judges it correctly. Only the voltage shown is wrong. Fixing it means flipping the
+load current in `solve_rail` together with every `v_ref − V` in the service, report and maps.
