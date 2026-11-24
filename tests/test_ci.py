@@ -92,3 +92,16 @@ def test_summary_command_and_cell_escaping(repo, capsys):
     md = ci.summary_markdown(index)
     assert "`a\\|b.coppernicus.yml`" in md and "&lt;V\\|1&gt;" in md and "not judged (no limits)" in md
     assert "Not judged: no limits" in md
+
+
+def test_a_crash_is_an_error_not_an_exceeded_limit(repo, monkeypatch):
+    """Python exits with 1 on an uncaught exception, the same code as "limit exceeded": a run
+    that printed no result must count as an error (2)."""
+    import subprocess
+
+    def crashed(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="Traceback (most recent call last)\n")
+    monkeypatch.setattr(ci.subprocess, "run", crashed)
+    index = ci.solve_all(["hw/demo-relaxed.coppernicus.yml"], Path("out"))
+    assert index["exit_code"] == 2 and index["verdict"] == "error"
+    assert index["projects"][0]["exit_code"] == 2

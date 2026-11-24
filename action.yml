@@ -84,14 +84,17 @@ runs:
         # is committed.
         html_flag=""
         if [ "$COPPERNICUS_HTML" != "true" ]; then html_flag="--no-html"; fi
-        set +e
+        index="$COPPERNICUS_OUT/coppernicus-ci.json"
+        rm -f "$index"
         uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -m coppernicus.ci solve \
-          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag "$COPPERNICUS_PROJECTS"
-        code=$?
-        set -e
-        verdict=$(uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -c \
-          "import json, sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['verdict'])" \
-          "$COPPERNICUS_OUT/coppernicus-ci.json" 2>/dev/null || echo error)
+          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag "$COPPERNICUS_PROJECTS" || true
+        # The exit code and verdict come from the index the helper writes: a crash also exits
+        # with 1, which must not read as "limit exceeded". No index means an error.
+        result=$(uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -c \
+          "import json, sys; d = json.load(open(sys.argv[1], encoding='utf-8')); print(d['exit_code'], d['verdict'])" \
+          "$index" 2>/dev/null) || result="2 error"
+        code=${result%% *}
+        verdict=${result##* }
         {
           echo "exit-code=$code"
           echo "verdict=$verdict"
@@ -117,7 +120,9 @@ runs:
       run: |
         uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -m coppernicus.ci summary \
           --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" --artifact-url "$COPPERNICUS_ARTIFACT_URL" \
-          >> "$GITHUB_STEP_SUMMARY" || true
+          >> "$GITHUB_STEP_SUMMARY" \
+          || printf '## Coppernicus: DC power integrity\n\n**Error:** no results; see the job log.\n' \
+          >> "$GITHUB_STEP_SUMMARY"
 
     - name: Verdict
       if: always()

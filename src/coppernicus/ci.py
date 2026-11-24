@@ -91,7 +91,10 @@ def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool =
         entry: Dict[str, Any] = {"project": project.as_posix(), "exit_code": run.returncode,
                                  "folder": folder.as_posix()}
         if "error" in doc:
+            # A crash also exits with 1 (Python's code for an uncaught exception), which must
+            # never read as "limit exceeded": any run without a result is an error.
             entry["error"] = doc["error"]
+            entry["exit_code"] = EXIT_ERROR
         else:
             entry["doc"] = doc
         entries.append(entry)
