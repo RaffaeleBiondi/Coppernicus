@@ -1,0 +1,138 @@
+name: Coppernicus PDN check
+description: >-
+  DC power integrity of KiCad boards: solve the rails of Coppernicus project files (voltage drop,
+  current density, via currents), publish maps and an HTML report, and fail on an exceeded limit.
+author: RaffaeleBiondi
+branding:
+  icon: zap
+  color: orange
+
+inputs:
+  project:
+    description: >-
+      Project file(s) to solve: a path or a glob of *.coppernicus.yml, relative to the repository
+      root. Several patterns go on separate lines.
+    required: true
+  output-dir:
+    description: Folder for the results (maps, HTML reports, JSON), relative to the repository root.
+    default: coppernicus-results
+  html:
+    description: Also write the interactive offline HTML report of each project.
+    default: "true"
+  top:
+    description: Current-crowding spots and vias listed per rail (every load is always listed).
+    default: "5"
+  fail-on-limit:
+    description: >-
+      Fail the step when a limit written in a project file is exceeded. Errors (a project that
+      cannot be solved) always fail it.
+    default: "true"
+  python-version:
+    description: Python used to run Coppernicus (3.12 or 3.13).
+    default: "3.12"
+  uv-version:
+    description: uv version to install; empty for the latest.
+    default: ""
+  upload-artifact:
+    description: Upload the results folder as a workflow artifact.
+    default: "true"
+  artifact-name:
+    description: Name of the uploaded artifact.
+    default: coppernicus-results
+
+outputs:
+  verdict:
+    description: >-
+      pass, fail, not_judged, pass_partially_judged or error, over every project. Judged only
+      against the limits written in the project files.
+    value: ${{ steps.solve.outputs.verdict }}
+  exit-code:
+    description: 0 (no limit exceeded), 1 (a limit exceeded) or 2 (an error).
+    value: ${{ steps.solve.outputs.exit-code }}
+  results-dir:
+    description: Absolute path of the results folder.
+    value: ${{ steps.solve.outputs.results-dir }}
+  artifact-url:
+    description: Download URL of the uploaded results, when uploaded.
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up uv and Python
+      uses: astral-sh/setup-uv@v10.4.0
+      with:
+        version: ${{ inputs.uv-version }}
+        python-version: ${{ inputs.python-version }}
+        working-directory: ${{ github.action_path }}
+        enable-cache: true
+
+    - name: Install Coppernicus
+      shell: bash
+      run: uv sync --project "$GITHUB_ACTION_PATH" --frozen --no-dev
+
+    - name: Solve the rails
+      id: solve
+      shell: bash
+      env:
+        COPPERNICUS_PROJECTS: ${{ inputs.project }}
+        COPPERNICUS_OUT: ${{ inputs.output-dir }}
+        COPPERNICUS_TOP: ${{ inputs.top }}
+        COPPERNICUS_HTML: ${{ inputs.html }}
+      run: |
+        # The results go to their own folder; nothing is written next to a board and nothing
+        # is committed.
+        html_flag=""
+        if [ "$COPPERNICUS_HTML" != "true" ]; then html_flag="--no-html"; fi
+        set +e
+        uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -m coppernicus.ci solve \
+          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag "$COPPERNICUS_PROJECTS"
+        code=$?
+        set -e
+        verdict=$(uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -c \
+          "import json, sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['verdict'])" \
+          "$COPPERNICUS_OUT/coppernicus-ci.json" 2>/dev/null || echo error)
+        {
+          echo "exit-code=$code"
+          echo "verdict=$verdict"
+          echo "results-dir=$(cd "$COPPERNICUS_OUT" 2>/dev/null && pwd || echo "$COPPERNICUS_OUT")"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Upload the results
+      id: upload
+      if: always() && inputs.upload-artifact == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.output-dir }}
+        if-no-files-found: warn
+
+    - name: Write the job summary
+      if: always()
+      shell: bash
+      env:
+        COPPERNICUS_OUT: ${{ inputs.output-dir }}
+        COPPERNICUS_TOP: ${{ inputs.top }}
+        COPPERNICUS_ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+      run: |
+        uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -m coppernicus.ci summary \
+          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" --artifact-url "$COPPERNICUS_ARTIFACT_URL" \
+          >> "$GITHUB_STEP_SUMMARY" || true
+
+    - name: Verdict
+      if: always()
+      shell: bash
+      env:
+        CODE: ${{ steps.solve.outputs.exit-code }}
+        FAIL_ON_LIMIT: ${{ inputs.fail-on-limit }}
+      run: |
+        case "$CODE" in
+          0) echo "Coppernicus: no limit exceeded." ;;
+          1) if [ "$FAIL_ON_LIMIT" = "true" ]; then
+               echo "::error title=Coppernicus::A limit set in a project file is exceeded. See the job summary."
+               exit 1
+             fi
+             echo "::warning title=Coppernicus::A limit set in a project file is exceeded (fail-on-limit is false)." ;;
+          *) echo "::error title=Coppernicus::A project could not be solved (exit code ${CODE:-none}). See the log above."
+             exit 2 ;;
+        esac

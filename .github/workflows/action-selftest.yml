@@ -1,0 +1,112 @@
+name: Action self-test
+
+# Runs the repository's own GitHub Action (action.yml at the root) on the synthetic demo.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: action-selftest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tight-limit-fails:
+    name: demo, 0.25 % budget -> the step fails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        uses: ./
+        continue-on-error: true
+        with:
+          project: examples/demo/demo.coppernicus.yml
+          output-dir: results-tight
+          artifact-name: selftest-tight
+      - name: The exceeded limit must fail the step, with every file written
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.check.outcome }}
+          VERDICT: ${{ steps.check.outputs.verdict }}
+          CODE: ${{ steps.check.outputs.exit-code }}
+        run: |
+          echo "outcome=$OUTCOME verdict=$VERDICT exit-code=$CODE"
+          test "$OUTCOME" = failure
+          test "$VERDICT" = fail
+          test "$CODE" = 1
+          dir=results-tight/examples_demo_demo.coppernicus
+          test -f "$dir/demo.coppernicus_summary.json"
+          test -f "$dir/demo.coppernicus_report.html"
+          test "$(ls "$dir"/*.png | wc -l)" -eq 4
+          test -z "$(ls examples/demo/*.png examples/demo/*.html 2>/dev/null)"   # nothing next to the board
+
+  relaxed-limit-passes:
+    name: demo, 1 % budget -> the step passes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        uses: ./
+        with:
+          project: examples/demo/demo-relaxed.coppernicus.yml
+          output-dir: results-relaxed
+          artifact-name: selftest-relaxed
+      - name: Within the limit
+        shell: bash
+        env:
+          VERDICT: ${{ steps.check.outputs.verdict }}
+          CODE: ${{ steps.check.outputs.exit-code }}
+        run: |
+          echo "verdict=$VERDICT exit-code=$CODE"
+          test "$VERDICT" = pass
+          test "$CODE" = 0
+
+  report-only:
+    name: demo with fail-on-limit false, no HTML -> passes, verdict still fail
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        uses: ./
+        with:
+          project: |
+            examples/demo/demo.coppernicus.yml
+          output-dir: results-report-only
+          html: "false"
+          fail-on-limit: "false"
+          upload-artifact: "false"
+      - name: Reported, not failed
+        shell: bash
+        env:
+          VERDICT: ${{ steps.check.outputs.verdict }}
+          CODE: ${{ steps.check.outputs.exit-code }}
+        run: |
+          echo "verdict=$VERDICT exit-code=$CODE"
+          test "$VERDICT" = fail
+          test "$CODE" = 1
+          test -z "$(find results-report-only -name '*.html')"
+
+  no-match-is-an-error:
+    name: a pattern matching nothing -> the step fails with exit code 2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        uses: ./
+        continue-on-error: true
+        with:
+          project: does-not-exist/*.coppernicus.yml
+          upload-artifact: "false"
+      - name: An error, whatever fail-on-limit says
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.check.outcome }}
+          CODE: ${{ steps.check.outputs.exit-code }}
+        run: |
+          echo "outcome=$OUTCOME exit-code=$CODE"
+          test "$OUTCOME" = failure
+          test "$CODE" = 2
