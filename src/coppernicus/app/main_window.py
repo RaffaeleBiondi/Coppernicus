@@ -219,6 +219,7 @@ class MainWindow(QMainWindow):
         self.measure.toggled.connect(self._measure_toggled)
         self.view.probed.connect(lambda text: self.statusBar().showMessage(text))
         self.view.pad_picked.connect(self.pick_pad)
+        self.view.add_hover_menu(self.menuBar().addMenu("View"))      # View → Hover shows
         self.compare.pin_requested.connect(self.pin_baseline)
         self.compare.clear_requested.connect(self.clear_baseline)
         self.rail_panel.pick_changed.connect(self._pick_mode_changed)

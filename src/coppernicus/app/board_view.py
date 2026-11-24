@@ -3,7 +3,8 @@
 Shows one copper layer at a time: the board outline, the net's copper outline, and after a
 solve a colour map (voltage drop, voltage or current density) with the sources, loads and
 vias on top. Left-drag pans, the wheel zooms, a double-click reads the values under the
-pointer. In pick mode a single click (a press and release less than 3 px apart, so a pan
+pointer and, as the pointer moves, a readout beside it shows the values chosen in View →
+Hover shows. In pick mode a single click (a press and release less than 3 px apart, so a pan
 is never a click) reports the board point under it; in measure mode two clicks give the
 voltage difference between two points. Drop isolines and current-flow arrows can be laid
 over any map. KiCad's y axis points down; the view plots (x, −y) so the board reads as in
@@ -20,10 +21,21 @@ os.environ.setdefault("QT_API", "pyside6")
 import numpy as np  # noqa: E402
 import pyvista as pv  # noqa: E402
 from matplotlib import colormaps  # noqa: E402
-from PySide6.QtCore import Qt, Signal  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, Signal  # noqa: E402
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap  # noqa: E402
-from PySide6.QtWidgets import QHBoxLayout, QWidget  # noqa: E402
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QWidget  # noqa: E402
 from pyvistaqt import QtInteractor  # noqa: E402
+
+from coppernicus.app import APP_NAME  # noqa: E402
+from coppernicus.app.hover import (  # noqa: E402
+    HOVER_DEFAULT,
+    HOVER_VALUES,
+    chosen_from_setting,
+    hover_text,
+    hover_values,
+    label_position,
+    setting_from_chosen,
+)
 
 # TriangleLocator is also re-exported here for code that imported it from this module.
 from coppernicus.fields import TriangleLocator, drop_levels, probe, sample_flow  # noqa: E402
@@ -49,6 +61,10 @@ ISOLINE_COUNT = 10
 MAX_ARROWS = 2000
 ARROW_CELLS = 36                  # arrows across the layer's larger side, before thinning
 ARROW_FULL_PERCENTILE = 95        # arrows at or above this percentile of |J| get full length
+HOVER_MS = 40                     # at most one hover probe per 40 ms while the pointer moves
+HOVER_SETTING = "view/hover_shows"    # the values the hover readout shows (QSettings)
+HOVER_STYLE = ("QLabel { background: #fffff0; color: #111111; border: 1px solid #888888;"
+               " border-radius: 3px; padding: 2px 5px; }")
 
 
 def _xyz(points: np.ndarray, z: float = 0.0) -> np.ndarray:
@@ -180,6 +196,20 @@ class BoardView(QWidget):
         self._measure: List[Tuple[str, float, float, float]] = []    # (layer, x, y, V): A, then B
         self._difference_mv: Optional[np.ndarray] = None             # per node, on the Δ map
         self._measure_result: Optional[RailResult] = None
+        # Hover readout: a move stores the pointer and starts the timer if it is idle, so a
+        # moving pointer is probed every HOVER_MS, at its latest position.
+        self.hover_label = QLabel(self.plotter.interactor)
+        self.hover_label.setStyleSheet(HOVER_STYLE)
+        self.hover_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.hover_label.hide()
+        self.hover_actions = {}
+        self._hover_chosen: Tuple[str, ...] = HOVER_DEFAULT
+        self._hover_at: Optional[QPoint] = None                       # widget pixels, y down
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(HOVER_MS)
+        self._hover_timer.timeout.connect(self._hover_tick)
+        self.plotter.interactor.installEventFilter(self)
 
     # ------------------------------------------------------------------ scene
     def reset(self):
@@ -188,6 +218,7 @@ class BoardView(QWidget):
         self._measure, self._measure_result = [], None
 
     def clear(self):
+        self._hide_hover()
         self.plotter.clear()
         self.colorbar.set_scale(None)
         self._layer, self._result, self._finder = None, None, None
@@ -477,9 +508,92 @@ class BoardView(QWidget):
                              f"{float(drop_mv(self._result, p.voltage_v)):.3f} mV, "
                              f"|J| = {p.current_density_a_mm2:.2f} A/mm²{delta}")
 
+    # ------------------------------------------------------------------ hover
+    def hover_at(self, x: float, y: float) -> str:
+        """The hover readout at board point (x, y) mm on the shown layer: the double-click's
+        probe on the result it reads (a power-tree group when one is shown). Empty off the
+        copper, before a solve and with no value chosen."""
+        if self._layer is None or self._finder is None or self._result is None or not self._hover_chosen:
+            return ""
+        p = probe(self._layer, self._finder, x, y)
+        return hover_text(None if p is None else hover_values(self._result, self._layer.name, p),
+                          self._hover_chosen)
+
+    def set_hover_values(self, chosen: Sequence[str]):
+        """The values the readout shows (keys of :data:`HOVER_VALUES`); none turns it off."""
+        self._hover_chosen = tuple(chosen)
+        if not self._hover_chosen:
+            self._hide_hover()
+
+    def add_hover_menu(self, menu: QMenu) -> QMenu:
+        """Add the "Hover shows" submenu to ``menu``: one checkable action per value, none
+        checked turns the readout off. The choice is kept in the user's settings."""
+        settings = _settings()
+        self.set_hover_values(chosen_from_setting(settings.value(HOVER_SETTING)))
+        sub = menu.addMenu("Hover shows")
+        for key, label in HOVER_VALUES:
+            act = sub.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(key in self._hover_chosen)
+            act.toggled.connect(self._hover_menu_toggled)
+            self.hover_actions[key] = act
+        return sub
+
+    def _hover_menu_toggled(self, *_):
+        chosen = [key for key, act in self.hover_actions.items() if act.isChecked()]
+        self.set_hover_values(chosen)
+        _settings().setValue(HOVER_SETTING, setting_from_chosen(chosen))
+
+    def eventFilter(self, watched, event):
+        if watched is self.plotter.interactor:
+            kind = event.type()
+            if kind == QEvent.MouseMove:
+                if event.buttons() != Qt.NoButton:          # panning or dragging
+                    self._hide_hover()
+                elif self._hover_chosen:
+                    self._hover_at = event.position().toPoint()
+                    if not self._hover_timer.isActive():
+                        self._hover_timer.start()
+            elif kind in (QEvent.Leave, QEvent.MouseButtonPress, QEvent.MouseButtonDblClick):
+                self._hide_hover()
+            elif kind == QEvent.Wheel and self._hover_at is not None and not self._hover_timer.isActive():
+                self._hover_timer.start()                   # a zoom moves the board under it
+        return super().eventFilter(watched, event)
+
+    def _hover_tick(self):
+        if self._hover_at is None:
+            return
+        # The pointer's display point as VTK received it, as a click in pick mode reads it.
+        text = self.hover_at(*self.display_to_board(*self._event_xy()))
+        label = self.hover_label
+        if not text:
+            label.hide()
+            return
+        if text != label.text():
+            label.setText(text)
+            label.adjustSize()
+        widget = self.plotter.interactor
+        corner = QPoint(*label_position((self._hover_at.x(), self._hover_at.y()),
+                                        (label.width(), label.height()), (widget.width(), widget.height())))
+        if label.pos() != corner:
+            label.move(corner)
+        if not label.isVisible():
+            label.show()
+
+    def _hide_hover(self):
+        self._hover_timer.stop()
+        self._hover_at = None
+        self.hover_label.hide()
+
     def closeEvent(self, event):
+        self._hover_timer.stop()
         self.plotter.close()
         super().closeEvent(event)
+
+
+def _settings() -> QSettings:
+    """The user's settings for the app (the default format, so a test can redirect them)."""
+    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
 
 
 def copper_rings(geom) -> List[np.ndarray]:
