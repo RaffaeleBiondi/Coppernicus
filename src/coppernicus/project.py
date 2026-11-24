@@ -7,18 +7,37 @@ A *rail* is one power net. Its *sources* are parts whose pins are held at a fixe
 (a regulator output); its *loads* are parts whose pins draw a current, split equally across
 the pins (that is what the engine solves). Pins are given as a list of pad numbers, glob
 patterns (``"A*"``), or ``None`` / ``"all"`` for every pin of the part on the rail's net.
+
+Version 2 adds what a whole power tree needs (every field optional, omitted from the file
+while at its default, so files written before it load and save unchanged):
+
+* a source's ``kind`` (``"source"``, ``"ldo"``, ``"smps"``), ``efficiency`` (a fraction,
+  switchers) and ``quiescent_a``, and the pins of its ``input``, ``ground``, ``sense`` and
+  ``ground_sense``;
+* a load's ``ground`` pins, where its current returns;
+* ``links``: parts that join two nets with a resistance (ferrites, sense resistors, fuses);
+* ``engine_options``: an engine-specific passthrough, checked by the engine.
+
+A pin reference is saved as a mapping ``{ref, net, pins}``; ``ref`` is omitted when it is the
+terminal's own part. See ``docs/engine-mapping.md`` for how the engine reads these fields.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple, TypeVar
 
 import yaml
 
 PinSpec = Optional[List[str]]
+
+SOURCE_KINDS = ("source", "ldo", "smps")     # ideal supply, linear regulator, switcher
+# A source's pin references (input, ground and sense pins) and a load's.
+SOURCE_PIN_REFS = ("input", "ground", "sense", "ground_sense")
+LOAD_PIN_REFS = ("ground",)
 
 
 class ProjectError(ValueError):
@@ -48,11 +67,32 @@ def pins_text(pins: PinSpec) -> str:
 
 @dataclass
 class Source:
-    """Pins of ``ref`` held at ``voltage`` (a regulator output, a connector supply)."""
+    """Pins of ``ref`` held at ``voltage`` (a regulator output, a connector supply).
+
+    For a power tree: an ``"ldo"`` or ``"smps"`` draws its input current from the pins of
+    ``input`` (LDO: I_out + I_q; switcher: V_out·I_out / (efficiency·V_in) + I_q). Pin
+    references (``input_*``, ``ground_*``, ``sense_*``, ``ground_sense_*``) are set when their
+    ``*_net`` is; an empty ``*_ref`` means this source's own part."""
     ref: str
     voltage: float
     pins: PinSpec = None
     name: str = ""
+    kind: str = "source"
+    efficiency: Optional[float] = None       # fraction 0–1, switchers only
+    quiescent_a: float = 0.0
+    input_ref: str = ""
+    input_pins: PinSpec = None
+    input_net: str = ""
+    ground_ref: str = ""
+    ground_pins: PinSpec = None
+    ground_net: str = ""
+    # Remote sense: the voltage is regulated at these pins (above ground_sense, if set).
+    sense_ref: str = ""
+    sense_pins: PinSpec = None
+    sense_net: str = ""
+    ground_sense_ref: str = ""
+    ground_sense_pins: PinSpec = None
+    ground_sense_net: str = ""
 
     @property
     def label(self) -> str:
@@ -61,15 +101,65 @@ class Source:
 
 @dataclass
 class Load:
-    """Pins of ``ref`` drawing ``current`` amps in total, split equally across the pins."""
+    """Pins of ``ref`` drawing ``current`` amps in total, split equally across the pins;
+    with ``ground_net`` set, the current returns through those ground pins."""
     ref: str
     current: float
     pins: PinSpec = None
     name: str = ""
+    ground_ref: str = ""
+    ground_pins: PinSpec = None
+    ground_net: str = ""
 
     @property
     def label(self) -> str:
         return self.name or self.ref
+
+
+@dataclass
+class Link:
+    """A part joining two nets with a resistance (ferrite, sense resistor, fuse): its pins
+    ``pins_a`` on ``net_a`` and ``pins_b`` on ``net_b``. Nets joined by links are solved
+    together as one group in a power-tree solve."""
+    name: str
+    ref: str
+    pins_a: PinSpec
+    net_a: str
+    pins_b: PinSpec
+    net_b: str
+    resistance_ohm: float
+
+
+def pin_ref(terminal, what: str) -> Optional[Tuple[str, PinSpec, str]]:
+    """``(ref, pins, net)`` of a terminal's pin reference ``what`` (``"input"``, ``"ground"``,
+    …), the part defaulting to the terminal's own; ``None`` when its net is not set."""
+    net = getattr(terminal, f"{what}_net")
+    if not net:
+        return None
+    return getattr(terminal, f"{what}_ref") or terminal.ref, getattr(terminal, f"{what}_pins"), net
+
+
+T = TypeVar("T", Source, Load)
+
+
+def carry_over(old: Sequence[T], new: Sequence[T]) -> List[T]:
+    """``new`` terminals, from an editor that shows only name, ref, pins and the value, with
+    every other field (a regulator's kind, input, ground and sense pins…) taken from the
+    matching ``old`` terminal: the same part with the same pins, else the same part. A row
+    whose part changed starts from the defaults."""
+    unused = list(old)
+    out = []
+    for n in new:
+        match = (next((o for o in unused if o.ref == n.ref and o.pins == n.pins), None)
+                 or next((o for o in unused if o.ref == n.ref), None))
+        if match is None:
+            out.append(n)
+            continue
+        unused.remove(match)
+        value = "voltage" if isinstance(n, Source) else "current"
+        out.append(dataclasses.replace(match, ref=n.ref, pins=n.pins, name=n.name,
+                                       **{value: getattr(n, value)}))
+    return out
 
 
 @dataclass
@@ -109,6 +199,10 @@ class Project:
     # Nets the user marked as rails by hand, where the name/zone heuristic missed them.
     # Saved only when not empty, so files written before this field stay identical.
     marked_rails: List[str] = field(default_factory=list)
+    links: List[Link] = field(default_factory=list)
+    # Engine-specific options, passed through to the engine and checked there (KiPI:
+    # ``excluded_nets``). Saved only when not empty.
+    engine_options: Dict[str, Any] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ queries
     def board_path(self) -> Path:
@@ -134,8 +228,19 @@ class Project:
             if t.name:
                 d["name"] = t.name
             d["ref"] = t.ref
-            d["pins"] = "all" if t.pins is None else list(t.pins)
+            d["pins"] = _pins_out(t.pins)
             d[value_key] = t.voltage if value_key == "voltage" else t.current
+            if value_key == "voltage":            # v2 fields, only when not the default
+                if t.kind != "source":
+                    d["kind"] = t.kind
+                if t.efficiency is not None:
+                    d["efficiency"] = t.efficiency
+                if t.quiescent_a:
+                    d["quiescent_a"] = t.quiescent_a
+            for what in (SOURCE_PIN_REFS if value_key == "voltage" else LOAD_PIN_REFS):
+                if getattr(t, f"{what}_net"):
+                    d[what] = _pin_ref_out(getattr(t, f"{what}_ref"), getattr(t, f"{what}_pins"),
+                                           getattr(t, f"{what}_net"))
             return d
 
         rails = []
@@ -150,6 +255,12 @@ class Project:
                 rd["follow_net_ties"] = False
             rails.append(rd)
         out: Dict[str, Any] = {"board": self.board, "settings": dict(vars(self.settings)), "rails": rails}
+        if self.links:
+            out["links"] = [{"name": k.name, "ref": k.ref, "a": _pin_ref_out("", k.pins_a, k.net_a),
+                             "b": _pin_ref_out("", k.pins_b, k.net_b),
+                             "resistance_ohm": k.resistance_ohm} for k in self.links]
+        if self.engine_options:
+            out["engine_options"] = dict(self.engine_options)
         if self.marked_rails:
             out["marked_rails"] = list(self.marked_rails)
         return out
@@ -164,22 +275,22 @@ class Project:
             for rd in data.get("rails") or []:
                 rails.append(Rail(
                     net=str(rd["net"]),
-                    sources=[Source(ref=str(s["ref"]), voltage=float(s["voltage"]),
-                                    pins=parse_pins(s.get("pins")), name=str(s.get("name", "")))
-                             for s in rd.get("sources") or []],
-                    loads=[Load(ref=str(ld["ref"]), current=float(ld["current"]),
-                                pins=parse_pins(ld.get("pins")), name=str(ld.get("name", "")))
-                           for ld in rd.get("loads") or []],
+                    sources=[_source_in(s) for s in rd.get("sources") or []],
+                    loads=[_load_in(ld) for ld in rd.get("loads") or []],
                     limits=Limits(**(rd.get("limits") or {})),
                     follow_net_ties=bool(rd.get("follow_net_ties", True)),
                 ))
             marked = data.get("marked_rails") or []
             if not isinstance(marked, list):
                 raise ValueError("marked_rails must be a list of net names")
+            links = [_link_in(k) for k in data.get("links") or []]
+            options = data.get("engine_options") or {}
+            if not isinstance(options, dict):
+                raise ValueError("engine_options must be a mapping of option names to values")
         except (KeyError, TypeError, ValueError) as e:
             raise ProjectError(f"invalid project file: {e}") from e
         return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path,
-                   marked_rails=[str(n) for n in marked])
+                   marked_rails=[str(n) for n in marked], links=links, engine_options=dict(options))
 
     @classmethod
     def load(cls, path) -> "Project":
@@ -205,3 +316,84 @@ class Project:
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self.to_dict(), f, sort_keys=False, allow_unicode=True)
         return path
+
+
+# ---------------------------------------------------------------------- file helpers
+
+def _pins_out(pins: PinSpec):
+    return "all" if pins is None else list(pins)
+
+
+def _pin_ref_out(ref: str, pins: PinSpec, net: str) -> Dict[str, Any]:
+    d: Dict[str, Any] = {"ref": ref} if ref else {}
+    d["net"] = net
+    d["pins"] = _pins_out(pins)
+    return d
+
+
+def _pin_ref_in(data: Dict[str, Any], what: str, owner: str) -> Dict[str, Any]:
+    """The ``{what}_ref/_pins/_net`` fields from a nested ``{ref, net, pins}`` mapping."""
+    value = data.get(what)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{owner}: {what} must be a mapping {{ref, net, pins}}, not {value!r}")
+    net = str(value.get("net") or "").strip()
+    if not net:
+        raise ValueError(f"{owner}: {what} needs its net")
+    return {f"{what}_ref": str(value.get("ref") or "").strip(),
+            f"{what}_pins": parse_pins(value.get("pins")), f"{what}_net": net}
+
+
+def _source_in(s: Dict[str, Any]) -> Source:
+    ref = str(s["ref"])
+    kind = str(s.get("kind", "source"))
+    if kind not in SOURCE_KINDS:
+        raise ValueError(f"source {ref}: kind must be one of {', '.join(SOURCE_KINDS)}, not {kind!r}")
+    efficiency = s.get("efficiency")
+    if efficiency is not None:
+        efficiency = float(efficiency)
+        if not 0 < efficiency <= 1:
+            raise ValueError(f"source {ref}: efficiency is a fraction between 0 and 1 "
+                             f"(0.9 for 90 %), not {efficiency:g}")
+    quiescent = float(s.get("quiescent_a", 0.0))
+    if quiescent < 0:
+        raise ValueError(f"source {ref}: quiescent_a cannot be negative")
+    refs: Dict[str, Any] = {}
+    for what in SOURCE_PIN_REFS:
+        refs.update(_pin_ref_in(s, what, f"source {ref}"))
+    return Source(ref=ref, voltage=float(s["voltage"]), pins=parse_pins(s.get("pins")),
+                  name=str(s.get("name", "")), kind=kind, efficiency=efficiency,
+                  quiescent_a=quiescent, **refs)
+
+
+def _load_in(ld: Dict[str, Any]) -> Load:
+    ref = str(ld["ref"])
+    refs: Dict[str, Any] = {}
+    for what in LOAD_PIN_REFS:
+        refs.update(_pin_ref_in(ld, what, f"load {ref}"))
+    return Load(ref=ref, current=float(ld["current"]), pins=parse_pins(ld.get("pins")),
+                name=str(ld.get("name", "")), **refs)
+
+
+def _link_in(k: Dict[str, Any]) -> Link:
+    if not isinstance(k, dict):
+        raise ValueError(f"each link must be a mapping, not {k!r}")
+    name = str(k.get("name") or "").strip()
+    if not name:
+        raise ValueError("each link needs a name")
+    ref = str(k.get("ref") or "").strip()
+    if not ref:
+        raise ValueError(f"link {name} needs its part reference (ref)")
+    if k.get("resistance_ohm") is None:
+        raise ValueError(f"link {name} needs resistance_ohm")
+    resistance = float(k["resistance_ohm"])
+    if resistance < 0:
+        raise ValueError(f"link {name}: resistance_ohm cannot be negative")
+    sides = []
+    for side in ("a", "b"):
+        if k.get(side) is None:
+            raise ValueError(f"link {name} needs side {side}: {{net, pins}}")
+        d = _pin_ref_in(k, side, f"link {name}")
+        sides += [d[f"{side}_pins"], d[f"{side}_net"]]
+    return Link(name, ref, *sides, resistance)

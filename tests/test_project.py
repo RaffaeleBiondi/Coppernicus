@@ -1,8 +1,24 @@
 """Project files: YAML round trip, pin parsing, relative board paths."""
 
-import pytest
+from pathlib import Path
 
-from coppernicus.project import Limits, Load, Project, ProjectError, Rail, Settings, Source, parse_pins
+import pytest
+import yaml
+
+from coppernicus.project import (
+    Limits,
+    Link,
+    Load,
+    Project,
+    ProjectError,
+    Rail,
+    Settings,
+    Source,
+    carry_over,
+    parse_pins,
+)
+
+DEMO = Path(__file__).resolve().parents[1] / "examples" / "demo" / "demo.coppernicus.yml"
 
 
 def test_parse_pins():
@@ -65,3 +81,111 @@ def test_marked_rails_round_trip(tmp_path):
     path = old.save(tmp_path / "old.coppernicus.yml")
     assert "marked_rails" not in path.read_text()
     assert Project.load(path).marked_rails == []
+
+
+# ---------------------------------------------------------------- project model v2
+
+def test_v1_project_loads_unchanged():
+    """A file written before v2 loads, and writes back the same dict and the same text."""
+    text = DEMO.read_text(encoding="utf-8")
+    p = Project.load(DEMO)
+    assert p.to_dict() == yaml.safe_load(text)
+    assert yaml.safe_dump(p.to_dict(), sort_keys=False, allow_unicode=True) == text
+    assert p.links == [] and p.engine_options == {}
+
+
+def test_v2_defaults_write_nothing_new():
+    assert set(Project().to_dict()) == {"board", "settings", "rails"}
+    d = Project(rails=[Rail("VCC", sources=[Source("J1", 3.3)], loads=[Load("U1", 1.0)])]).to_dict()
+    assert set(d["rails"][0]["sources"][0]) == {"ref", "pins", "voltage"}
+    assert set(d["rails"][0]["loads"][0]) == {"ref", "pins", "current"}
+
+
+def _v2_project():
+    return Project(
+        board="b.kicad_pcb",
+        rails=[
+            Rail("+3V3", sources=[Source("U1", 3.3, ["2"], kind="smps", efficiency=0.9,
+                                         quiescent_a=0.005, input_pins=["1"], input_net="VIN",
+                                         ground_pins=["3"], ground_net="GND")],
+                 loads=[Load("U4", 0.5, ["1"], ground_net="GND")]),
+            Rail("+1V8", sources=[Source("U2", 1.8, ["2"], name="LDO", kind="ldo",
+                                         quiescent_a=0.002, input_ref="U2", input_pins=["1"],
+                                         input_net="+3V3_F", ground_pins=["3"], ground_net="GND",
+                                         sense_ref="U3", sense_pins=["1"], sense_net="+1V8",
+                                         ground_sense_ref="U3", ground_sense_pins=["2"],
+                                         ground_sense_net="GND")],
+                 loads=[Load("U3", 2.0, ["1"], ground_ref="U3", ground_pins=["2"],
+                             ground_net="GND")]),
+        ],
+        links=[Link("FB1", "FB1", ["1"], "+3V3", ["2"], "+3V3_F", 0.05)],
+        engine_options={"excluded_nets": ["VIN"]},
+    )
+
+
+def test_round_trip_v2_fields(tmp_path):
+    p = _v2_project()
+    path = p.save(tmp_path / "v2.coppernicus.yml")
+    q = Project.load(path)
+    assert q.rails == p.rails
+    assert q.links == p.links
+    assert q.engine_options == p.engine_options
+    # Pin references are nested mappings in the file, the part omitted when it is the
+    # terminal's own.
+    d = yaml.safe_load(path.read_text())
+    u1 = d["rails"][0]["sources"][0]
+    assert u1["input"] == {"net": "VIN", "pins": ["1"]}
+    assert d["rails"][0]["loads"][0]["ground"] == {"net": "GND", "pins": "all"}
+    assert d["rails"][1]["sources"][0]["sense"] == {"ref": "U3", "net": "+1V8", "pins": ["1"]}
+    assert d["links"][0] == {"name": "FB1", "ref": "FB1", "a": {"net": "+3V3", "pins": ["1"]},
+                             "b": {"net": "+3V3_F", "pins": ["2"]}, "resistance_ohm": 0.05}
+
+
+@pytest.mark.parametrize("change, words", [
+    (lambda s: s.update(kind="buck"), "kind"),
+    (lambda s: s.update(efficiency=90), "fraction"),
+    (lambda s: s.update(efficiency=0), "fraction"),
+    (lambda s: s.update(quiescent_a=-1), "quiescent_a"),
+    (lambda s: s.update(input={"pins": ["1"]}), "net"),
+    (lambda s: s.update(ground="GND"), "ground"),
+])
+def test_v2_source_values_are_checked(change, words):
+    src = {"ref": "U1", "voltage": 3.3, "pins": "all"}
+    change(src)
+    with pytest.raises(ProjectError, match=words):
+        Project.from_dict({"rails": [{"net": "+3V3", "sources": [src]}]})
+
+
+@pytest.mark.parametrize("link, words", [
+    ({"name": "FB1", "ref": "FB1", "a": {"net": "A"}, "b": {"net": "B"}}, "resistance_ohm"),
+    ({"name": "FB1", "ref": "FB1", "a": {"net": "A"}, "b": {"net": "B"}, "resistance_ohm": -1},
+     "resistance_ohm"),
+    ({"name": "FB1", "ref": "FB1", "a": {"net": "A"}, "resistance_ohm": 0.1}, "b"),
+    ({"ref": "FB1", "a": {"net": "A"}, "b": {"net": "B"}, "resistance_ohm": 0.1}, "name"),
+])
+def test_link_values_are_checked(link, words):
+    with pytest.raises(ProjectError, match=words):
+        Project.from_dict({"links": [link]})
+
+
+def test_engine_options_must_be_a_mapping():
+    with pytest.raises(ProjectError, match="engine_options"):
+        Project.from_dict({"engine_options": ["excluded_nets"]})
+
+
+def test_carry_over_keeps_fields_an_editor_does_not_show():
+    """The rail editor knows only name, ref, pins and the value: rebuilding the rows from it
+    must keep a regulator's kind, input and ground pins (matched by part and pins, then by
+    part)."""
+    u1 = Source("U1", 3.3, ["2"], kind="smps", efficiency=0.9, input_net="VIN", ground_net="GND")
+    u4 = Load("U4", 0.5, ["1"], ground_net="GND")
+    edited = carry_over([u1], [Source("J1", 5.0), Source("U1", 3.4, ["2"], name="Buck")])
+    assert edited[0] == Source("J1", 5.0)
+    assert edited[1] == Source("U1", 3.4, ["2"], name="Buck", kind="smps", efficiency=0.9,
+                               input_net="VIN", ground_net="GND")
+    # Pins changed: still the same part, so it keeps its ground.
+    assert carry_over([u4], [Load("U4", 0.7, ["1", "3"])]) == [
+        Load("U4", 0.7, ["1", "3"], ground_net="GND")]
+    # A row deleted above it does not shift the fields onto another part.
+    u5 = Load("U5", 0.1)
+    assert carry_over([u5, u4], [Load("U4", 0.5, ["1"])]) == [u4]
