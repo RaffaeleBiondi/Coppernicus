@@ -50,7 +50,7 @@ $RECYCLE.BIN/
 *~
 
 # ---------------------------------------------------------------------------
-# KiCad (only small hand-drawn test boards are ever committed)
+# KiCad editor leftovers
 # ---------------------------------------------------------------------------
 *-backups/
 *.kicad_prl
@@ -69,9 +69,29 @@ out/
 *.npz
 
 # ---------------------------------------------------------------------------
-# Real boards — kept local, never pushed to this repository
+# Boards — never pushed to this repository
 # ---------------------------------------------------------------------------
+# Real boards (copies, projects and results) live here for local tests; the test
+# suite solves every boards_local/**/*.coppernicus.yml it finds.
 boards_local/
+# Any board or board-derived file anywhere else is ignored too, in case one is
+# copied into the tree by mistake ...
+*.kicad_pcb
+*.kicad_pro
+*.kicad_sch
+*.kicad_pcb.bak
+*.kicad_sch.bak
+*.kicad_pro.bak*
+*.kicad_pcb.*.bak
+*.json.gz
+*.hyp
+*.tgz
+*.gbr
+*.drl
+# ... except the synthetic demo, and small boards drawn on purpose for tests.
+!examples/demo/demo.kipi.json.gz
+!tests/boards/*.kicad_pcb
+!tests/boards/*.kicad_pro
 
 # ---------------------------------------------------------------------------
 # Claude Code local settings

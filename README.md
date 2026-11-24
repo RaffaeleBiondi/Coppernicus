@@ -85,6 +85,18 @@ uv run coppernicus gui path/to/board.kicad_pcb             # set up rails in the
 `solve` prints a report per rail, writes per-layer PNG maps and a JSON summary, and exits with
 `1` when a limit you set is exceeded (`2` on errors). That makes it usable in scripts and CI.
 
+### macOS launcher
+
+```sh
+tools/make_mac_launcher.sh            # builds ~/Applications/Coppernicus.app
+```
+
+This builds a double-clickable `Coppernicus.app` with the project icon, which you can keep in
+the Dock or in Launchpad. It contains no Python: it starts the app from this checkout with
+`uv run`, so it only works on the machine where it was built. Rebuild it if you move the
+repository. A standalone, distributable app comes with the packaging stage. Known cosmetic issue:
+the menu bar shows "Python" as the app name.
+
 <p align="center">
   <img src="docs/images/map-demo-current.png" alt="Current-density map of the demo board written by coppernicus solve" width="560">
 </p>
