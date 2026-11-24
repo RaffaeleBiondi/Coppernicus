@@ -198,6 +198,83 @@ def test_copper_thickness_what_if_and_compare(session, boards):
     assert abs(cut["current_a"]) == pytest.approx(1.0, rel=5e-3)
 
 
+def strip_project(tmp_path, thickness=None) -> Project:
+    """A project file for the strip board of the ``boards`` fixture (J1 → U1, 1 A)."""
+    p = Project(board="boards/strip.kipi.json.gz", rails=[Rail(
+        Strip.NET, sources=[Source("J1", 1.0)], loads=[Load("U1", 1.0)])])
+    p.settings.copper_thickness_mm = dict(thickness or {})
+    p.save(tmp_path / ("strip-thick.coppernicus.yml" if thickness else "strip.coppernicus.yml"))
+    return p
+
+
+def test_project_copper_thickness_halves_the_strip_drop(session, boards, tmp_path):
+    """The setting in a project file is honoured by solve_project (the path of the CLI,
+    --json, --html, the MCP solve_project tool and the GitHub Action). The strip has no via,
+    so twice the copper is exactly half the drop."""
+    plain = session.solve_project(strip_project(tmp_path).path)["rails"][0]
+    thick = session.solve_project(strip_project(tmp_path, {"F.Cu": 2 * OZ1}).path)["rails"][0]
+    assert thick["loads"][0]["drop_mv"] == pytest.approx(plain["loads"][0]["drop_mv"] / 2, rel=1e-6)
+    assert thick["settings"]["copper_thickness_mm"] == {"F.Cu": 2 * OZ1}
+    assert "copper_thickness_mm" not in plain["settings"]
+    [note] = [a for a in thick["assumptions"] if a.startswith("What-if copper thickness")]
+    assert f"F.Cu {2 * OZ1:g} mm (board file: {OZ1:g} mm)" in note
+    assert "board file is not changed" in note and "via barrels get longer when the stack thickens" in note
+    assert not any(a.startswith("What-if") for a in plain["assumptions"])
+
+
+def test_project_copper_thickness_unknown_layer_fails_the_project(session, boards, tmp_path):
+    """A layer the board does not have is one error for the project (not one per rail),
+    and it lists the board's copper layers."""
+    p = strip_project(tmp_path, {"In1.Cu": 0.07})
+    with pytest.raises(ServiceError) as e:
+        session.solve_project(p.path)
+    assert e.value.code == "layer_not_found"
+    assert "No copper layer In1.Cu" in e.value.message and "F.Cu, B.Cu" in e.value.message
+    assert e.value.message.startswith("strip-thick.coppernicus.yml: settings.copper_thickness_mm")
+
+
+def test_solve_rail_thickness_overrides_the_projects_per_layer(session, boards):
+    bid = session.open_board(boards["strip"])["board_id"]
+    a = solve_strip(session, bid)
+    project_settings = Project().settings
+    project_settings.copper_thickness_mm = {"F.Cu": 2 * OZ1, "B.Cu": 0.07}
+    b = solve_strip(session, bid, base_settings=project_settings,
+                    settings={"copper_thickness_mm": {"F.Cu": 4 * OZ1}})
+    assert b["settings"]["copper_thickness_mm"] == {"F.Cu": 4 * OZ1, "B.Cu": 0.07}
+    assert project_settings.copper_thickness_mm == {"F.Cu": 2 * OZ1, "B.Cu": 0.07}   # not edited
+    # B.Cu thicker changes the via barrels only; the strip has none, so F.Cu sets the drop.
+    assert b["loads"][0]["drop_mv"] == pytest.approx(a["loads"][0]["drop_mv"] / 4, rel=1e-6)
+
+
+def test_solve_rail_refuses_a_thickness_in_microns(session, boards):
+    bid = session.open_board(boards["strip"])["board_id"]
+    for bad in (35, 0, -1, "1oz", True):
+        with pytest.raises(ServiceError) as e:
+            solve_strip(session, bid, settings={"copper_thickness_mm": {"F.Cu": bad}})
+        assert e.value.code == "invalid_input" and "1 oz copper is 0.035, not 35" in e.value.message
+
+
+def test_engine_applies_the_project_thickness(boards, tmp_path):
+    """The GUI's path: engine.solve_rail with the project's settings, on the board file as
+    opened. The what-if copy is made once and reused; asking a copy (or the file) for the
+    thickness it already has returns it unchanged, so nothing is applied twice."""
+    from coppernicus.engine import Board, solve_rail
+
+    board = Board.open(boards["strip"])
+    project = Project.load(strip_project(tmp_path, {"F.Cu": 2 * OZ1}).path)
+    rail = project.rails[0]
+    thick = solve_rail(board, rail, project.settings)
+    plain = solve_rail(board, rail, Project.load(strip_project(tmp_path).path).settings)
+    assert 1.0 - thick.loads[0].v_min == pytest.approx((1.0 - plain.loads[0].v_min) / 2, rel=1e-6)
+    assert any(a.startswith("What-if copper thickness") for a in thick.assumptions)
+    variant = board.with_copper_thickness({"F.Cu": 2 * OZ1})
+    assert board.with_copper_thickness({"F.Cu": 2 * OZ1}) is variant
+    assert variant.with_copper_thickness({"F.Cu": 2 * OZ1}) is variant
+    assert board.with_copper_thickness({"F.Cu": OZ1}) is board
+    assert variant.file_thickness_mm == {"F.Cu": OZ1, "B.Cu": OZ1}
+    assert [lay.thickness_mm for lay in variant.layers()] == pytest.approx([2 * OZ1, OZ1])
+
+
 def test_render_map_writes_pngs_to_the_session_folder(session, boards, tmp_path):
     bid = session.open_board(boards["demo"])["board_id"]
     rid = session.solve_rail(bid, "+3V3", [{"ref": "J1", "voltage_v": 3.3}], DEMO_LOADS)["result_id"]

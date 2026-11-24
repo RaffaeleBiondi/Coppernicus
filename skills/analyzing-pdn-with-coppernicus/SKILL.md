@@ -38,10 +38,14 @@ why, and ask for what is missing.
    **measure** a neck or track width and the current through it. Do not back-compute widths
    from J or read them off a PNG.
 7. What-if: re-solve with `settings={"copper_thickness_mm": {"B.Cu": 0.07}}`,
-   `via_plating_um` or `copper_temp_c`, then `compare_results(a, b)`. `copper_thickness_mm` is
-   a quick test that exists only here, not in project files. Real changes are made in KiCad.
-   The stack is rebuilt around the new thickness, so via barrels change length. A net with no
-   copper on that layer can still move slightly. Do not read that shift as a copper effect.
+   `via_plating_um` or `copper_temp_c`, then `compare_results(a, b)`.
+   - `copper_thickness_mm` is an optional what-if, in mm (1 oz = 0.035, not 35). It never
+     changes the board file; real changes of copper weight are made in KiCad.
+   - The stack is rebuilt around the new thickness, so via barrels get longer when it thickens.
+     A net with no copper on that layer can still move slightly. Do not read that shift as a
+     copper effect.
+   - A project file can hold the same setting. If a result's assumptions start with
+     "What-if copper thickness", say so: the numbers are not the board file's copper.
 8. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
    layer's maps with zoom, pan and a hover readout, plus the problems, worst values and
    assumptions. Give the user its `path`; you cannot read the page yourself.
@@ -56,7 +60,8 @@ follow the hint. `result_evicted` means you must solve again.
 **Without MCP**, use the CLI:
 - `uv run --project <Coppernicus repo> coppernicus nets|parts BOARD [NET] --json`;
 - `coppernicus solve PROJECT.coppernicus.yml --json --out DIR [--top N] [--html]`. The project
-  YAML takes `settings: {max_edge_mm, via_plating_um, copper_temp_c}`.
+  YAML takes `settings: {max_edge_mm, via_plating_um, copper_temp_c, copper_thickness_mm?}`;
+  `copper_thickness_mm: {B.Cu: 0.07}` is the optional what-if of step 7.
 - Write the YAML and the outputs outside the board's folder.
 - stdout and the file named by `summary_file` hold the same document. Its `problems` lists every
   load plus the top N spots and vias (`--top N`, default 5).

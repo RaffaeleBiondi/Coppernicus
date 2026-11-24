@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import fnmatch
 import logging
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -81,13 +82,17 @@ def _pin_key(pin: str):
 
 class Board:
     def __init__(self, snapshot: BoardSnapshot, path: Optional[Path] = None,
-                 warnings: Sequence[str] = ()):
+                 warnings: Sequence[str] = (), file_thickness_mm: Optional[Dict[str, float]] = None):
         self._snap = snapshot
         self.path = Path(path) if path is not None else None
+        # Copper thickness by layer name as the board file has it (kept by what-if copies).
+        self.file_thickness_mm: Dict[str, float] = dict(file_thickness_mm) if file_thickness_mm else {
+            c.name: c.thickness_mm for c in snapshot.stackup.copper}
         self.warnings: List[str] = list(dict.fromkeys([*warnings, *snapshot.assumed]))
         self._pads_by_id: Dict[str, Pad] = {p.id: p for p in snapshot.pads}
         self._kinds: Optional[Dict[str, str]] = None
         self._pad_index: Dict[Optional[int], tuple] = {}
+        self._variants: Dict[tuple, "Board"] = {}      # what-if copies by thickness
 
     @classmethod
     def open(cls, path) -> "Board":
@@ -142,16 +147,23 @@ class Board:
     def with_copper_thickness(self, thickness_mm: Dict[str, float]) -> "Board":
         """A what-if copy of this board with some copper layers (by name) set to another
         thickness, the stack rebuilt around them. The board file is not touched."""
-        copper = {c.name for c in self._snap.stackup.copper}
-        unknown = [n for n in thickness_mm if n not in copper]
+        copper = {c.name: c.thickness_mm for c in self._snap.stackup.copper}
+        unknown = [str(n) for n in thickness_mm if n not in copper]
         if unknown:
             raise EngineError(f"No copper layer {', '.join(unknown)} on this board "
                               f"(copper layers: {', '.join(c.name for c in self.layers())})")
-        stack = self._snap.stackup
-        new_mm = [float(thickness_mm.get(e.name, e.thickness_mm)) if isinstance(e, CopperLayer)
-                  else e.thickness_mm for e in stack_order(stack)]
-        snap = dataclasses.replace(self._snap, stackup=restack(stack, new_mm, edited=True))
-        return Board(snap, self.path, self.warnings)
+        if all(math.isclose(float(mm), copper[n], rel_tol=1e-9, abs_tol=1e-12)
+               for n, mm in thickness_mm.items()):
+            return self                   # already this thickness (e.g. a what-if copy)
+        key = tuple(sorted((n, float(mm)) for n, mm in thickness_mm.items()))
+        if key not in self._variants:
+            stack = self._snap.stackup
+            new_mm = [float(thickness_mm.get(e.name, e.thickness_mm)) if isinstance(e, CopperLayer)
+                      else e.thickness_mm for e in stack_order(stack)]
+            snap = dataclasses.replace(self._snap, stackup=restack(stack, new_mm, edited=True))
+            self._variants[key] = Board(snap, self.path, self.warnings,
+                                        file_thickness_mm=self.file_thickness_mm)
+        return self._variants[key]
 
     # ------------------------------------------------------------------ parts and pins
     def parts_on_net(self, net: str) -> List[PartPins]:

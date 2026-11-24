@@ -25,6 +25,7 @@ terminal's own part. See ``docs/engine-mapping.md`` for how the engine reads the
 from __future__ import annotations
 
 import dataclasses
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
@@ -199,6 +200,41 @@ class Settings:
     # type); a number: that plating for every plated hole.
     via_plating_um: Optional[float] = None
     copper_temp_c: float = 20.0               # resistivity is referenced to 20 °C
+    # What-if copper thickness by layer name, mm (1 oz = 0.035). Empty: the board file's.
+    # The board file is never changed; real changes of copper weight are made in KiCad.
+    copper_thickness_mm: Dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self):
+        self.copper_thickness_mm = check_copper_thickness(self.copper_thickness_mm)
+
+
+# A sanity bound, far above the copper of any PCB: a larger number is µm written as mm.
+MAX_COPPER_MM = 10.0
+
+
+def check_copper_thickness(values) -> Dict[str, float]:
+    """``{layer name: thickness in mm}``, checked: each a finite number, > 0 and below
+    ``MAX_COPPER_MM``. Raises :class:`ProjectError` saying the unit."""
+    if values is None:
+        return {}
+    if not isinstance(values, dict):
+        raise ProjectError("copper_thickness_mm must map copper layer names to mm, "
+                           f"e.g. {{B.Cu: 0.07}}, not {values!r}")
+    out = {}
+    for layer, mm in values.items():
+        x = None if isinstance(mm, bool) else _float_or_none(mm)
+        if x is None or not math.isfinite(x) or x <= 0 or x >= MAX_COPPER_MM:
+            raise ProjectError(f"copper_thickness_mm[{layer}] = {mm!r}: give the thickness in mm, "
+                               f"> 0 and below {MAX_COPPER_MM:g} (1 oz copper is 0.035, not 35)")
+        out[str(layer)] = x
+    return out
+
+
+def _float_or_none(value) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -265,7 +301,7 @@ class Project:
             if not r.follow_net_ties:
                 rd["follow_net_ties"] = False
             rails.append(rd)
-        out: Dict[str, Any] = {"board": self.board, "settings": dict(vars(self.settings)), "rails": rails}
+        out: Dict[str, Any] = {"board": self.board, "settings": _settings_out(self.settings), "rails": rails}
         if self.links:
             out["links"] = [{"name": k.name, "ref": k.ref, "a": _pin_ref_out("", k.pins_a, k.net_a),
                              "b": _pin_ref_out("", k.pins_b, k.net_b),
@@ -331,6 +367,17 @@ class Project:
 
 
 # ---------------------------------------------------------------------- file helpers
+
+def _settings_out(settings: Settings) -> Dict[str, Any]:
+    """The settings as written to the file; copper_thickness_mm only when set, so a project
+    without it is written exactly as before."""
+    out = dict(vars(settings))
+    if not out.get("copper_thickness_mm"):
+        out.pop("copper_thickness_mm", None)
+    else:
+        out["copper_thickness_mm"] = dict(out["copper_thickness_mm"])
+    return out
+
 
 def _portable_path(text: str) -> Path:
     """A path written in a project file, with "/" or "\\" as separators (a file saved on

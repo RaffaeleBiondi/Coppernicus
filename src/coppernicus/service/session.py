@@ -62,7 +62,6 @@ class _BoardEntry:
     mtime_ns: int
     board: Board
     _outline: Optional[list] = None
-    _variants: Dict[Tuple, Board] = field(default_factory=dict)
 
     def outline(self) -> list:
         if self._outline is None:
@@ -70,17 +69,14 @@ class _BoardEntry:
         return self._outline
 
     def variant(self, thickness: Mapping[str, float]) -> Board:
-        """The board, or a what-if copy with other copper thicknesses."""
+        """The board, or a what-if copy with other copper thicknesses (cached by the board)."""
         if not thickness:
             return self.board
-        key = tuple(sorted(thickness.items()))
-        if key not in self._variants:
-            try:
-                self._variants[key] = self.board.with_copper_thickness(dict(thickness))
-            except EngineError as e:
-                raise ServiceError(E.LAYER_NOT_FOUND, str(e),
-                                   "copper_thickness_mm takes copper layer names as in KiCad") from None
-        return self._variants[key]
+        try:
+            return self.board.with_copper_thickness(dict(thickness))
+        except EngineError as e:
+            raise ServiceError(E.LAYER_NOT_FOUND, str(e),
+                               "copper_thickness_mm takes copper layer names as in KiCad") from None
 
     def stale(self) -> bool:
         try:
@@ -296,18 +292,21 @@ class Session:
                    loads: Sequence[Mapping[str, Any]], limits: Optional[Mapping[str, Any]] = None,
                    settings: Optional[Mapping[str, Any]] = None, follow_net_ties: bool = True,
                    top: int = 5, progress: Progress = None, cancelled: Cancel = None,
-                   base_rail: Optional[Rail] = None) -> Dict[str, Any]:
+                   base_rail: Optional[Rail] = None,
+                   base_settings: Optional[Settings] = None) -> Dict[str, Any]:
         """Solve one rail: sources hold ``voltage_v`` on their pins, loads draw ``current_a``
         split equally across their pins. Returns a compact summary with a ``result_id``.
 
         ``base_rail`` (in-process callers only) is an existing rail the dicts edit: every
-        field they do not set, on the rail and on each matching terminal, is carried over."""
+        field they do not set, on the rail and on each matching terminal, is carried over.
+        ``base_settings`` (in-process callers only, e.g. a project's) are the settings that
+        ``settings`` edits; its ``copper_thickness_mm`` overrides theirs layer by layer."""
         entry = self._entry(board_id)
         if not isinstance(sources, (list, tuple)) or not isinstance(loads, (list, tuple)):
             raise ServiceError(E.INVALID_INPUT, "sources and loads must be lists of objects")
         rail = C.rail_from_dicts(net, sources, loads, limits, follow_net_ties, base=base_rail)
-        solve_settings, thickness = C.settings_from_dict(settings)
-        live = self._solve(entry, rail, solve_settings, thickness, top, progress, cancelled)
+        solve_settings, _ = C.settings_from_dict(settings, base=base_settings)
+        live = self._solve(entry, rail, solve_settings, top, progress, cancelled)
         return C.jsonable(live.rec.summary)
 
     def _validate_rail(self, board: Board, rail: Rail) -> None:
@@ -334,8 +333,11 @@ class Session:
                     raise ServiceError(E.PIN_NOT_ON_NET, f"{t.ref} has no pin {pattern!r} on net {where}",
                                        f"pins of {t.ref} on this net: {_limited(available, 64)}")
 
-    def _solve(self, entry: _BoardEntry, rail: Rail, settings: Settings, thickness: Dict[str, float],
-               top: int, progress: Progress, cancelled: Cancel) -> _Live:
+    def _solve(self, entry: _BoardEntry, rail: Rail, settings: Settings, top: int,
+               progress: Progress, cancelled: Cancel) -> _Live:
+        # The what-if thickness is in the settings; the engine applies it (to the variant
+        # here, already that thickness, it is a no-op) and writes the assumption.
+        thickness = dict(settings.copper_thickness_mm)
         board = entry.variant(thickness)
         self._validate_rail(board, rail)
         with self._solve_lock:
@@ -350,14 +352,7 @@ class Session:
                 raise ServiceError(E.SOLVE_FAILED, f"{rail.net}: {e}",
                                    "check that the sources and loads are connected by copper of "
                                    "this net") from None
-        original = {lay.name: lay.thickness_mm for lay in entry.board.layers()}
         layer_thickness = {lay.name: lay.thickness_mm for lay in board.layers()}
-        if thickness:
-            res.assumptions.append("What-if copper thickness (not the board file's): " + ", ".join(
-                f"{name} {mm:g} mm (board file: {original.get(name, float('nan')):g} mm)"
-                for name, mm in sorted(thickness.items())) + ". The stack is rebuilt around the new "
-                "thickness, so plated holes get longer or shorter: even a net with no copper on "
-                "that layer changes slightly through its via barrels.")
         problems = find_problems(res, rail.limits, top=max(1, int(top)))
         with self._lock:
             self._n_results += 1
@@ -420,6 +415,11 @@ class Session:
                                "fix the project file; its format is in the README") from None
         board_info = self.open_board(project.board_path())
         entry = self._entry(board_info["board_id"])
+        try:                              # a wrong layer name fails the project, not each rail
+            entry.variant(project.settings.copper_thickness_mm)
+        except ServiceError as e:
+            raise ServiceError(e.code, f"{path.name}: settings.copper_thickness_mm: {e.message}",
+                               "use the copper layer names as in KiCad") from None
         wanted = list(rails or [])
         selected = [r for r in project.rails if not wanted or r.net in wanted]
         if not selected:
@@ -450,7 +450,7 @@ class Session:
                             "an estimated input load will come in a later version"}})
                 continue
             try:
-                live = self._solve(entry, rail, project.settings, {}, top, progress, cancelled)
+                live = self._solve(entry, rail, project.settings, top, progress, cancelled)
             except ServiceError as e:
                 if stop_on_error or e.code == E.CANCELLED:
                     raise

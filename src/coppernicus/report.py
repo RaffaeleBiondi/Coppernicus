@@ -369,7 +369,7 @@ class ReportBuilder:
         return _plain({
             "title": self.title, "board": self.board_name, "project": self.project,
             "generated": time.strftime("%Y-%m-%d %H:%M"), "version": __version__,
-            "settings": self.settings,
+            "settings": _shown_settings(self.settings),
             "outline": [np.round(r, 4).tolist() for r in self.outline],
             "codes": {"v": V_CODES, "j": J_CODES},
             "cmaps": {"viridis": _cmap("viridis"), "magma": _cmap("magma")},
@@ -458,6 +458,19 @@ def build_report(items: Sequence[RailReport], *, title: str = "", board_name: st
         text = builder.html()
     builder.seconds += seconds
     return builder, text
+
+
+def _shown_settings(settings: Mapping[str, Any]) -> Dict[str, Any]:
+    """The settings as the page lists them, one line each: a mapping (copper_thickness_mm)
+    as "B.Cu 0.07 mm, ...", left out when empty."""
+    out = {}
+    for key, value in settings.items():
+        if isinstance(value, Mapping):
+            if not value:
+                continue
+            value = ", ".join(f"{name} {float(mm):g} mm" for name, mm in sorted(value.items()))
+        out[key] = value
+    return out
 
 
 def _plain(obj: Any) -> Any:

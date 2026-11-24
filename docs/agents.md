@@ -90,13 +90,22 @@ no meaning there: `max_drop_pct` and `drop_pct` are `null`. Give the drops in mV
 - `via_plating_um`: plating for every plated hole. The default is the engine's table by hole
   type.
 - `copper_temp_c`: copper temperature for ρ(T) (default 20).
-- `copper_thickness_mm`: a what-if thickness per layer name, for example `{"B.Cu": 0.07}`. The
-  board file is not changed. This is a quick test for agents, available only here in
-  `solve_rail`. It is deliberately not part of project files: a real change of copper weight is
-  made in KiCad, which then becomes the board that is solved.
+- `copper_thickness_mm`: an optional what-if thickness per copper layer name, in mm, for
+  example `{"B.Cu": 0.07}` (1 oz copper is 0.035, not 35). The board file is not changed: a
+  real change of copper weight is made in KiCad, which then becomes the board that is solved.
+  An unknown layer name is an error (`layer_not_found`) whose message lists the board's copper
+  layers.
 
-  The stack is rebuilt around the new thickness, so plated holes get longer or shorter. Even a
-  net with no copper on the changed layer then moves slightly through its via barrels.
+  A project file can hold the same setting under `settings:` (see
+  [Project files](#copper-thickness-in-project-files)). The `solve_rail` tool has no project,
+  so it uses only the thicknesses you pass. An in-process caller that passes a project's
+  settings as `base_settings` gets them merged layer by layer: a layer you name overrides the
+  project's, and the other layers keep the project's value.
+
+  The stack is rebuilt around the new thickness, so via barrels get longer when the stack
+  thickens (shorter when it thins). Even a net with no copper on the changed layer then moves
+  slightly through its vias. The result's assumptions say which layers were overridden, with
+  the board file's value next to each.
 
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;
@@ -277,6 +286,33 @@ in `report_file`.
 In CI, the GitHub Action (see [docs/ci.md](ci.md)) runs the same `solve --json --html` on every
 project file of a KiCad repository. It writes a job summary and fails on an exceeded limit.
 
+### Copper thickness in project files
+
+A project file can hold an optional what-if copper thickness, in mm, per copper layer name:
+
+```yaml
+settings:
+  max_edge_mm: 0.5
+  via_plating_um: null
+  copper_temp_c: 20.0
+  copper_thickness_mm:
+    B.Cu: 0.07
+```
+
+Every solve of that project uses it: `coppernicus solve` (with or without `--json` and
+`--html`), the MCP `solve_project` tool, the GitHub Action and the desktop app. The board file
+is not changed. Real changes of copper weight are made in KiCad. Each rail's assumptions name
+the overridden layers, with the board file's value next to each; the HTML report lists the
+setting with the others.
+
+- Values are in mm, finite, above 0 and below 10: 1 oz copper is 0.035, not 35. A value such as
+  35 makes the project file invalid.
+- A layer name the board does not have fails the whole project, with one `layer_not_found`
+  error listing the board's copper layers.
+- Without the key, the file is read and saved exactly as before.
+- The desktop app solves with the setting but has no field for it yet: edit the YAML. The app
+  keeps the key when it saves the project.
+
 ## Limits of this version
 
 - **Memory.** A large rail's result can take about 1 GB. Only the `--max-results` most recently
@@ -286,9 +322,9 @@ project file of a KiCad repository. It writes a job summary and fails on an exce
 - **DC only, one net at a time.** The ground return is not included; solve the ground net as its
   own rail. The power tree, thermal, AC impedance and DC-DC ripple, which KiPI's engine has, are
   not exposed yet.
-- **What-ifs are settings only:** copper thickness, via plating and temperature. Adding vias or
-  editing copper is a later step. `copper_thickness_mm` stays an MCP-only quick test, by
-  design.
+- **What-ifs are settings only:** copper thickness, via plating and temperature, in `solve_rail`
+  or in a project file. Adding vias or editing copper is a later step; real changes are made in
+  KiCad.
 - **The HTML report's maps are sampled on cells** (see [HTML report](#html-report)). Features
   smaller than a cell, such as a hole or a very thin track, can look blocky or vanish in the
   map, while the numbers, the problems and the probes stay exact.
