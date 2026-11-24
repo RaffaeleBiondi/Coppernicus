@@ -2,12 +2,17 @@
 
     coppernicus                         open the app
     coppernicus gui [BOARD|PROJECT] [--solve NET] [--field drop|voltage|current]
-    coppernicus nets BOARD [--all]      power and ground nets (all nets with --all)
-    coppernicus parts BOARD NET         parts and pins on a net (to write sources and loads)
-    coppernicus solve PROJECT [--out DIR] [--rail NET ...] [--no-maps]
+    coppernicus nets BOARD [--all] [--json]   power and ground nets (all nets with --all)
+    coppernicus parts BOARD NET [--json]      parts and pins on a net (to write sources and loads)
+    coppernicus solve PROJECT [--out DIR] [--rail NET ...] [--no-maps] [--json]
+    coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
 
 ``solve`` exits with 0 when every rail solved and no user limit was exceeded, 1 when a
 limit was exceeded, 2 on an error (missing file, part not on the net, no copper path...).
+
+With ``--json`` a command prints one JSON document on stdout (the data the MCP tools
+return, units in every key name) and nothing else; an error is printed as
+``{"error": {"code", "message", "hint"}}`` with exit code 2. Progress (``-v``) goes to stderr.
 """
 
 from __future__ import annotations
@@ -23,7 +28,74 @@ from coppernicus import __version__
 EXIT_OK, EXIT_LIMIT, EXIT_ERROR = 0, 1, 2
 
 
+def _print_json(doc) -> None:
+    print(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False))
+
+
+def _run_json(fn) -> int:
+    """Run ``fn() -> (document, exit code)`` and print the document, or the error, as JSON."""
+    from coppernicus.service import ServiceError
+    try:
+        doc, code = fn()
+    except ServiceError as e:
+        _print_json({"error": e.to_dict()})
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    _print_json(doc)
+    return code
+
+
+def _json_nets(args) -> int:
+    from coppernicus.service import Session
+
+    def run():
+        session = Session()
+        board = session.open_board(args.board)
+        doc = session.list_nets(board["board_id"], kind="all" if args.all else "power_or_ground",
+                                limit=1_000_000)
+        return {"board": board, **doc}, EXIT_OK
+    return _run_json(run)
+
+
+def _json_parts(args) -> int:
+    from coppernicus.service import Session
+
+    def run():
+        session = Session()
+        board = session.open_board(args.board)
+        return {"board": board, **session.net_parts(board["board_id"], args.net)}, EXIT_OK
+    return _run_json(run)
+
+
+def _json_solve(args) -> int:
+    from coppernicus.maps import safe_name
+    from coppernicus.service import Session
+
+    def run():
+        out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
+        session = Session(out_dir=out_dir, max_results=1)    # one rail's arrays at a time
+        legacy = []                                           # the *_summary.json file, as before
+
+        def on_rail(rid, summary):
+            legacy.append(_rail_summary(session.rail_result(rid), session.rail_problems(rid),
+                                        summary.get("maps", [])))
+
+        progress = (lambda m: print(f"    … {m}", file=sys.stderr)) if args.verbose else None
+        doc = session.solve_project(args.project, rails=args.rail,
+                                    maps_dir=None if args.no_maps else out_dir, stop_on_error=True,
+                                    progress=progress, on_rail=on_rail)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{safe_name(Path(args.project).stem)}_summary.json"
+        path.write_text(json.dumps({"board": doc["board"]["name"], "rails": legacy}, indent=1),
+                        encoding="utf-8")
+        doc["summary_file"] = str(path)
+        return doc, EXIT_LIMIT if doc["verdict"] == "fail" else EXIT_OK
+    return _run_json(run)
+
+
 def _cmd_nets(args) -> int:
+    if args.json:
+        return _json_nets(args)
     from coppernicus.engine import Board
     board = Board.open(args.board)
     nets = board.nets() if args.all else board.power_nets()
@@ -37,6 +109,8 @@ def _cmd_nets(args) -> int:
 
 
 def _cmd_parts(args) -> int:
+    if args.json:
+        return _json_parts(args)
     from coppernicus.engine import Board
     board = Board.open(args.board)
     parts = board.parts_on_net(args.net)
@@ -59,6 +133,8 @@ def _print_board_warnings(board):
 
 
 def _cmd_solve(args) -> int:
+    if args.json:
+        return _json_solve(args)
     from coppernicus.engine import Board, solve_rail
     from coppernicus.maps import safe_name, save_layer_maps
     from coppernicus.problems import FAIL, find_problems
@@ -135,6 +211,12 @@ def _rail_summary(res, problems, maps) -> dict:
     }
 
 
+def _cmd_mcp(args) -> int:
+    from coppernicus.mcp_server import run_stdio
+    return run_stdio(out_dir=args.out, log_file=args.log_file, log_level=args.log_level,
+                     max_results=args.max_results, max_result_mb=args.max_result_mb)
+
+
 def _cmd_gui(args) -> int:
     from coppernicus.app import run
     return run(args.path, screenshot=args.screenshot, solve_net=args.solve_net, layer=args.layer,
@@ -158,11 +240,13 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("nets", help="list power and ground nets of a board")
     p.add_argument("board")
     p.add_argument("--all", action="store_true", help="list every net")
+    p.add_argument("--json", action="store_true", help="print JSON (for scripts and agents)")
     p.set_defaults(func=_cmd_nets)
 
     p = sub.add_parser("parts", help="list parts and pins on a net")
     p.add_argument("board")
     p.add_argument("net")
+    p.add_argument("--json", action="store_true", help="print JSON (for scripts and agents)")
     p.set_defaults(func=_cmd_parts)
 
     p = sub.add_parser("solve", help="solve the rails of a project file")
@@ -171,7 +255,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--rail", action="append", help="solve only this net (repeatable)")
     p.add_argument("--no-maps", action="store_true", help="skip the PNG maps")
     p.add_argument("-v", "--verbose", action="store_true", help="show the engine's progress")
+    p.add_argument("--json", action="store_true",
+                   help="print a JSON summary on stdout instead of the report (for scripts and agents)")
     p.set_defaults(func=_cmd_solve)
+
+    p = sub.add_parser("mcp", help="run the MCP server for AI agents (stdio; see README)")
+    p.add_argument("--out", help="folder for maps (default: a new folder under the system temp directory)")
+    p.add_argument("--log-file", help="write the server log to this file (default: stderr)")
+    p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+                   help="server log level (default: INFO)")
+    p.add_argument("--max-results", type=int, default=8,
+                   help="solved results kept in memory with their fields (default: 8)")
+    p.add_argument("--max-result-mb", type=float, default=2048,
+                   help="memory bound for kept results, MB (default: 2048)")
+    p.set_defaults(func=_cmd_mcp)
     return ap
 
 

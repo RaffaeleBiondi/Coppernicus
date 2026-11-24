@@ -3,11 +3,12 @@ acceptance test, an agent's analysis of the demo board done with the tools alone
 
 import base64
 import json
+import sys
 from pathlib import Path
 
 import anyio
 import pytest
-from mcp import Client
+from mcp import Client, StdioServerParameters
 
 from coppernicus.mcp_server import build_server
 from coppernicus.service import Session
@@ -142,3 +143,34 @@ def test_acceptance_an_agent_reproduces_the_demo_analysis(tmp_path):
     assert summary["verdict"] == "fail"
     assert {ld["name"] for ld in summary["loads"] if ld["exceeds_drop_limit"]} == {"U1", "U2"}
     assert summary["limits"] == {"max_drop_pct": 0.25}
+
+
+def test_stdio_subprocess_round_trip(tmp_path):
+    """``python -m coppernicus mcp`` as a real child process speaking over stdio: anything
+    other than protocol messages on its stdout would break the client."""
+    log = tmp_path / "server.log"
+    params = StdioServerParameters(command=sys.executable, args=[
+        "-m", "coppernicus", "mcp", "--out", str(tmp_path / "maps"), "--log-file", str(log)])
+    progress = []
+
+    async def main():
+        async with Client(params) as client:
+            board = await call(client, "open_board", path=str(DEMO_BOARD))
+            nets = await call(client, "list_nets", board_id=board["board_id"])
+
+            async def on_progress(value, total, message):
+                progress.append(message)
+            solved = await client.call_tool("solve_rail", {
+                "board_id": board["board_id"], "net": nets["nets"][0]["name"],
+                "sources": [{"ref": "J1", "voltage_v": 3.3}],
+                "loads": [{"ref": "U1", "current_a": 2.0}]}, progress_callback=on_progress)
+            picture = await client.call_tool("render_map", {
+                "result_id": solved.structured_content["result_id"]})
+            return solved, picture
+
+    solved, picture = anyio.run(main)
+    assert not solved.is_error and solved.structured_content["loads"][0]["drop_mv"] > 0
+    assert image_bytes(picture)[:8] == PNG
+    assert (tmp_path / "maps" / Path(picture.structured_content["path"]).name).exists()
+    assert "MCP server on stdio" in log.read_text()
+    assert progress                     # delivered beside the response; may still be arriving

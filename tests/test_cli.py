@@ -52,3 +52,55 @@ def test_errors_are_reported_not_raised(demo_project, tmp_path, capsys):
     assert main(["solve", str(demo_project), "--no-maps", "--out", str(tmp_path)]) == EXIT_ERROR
     assert "U99 has no pads" in capsys.readouterr().err
     assert main(["nets", str(tmp_path / "missing.kicad_pcb")]) == EXIT_ERROR
+
+
+# ---------------------------------------------------------------------- --json
+
+def test_json_nets_and_parts(demo_project, capsys):
+    board = str(demo_project.parent / "demo.kipi.json.gz")
+    assert main(["nets", board, "--json"]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["board"]["name"] == "demo.kipi.json.gz"
+    assert doc["nets"] == [{"name": "+3V3", "kind": "power", "layers": ["F.Cu", "B.Cu"]}]
+    assert main(["parts", board, "+3V3", "--json"]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
+    assert [p["ref"] for p in doc["parts"]] == ["J1", "U1", "U2", "U3"]
+    assert main(["parts", board, "+3v3", "--json"]) == EXIT_ERROR
+    out = capsys.readouterr()
+    assert json.loads(out.out)["error"] == {"code": "net_not_found",
+                                            "message": "No net '+3v3' on this board",
+                                            "hint": "did you mean '+3V3'?"}
+    assert "No net" in out.err
+    assert main(["nets", str(demo_project.parent / "missing.kicad_pcb"), "--json"]) == EXIT_ERROR
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "file_not_found"
+
+
+def test_json_solve_prints_only_json_and_keeps_files(demo_project, tmp_path, capsys):
+    out_dir = tmp_path / "out"
+    assert main(["solve", str(demo_project), "--out", str(out_dir), "--json", "-v"]) == EXIT_OK
+    captured = capsys.readouterr()
+    doc = json.loads(captured.out)                       # stdout is the JSON document alone
+    assert "Meshing" in captured.err                     # -v progress went to stderr
+    [rail] = doc["rails"]
+    assert rail["net"] == "+3V3" and rail["verdict"] == "not_judged" and doc["verdict"] == "not_judged"
+    assert [ld["name"] for ld in rail["loads"]] == ["U1", "U3"]
+    assert sorted(p.rsplit("/", 1)[-1] for p in rail["maps"]) == [
+        "P3V3_B.Cu_current.png", "P3V3_B.Cu_drop.png", "P3V3_F.Cu_current.png", "P3V3_F.Cu_drop.png"]
+    summary = json.loads((out_dir / "demo.coppernicus_summary.json").read_text())   # format unchanged
+    assert summary["rails"][0]["net"] == "+3V3" and summary["rails"][0]["energy_balance_error"] < 1e-6
+    assert doc["summary_file"].endswith("demo.coppernicus_summary.json")
+
+
+def test_json_solve_exit_codes(demo_project, tmp_path, capsys):
+    p = Project.load(demo_project)
+    p.rails[0].limits = Limits(max_drop_pct=0.01)
+    p.save()
+    assert main(["solve", str(demo_project), "--no-maps", "--out", str(tmp_path), "--json"]) == EXIT_LIMIT
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["verdict"] == "fail" and doc["rails"][0]["limits"] == {"max_drop_pct": 0.01}
+    p.rails[0].loads.append(Load("U99", 1.0))
+    p.save()
+    assert main(["solve", str(demo_project), "--no-maps", "--out", str(tmp_path), "--json"]) == EXIT_ERROR
+    out = capsys.readouterr()
+    assert json.loads(out.out)["error"]["code"] == "part_not_on_net"
+    assert "U99 has no pads" in out.err
