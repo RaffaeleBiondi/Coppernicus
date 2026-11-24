@@ -172,13 +172,24 @@ uv run coppernicus gui project.coppernicus.yml --solve +3V3 --field current
 ```
 
 Add `--json` to `nets`, `parts` or `solve` to get one JSON document on stdout instead of text.
+The `*_summary.json` file that `solve` writes holds the same document.
 
 `solve` prints a report per rail and writes a PNG map per layer plus a JSON summary into
 `results/`, next to the project file. It exits with **0** when everything is within your
 limits, **1** when a limit is exceeded and **2** on an error.
 
+**HTML report.** Add `--html` to `solve` (and `--open` to open it straight away). Coppernicus
+writes one offline HTML file next to the summary. It holds every rail and copper layer as voltage
+drop, voltage or current density, with zoom, pan and a readout under the mouse, plus the problems
+table (click a row to zoom), the worst values per rail and the assumptions. It needs no network,
+so you can send it to a colleague. On a 10-layer board with four rails it weighs about 6 MB.
+
+```sh
+uv run coppernicus solve project.coppernicus.yml --html --open
+```
+
 <p align="center">
-  <img src="docs/images/map-demo-current.png" alt="A current-density map written by coppernicus solve" width="520">
+  <img src="docs/images/report-demo.png" alt="The offline HTML report of the demo board: summary cards, the drop map with sources, loads and hotspots, and the hover readout" width="800">
 </p>
 
 ## Use it from an AI agent
@@ -243,7 +254,8 @@ rails:
 | Nets marked as rails by hand, saved in the project (right-click a net) | ✅ |
 | Command line with exit codes for scripts and CI | ✅ |
 | AI-agent interface: MCP server and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
-| Interactive HTML report, GitHub Action for KiCad repositories | ⏳ |
+| Offline interactive HTML report (`solve --html`, MCP `report` tool) | ✅ (tested in Chromium and Chrome; Safari and Firefox not yet) |
+| GitHub Action for KiCad repositories | ⏳ next |
 | Before/after comparison of two solves, loss-by-layer chart | 🔄 in progress |
 | Readout while hovering (today: double-click) | ⏳ |
 | Power tree with ground return, board temperature | ⏳ (KiPI's engine has both) |

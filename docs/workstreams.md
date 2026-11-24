@@ -58,6 +58,12 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
 2. **Phase 2:** interactive offline HTML report per rail (zoom/pan, drop and current maps per
    layer, loads, problems, assumptions), `solve --html` / `--open`, and per-rail worst values
    summarised.
+   **Status (2026-11-24): merged in `main` (`5ff5d1d`).** `coppernicus/report.py`
+   (`write_report(results, project, path, *, outline, board_name, ...)`), `solve --html/--open/--top`,
+   MCP `report` tool (11 tools), one unit-keyed summary format, full problem lists. Measured:
+   19.7 MB for a synthetic 3.07 M-triangle board; about 6 MB for a local 10-layer, 4-rail board,
+   checked in Chromium. Safari and Firefox not tried. Assets in `src/coppernicus/report_assets/`
+   must be packaged as data files (WS4).
 3. **Phase 3:** automation, i.e. a GitHub Action (or workflow template) usable from a KiCad
    repository, which solves with limits, uploads PNG/HTML artifacts and fails on an exceeded
    limit. Also a way to define sources and loads:
