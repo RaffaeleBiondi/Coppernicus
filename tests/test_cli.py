@@ -222,3 +222,18 @@ def test_a_crash_exits_2_never_1(demo_project, tmp_path, capsys, monkeypatch, tr
         "code": "internal_error", "message": "ZeroDivisionError: forced for the test",
         "hint": "this is a bug in Coppernicus: please report it with the command you ran"}
     assert out.err.count("\n") == 1
+
+
+def test_a_net_at_0_v_solved_alone_prints_its_rise_not_a_drop(capsys):
+    from coppernicus.cli import _print_rail
+    from coppernicus.engine import Board, solve_rail
+    from coppernicus.engine.synthetic import Strip, strip_board
+    from coppernicus.problems import find_problems
+    from coppernicus.project import Load, Rail, Source
+    rail = Rail(Strip.NET, sources=[Source("J1", 0.0)], loads=[Load("U1", 1.0)])
+    res = solve_rail(Board(strip_board()), rail)
+    _print_rail(res, find_problems(res))
+    out = capsys.readouterr().out
+    assert "max ground rise" in out and "mV above 0 V" in out
+    [load_line] = [ln for ln in out.splitlines() if ln.strip().startswith("load")]
+    assert " rise " in load_line and " drop " not in load_line
