@@ -30,7 +30,7 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
 
 1. **Phase 1:** service layer, CLI `--json`, MCP server (`coppernicus mcp`), tests, and how to
    register the server in Claude Code / Claude Desktop.
-   **Status (2026-11-24): done on `feat/mcp`, awaiting review.**
+   **Status (2026-11-24): merged in `main` (`d2ce457`). Guide for agents: `docs/agents.md`.**
    - `src/coppernicus/service/`: a `Session` with boards and results by id, and an LRU bound on
      result arrays that keeps summaries.
    - Ten MCP tools on `mcp` 2.3.0: `open_board`, `list_nets`, `net_parts`, `solve_rail`,
@@ -46,8 +46,13 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
      - a real stdio subprocess round trip.
    - Checked by hand: the engine's mesh process pool runs under `coppernicus mcp` over stdio
      (a synthetic 1.2 M-triangle board).
-   - The app keeps its own `TriangleLocator`. `service/fields.py` holds a non-GUI copy that the
-     GUI can switch to when it moves onto the service layer.
+   - The app and the service share `coppernicus/fields.py` (the vectorised `TriangleLocator`,
+     `current_vectors`). `service/fields.py` holds only the cross-section cut.
+   - Checked by the coordinator: `solve --json` on a local real board gives the same numbers
+     as the human report.
+   - Not yet tried: registration in a real Claude Code or Claude Desktop host; Windows.
+   - Open questions for the owner: `copper_thickness_mm` in the project YAML; unit-keyed
+     `*_summary.json`; the default memory bound (8 results, 2 GB).
 2. **Phase 2:** interactive offline HTML report per rail (zoom/pan, drop and current maps per
    layer, loads, problems, assumptions), `solve --html` / `--open`, and per-rail worst values
    summarised.
@@ -63,7 +68,8 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
 Detailed tasks are in `docs/superpowers/plans/2026-11-24-coppernicus-roadmap.md`, Part A.
 
 Status: T1 (pick pads on the board) and T2 (`coppernicus/fields.py`: current vectors, arrow
-sampling, isolines, `TriangleLocator`) are merged in `main` (`d07199e`). T3 is in progress.
+sampling, isolines, `TriangleLocator`) are merged in `main` (`d07199e`). T3, T4 and the
+cosmetics are done on `feat/gui`; the Part A hand-over is pending.
 `coppernicus/fields.py` is the single home of the field helpers. WS1 keeps only its cut tools
 in `service/fields.py` and imports the rest.
 
@@ -103,6 +109,27 @@ First make Coppernicus functional; efficiency and packaging come afterwards.
 - Decide on Triangle; then packaging (`.app` / `.exe`, signing / notarization).
 - First test run on Windows.
 - GitHub Actions CI for the repository's own tests (synthetic boards only).
+
+## WS5: documentation and the local launcher (coordinator)
+
+The owner's goal (2026-11-24): every feature can be tried from the local launcher
+(`tools/make_mac_launcher.sh`, which runs `main`), and the README is a short, visual guide.
+
+- The coordinator owns `README.md`. The other streams send status-table lines in their
+  hand-over messages instead of editing it.
+- Screenshots come only from synthetic boards, made by `tools/make_docs_screenshots.py`. They
+  are regenerated at merges that change the UI.
+- `docs/agents.md` is the guide for AI agents that use Coppernicus (MCP and CLI `--json`). WS1
+  writes it with Phase 1.
+- Every Part B task ships a synthetic example in `examples/` that the app opens and that
+  exercises the feature from the GUI.
+- After every merge: pytest on `main`, then one start through the launcher, then check
+  `~/Library/Logs/Coppernicus/launcher.log`.
+- The owner gave a standing go-ahead: once a delivery is verified and merged, the coordinator
+  dispatches the next phase or task without asking. Decisions that stay with the owner:
+  - permission for agents to open windows;
+  - for WS1 Phase 3, defining sources and loads inside KiCad;
+  - anything about packaging, efficiency or Triangle.
 
 ## Coordination rules
 
