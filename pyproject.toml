@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coppernicus"
+version = "0.1.0.dev0"
+description = "Standalone DC power-integrity (IR drop & current density) analyzer for KiCad PCBs"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "RaffaeleBiondi" }]
+keywords = ["kicad", "pcb", "power integrity", "ir drop", "pdn", "current density", "fem"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Manufacturing",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
+dependencies = [
+    # The solver engine: KiPI, pinned to the v1.0.1 commit. Only coppernicus.engine imports it.
+    "kipi @ git+https://github.com/drewsum/KiPI@3ffce16aa5a0248ccdbdda8603c3c484ac99f570",
+    "numpy>=1.24",
+    "scipy>=1.11",
+    "shapely>=2.1",
+    "matplotlib>=3.8",
+    "PyYAML>=6.0",
+    "PySide6-Essentials>=6.6",
+    "qtpy>=2.4",
+    "pyvista>=0.44",
+    "pyvistaqt>=0.11",
+]
+
+[project.scripts]
+coppernicus = "coppernicus.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coppernicus"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "B", "I"]
