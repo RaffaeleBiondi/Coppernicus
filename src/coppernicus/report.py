@@ -44,7 +44,8 @@ from coppernicus.results import LayerField, RailResult
 J_CLIP_PERCENTILE = 99.5          # colour-scale top for |J|, as in the maps and the app
 V_CODES = 65533                    # voltage levels: 0 = no copper, 1 = copper with no source
 J_CODES = 65534                    # |J| levels: 0 = no copper
-DEFAULT_BUDGET_MB = 27.0           # whole file; the owner set ~30 MB as the ceiling
+DEFAULT_BUDGET_MB = 27.0           # whole file, aimed at
+MAX_FILE_MB = 30.0                 # the ceiling the owner set; write_report resamples above it
 MIN_CELL_MM = 0.005
 MAX_CELL_MM = 1.0
 MESH_OVERSAMPLING = 6.0            # cells per median mesh edge, at most
@@ -238,7 +239,7 @@ class ReportBuilder:
                  outline: Sequence[np.ndarray] = (), project: str = "",
                  settings: Optional[Mapping[str, Any]] = None,
                  budget_mb: float = DEFAULT_BUDGET_MB, expected_layers: Optional[int] = None,
-                 top: int = 10):
+                 top: int = 10, cell_scale: float = 1.0):
         self.title = title or "Coppernicus report"
         self.board_name = board_name
         self.outline = [np.asarray(r, dtype=float) for r in outline]
@@ -247,18 +248,23 @@ class ReportBuilder:
         self.budget_mb = float(budget_mb)
         self.expected_layers = expected_layers
         self.top = max(1, int(top))           # hotspots and vias ranked per rail
+        self.cell_scale = max(float(cell_scale), 1.0)   # > 1 coarsens every cell (a resample)
         self.rails: List[Dict[str, Any]] = []
         self.blocks: Dict[str, str] = {}
         self.cells_used = 0
+        self.bytes_used = 0
         self.layers_added = 0
         self.seconds = 0.0
 
     # ------------------------------------------------------------------ rails
     def _cell_for(self, result: RailResult) -> float:
-        budget_cells = self.budget_mb * 1e6 * 0.9 / BYTES_PER_CELL
+        # Bytes per cell: the estimate until a rail is in, then what the cells really took.
+        per_cell = self.bytes_used / self.cells_used if self.cells_used else BYTES_PER_CELL
+        budget = self.budget_mb * 1e6
+        bytes_left = max(0.92 * budget - self.bytes_used, 0.08 * budget)
         expected = max(self.expected_layers or 0, self.layers_added + len(result.layers))
         left_layers = max(expected - self.layers_added, len(result.layers))
-        share = max(budget_cells - self.cells_used, 0.1 * budget_cells) * len(result.layers) / left_layers
+        share = bytes_left / max(per_cell, 0.3) * len(result.layers) / left_layers
         area = sum((b[2] - b[0]) * (b[3] - b[1]) for b in map(_bbox, result.layers))
         cell = math.sqrt(area / max(share, 1.0))
         cell = max(cell, _median_edge_mm(result) / MESH_OVERSAMPLING, MIN_CELL_MM)
@@ -266,7 +272,7 @@ class ReportBuilder:
             x0, y0, x1, y1 = _bbox(lf)
             cell = max(cell, math.sqrt((x1 - x0) * (y1 - y0) / MAX_CELLS_PER_LAYER),
                        (x1 - x0) / MAX_SIDE, (y1 - y0) / MAX_SIDE)
-        return min(cell, MAX_CELL_MM)
+        return min(cell * self.cell_scale, MAX_CELL_MM)
 
     def add_rail(self, result: RailResult, limits: Optional[Limits] = None,
                  problems: Optional[List[Problem]] = None, label: str = "",
@@ -295,6 +301,7 @@ class ReportBuilder:
             self.blocks[vid] = encode(quantise_v(mask, v, v_lo, v_hi))
             self.blocks[jid] = encode(quantise_j(mask, j, j_hi))
             self.cells_used += grid.nx * grid.ny
+            self.bytes_used += len(self.blocks[vid]) + len(self.blocks[jid])
             lv = lf.voltage[np.isfinite(lf.voltage)]
             layers.append({
                 "name": lf.name, "power_w": lf.power, "copper_area_mm2": float(lf.tri_area.sum()),
@@ -371,7 +378,9 @@ class ReportBuilder:
 
     def html(self) -> str:
         meta = json.dumps(self.meta(), ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-        meta = meta.replace("</", "<\\/")
+        # "<" only occurs inside JSON strings; as < no text can end or confuse the script
+        # block ("</script>", "<!--"), and JSON.parse reads it back unchanged.
+        meta = meta.replace("<", "\\u003c")
         blocks = "\n".join(f'<script type="application/octet-stream" id="{k}">{v}</script>'
                            for k, v in self.blocks.items())
         values = {"TITLE": html.escape(self.title), "STYLE": _asset("report.css"),
@@ -380,12 +389,22 @@ class ReportBuilder:
         return re.sub(r"__(TITLE|STYLE|SCRIPT|META|BLOCKS)__", lambda m: values[m.group(1)],
                       _asset("report.html"))
 
-    def write(self, path) -> Path:
+    def write(self, path, text: Optional[str] = None) -> Path:
         """Write the report (creating folders) and return its path."""
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.html(), encoding="utf-8")
+        path.write_text(self.html() if text is None else text, encoding="utf-8")
         return path
+
+    def size_warning(self, path) -> Optional[str]:
+        """A warning when the written file is above the ~30 MB ceiling (the cell size was
+        estimated before all rails were in), else None."""
+        size = Path(path).stat().st_size
+        if size <= MAX_FILE_MB * 1e6:
+            return None
+        return (f"The HTML report is {size / 1e6:.1f} MB, above the {MAX_FILE_MB:g} MB aimed at: it may "
+                "open slowly. Report fewer rails at a time (--rail), or write it with write_report, "
+                "which resamples to fit.")
 
 
 ResultLike = Union[RailResult, RailReport]
@@ -405,13 +424,40 @@ def write_report(results: Iterable[ResultLike], project: Optional[Project], path
         for r in results]
     settings = dict(vars(project.settings)) if project is not None else {}
     name = (Path(project.path).name if project is not None and project.path else "")
-    builder = ReportBuilder(title=title or f"Coppernicus report: {name or board_name or 'rails'}",
-                            board_name=board_name, outline=outline, project=name, settings=settings,
-                            budget_mb=budget_mb,
-                            expected_layers=sum(len(i.result.layers) for i in items))
-    for item in items:
-        builder.add_rail(item.result, item.limits, item.problems, item.label, item.notes)
-    return builder.write(path)
+    builder, text = build_report(items, title=title or f"Coppernicus report: {name or board_name or 'rails'}",
+                                 board_name=board_name, outline=outline, project=name,
+                                 settings=settings, budget_mb=budget_mb)
+    return builder.write(path, text)
+
+
+def build_report(items: Sequence[RailReport], *, title: str = "", board_name: str = "",
+                 outline: Sequence[np.ndarray] = (), project: str = "",
+                 settings: Optional[Mapping[str, Any]] = None,
+                 budget_mb: float = DEFAULT_BUDGET_MB) -> Tuple[ReportBuilder, str]:
+    """Build a report of all ``items`` and its HTML. When the first estimate of the cell size
+    makes the page larger than ``MAX_FILE_MB``, the cells are coarsened and the page rebuilt,
+    up to three times (coarser cells compress less well, so one step can fall short)."""
+    def build(scale: float) -> ReportBuilder:
+        b = ReportBuilder(title=title, board_name=board_name, outline=outline, project=project,
+                          settings=settings, budget_mb=budget_mb, cell_scale=scale,
+                          expected_layers=sum(len(i.result.layers) for i in items))
+        for item in items:
+            b.add_rail(item.result, item.limits, item.problems, item.label, item.notes)
+        return b
+
+    scale, seconds = 1.0, 0.0
+    builder = build(scale)
+    text = builder.html()
+    for _ in range(3):
+        size = len(text.encode("utf-8"))
+        if size <= MAX_FILE_MB * 1e6:
+            break
+        seconds += builder.seconds
+        scale *= 1.05 * math.sqrt(size / (0.9 * MAX_FILE_MB * 1e6))     # cells ~ 1 / side²
+        builder = build(scale)
+        text = builder.html()
+    builder.seconds += seconds
+    return builder, text
 
 
 def _plain(obj: Any) -> Any:

@@ -30,8 +30,9 @@ DEMO_RAIL = Rail("+3V3", sources=[Source("J1", 3.3, name="Supply")],
 def parse(path):
     """The page's metadata and its data blocks, as the browser sees them."""
     text = path.read_text(encoding="utf-8")
+    # The block ends at the first "</script>", as in a browser.
     meta = json.loads(re.search(r'<script type="application/json" id="meta">(.*?)</script>', text, re.S)
-                      .group(1).replace("<\\/", "</"))
+                      .group(1))
     blocks = dict(re.findall(r'<script type="application/octet-stream" id="([^"]+)">([^<]*)</script>', text))
     return text, meta, blocks
 
@@ -139,14 +140,29 @@ def test_strip_cells_follow_the_closed_form(tmp_path):
     assert mask[:, track].sum(axis=0).mean() * grid.cell == pytest.approx(Strip.W, abs=grid.cell)
 
 
-def test_names_cannot_break_out_of_the_page(demo, tmp_path):
+@pytest.mark.parametrize("nasty", ['</script><script>alert(1)</script> __META__ "x"',
+                                   "<!--<script>", "</SCRIPT >", "a < b & c > d"])
+def test_names_cannot_break_out_of_the_page(demo, tmp_path, nasty):
     board, res = demo
-    nasty = '</script><script>alert(1)</script> __META__ "x"'
     path = write_report([RailReport(res, label=nasty)], None, tmp_path / "x.html")
-    text, meta, _ = parse(path)
-    assert meta["rails"][0]["label"] == nasty
-    assert text.count("<script>alert(1)</script>") == 0
+    text, meta, blocks = parse(path)
+    assert meta["rails"][0]["label"] == nasty                  # read back unchanged
+    meta_block = re.search(r'id="meta">(.*?)</script>', text, re.S).group(1)
+    assert "<" not in meta_block                               # nothing the HTML parser acts on
+    assert len(blocks) == 2 * len(res.layers)                  # every data block still found
     assert text.count('id="meta"') == 1
+
+
+def test_a_page_over_the_ceiling_is_resampled_to_fit(demo, tmp_path, monkeypatch):
+    import coppernicus.report as report
+    board, res = demo
+    natural = write_report([RailReport(res)], None, tmp_path / "natural.html")
+    ceiling = 0.5 * natural.stat().st_size / 1e6
+    monkeypatch.setattr(report, "MAX_FILE_MB", ceiling)       # as if the estimate were off
+    fitted = write_report([RailReport(res)], None, tmp_path / "fitted.html", budget_mb=10 * ceiling)
+    assert fitted.stat().st_size <= ceiling * 1e6
+    _, meta, _ = parse(fitted)
+    assert meta["rails"][0]["cell_mm"] > parse(natural)[1]["rails"][0]["cell_mm"]
 
 
 def test_budget_sets_the_cell_size(demo, tmp_path):

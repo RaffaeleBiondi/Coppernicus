@@ -133,7 +133,7 @@ def _cmd_solve(args) -> int:
     session = Session(out_dir=out_dir, max_results=1)        # one rail's arrays at a time
     report = {}
 
-    def on_board(info, n_rails):
+    def on_board(info, n_rails, n_layers):
         if not quiet:
             print(f"Board: {info['name']} ({len(info['layers'])} copper layers)")
             for w in info["warnings"]:
@@ -143,7 +143,7 @@ def _cmd_solve(args) -> int:
             report["builder"] = ReportBuilder(
                 title=f"Coppernicus report: {Path(args.project).name}", board_name=info["name"],
                 outline=session.board_outline(info["board_id"]), project=Path(args.project).name,
-                expected_layers=n_rails * len(info["layers"]), top=max(args.top, 10))
+                expected_layers=n_layers, top=max(args.top, 10))
 
     def on_rail(rid, summary):
         res, problems = session.rail_result(rid), session.rail_problems(rid)
@@ -175,8 +175,12 @@ def _cmd_solve(args) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / f"{stem}_summary.json"
     doc["summary_file"] = str(summary_path)
+    size_warning = None
     if "builder" in report:
         doc["report_file"] = str(report["builder"].write(html_path))
+        size_warning = report["builder"].size_warning(html_path)
+        if size_warning:
+            doc["warnings"].append(size_warning)
     summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
                             encoding="utf-8")
     if quiet:
@@ -185,6 +189,8 @@ def _cmd_solve(args) -> int:
         print(f"Summary: {summary_path}")
         if "report_file" in doc:
             print(f"Report: {doc['report_file']}")
+        if size_warning:
+            print(f"warning: {size_warning}")
     if args.open and "report_file" in doc:
         import webbrowser
         webbrowser.open(Path(doc["report_file"]).resolve().as_uri())

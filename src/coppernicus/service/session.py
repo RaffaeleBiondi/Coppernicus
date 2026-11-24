@@ -378,12 +378,12 @@ class Session:
                       maps_dir=None, stop_on_error: bool = False, progress: Progress = None,
                       cancelled: Cancel = None,
                       on_rail: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-                      on_board: Optional[Callable[[Dict[str, Any], int], None]] = None
+                      on_board: Optional[Callable[[Dict[str, Any], int, int], None]] = None
                       ) -> Dict[str, Any]:
         """Solve the rails of a project file (all, or those named in ``rails``) with the
         project's settings and limits. With ``maps_dir``, write drop and current PNGs per
         layer there. A rail that fails to solve is reported in place unless
-        ``stop_on_error``. ``on_board(board_info, n_rails)`` is called once the board is open
+        ``stop_on_error``. ``on_board(board_info, n_rails, n_layers)`` is called once the board is open
         and the rails are chosen; ``on_rail(result_id, summary)`` after each rail, while its
         full result is still in memory."""
         path = Path(str(project_path)).expanduser()
@@ -411,7 +411,14 @@ class Session:
                                "No rails to solve" + (f" matching {wanted}" if wanted else ""),
                                f"rails in the project: {names}")
         if on_board is not None:
-            on_board(board_info, len(selected))
+            board = entry.board
+            n_layers = 0                  # copper layers the selected rails have, net ties followed
+            for rail in selected:
+                if rail.net not in board.nets():
+                    continue
+                nets = tied_nets(board, rail.net)[0] if rail.follow_net_ties else [rail.net]
+                n_layers += len({lid for n in nets for lid in board.net_layers(n)})
+            on_board(board_info, len(selected), n_layers)
         out_rails, verdicts = [], []
         for i, rail in enumerate(selected, start=1):
             if progress is not None:
@@ -483,7 +490,7 @@ class Session:
                title: str = "") -> Dict[str, Any]:
         """Write an offline HTML report of results (default: every result whose fields are
         still in memory, oldest first) and return its path, size and cell sizes."""
-        from coppernicus.report import ReportBuilder
+        from coppernicus.report import RailReport, build_report
         with self._lock:
             ids = [str(r) for r in result_ids] if result_ids else [
                 r.id for r in self._results.values() if r.result is not None]
@@ -496,20 +503,20 @@ class Session:
                     [f"These results come from {len(boards)} boards ({', '.join(boards)}); the outline "
                      f"drawn is that of {boards[0]}."])
         board_name = lives[0].board.name if lives[0].board is not None else ""
-        builder = ReportBuilder(title=title or f"Coppernicus report: {board_name or 'rails'}",
-                                board_name=board_name, outline=lives[0].outline,
-                                expected_layers=sum(len(lv.res.layers) for lv in lives))
+        items = []
         for lv in lives:
             used = C.settings_to_dict(lv.rec.settings, lv.rec.thickness)
             note = "Settings of this result: " + ", ".join(
                 f"{k} = {'engine default' if v is None else v}" for k, v in used.items()) + "."
-            builder.add_rail(lv.res, lv.rec.rail.limits, label=f"{lv.res.net} ({lv.rec.id})",
-                             notes=[note])
+            items.append(RailReport(lv.res, lv.rec.rail.limits, label=f"{lv.res.net} ({lv.rec.id})",
+                                    notes=[note]))
+        builder, text = build_report(items, title=title or f"Coppernicus report: {board_name or 'rails'}",
+                                     board_name=board_name, outline=lives[0].outline)
         if path:
             target = Path(str(path)).expanduser().resolve()
         else:
             target = self.out_dir() / f"report-{time.strftime('%Y%m%d-%H%M%S')}.html"
-        builder.write(target)
+        builder.write(target, text)
         return C.jsonable({
             "path": target, "size_mb": target.stat().st_size / 1e6,
             "rails": [{"result_id": lv.rec.id, "net": lv.res.net, "cell_mm": r["cell_mm"]}
