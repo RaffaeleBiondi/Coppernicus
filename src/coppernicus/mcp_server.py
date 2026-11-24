@@ -15,7 +15,10 @@ the parameter models must be real classes at definition time.
 
 import json
 import logging
+import os
 import sys
+import time
+from pathlib import Path
 from typing import Annotated, Any, Literal, Optional
 
 import anyio.from_thread
@@ -261,8 +264,12 @@ def _configure_logging(log_file: Optional[str], level: str) -> None:
 
 def run_stdio(out_dir=None, log_file: Optional[str] = None, log_level: str = "INFO",
               max_results: int = 8, max_result_mb: float = 2048) -> int:
-    """Serve over stdio until the client disconnects."""
+    """Serve over stdio until the client disconnects. Maps go to a new ``session-…`` folder
+    inside ``out_dir``: result ids restart at r1 in every server, so sessions must not share
+    a folder."""
     _configure_logging(log_file, log_level)
+    if out_dir:
+        out_dir = Path(out_dir).expanduser() / f"session-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
     session = Session(out_dir=out_dir, max_results=max_results, max_result_mb=max_result_mb)
     server = build_server(session, log_level)
     log.info("Coppernicus %s MCP server on stdio; maps go to %s", __version__, session.out_dir())

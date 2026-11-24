@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import difflib
 import fnmatch
+import logging
 import math
 import os
 import tempfile
@@ -22,9 +23,10 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
+import yaml
 from shapely.geometry import LineString
 from shapely.ops import unary_union
 
@@ -38,6 +40,8 @@ from coppernicus.service import convert as C
 from coppernicus.service import errors as E
 from coppernicus.service import fields as F
 from coppernicus.service.errors import ServiceError
+
+log = logging.getLogger("coppernicus.service")
 
 Progress = Optional[Callable[[str], None]]
 Cancel = Optional[Callable[[], bool]]
@@ -106,6 +110,13 @@ class _ResultRecord:
     summary: Dict[str, Any]
     nbytes: int
     queries: Dict[str, Any] = field(default_factory=dict)      # per layer: locator, J, copper
+
+
+class _Live(NamedTuple):
+    rec: _ResultRecord
+    res: RailResult
+    board: Board
+    outline: list
 
 
 def _result_nbytes(res: RailResult) -> int:
@@ -179,9 +190,12 @@ class Session:
                 return self._boards[bid]
         try:
             board = Board.open(p)
-        except EngineError as e:
-            raise ServiceError(E.BOARD_UNREADABLE, f"Could not read {p.name}: {e}",
-                               f"readable formats: {board_file_filter()}") from None
+        except Exception as e:         # any importer failure means: this file can't be read
+            log.debug("could not read %s", p, exc_info=True)
+            hint = (f"{p.name} looks like a project file: use solve_project for it"
+                    if p.suffix.lower() in (".yml", ".yaml") else f"readable formats: {board_file_filter()}")
+            detail = str(e) if isinstance(e, EngineError) else f"{type(e).__name__}: {e}"
+            raise ServiceError(E.BOARD_UNREADABLE, f"Could not read {p.name}: {detail}", hint) from None
         with self._lock:
             self._n_boards += 1
             entry = _BoardEntry(f"b{self._n_boards}", p, st.st_mtime_ns, board)
@@ -277,8 +291,8 @@ class Session:
                     loads=[C.terminal_from_dict(ld, "load") for ld in loads],
                     limits=C.limits_from_dict(limits), follow_net_ties=bool(follow_net_ties))
         solve_settings, thickness = C.settings_from_dict(settings)
-        rec = self._solve(entry, rail, solve_settings, thickness, top, progress, cancelled)
-        return C.jsonable(rec.summary)
+        live = self._solve(entry, rail, solve_settings, thickness, top, progress, cancelled)
+        return C.jsonable(live.rec.summary)
 
     def _validate_rail(self, board: Board, rail: Rail) -> None:
         self._check_net(board, rail.net)
@@ -305,7 +319,7 @@ class Session:
                                        f"pins of {t.ref} on this net: {_limited(available, 64)}")
 
     def _solve(self, entry: _BoardEntry, rail: Rail, settings: Settings, thickness: Dict[str, float],
-               top: int, progress: Progress, cancelled: Cancel) -> _ResultRecord:
+               top: int, progress: Progress, cancelled: Cancel) -> _Live:
         board = entry.variant(thickness)
         self._validate_rail(board, rail)
         with self._solve_lock:
@@ -337,17 +351,19 @@ class Session:
                             layer_thickness, res, problems, summary, _result_nbytes(res))
         with self._lock:
             self._results[rid] = rec
-            self._evict()
-        return rec
+            self._evict(keep=rid)
+        return _Live(rec, res, board, rec.outline)
 
-    def _evict(self) -> None:
+    def _evict(self, keep: Optional[str] = None) -> None:
         """Drop the arrays of the least recently used results beyond the bounds (never the
-        newest), keeping their summaries."""
+        most recently used one, nor ``keep``), keeping their summaries."""
         heavy = [r for r in self._results.values() if r.result is not None]
         total = sum(r.nbytes for r in heavy)
         for r in heavy[:-1]:
             if len(heavy) <= self.max_results and total <= self.max_result_bytes:
                 break
+            if r.id == keep:
+                continue
             heavy.remove(r)
             total -= r.nbytes
             r.result, r.board, r.outline, r.queries, r.nbytes = None, None, None, {}, 0
@@ -373,8 +389,9 @@ class Session:
         except FileNotFoundError:
             raise ServiceError(E.FILE_NOT_FOUND, f"No such project file: {project_path}",
                                "give an absolute path to a *.coppernicus.yml file") from None
-        except (ProjectError, OSError) as e:
-            raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}") from None
+        except (ProjectError, OSError, yaml.YAMLError) as e:
+            raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                               "fix the project file (YAML; see the README for its format)") from None
         board_info = self.open_board(project.board_path())
         entry = self._entry(board_info["board_id"])
         wanted = list(rails or [])
@@ -389,19 +406,19 @@ class Session:
             if progress is not None:
                 progress(f"rail {i}/{len(selected)}: {rail.net}")
             try:
-                rec = self._solve(entry, rail, project.settings, {}, top, progress, cancelled)
+                live = self._solve(entry, rail, project.settings, {}, top, progress, cancelled)
             except ServiceError as e:
                 if stop_on_error or e.code == E.CANCELLED:
                     raise
                 out_rails.append({"net": rail.net, "error": e.to_dict()})
                 verdicts.append("error")
                 continue
-            summary = dict(rec.summary)
+            summary = dict(live.rec.summary)
             if maps_dir is not None:
                 summary["maps"] = [str(p) for p in save_layer_maps(
-                    rec.result, rec.outline, Path(maps_dir), rec.problems)]
+                    live.res, live.outline, Path(maps_dir), live.rec.problems)]
             if on_rail is not None:
-                on_rail(rec.id, summary)
+                on_rail(live.rec.id, summary)
             out_rails.append(summary)
             verdicts.append(summary["verdict"])
         overall = ("error" if "error" in verdicts else "fail" if "fail" in verdicts else
@@ -429,15 +446,21 @@ class Session:
             self._results.move_to_end(rec.id)
             return rec
 
+    def _live(self, result_id: str) -> _Live:
+        """A result with its arrays, board and outline bound at once: an eviction by another
+        call while this one runs cannot pull them away."""
+        with self._lock:
+            rec = self._record(result_id)
+            return _Live(rec, rec.result, rec.board, rec.outline)
+
     def rail_result(self, result_id: str) -> RailResult:
         """The full result object (for in-process callers such as the CLI)."""
-        return self._record(result_id).result
+        return self._live(result_id).res
 
     def rail_problems(self, result_id: str) -> List[Problem]:
         return list(self._record(result_id).problems)
 
-    def _layer(self, rec: _ResultRecord, layer: Optional[str]) -> LayerField:
-        res = rec.result
+    def _layer(self, res: RailResult, layer: Optional[str]) -> LayerField:
         if layer is None or layer == "":
             return max(res.layers, key=lambda lf: lf.power)
         lf = res.layer(str(layer))
@@ -446,28 +469,40 @@ class Session:
                                f"layers of this result: {', '.join(x.name for x in res.layers)}")
         return lf
 
-    def _queries(self, rec: _ResultRecord, lf: LayerField) -> Dict[str, Any]:
+    def _queries(self, live: _Live, lf: LayerField) -> Dict[str, Any]:
+        """Locator and J vectors of a layer, built once (outside the lock: a large layer takes
+        a while) and counted in the result's memory."""
+        rec = live.rec
+        with self._lock:
+            q = rec.queries.get(lf.name)
+        if q is not None:
+            return q
+        built = {"locator": F.TriangleLocator(lf.points, lf.tris), "j": F.current_vectors(lf)}
         with self._lock:
             q = rec.queries.get(lf.name)
             if q is None:
-                q = {"locator": F.TriangleLocator(lf.points, lf.tris), "j": F.current_vectors(lf)}
-                rec.queries[lf.name] = q
-            return q
+                q = built
+                if rec.result is not None:            # not evicted meanwhile
+                    rec.queries[lf.name] = q
+                    rec.nbytes += built["locator"].nbytes + built["j"].nbytes
+                    self._evict(keep=rec.id)
+        return q
 
-    def _copper(self, rec: _ResultRecord, lf: LayerField):
-        q = self._queries(rec, lf)
+    def _copper(self, live: _Live, lf: LayerField):
+        q = self._queries(live, lf)
         if "copper" not in q:
-            q["copper"] = unary_union([rec.board.copper(n, lf.layer_id) for n in rec.result.nets])
+            q["copper"] = unary_union([live.board.copper(n, lf.layer_id) for n in live.res.nets])
         return q["copper"]
 
     def get_problems(self, result_id: str, limits: Optional[Mapping[str, Any]] = None,
                      top: int = 5) -> Dict[str, Any]:
         """Re-rank a result's problems against other limits, without solving again."""
-        rec = self._record(result_id)
+        live = self._live(result_id)
+        rec = live.rec
         lim = rec.rail.limits if limits is None else C.limits_from_dict(limits)
-        problems = find_problems(rec.result, lim, top=max(1, int(top)))
+        problems = find_problems(live.res, lim, top=max(1, int(top)))
         return C.jsonable({
-            "result_id": rec.id, "net": rec.result.net, **C.verdict(problems, lim),
+            "result_id": rec.id, "net": live.res.net, **C.verdict(problems, lim),
             "problems": [C.problem_dict(p) for p in problems],
             "assumptions": [
                 "Loads are ranked by drop at their worst pin; hotspots are connected regions in the "
@@ -481,8 +516,9 @@ class Session:
                    out_dir=None) -> Dict[str, Any]:
         """A PNG map of ``field`` (drop / voltage / current) on one layer (default: the layer
         with the most copper loss), optionally zoomed to region_mm = [x_min, y_min, x_max, y_max]."""
-        rec = self._record(result_id)
-        lf = self._layer(rec, layer)
+        live = self._live(result_id)
+        rec, res = live.rec, live.res
+        lf = self._layer(res, layer)
         if field not in FIELDS:
             raise ServiceError(E.INVALID_INPUT, f"unknown field {field!r}",
                                f"field is one of: {', '.join(FIELDS)}")
@@ -498,11 +534,11 @@ class Session:
         folder = Path(out_dir).expanduser().resolve() if out_dir else self.out_dir()
         folder.mkdir(parents=True, exist_ok=True)
         tag = "" if region is None else "_" + safe_name("_".join(f"{v:g}" for v in region))
-        path = folder / f"{rec.id}_{safe_name(rec.result.net)}_{safe_name(lf.name)}_{field}{tag}.png"
-        scale = render_layer_map(rec.result, lf, field, rec.outline, path, rec.problems, region, dpi)
+        path = folder / f"{rec.id}_{safe_name(res.net)}_{safe_name(lf.name)}_{field}{tag}.png"
+        scale = render_layer_map(res, lf, field, live.outline, path, rec.problems, region, dpi)
         key = {"mV": "scale_mv", "V": "scale_v", "A/mm²": "scale_a_mm2"}[scale["unit"]]
         return C.jsonable({
-            "result_id": rec.id, "net": rec.result.net, "layer": lf.name, "field": field,
+            "result_id": rec.id, "net": res.net, "layer": lf.name, "field": field,
             "path": path, "region_mm": list(region) if region else None,
             key: [scale["min"], scale["max"]], "image_px": [8 * dpi, 6 * dpi],
             "legend": "green triangles: sources; red dots: loads; crosses: current-crowding "
@@ -515,18 +551,18 @@ class Session:
 
     def probe(self, result_id: str, layer: str, x_mm: float, y_mm: float) -> Dict[str, Any]:
         """Voltage, drop and current density at a point of a layer."""
-        rec = self._record(result_id)
-        lf = self._layer(rec, layer)
+        live = self._live(result_id)
+        rec, res = live.rec, live.res
+        lf = self._layer(res, layer)
         x, y = C._number(x_mm, "x_mm"), C._number(y_mm, "y_mm")
-        q = self._queries(rec, lf)
+        q = self._queries(live, lf)
         loc, jv = q["locator"], q["j"]
-        res = rec.result
         out: Dict[str, Any] = {"result_id": rec.id, "net": res.net, "layer": lf.name,
                                "x_mm": x, "y_mm": y}
         k = loc.locate(x, y)
         if k < 0:
             here = [o.name for o in res.layers
-                    if o.name != lf.name and self._queries(rec, o)["locator"].locate(x, y) >= 0]
+                    if o.name != lf.name and self._queries(live, o)["locator"].locate(x, y) >= 0]
             kn, dist = loc.nearest(x, y)
             near = loc.centroids[kn] if kn >= 0 else (math.nan, math.nan)
             out.update({"on_copper": False, "layers_with_copper_here": here,
@@ -551,23 +587,23 @@ class Session:
     def cut_current(self, result_id: str, layer: str, p1_mm: Sequence[float],
                     p2_mm: Sequence[float]) -> Dict[str, Any]:
         """Copper width along the segment p1→p2 on a layer and the current through it."""
-        rec = self._record(result_id)
-        lf = self._layer(rec, layer)
+        live = self._live(result_id)
+        rec, res = live.rec, live.res
+        lf = self._layer(res, layer)
         p1 = [C._number(v, "p1_mm") for v in p1_mm]
         p2 = [C._number(v, "p2_mm") for v in p2_mm]
         if len(p1) != 2 or len(p2) != 2:
             raise ServiceError(E.INVALID_INPUT, "p1_mm and p2_mm are [x, y] in mm")
         if p1 == p2:
             raise ServiceError(E.INVALID_INPUT, "the two points of a cut must differ")
-        q = self._queries(rec, lf)
-        copper = self._copper(rec, lf)
+        q = self._queries(live, lf)
+        copper = self._copper(live, lf)
         t_mm = rec.layer_thickness[lf.name]
         cut = F.cut_current(lf, q["locator"], q["j"], copper, t_mm, p1, p2)
-        res = rec.result
         if cut.width_mm <= 0:
             line = LineString([p1, p2])
             crossed = [o.name for o in res.layers if o.name != lf.name
-                       and not self._copper(rec, o).intersection(line).is_empty]
+                       and not self._copper(live, o).intersection(line).is_empty]
             raise ServiceError(E.CUT_MISSES_COPPER,
                                f"The segment crosses no copper of {res.net} on {lf.name}",
                                f"layers it does cross: {', '.join(crossed)}" if crossed else

@@ -221,7 +221,7 @@ dev = [
 requires-dist = [
     { name = "kipi", git = "https://github.com/drewsum/KiPI?rev=3ffce16aa5a0248ccdbdda8603c3c484ac99f570" },
     { name = "matplotlib", specifier = ">=3.8" },
-    { name = "mcp", specifier = ">=2.3.0" },
+    { name = "mcp", specifier = ">=2.3.0,<3" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pyside6-essentials", specifier = ">=6.6" },
     { name = "pyvista", specifier = ">=0.44" },

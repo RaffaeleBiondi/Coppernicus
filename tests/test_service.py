@@ -10,11 +10,14 @@ import pytest
 
 from coppernicus.engine.synthetic import (
     OZ1,
+    F,
     Strip,
+    SyntheticBoard,
     demo_board,
     net_tie_board,
     save_snapshot,
     strip_board,
+    two_layer_stackup,
 )
 from coppernicus.project import Limits, Load, Project, Rail, Source
 from coppernicus.service import ServiceError, Session
@@ -245,10 +248,41 @@ def test_structured_errors(session, boards):
     assert code(session.cut_current, rid, "B.Cu", [1, 1], [1, 1]).code == "invalid_input"
 
 
+def test_unreadable_files_and_unconnected_loads_are_structured_errors(session, boards, tmp_path):
+    garbage = tmp_path / "garbage.kicad_pcb"
+    garbage.write_text("(kicad_pcb (version 20240108")
+    with pytest.raises(ServiceError) as e:
+        session.open_board(garbage)
+    assert e.value.code == "board_unreadable" and "formats" in e.value.hint
+    project = tmp_path / "broken.coppernicus.yml"
+    project.write_text("board: x\nrails: [\n  - net: : :\n")
+    with pytest.raises(ServiceError) as e:
+        session.open_board(project)
+    assert e.value.code == "board_unreadable" and "solve_project" in e.value.hint
+    with pytest.raises(ServiceError) as e:
+        session.solve_project(project)                                  # not valid YAML
+    assert e.value.code == "invalid_project"
+
+    island = SyntheticBoard("island", two_layer_stackup())              # U2 has no copper path
+    island.square_pad("J1", "1", "VCC", 0.0, 0.0, 1.5)
+    island.square_pad("U1", "1", "VCC", 40.0, 0.0, 1.5)
+    island.track("VCC", F, 0.5, (0.0, 0.0), (40.0, 0.0))
+    island.square_pad("U2", "1", "VCC", 20.0, 10.0, 1.5)
+    save_snapshot(island.snapshot(), tmp_path / "island.kipi.json.gz")
+    bid = session.open_board(tmp_path / "island.kipi.json.gz")["board_id"]
+    with pytest.raises(ServiceError) as e:
+        session.solve_rail(bid, "VCC", [{"ref": "J1", "voltage_v": 1.0}],
+                           [{"ref": "U1", "current_a": 1.0}, {"ref": "U2", "current_a": 0.5}])
+    assert e.value.code == "solve_failed" and "U2" in e.value.message
+
+
 def test_memory_bound_evicts_fields_but_keeps_summaries(tmp_path, boards):
     session = Session(out_dir=tmp_path / "out", max_results=1)
     bid = session.open_board(boards["strip"])["board_id"]
     a = solve_strip(session, bid, 1.0)["result_id"]
+    before = session._results[a].nbytes
+    session.probe(a, "F.Cu", 20.0, 0.0)                          # builds the layer's locator
+    assert session._results[a].nbytes > before                   # ... and counts it
     b = solve_strip(session, bid, 2.0)["result_id"]
     with pytest.raises(ServiceError) as e:
         session.probe(a, "F.Cu", 20.0, 0.0)

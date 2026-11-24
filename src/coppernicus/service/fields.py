@@ -46,7 +46,16 @@ class TriangleLocator:
             with np.errstate(divide="ignore", invalid="ignore"):
                 inv = 1.0 / np.where(self._ok, det, 1.0)
             self._inv = np.stack([d * inv, -b * inv, -c * inv, a * inv], axis=1)   # (M, 4)
-            self._origin = p[:, 2, :]
+            self._origin = p[:, 2, :].copy()                  # a copy: a view would pin all of p
+
+    @property
+    def nbytes(self) -> int:
+        """Memory held by the locator (its arrays and KD-tree), roughly."""
+        if self.tree is None:
+            return 0
+        tree = self.tree.data.nbytes + self.tree.indices.nbytes
+        return int(self.centroids.nbytes + self._inv.nbytes + self._origin.nbytes
+                   + self._ok.nbytes + 2 * tree)
 
     def weights(self, k: int, x: float, y: float) -> np.ndarray:
         """Barycentric weights of (x, y) in triangle ``k`` (they sum to 1)."""

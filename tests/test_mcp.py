@@ -171,6 +171,8 @@ def test_stdio_subprocess_round_trip(tmp_path):
     solved, picture = anyio.run(main)
     assert not solved.is_error and solved.structured_content["loads"][0]["drop_mv"] > 0
     assert image_bytes(picture)[:8] == PNG
-    assert (tmp_path / "maps" / Path(picture.structured_content["path"]).name).exists()
+    map_path = Path(picture.structured_content["path"])
+    assert map_path.exists() and map_path.parent.parent == (tmp_path / "maps").resolve()
+    assert map_path.parent.name.startswith("session-")             # one folder per server run
     assert "MCP server on stdio" in log.read_text()
     assert progress                     # delivered beside the response; may still be arriving

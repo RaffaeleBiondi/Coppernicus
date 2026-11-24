@@ -61,9 +61,14 @@ def _json_parts(args) -> int:
     from coppernicus.service import Session
 
     def run():
+        from coppernicus.service import ServiceError
         session = Session()
         board = session.open_board(args.board)
-        return {"board": board, **session.net_parts(board["board_id"], args.net)}, EXIT_OK
+        doc = session.net_parts(board["board_id"], args.net)
+        if not doc["parts"]:                       # as the human-readable command: exit 2
+            raise ServiceError("no_parts_on_net", f"No parts on net {args.net!r}",
+                               "sources and loads must be parts with pads on the net")
+        return {"board": board, **doc}, EXIT_OK
     return _run_json(run)
 
 
@@ -260,7 +265,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=_cmd_solve)
 
     p = sub.add_parser("mcp", help="run the MCP server for AI agents (stdio; see README)")
-    p.add_argument("--out", help="folder for maps (default: a new folder under the system temp directory)")
+    p.add_argument("--out", help="folder for maps, one session-... subfolder per run "
+                                 "(default: a new folder under the system temp directory)")
     p.add_argument("--log-file", help="write the server log to this file (default: stderr)")
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"],
                    help="server log level (default: INFO)")
