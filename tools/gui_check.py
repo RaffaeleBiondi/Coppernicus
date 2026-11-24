@@ -4,6 +4,7 @@
     uv run python tools/gui_check.py --window --out DIR   # a real window (closes itself):
                                                       # also simulated mouse clicks
     uv run python tools/gui_check.py --local PROJECT --rail NET --out DIR   # + time a real rail
+                                                      # (and its KiCad-fields merge)
 
 Offscreen, Qt has no OpenGL context, so the app's own view draws nothing: the check covers
 the app logic (pads picked, rows, solve, ΔV, arrow geometry) and renders the view's scene
@@ -26,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_BOARD = ROOT / "examples" / "demo" / "demo.kipi.json.gz"
 CHAIN_PROJECT = ROOT / "examples" / "power_chain" / "power_chain.coppernicus.yml"
+FIELDS_PROJECT = ROOT / "examples" / "fields" / "fields.coppernicus.yml"
 
 
 class Checks:
@@ -52,6 +54,32 @@ def _quiet_dialogs():
         return staticmethod(box)
     for kind in ("critical", "warning", "information", "question"):
         setattr(QMessageBox, kind, say(kind))
+    # The questions of an override (a QMessageBox of their own): cancelled unless a scenario
+    # answers them.
+    from coppernicus.app import fields_view
+
+    def ask(name, answer):
+        def question(_parent, net, *_a):
+            print(f"question: {name} {net}: {answer}", flush=True)
+            DIALOGS.append(("question", name))
+            return answer
+        return question
+    fields_view.ask_override = ask("ask_override", None)
+    fields_view.confirm_use_fields = ask("confirm_use_fields", False)
+
+
+def time_remerge(window, n: int = 20) -> str:
+    """The KiCad-fields merge of the open project, timed: n calls of ``_remerge``."""
+    import statistics
+    import time
+    times = []
+    for _ in range(n):
+        t0 = time.perf_counter()
+        window._remerge()
+        times.append(time.perf_counter() - t0)
+    return (f"_remerge median {statistics.median(times) * 1e3:.3f} ms, max {max(times) * 1e3:.3f} ms "
+            f"over {n} calls; read_board_fields at open {window.last_fields_read_s * 1e3:.1f} ms; "
+            f"{len(window.board_fields.fields) if window.board_fields else 0} part(s) with PI_* fields")
 
 
 def solve_and_wait(window, timeout_s: float):
@@ -282,6 +310,7 @@ def run_local(window, check: Checks, args, out: Path):
     """Time the redraw on a local project rail (read-only: nothing is saved)."""
     from PySide6.QtWidgets import QApplication
     window.open_project(args.local)
+    print(f"[INFO] local project: {time_remerge(window)}", flush=True)
     window.nets.select(args.rail)
     QApplication.processEvents()
     res = solve_and_wait(window, args.timeout)
@@ -1453,6 +1482,101 @@ def run_hover_local(window, check: Checks, args):
         report_hover_times(window, check, f"the local rail ({len(layer.tris):,} triangles, shown layer)")
 
 
+def run_fields(window, check: Checks, args, out: Path):
+    """The app reads the KiCad footprint fields, on examples/fields: the rail from the fields
+    is listed [KiCad] and shown read-only over the project's own (ignored) rail, with the
+    warning; F5 gives the CLI's numbers; Override in project and back; the fields turned off
+    and on; Reload board. Saves only into ``out``; the example's files are never written."""
+    import contextlib
+    import io
+    import json
+
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.app import fields_view
+    from coppernicus.cli import main as cli
+    before = {f.name: f.read_bytes() for f in FIELDS_PROJECT.parent.iterdir()}
+    window.dirty = False
+    ok = window.open_project(FIELDS_PROJECT)
+    QApplication.processEvents()
+    check("fields: the example opens on its rail from KiCad fields", ok and window.net == "VCC",
+          str(window.net))
+    item = window.nets.list.currentItem()
+    check("... listed with a [KiCad] mark naming J1 and U1", item is not None and "[KiCad]" in item.text()
+          and "J1, U1" in item.toolTip(), item.toolTip() if item else "")
+    rp = window.rail_panel
+    check("... shown read-only under its banner", rp.read_only and rp.banner.text.text()
+          == "From KiCad footprint fields (parts J1, U1) — read-only", rp.banner.text.text())
+    check("... the KiCad values (U1 1 A), the project's own rail (1.5 A) ignored with a warning",
+          rp.loads.rows() == [("", "U1", None, 1.0)]
+          and "project file rail VCC ignored" in rp.banner.warnings.text(), rp.banner.warnings.text())
+    check("... max drop 2 % from PI_LIMIT_DROP on U1, read-only", rp.max_drop.text() == "2"
+          and rp.max_drop.isReadOnly() and "U1" in rp.max_drop.toolTip(), rp.max_drop.toolTip())
+    print(f"[INFO] fields example: {time_remerge(window)}", flush=True)
+
+    res = solve_and_wait(window, args.timeout)
+    with contextlib.redirect_stdout(io.StringIO()) as printed:
+        cli(["solve", str(FIELDS_PROJECT), "--json", "--no-maps", "--out", str(out / "fields_cli")])
+    [doc] = json.loads(printed.getvalue())["rails"]
+    check("fields: F5 gives the CLI's drop at U1", res is not None
+          and abs(res.drop(res.loads[0]) * 1e3 - doc["loads"][0]["drop_mv"]) < 1e-9,
+          f"{res.drop(res.loads[0]) * 1e3:.6f} mV vs {doc['loads'][0]['drop_mv']:.6f} mV" if res else "")
+    notes = window.problems.notes.toPlainText()
+    check("... with the fields' note and the warning in the Problems notes",
+          "Rail VCC from KiCad footprint fields" in notes and "project file rail VCC ignored" in notes)
+    if args.window:                                   # a real click on U1's pad while picking
+        rp.set_pick("load")
+        QApplication.processEvents()
+        qt_click_view(window, 40.0, 0.0)
+        msg = window.statusBar().currentMessage()
+        check("fields: a pad clicked while picking says how to edit the rail",
+              msg == fields_view.read_only_reason("VCC") and window.project.rail("VCC").loads[0].current
+              == 1.5, msg)
+        rp.set_pick("")
+
+    fields_view.ask_override = lambda _w, _net, differences: fields_view.START_FROM_KICAD
+    rp.banner.button.click()                          # Override in project
+    QApplication.processEvents()
+    own = window.project.rail("VCC")
+    check("fields: Override in project, starting from the KiCad values", own.override_board_fields
+          and own.loads[0].current == 1.0 and not rp.read_only
+          and rp.banner.button.text() == "Use KiCad fields", rp.banner.text.text())
+    rp.loads.table.cellWidget(0, 3).setValue(0.8)
+    QApplication.processEvents()
+    res = solve_and_wait(window, args.timeout)
+    check("... edited and solved: U1 draws 0.8 A",
+          res is not None and abs(res.loads[0].current - 0.8) < 1e-12)
+    path = out / "fields_override.coppernicus.yml"
+    window._save(path)
+    text = path.read_text(encoding="utf-8")
+    check("... saved with override_board_fields", "override_board_fields: true" in text
+          and "current: 0.8" in text)
+    fields_view.confirm_use_fields = lambda _w, _net: True
+    rp.banner.button.click()                          # Use KiCad fields
+    QApplication.processEvents()
+    own = window.project.rail("VCC")
+    check("fields: Use KiCad fields keeps the rail's limits only, and no warning is left",
+          own is not None and not own.override_board_fields and not own.sources and not own.loads
+          and window.merged.warnings == [] and rp.read_only, repr(own))
+    window.use_fields_action.trigger()                # Project → Use KiCad footprint fields: off
+    QApplication.processEvents()
+    item = window.nets.list.currentItem()
+    check("fields: turned off, every rail is the project's and the mark is gone",
+          window.merged.origins == {} and not rp.read_only and item is not None and item.text() == "VCC")
+    window.use_fields_action.trigger()
+    QApplication.processEvents()
+    check("... and on again", rp.read_only and window.project.use_board_fields)
+    window.reload_action.trigger()                    # File → Reload board
+    QApplication.processEvents()
+    check("fields: Reload board keeps the net and the edits, drops the results",
+          window.net == "VCC" and window.results == {} and window.dirty)
+    window.dirty = False
+    fields_view.ask_override = lambda *_: None
+    fields_view.confirm_use_fields = lambda *_: False
+    after = {f.name: f.read_bytes() for f in FIELDS_PROJECT.parent.iterdir()}
+    check("fields: the example's files are unchanged", after == before)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
@@ -1485,6 +1609,7 @@ def main(argv=None) -> int:
         run_power_chain(window, check, args, out)
         run_power_tree(window, check, args, out)
         run_signs(window, check, args, out)
+        run_fields(window, check, args, out)
         run_demo(window, check, args, out)
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:
