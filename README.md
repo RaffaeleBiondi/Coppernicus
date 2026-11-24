@@ -286,6 +286,13 @@ overridden layers. Leave it out to solve the board as designed. A ground net tak
 `max_ground_rise_mv` as its limit. Regulator details (kind, efficiency, input and ground pins)
 and links such as ferrites are described in [docs/engine-mapping.md](docs/engine-mapping.md).
 
+**Values from KiCad.** If the board's parts carry power fields, put on the symbol in the schematic
+and copied to the footprint by *Update PCB from Schematic*, Coppernicus reads them by default:
+`PI_RAIL: +3V3`, `PI_SOURCE: 3.3V`, `PI_LOAD: 2A`, `PI_KIND: ldo`, `PI_INPUT: VIN`, `PI_GND: GND`,
+`PI_LINK: 50mOhm`… Every value needs its unit. They win over a project rail of the same net, and a
+warning lists the differences. Set `override_board_fields: true` on that rail to keep yours, or
+`use_board_fields: false` to ignore the fields. `coppernicus fields board.kicad_pcb` lists them.
+
 ## Status
 
 | Feature | Status |
@@ -304,7 +311,7 @@ and links such as ferrites are described in [docs/engine-mapping.md](docs/engine
 | AI-agent interface: MCP server (with `solve_tree` for the whole power tree) and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
 | Offline interactive HTML report (`solve --html`, MCP `report` tool) | ✅ (tested in Chromium and Chrome; Safari and Firefox not yet) |
 | GitHub Action for KiCad repositories (`uses: RaffaeleBiondi/Coppernicus@main`), job summary, artifacts | ✅ |
-| Sources and loads defined in KiCad footprint fields | ⏳ proposal in [docs/kicad-fields-proposal.md](docs/kicad-fields-proposal.md) |
+| Sources, loads, converters and links defined in KiCad footprint fields (`PI_RAIL`, `PI_SOURCE`, `PI_LOAD`, `PI_KIND`, `PI_INPUT`, `PI_GND`, `PI_LINK`…) | ✅ read by default from `.kicad_pcb` in the CLI, MCP and Action; KiCad wins over a project rail unless `override_board_fields: true`; the app comes next ([fields](docs/agents.md#kicad-footprint-fields)) |
 | Before/after comparison: "Pin as baseline", Compare tab (per-load, total and per-layer deltas, settings that changed), "Δ drop vs baseline" map | ✅ |
 | Copper loss by layer as a chart (baseline beside current) | ✅ |
 | Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
