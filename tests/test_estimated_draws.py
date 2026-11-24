@@ -118,3 +118,19 @@ def test_a_load_named_like_an_estimate_is_not_one(session, tmp_path):
         Strip.NET, sources=[Source("J1", 1.0)], loads=[Load("U1", 1.0, name="U9 (input, estimated)")])])
     [rail] = session.solve_project(p.save(tmp_path / "odd.coppernicus.yml"))["rails"]
     assert [(ld["name"], ld["estimated"]) for ld in rail["loads"]] == [("U9 (input, estimated)", False)]
+
+
+def test_tree_group_terminals_are_not_estimates(chain):
+    """The app's Compare summarises power-tree groups with rail_summary too: their extra
+    terminals ("U2 (input)", "U1 (gnd)", "U3 (return)") are solved exactly, not estimated."""
+    from coppernicus.engine.tree import solve_project_tree
+    from coppernicus.problems import find_problems
+    from coppernicus.service.convert import rail_summary
+
+    project = Project.load(chain)
+    tree = solve_project_tree(Board.open(project.board_path()), project)
+    for key, res in tree.groups.items():
+        rail = project.rail(key) or Rail(key)
+        s = rail_summary(key, "b1", res, rail, find_problems(res, rail.limits), project.settings, {}, {})
+        assert len(s["loads"]) == len(res.loads)
+        assert not any(ld["estimated"] for ld in s["loads"]), key

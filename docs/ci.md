@@ -44,16 +44,19 @@ passes. Coppernicus has no built-in thresholds. The limits are `max_drop_pct`,
 `max_current_density`, `max_via_current` and, for a ground net solved on its own,
 `max_ground_rise_mv`; the summary names the ones that were set ("ground rise ≤ 10 mV").
 
-A rail is "NOT JUDGED" when a limit you set applies to something it cannot judge: a % drop
-limit on a 0 V net, a load with no voltage at its pins, or `max_via_current` on a rail with no
-vias. The summary lists each such item with its reason. This does not fail the check (exit
-code 0, as for a pass); a limit exceeded elsewhere on the rail still fails it.
+A rail is "NOT JUDGED" when its drop limit applies to a load it cannot judge: a load of a 0 V
+net (use `max_ground_rise_mv` there), or a load with no voltage at its pins. The summary lists
+each such item with its reason, and the overall verdict is then `not_judged`. This does not
+fail the check (exit code 0, as for a pass); a limit exceeded elsewhere still fails it. A via,
+current-density or ground-rise limit with nothing to judge (no vias, say) passes.
 
 A rail that feeds a regulator's input or a link (`links:`) also draws that current,
 estimated at nominal voltages without copper losses, as the desktop app does. It is listed as
-a load named "U1 (input, estimated)" or "FB1 (link, estimated)", and the assumptions say so. A
-rail with no loads that feeds nothing is shown as "skipped: nothing to draw". It is not an
-error and does not fail the check.
+a load named "U1 (input, estimated)" or "FB1 (link, estimated)", and the assumptions say so.
+Such a draw is judged against `max_drop_pct` like any load, and its current also flows through
+the rail's copper, so the rail's other drops grow: a check that passed before this change can
+now fail. A rail with no loads that feeds nothing is shown as "skipped: nothing to draw". It
+is not an error and does not fail the check.
 
 A project file can set an optional what-if copper thickness per layer, in mm, under
 `settings: copper_thickness_mm:` (for example `B.Cu: 0.07`; 1 oz is 0.035). The check then

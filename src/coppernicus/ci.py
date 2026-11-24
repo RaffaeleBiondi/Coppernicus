@@ -136,6 +136,8 @@ def overall_verdict(entries: Sequence[Dict[str, Any]]) -> str:
         return "error"
     if "fail" in verdicts:
         return "fail"
+    if any(e["doc"].get("not_judged") for e in entries):    # a set limit could not judge
+        return "not_judged"
     if all(v == "pass" for v in verdicts):
         return "pass"
     return "pass_partially_judged" if any(v in ("pass", "pass_partially_judged") for v in verdicts) \

@@ -224,11 +224,14 @@ def problem_dict(p: Problem, estimated: Sequence[str] = ()) -> Dict[str, Any]:
 
 
 def not_judged_items(res: RailResult, limits: Limits) -> List[Dict[str, str]]:
-    """What a limit the user set applies to but could not judge, each with the reason: a %
-    limit on a load of a 0 V net, a load with no voltage at its pins, a limit that judges
-    nothing on this rail (no vias, no copper)."""
+    """What the drop limit the user set applies to but could not judge, each with the
+    reason: a load of a 0 V net (a % has no meaning there), a load with no voltage at its
+    pins, or no load at all. As in the power tree, a copper limit (via current, current
+    density, ground rise) with nothing to judge passes: it is not listed."""
     out = []
     if limits.max_drop_pct is not None:
+        if not res.loads:
+            out.append({"item": res.net, "limit": "max_drop_pct", "reason": "no load to judge"})
         for t in res.loads:
             if math.isfinite(res.drop_pct(t)):
                 continue
@@ -236,15 +239,6 @@ def not_judged_items(res: RailResult, limits: Limits) -> List[Dict[str, str]]:
                       "max_ground_rise_mv)" if not res.v_ref else
                       "no voltage at its pins: not connected to the source by copper")
             out.append({"item": t.name, "limit": "max_drop_pct", "reason": reason})
-    if limits.max_via_current is not None and not res.vias:
-        out.append({"item": res.net, "limit": "max_via_current_a",
-                    "reason": "the rail has no vias: the limit judges nothing"})
-    solved = [lf for lf in res.layers if np.isfinite(lf.voltage).any()]
-    if not solved:
-        for key in ("max_current_density_a_mm2", "max_ground_rise_mv"):
-            if getattr(limits, LIMIT_KEYS[key]) is not None:
-                out.append({"item": res.net, "limit": key,
-                            "reason": "no copper solved: the limit judges nothing"})
     return out
 
 
@@ -278,21 +272,26 @@ def verdict(problems: List[Problem], limits: Limits, result: Optional[RailResult
 def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems: List[Problem],
                  settings: Settings, thickness: Mapping[str, float],
                  layer_thickness: Mapping[str, float], top: int = 5,
-                 pin_numbers: Optional[Callable[[str], str]] = None) -> Dict[str, Any]:
+                 pin_numbers: Optional[Callable[[str], str]] = None,
+                 estimated: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """The compact summary of a solved rail. ``problems`` are listed in full: every load,
     then the ``top`` current-crowding spots and the ``top`` vias (more when they exceed a
     limit), as :func:`coppernicus.problems.find_problems` ranked them.
 
-    ``loads`` lists the rail's own loads, then (``"estimated": true``) what a project rail
-    draws for the regulator inputs and links it feeds, which the engine appends after them;
-    their ``pins`` are the pad numbers (``pin_numbers``: pad id → number)."""
+    ``loads`` lists every load of the result: the rail's own (``pins`` as set), then any
+    other terminal (``pins`` as pad numbers through ``pin_numbers``, pad id → number). Those
+    named in ``estimated`` (the draws a project rail makes for the regulator inputs and links
+    it feeds, which the session knows by position) get ``"estimated": true``; without the
+    list, the engine's name suffix ", estimated)" tells them, so the exact terminals of a
+    power-tree group ("U2 (input)", "U1 (gnd)") are never marked."""
     v_ref = res.v_ref
     # Of |v_ref|, so a negative rail's percentages are positive, as its drops are.
     pct = (lambda volts: 100.0 * volts / abs(v_ref)) if v_ref else (lambda volts: float("nan"))
     limits = rail.limits
     loads = []
     own = len(rail.loads)
-    estimated = [t.name for t in res.loads[own:]]
+    estimated = (list(estimated) if estimated is not None else
+                 [t.name for t in res.loads if t.name.endswith(", estimated)")])
     for i, t in enumerate(res.loads):
         spec = rail.loads[i] if i < own else None
         if spec is not None:
@@ -304,7 +303,7 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         exceeds = (None if limits.max_drop_pct is None or not math.isfinite(res.drop_pct(t))
                    else bool(res.drop_pct(t) > limits.max_drop_pct))
         x, y = t.positions[0] if t.positions else (float("nan"), float("nan"))
-        loads.append({"name": t.name, "ref": t.ref, "pins": pins, "estimated": spec is None,
+        loads.append({"name": t.name, "ref": t.ref, "pins": pins, "estimated": t.name in estimated,
                       "pin_count": len(t.pad_ids), "current_a": t.current, "v_min_v": t.v_min,
                       "v_max_v": t.v_max, "drop_mv": drop * 1e3, "drop_pct": res.drop_pct(t),
                       "exceeds_drop_limit": exceeds, "x_mm": x, "y_mm": y})

@@ -364,7 +364,8 @@ class Session:
             rid = f"r{self._n_results}"
         summary = C.rail_summary(rid, entry.id, res, rail, problems, settings, thickness,
                                  layer_thickness, top=max(1, int(top)),
-                                 pin_numbers=lambda pid: board.pad(pid).number)
+                                 pin_numbers=lambda pid: board.pad(pid).number,
+                                 estimated=[t.name for t in res.loads[len(rail.loads):]])
         summary["warnings"] = entry.warnings() + summary["warnings"]
         rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
                             layer_thickness, res, problems, summary, _result_nbytes(res))
@@ -453,14 +454,17 @@ class Session:
             out_rails.append(summary)
             verdicts.append(summary["verdict"])
         # Skipped rails (no loads) are left out of the verdict.
+        unjudged_rails = any(r.get("not_judged") for r in out_rails)
         overall = ("error" if "error" in verdicts else "fail" if "fail" in verdicts else
+                   "not_judged" if unjudged_rails else
                    "pass" if verdicts and all(v == "pass" for v in verdicts) else
                    "pass_partially_judged" if "pass" in verdicts else "not_judged")
         unjudged = [{"rail": r["net"], **u} for r in out_rails for u in r.get("not_judged", [])]
-        note = ("fail: a limit you set is exceeded on some rail; pass: every rail has limits, "
-                "each judges what it applies to, and none is exceeded; not_judged: no limits set, "
-                "or a limit set could not judge some items (listed in not_judged). Rails skipped "
-                "for having no loads are left out.")
+        note = ("fail: a limit you set is exceeded on some rail; not_judged: a limit set could "
+                "not judge some items (listed in not_judged), or no limits are set; pass: every "
+                "rail has limits and none is exceeded; pass_partially_judged: the rails with "
+                "limits pass, others have none. Rails skipped for having nothing to draw are "
+                "left out.")
         if unjudged:
             note += " Not judged: " + "; ".join(f"{u['rail']}: {u['item']} ({u['limit']}): "
                                                 f"{u['reason']}" for u in unjudged)

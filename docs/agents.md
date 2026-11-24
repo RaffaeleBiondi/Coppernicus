@@ -187,15 +187,18 @@ Problem kinds, in `problems` of every summary and of `get_problems`:
   argument of the wrong type is rejected by the tool's input schema before it runs.
 - **Verdicts.** A verdict exists only against limits the user gives:
   - `fail`: an item exceeds a limit you set;
-  - `not_judged`: no limits are set, so problems are ranked and nothing is judged; or a limit
-    you set applies to something it could not judge. `not_judged` then lists each item with
-    `limit` and `reason`: a % limit on a 0 V net, a load with no voltage at its pins, a limit
-    that judges nothing on this rail (`max_via_current_a` on a rail with no vias). A failure
-    elsewhere still makes the verdict `fail`;
-  - `pass`: limits are set, each judges what it applies to, and none is exceeded.
+  - `not_judged`: no limits are set, so problems are ranked and nothing is judged; or the
+    drop limit you set applies to a load it could not judge. `not_judged` then lists each item
+    with `limit` and `reason`: a load of a 0 V net (a % has no meaning there), a load with no
+    voltage at its pins, no load at all. A failure elsewhere still makes the verdict `fail`;
+  - `pass`: limits are set and none is exceeded. A copper limit (`max_via_current_a`,
+    `max_current_density_a_mm2`, `max_ground_rise_mv`) with nothing to judge, such as a via
+    limit on a rail with no vias, passes, as in the power tree.
 
-  `solve_project` adds a top-level `not_judged` with the rail of each item. The CLI text and
-  the CI job summary print each item as "NOT JUDGED …". Exit code 0, as for `pass`.
+  `solve_project` adds a top-level `not_judged` with the rail of each item, and its verdict is
+  `not_judged` when any rail has such items (`pass_partially_judged` stays for "the rails with
+  limits pass, others have none"). The CLI text and the CI job summary print each item as
+  "NOT JUDGED …". Exit code 0, as for `pass`.
 
   Coppernicus invents no thresholds, and an agent should not either.
 - **`assumptions` and `warnings` come with every answer.** Read them. They say:

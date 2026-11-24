@@ -70,18 +70,31 @@ def test_a_percent_limit_on_a_0_v_net_is_not_judged(session, strip):
     assert solve(session, strip, 0.0, max_drop_pct=1.0, max_ground_rise_mv=1.0)["verdict"] == "fail"
 
 
-def test_a_limit_that_judges_nothing_is_not_judged(session, strip):
+def test_a_copper_limit_with_nothing_to_judge_passes(session, strip):
+    """The final rule (as in the power tree): a via, current-density or rise limit with
+    nothing to judge passes; only a drop limit that cannot judge a load is not judged."""
     out = solve(session, strip, 1.0, max_via_current_a=1.0)       # the strip has no via
-    assert out["verdict"] == "not_judged"
-    assert out["not_judged"] == [{"item": Strip.NET, "limit": "max_via_current_a",
-                                  "reason": "the rail has no vias: the limit judges nothing"}]
-
-
-def test_pass_needs_every_set_limit_to_judge(session, strip):
-    out = solve(session, strip, 1.0, max_drop_pct=50.0)
     assert out["verdict"] == "pass" and out["not_judged"] == []
     again = session.get_problems(out["result_id"], limits={"max_drop_pct": 50.0, "max_via_current_a": 1})
-    assert again["verdict"] == "not_judged" and again["not_judged"][0]["limit"] == "max_via_current_a"
+    assert again["verdict"] == "pass" and again["not_judged"] == []
+
+
+def test_a_project_with_a_rail_not_judged_is_not_judged(strip, tmp_path):
+    """Project level, the same rule: a rail passing and another with items its limits could
+    not judge make the project not_judged (not pass_partially_judged), and the CI index too."""
+    def rail(volts, pct):
+        return Rail(Strip.NET, sources=[Source("J1", volts)], loads=[Load("U1", 1.0)],
+                    limits=Limits(max_drop_pct=pct))
+    p = Project(board="boards/strip.kipi.json.gz", rails=[rail(1.0, 50.0), rail(0.0, 1.0)])
+    doc = Session(out_dir=tmp_path / "out").solve_project(p.save(tmp_path / "two.coppernicus.yml"))
+    assert [r["verdict"] for r in doc["rails"]] == ["pass", "not_judged"]
+    assert doc["verdict"] == "not_judged" and len(doc["not_judged"]) == 1
+    entries = [{"project": "two.coppernicus.yml", "exit_code": 0, "doc": doc}]
+    assert ci.overall_verdict(entries) == "not_judged"
+    no_limits = dict(doc, rails=[doc["rails"][0], dict(doc["rails"][1], not_judged=[], limits={})],
+                     not_judged=[])
+    assert ci.overall_verdict([dict(entries[0], doc=dict(no_limits, verdict="pass_partially_judged"))]) \
+        == "pass_partially_judged"
 
 
 def test_not_judged_items_are_listed_in_the_cli_text_and_the_ci_summary(strip, tmp_path, capsys):
