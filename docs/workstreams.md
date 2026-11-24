@@ -44,6 +44,10 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
 
 Detailed tasks are in `docs/superpowers/plans/2026-11-24-coppernicus-roadmap.md`, Part A.
 
+Status: T1 (pick pads on the board) and T2 (`coppernicus/fields.py`: current vectors, arrow
+sampling, isolines, `TriangleLocator`) are merged in `main` (`d07199e`). T3 is in progress.
+`coppernicus/fields.py` is the single home of the field helpers. WS1 keeps only its cut tools
+in `service/fields.py` and imports the rest.
 
 - Pick sources and loads by clicking pads on the board.
 - Drop isolines, current-flow arrows, ΔV between two picked points, hover readout.
