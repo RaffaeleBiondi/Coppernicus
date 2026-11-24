@@ -23,6 +23,8 @@ from kipi.core.model.board import (
 )
 from shapely.geometry import MultiPolygon, box
 
+from coppernicus.project import Link, Load, Project, Rail, Source
+
 F, B = 3, 34                    # KiCad layer ids of F.Cu and B.Cu
 OZ1 = 0.035                     # 1 oz copper
 
@@ -205,6 +207,64 @@ def demo_board(led_net: bool = False) -> BoardSnapshot:
         b.square_pad("D1", "1", "LED_A", 46.0, 36.0, 1.0, value="LED")
         b.track("LED_A", F, 0.3, (36.0, 36.0), (46.0, 36.0))
     return b.snapshot(outline=box(0, 0, 60, 40))
+
+
+class PowerChain:
+    """The dimensions of KiPI's power-chain validation board
+    (``examples/validation/make_boards.py``), copied so its hand calculations hold here too.
+
+    2 mm wide strips on F.Cu over a 2 mm ground strip on B.Cu, 1 oz copper, pads 1 mm long,
+    positions along x (mm). F.Cu: J1.1, U1.1 on VIN | U1.2, U4.1, FB1.1 on +3V3 | FB1.2, U2.1
+    on +3V3_F | U2.2, U3.1 on +1V8. B.Cu (GND): J1.2, U1.3, U4.2, U2.3, U3.2.
+
+    A 12 V input J1 feeds switcher U1 (3.3 V); ferrite FB1 joins +3V3 to +3V3_F, which feeds
+    LDO U2 (1.8 V), regulated at its load U3 (remote and ground sense)."""
+    W = 2.0
+    VIN = {"J1.1": 0.0, "U1.1": 29.0}
+    V3V3 = {"U1.2": 32.0, "U4.1": 46.0, "FB1.1": 61.0}
+    V3V3_F = {"FB1.2": 64.0, "U2.1": 79.0}
+    V1V8 = {"U2.2": 82.0, "U3.1": 97.0}
+    GND = {"J1.2": 0.0, "U1.3": 31.0, "U4.2": 46.0, "U2.3": 80.5, "U3.2": 97.0}
+    V_SRC, V_SMPS, V_LDO = 12.0, 3.3, 1.8
+    ETA, IQ_SMPS, IQ_LDO = 0.9, 0.005, 0.002
+    R_FB = 0.05
+    I_U3, I_U4 = 2.0, 0.5
+
+
+def power_chain_board() -> BoardSnapshot:
+    g, b = PowerChain, SyntheticBoard("power_chain", two_layer_stackup())
+    for net, pins in (("VIN", g.VIN), ("+3V3", g.V3V3), ("+3V3_F", g.V3V3_F), ("+1V8", g.V1V8)):
+        xs = list(pins.values())
+        b.zone(net, F, box(min(xs), 0, max(xs) + 1, g.W))
+        for pin, x in pins.items():
+            ref, num = pin.split(".")
+            b.pad(ref, num, net, box(x, 0, x + 1, g.W))
+    b.zone("GND", B, box(0, 0, max(g.GND.values()) + 1, g.W))
+    for pin, x in g.GND.items():
+        ref, num = pin.split(".")
+        b.pad(ref, num, "GND", box(x, 0, x + 1, g.W), layers=(B,))
+    return b.snapshot()
+
+
+def power_chain_project(board: str = "power_chain.kipi.json.gz") -> Project:
+    """The power chain's setup as a Coppernicus project (KiPI's validation setup, without
+    its load tolerances: Coppernicus sets no limit the user did not)."""
+    g = PowerChain
+    return Project(board=board, rails=[
+        Rail("VIN", sources=[Source("J1", g.V_SRC, ["1"], ground_pins=["2"], ground_net="GND")]),
+        Rail("+3V3",
+             sources=[Source("U1", g.V_SMPS, ["2"], kind="smps", efficiency=g.ETA,
+                             quiescent_a=g.IQ_SMPS, input_pins=["1"], input_net="VIN",
+                             ground_pins=["3"], ground_net="GND")],
+             loads=[Load("U4", g.I_U4, ["1"], ground_pins=["2"], ground_net="GND")]),
+        Rail("+1V8",
+             sources=[Source("U2", g.V_LDO, ["2"], kind="ldo", quiescent_a=g.IQ_LDO,
+                             input_pins=["1"], input_net="+3V3_F", ground_pins=["3"],
+                             ground_net="GND", sense_ref="U3", sense_pins=["1"], sense_net="+1V8",
+                             ground_sense_ref="U3", ground_sense_pins=["2"],
+                             ground_sense_net="GND")],
+             loads=[Load("U3", g.I_U3, ["1"], ground_pins=["2"], ground_net="GND")]),
+    ], links=[Link("FB1", "FB1", ["1"], "+3V3", ["2"], "+3V3_F", g.R_FB)])
 
 
 def save_snapshot(snapshot: BoardSnapshot, path) -> None:

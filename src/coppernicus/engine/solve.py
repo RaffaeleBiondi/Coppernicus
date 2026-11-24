@@ -25,7 +25,7 @@ from kipi.dc.solver.setup import REF_TEMP_C, RHO_CU_OHM_MM
 from kipi.dc.solver.via_barrel import ViaRule, default_via_rules
 
 from coppernicus.engine.board import Board, EngineError, NetTie
-from coppernicus.project import Rail, Settings, pins_text
+from coppernicus.project import SOURCE_PIN_REFS, Rail, Settings, pins_text
 from coppernicus.results import LayerField, RailResult, TerminalResult, ViaCurrent
 
 TCR_CU = 0.00393     # per °C, copper; KiPI's default (kipi/dc/solver/setup.py)
@@ -75,6 +75,24 @@ def engine_settings(s: Settings) -> Tuple[SolveSettings, List[str]]:
         "the source voltage.",
     ]
     return SolveSettings(max_edge_mm=s.max_edge_mm, via_rules=rules), assumptions
+
+
+def tree_only_fields(rail: Rail) -> List[str]:
+    """An assumption naming the rail's fields that only a power-tree solve uses (regulator
+    kind, input, ground and sense pins, loads' ground pins); empty for a v1 rail."""
+    parts = []
+    for s in rail.sources:
+        what = [f"kind {s.kind}"] if s.kind != "source" else []
+        what += [f"{w.replace('_', ' ')} pins" for w in SOURCE_PIN_REFS if getattr(s, f"{w}_net")]
+        if what:
+            parts.append(f"source {s.label} ({', '.join(what)})")
+    grounded = [ld.label for ld in rail.loads if ld.ground_net]
+    if grounded:
+        parts.append(f"the ground pins of {', '.join(grounded)}")
+    if not parts:
+        return []
+    return ["Solved as one rail: each source holds its own pins at its voltage and no ground net "
+            f"is solved. Used only by the power-tree solve: {'; '.join(parts)}."]
 
 
 def tied_nets(board: Board, net: str) -> Tuple[List[str], List[NetTie]]:
@@ -128,6 +146,7 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
     if settings.copper_temp_c != REF_TEMP_C:
         t_c = float(settings.copper_temp_c)
         problem.temperature = lambda xy: np.full(len(np.atleast_2d(xy)), t_c)
+    assumptions += tree_only_fields(rail)
     if ties:
         assumptions.append("Net ties solved as shorts: " + ", ".join(
             f"{t.ref} ({t.net_a} ↔ {t.net_b})" for t in ties) + ".")

@@ -11,6 +11,8 @@ from coppernicus.engine.synthetic import (
     Strip,
     net_tie_board,
     pins_board,
+    power_chain_board,
+    power_chain_project,
     strip_board,
     via_board,
 )
@@ -170,3 +172,13 @@ def test_demo_led_net_is_a_signal_net_and_leaves_3v3_unchanged():
     for la, lb in zip(a.layers, b.layers):
         assert np.array_equal(la.points, lb.points) and np.array_equal(la.voltage, lb.voltage)
     assert [p.ref for p in led.parts_on_net("LED_A")] == ["D1", "R1"]
+
+
+def test_per_rail_solve_says_what_it_leaves_to_the_power_tree():
+    """A v2 rail solved on its own holds its source pins and solves no ground: the
+    assumptions say which fields only the power-tree solve uses. v1 rails say nothing new."""
+    project = power_chain_project()
+    res = solve_rail(Board(power_chain_board()), project.rail("+1V8"), project.settings)
+    [note] = [a for a in res.assumptions if "power-tree" in a]
+    assert "U2" in note and "ldo" in note and "sense" in note and "U3" in note
+    assert not any("power-tree" in a for a in solve_rail(Board(strip_board()), strip_rail()).assumptions)
