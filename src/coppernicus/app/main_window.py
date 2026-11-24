@@ -726,5 +726,11 @@ class MainWindow(QMainWindow):
         if self.worker is not None and self.worker.isRunning():
             self.worker.cancel()
             self.worker.wait(5000)
+        if self.report_worker is not None and self.report_worker.isRunning():
+            # A report cannot be cancelled halfway: finish the file, without asking to open it.
+            self.report_worker.succeeded.disconnect()
+            self.report_worker.failed.disconnect()
+            self.statusBar().showMessage("Finishing the report before closing…")
+            self.report_worker.wait()
         self.view.close()
         super().closeEvent(event)

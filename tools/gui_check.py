@@ -597,17 +597,29 @@ def run_report(window, check: Checks, args, out: Path):
     window.dirty = False
 
 
-def run_close_asks(window, check: Checks, out: Path):
-    """Closing with only hand-marked rails asks to save (the dialog answers Discard)."""
-    from PySide6.QtWidgets import QApplication
-    window.open_board(out / "pins.kipi.json.gz")
+def run_close_asks(window, check: Checks, args, out: Path):
+    """Closing with only hand-marked rails asks to save (the dialog answers Discard), and
+    closing while a report is being written waits for it."""
+    from PySide6.QtWidgets import QApplication, QFileDialog
+    window.open_project(out / "demo_copy.coppernicus.yml")        # written by run_report
     QApplication.processEvents()
-    window.nets.set_marked("OTHER", True)
+    solve_and_wait(window, args.timeout)
+    target = out / "closing" / "report.html"
+    real_save = QFileDialog.getSaveFileName
+    QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (str(target), ""))
+    try:
+        window.export_report()
+    finally:
+        QFileDialog.getSaveFileName = real_save
+    window.nets.set_marked("LED_A", True)                        # an unsaved edit
     before = len(DIALOGS)
     window.close()
-    QApplication.processEvents()
     check("closing with marked rails asks to save", any(k == "question" for k, _ in DIALOGS[before:]),
           str(DIALOGS[before:]))
+    worker = window.report_worker
+    check("closing waits for a report being written", worker is not None and not worker.isRunning()
+          and target.exists(), f"running {worker.isRunning() if worker else None}, file {target.exists()}")
+    QApplication.processEvents()
 
 
 def run_other_net(window, check: Checks, out: Path):
@@ -685,7 +697,7 @@ def main(argv=None) -> int:
         run_compare(window, check, args, out)
         run_report(window, check, args, out)
         run_open_asks(window, check, out)
-        run_close_asks(window, check, out)
+        run_close_asks(window, check, args, out)
     finally:
         if window.isVisible():
             window.dirty = False          # never ask to save
