@@ -10,127 +10,203 @@
 
 <p align="center">
   <img alt="Status: pre-alpha" src="https://img.shields.io/badge/status-pre--alpha-orange">
-  <img alt="Phase: evaluation and design" src="https://img.shields.io/badge/phase-evaluation%20%26%20design-lightgrey">
+  <img alt="Python 3.12" src="https://img.shields.io/badge/python-3.12-3776ab">
   <img alt="Platforms: macOS | Windows" src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-blue">
-  <img alt="License: TBD" src="https://img.shields.io/badge/license-TBD-red">
+  <img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-green">
 </p>
 
 ---
 
 > [!IMPORTANT]
-> **Coppernicus is in the evaluation and design phase.** There is no runnable code yet.
-> This README describes the goal, the roadmap and the *proposed* architecture. A quick-start
-> section will be added once there is a command that actually works.
+> **Pre-alpha.** The solver engine, the command line and a first desktop app work end to end,
+> and the GUI layout is a first draft that will change. Results should be checked against
+> your own judgement before you rely on them.
+
+<p align="center">
+  <img src="docs/images/gui-demo.png" alt="Coppernicus app: voltage-drop map of a synthetic demo board with ranked problems" width="900">
+</p>
 
 ## What it is
 
-Coppernicus is a desktop application (macOS and Windows) for **DC power-delivery-network (PDN)
-analysis** of printed circuit boards designed in **KiCad**.
+Coppernicus is a desktop application and command-line tool for **DC power-delivery-network
+(PDN) analysis** of printed circuit boards designed in **KiCad**.
 
-You open a board, pick a power net, tell Coppernicus **where the current enters** (a regulator
-output at a known voltage) and **where it leaves** (loads and the current each one draws), and it
-solves the current flow through the real copper geometry: planes, pours, tracks, pads and vias,
-on every layer.
+You open a board, pick a power net, say **where the current enters** (a regulator output at a
+known voltage) and **where it leaves** (loads and the current each one draws). Coppernicus then
+solves the current flow through the real copper geometry, on every layer: planes, pours,
+tracks, pads and vias.
 
-The two results that matter most are drawn as colour maps on top of the board:
+The two results that matter most are drawn as colour maps on the board:
 
-- **Voltage drop (IR drop)**: how much voltage each load actually receives, and where it is lost.
-- **Current density**: where the copper is crowded, from neck-downs and thin bridges to
-  overloaded vias.
+- **Voltage drop (IR drop)**: how much voltage each load really gets, and where it is lost.
+- **Current density**: where the copper is crowded, from neck-downs and thin tracks to the
+  copper around vias.
 
-Coppernicus is a **standalone program**, not a KiCad plugin: it reads board files directly and
-does not need KiCad to be running.
+It is a **standalone program**, not a KiCad plugin. It reads `.kicad_pcb` files directly (also
+ODB++ and HyperLynx) and does not need KiCad to be running. Board files are only ever read.
 
 ## Design goal: explain *where* and *why* a board fails
 
-Most PDN tools show a colour map and leave the interpretation to you. Coppernicus aims to
-point at the problem directly:
-
-| Feature | What it answers |
+| Feature | Status |
 |---|---|
-| Per-layer 2D view with voltage and current-density maps, drop isolines and current-flow arrows | *Where does the current go, and where is it lost?* |
-| Vias drawn by the current they carry, flagged above a limit | *Which vias are overloaded?* |
-| **Problems panel**: out-of-spec loads, bottlenecks, hot vias; click to zoom | *What should I fix first?* |
-| **Drop breakdown** per layer, segment and via | *Which part of the path eats my voltage budget?* |
-| Hover probe (V, ΔV, J, layer) and point-to-point ΔV | *What is the drop between these two points?* |
-| Before/after comparison of two runs, HTML/PDF report | *Did my layout change help?* |
+| 2D view, one copper layer at a time, with voltage-drop, voltage and current-density maps | ✅ |
+| Opens on the layer where the rail loses the most power | ✅ |
+| **Problems panel**: every load ranked by drop, current-crowding spots and the most loaded vias. Click a row to zoom to it | ✅ |
+| Pass/fail only against limits *you* set (drop %, A/mm², A per via). Without limits, problems are ranked and never judged | ✅ |
+| Copper-loss breakdown per layer and for the vias | ✅ (summary line) |
+| Double-click probe (V, drop, \|J\|) | ✅ |
+| Net ties found automatically and solved as shorts | ✅ |
+| Sources and loads picked by clicking pads on the board | ⏳ |
+| Drop isolines, current-flow arrows, point-to-point ΔV | ⏳ |
+| Before/after comparison, HTML/PDF report | ⏳ |
 
-## Roadmap
+## Quick start
 
-| Stage | Scope | Status |
-|---|---|---|
-| 0 | Repository setup | ✅ done |
-| 1 | **Study of [KiPI](https://github.com/drewsum/KiPI)**: physics, numerics, board import, UX. Run it on real boards and measure accuracy and speed against analytic cases | 🔄 in progress |
-| 2 | Architecture decision: a new front-end on top of KiPI's core, or a reimplementation | ⏳ planned |
-| 3 | **DC MVP**: board import, mesh, multilayer DC solver, CLI with YAML setup, colour maps | ⏳ planned |
-| 4 | **Desktop app**: net list, sources and loads by click or `REF.PAD`, maps, problems panel, drop breakdown | ⏳ planned |
-| 5 | Packaging for macOS (`.app`) and Windows (`.exe`) | ⏳ planned |
-| Later | Ground return path, electro-thermal coupling (I²R heating, ρ(T)) | 💡 idea |
-| Later | **AC / PDN impedance**: Z(f) at load pins, plane-pair cavity model, decoupling capacitors (C/ESR/ESL or S-parameters), mounting inductance, VRM model, target impedance | 💡 idea |
-| Later | **DC-DC ripple**: switching frequency and harmonics propagated through the PDN to every point of interest | 💡 idea |
+Requires [uv](https://docs.astral.sh/uv/). It installs Python 3.12 and every dependency,
+including the solver engine.
 
-## How it works (proposed)
+```sh
+git clone git@github.com:RaffaeleBiondi/Coppernicus.git
+cd Coppernicus
+uv sync
 
-> [!NOTE]
-> The architecture and stack below are **proposals** and will be confirmed at the end of
-> stage 1.
+# A synthetic demo board ships in examples/demo
+uv run coppernicus solve examples/demo/demo.coppernicus.yml --out results/demo
+uv run coppernicus gui examples/demo/demo.coppernicus.yml
+
+# Your own board
+uv run coppernicus nets path/to/board.kicad_pcb            # power and ground nets
+uv run coppernicus parts path/to/board.kicad_pcb +3V3      # parts and pins on a net
+uv run coppernicus gui path/to/board.kicad_pcb             # set up rails in the app, save a project
+```
+
+`solve` prints a report per rail, writes per-layer PNG maps and a JSON summary, and exits with
+`1` when a limit you set is exceeded (`2` on errors). That makes it usable in scripts and CI.
+
+<p align="center">
+  <img src="docs/images/map-demo-current.png" alt="Current-density map of the demo board written by coppernicus solve" width="560">
+</p>
+
+### Project file
+
+A project (`*.coppernicus.yml`) names the board and lists the rails to solve. The app writes it
+for you, and it is also easy to edit by hand:
+
+```yaml
+board: demo.kipi.json.gz          # relative to this file; .kicad_pcb works the same way
+settings:
+  max_edge_mm: 0.5                # largest mesh edge on planes
+  via_plating_um: null            # null = engine table (IPC-6012 Class 2 minimum average)
+  copper_temp_c: 20.0             # resistivity is referenced to 20 °C
+rails:
+- net: +3V3
+  sources:
+  - name: Supply
+    ref: J1
+    pins: all                     # or a list of pad numbers; globs like "A*" work
+    voltage: 3.3
+  loads:
+  - ref: U1
+    pins: all
+    current: 2.0                  # split equally across the pins
+  limits:
+    max_drop_pct: 0.25            # optional; also max_current_density, max_via_current
+```
+
+## How it works
 
 ```mermaid
 flowchart LR
-    A[".kicad_pcb"] --> B["Importer<br/>(read-only)"]
-    B --> C["Neutral board model<br/>stackup · copper per net/layer · vias · pads"]
-    C --> D["Mesher<br/>triangles per layer"]
-    D --> E["DC solver<br/>sparse FEM + via resistors"]
-    E --> F["Viewer & report<br/>V · |J| · via currents · problems"]
-    G["Setup<br/>net · sources · loads"] --> E
+    A[".kicad_pcb / ODB++ / HyperLynx"] --> B["engine.Board<br/>(read-only import)"]
+    P["Project file<br/>rails · sources · loads · limits"] --> S
+    B --> S["engine.solve_rail<br/>mesh + 2.5D DC FEM"]
+    S --> R["results<br/>plain arrays per layer"]
+    R --> Q["problems<br/>ranked, judged only vs. limits"]
+    R --> V["app (Qt + VTK) · maps (PNG) · CLI report"]
+    Q --> V
 ```
 
-**Physics.** On each copper layer the potential V obeys ∇·(σ·t·∇V) = 0, where σ is the copper
-conductivity and t the copper thickness, i.e. a sheet of resistance ρ/t per square. Layers are
-connected by vias modelled as resistors, using the barrel resistance from drill diameter and plating
-thickness. Regulator outputs are fixed-voltage boundaries and loads are current sinks on their pads.
-Parameters that are not stored in the board file, such as via plating thickness and copper
-temperature, are **explicit inputs with stated defaults**, never hidden constants.
+**Engine.** The DC solver is [KiPI](https://github.com/drewsum/KiPI)'s engine, pinned to its
+v1.0.1 commit. Coppernicus only talks to it through `coppernicus.engine`, the one package that
+imports KiPI. A different engine can be put in by rewriting that package alone.
 
-**Proposed stack:** Python 3.12 · PySide6 (Qt) · NumPy / SciPy (sparse solvers) · Shapely ·
-packaging with PyInstaller.
+**Physics** (KiPI's DC model, checked in stage 1, see [the analysis](docs/kipi-analysis.md)):
 
-**Board input:** KiCad `.kicad_pcb`. Other formats (ODB++, IPC-2581) may follow through the
-same neutral board model.
+- On every copper sheet, div(G_s·grad V) = 0 with sheet conductance G_s = t/ρ, solved with
+  linear finite elements.
+- Plated holes are resistors ρ·Δz/A between equipotential drill rings, with
+  A = π(d·t_p − t_p²) for drill d and plating t_p.
+- Source pins are held at the source voltage. Each load's current is split equally across its
+  pins.
+- ρ = 1.724·10⁻⁵ Ω·mm at 20 °C, α = 0.00393 /°C.
+
+Inputs that are not in the board file, such as via plating and copper temperature, are explicit
+settings. Every result lists the values that were used.
+
+**Stack:** Python 3.12 · PySide6 (Qt) · pyvista/VTK for the board view · NumPy, SciPy, Shapely ·
+matplotlib for the PNG maps.
 
 ## Repository layout
 
 ```text
 Coppernicus/
-├── README.md
-├── .gitignore
-├── Logo/                 # project logo (transparent and white-background versions)
-└── docs/                 # design notes, KiPI analysis (stage 1)
+├── src/coppernicus/
+│   ├── engine/          # the only code that imports KiPI: Board, solve_rail, synthetic boards
+│   ├── project.py       # project file model (YAML), engine-independent
+│   ├── results.py       # solve results as plain arrays
+│   ├── problems.py      # ranking and limit checks
+│   ├── maps.py          # per-layer PNG maps
+│   ├── cli.py           # command line
+│   └── app/             # desktop app: main window, panels, board view, background solve
+├── tests/               # synthetic boards with closed-form answers; boards_local/ tests skip if absent
+├── examples/demo/       # synthetic demo board and project
+├── docs/                # stage-1 KiPI analysis, images
+└── Logo/
 ```
 
-The layout will grow as stages 2–4 land (`coppernicus/` package, `tests/`, packaging scripts).
+Real boards go in `boards_local/`. That folder is git-ignored, and any
+`boards_local/**/*.coppernicus.yml` project in it is solved by the test suite.
 
-## Validation strategy
+## Validation
 
-The solver will be checked against cases with known answers before it is trusted on real boards:
+`uv run pytest` checks the engine on synthetic boards with known answers:
 
-- a straight strip, R = ρL / (w·t)
-- a single via against the barrel-resistance formula
-- current balance: the sum of load currents equals the source current
-- disconnected copper islands rejected with a clear error
-- cross-checks against KiPI on the same geometry
+- a straight strip within 0.5 % of R = ρL/(w·t);
+- the via barrel resistance;
+- the temperature scaling (1 + α·ΔT);
+- current balance and energy balance;
+- net ties solved as shorts;
+- clear errors for missing sources, loads and pins.
 
-Real production boards are kept out of this repository. Tests use synthetic geometry and small
-hand-drawn test boards.
+During stage 1, KiPI's import was compared with KiCad's own `pcbnew` on three real boards:
+per-net copper areas agree to within 1 %. KiPI's accuracy suite (DC, AC, coupled noise) passes on
+macOS.
 
-## Prior art and acknowledgements
+## Roadmap
 
-- **[KiPI](https://github.com/drewsum/KiPI)** by Drew Maatman (GPL-3.0): DC, AC and coupled-noise
-  power-integrity analysis for KiCad, as a plugin or standalone. It is the reference
-  implementation studied in stage 1 ([analysis](docs/kipi-analysis.md)).
+| Stage | Scope | Status |
+|---|---|---|
+| 0 | Repository setup | ✅ |
+| 1 | Study of KiPI: physics, import, performance, UX ([analysis](docs/kipi-analysis.md)) | ✅ (hands-on UX notes pending) |
+| 2 | Architecture: new app on top of KiPI's engine | ✅ decided |
+| 3 | Engine adapter, project file, problem ranking, CLI, PNG maps | ✅ first version |
+| 4 | Desktop app: draft done; next: pick pads on the board, isolines, arrows, reports | 🔄 |
+| 5 | Packaging for macOS (`.app`) and Windows (`.exe`) | ⏳ |
+| Later | Ground return path, electro-thermal (KiPI's engine already has both) | 💡 |
+| Later | AC / PDN impedance with decoupling capacitors and target impedance (in KiPI's engine) | 💡 |
+| Later | DC-DC ripple through the PDN | 💡 |
+
+## Acknowledgements
+
+- **[KiPI](https://github.com/drewsum/KiPI)** by Drew Maatman (GPL-3.0-or-later). Its engine
+  does the import, meshing and solving.
 - **[padne](https://github.com/atx/padne)** by Josef Gajdusek (GPL-3.0): KiCad-native 2.5D FEM
   DC voltage-drop solver. Prior art.
+- KiPI meshes with [Triangle](https://www.cs.cmu.edu/~quake/triangle.html) by J. R. Shewchuk.
+  Triangle's own notice allows free use and free redistribution, but distribution as part of a
+  commercial system needs the author's permission. See the [analysis](docs/kipi-analysis.md).
 
 ## License
 
-All rights reserved. The license will be decided at a later stage.
+Coppernicus is free software under the **GNU General Public License v3.0 or later**. See
+[LICENSE](LICENSE).

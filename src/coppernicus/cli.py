@@ -137,7 +137,8 @@ def _rail_summary(res, problems, maps) -> dict:
 
 def _cmd_gui(args) -> int:
     from coppernicus.app import run
-    return run(args.path)
+    return run(args.path, screenshot=args.screenshot, solve_net=args.solve_net, layer=args.layer,
+               field=args.field)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -147,6 +148,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("gui", help="open the app")
     p.add_argument("path", nargs="?", help="a board (.kicad_pcb, ...) or project (.coppernicus.yml)")
+    # Test hooks (hidden): open, solve a net, save window and view images, quit.
+    for flag in ("--screenshot", "--solve-net", "--layer", "--field"):
+        p.add_argument(flag, help=argparse.SUPPRESS)
     p.set_defaults(func=_cmd_gui)
 
     p = sub.add_parser("nets", help="list power and ground nets of a board")
