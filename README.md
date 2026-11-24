@@ -236,7 +236,7 @@ the check when a limit you wrote in a project file is exceeded. See [docs/ci.md]
 
 `coppernicus mcp` is an [MCP](https://modelcontextprotocol.io) server over stdio. With it,
 Claude Code, Claude Desktop or another MCP client can open a board, solve rails, read the drop
-and current density, render maps, measure a cross-section and compare what-ifs. An agent that
+and current density, render maps, measure a cross-section, compare what-ifs, and solve a project's whole power tree. An agent that
 only has a shell can use `--json` on `nets`, `parts` and `solve` instead. Registration, the
 tools, conventions and a worked example are in [docs/agents.md](docs/agents.md).
 
@@ -300,8 +300,8 @@ and links such as ferrites are described in [docs/engine-mapping.md](docs/engine
 | Drop isolines (the same levels on every layer) and current-flow arrows (length ∝ √\|J\|) | ✅ |
 | ΔV between two clicked points ("Measure ΔV") | ✅ |
 | Nets marked as rails by hand, saved in the project (right-click a net) | ✅ |
-| Command line with exit codes for scripts and CI | ✅ |
-| AI-agent interface: MCP server and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
+| Command line with exit codes for scripts and CI | ✅ (a crash exits 2, never 1) |
+| AI-agent interface: MCP server (with `solve_tree` for the whole power tree) and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
 | Offline interactive HTML report (`solve --html`, MCP `report` tool) | ✅ (tested in Chromium and Chrome; Safari and Firefox not yet) |
 | GitHub Action for KiCad repositories (`uses: RaffaeleBiondi/Coppernicus@main`), job summary, artifacts | ✅ |
 | Sources and loads defined in KiCad footprint fields | ⏳ proposal in [docs/kicad-fields-proposal.md](docs/kicad-fields-proposal.md) |
@@ -310,9 +310,10 @@ and links such as ferrites are described in [docs/engine-mapping.md](docs/engine
 | Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
 | Readout while hovering (today: double-click) | ⏳ |
 | Project file v2: regulator kind (source / LDO / switcher), efficiency, quiescent current; input, ground and remote-sense pins; load ground pins; links (ferrites, sense resistors, fuses). Old project files load and save unchanged | ✅ (regulators editable in the app; links set in the project file) |
-| Power tree with ground return: regulators as loads on the rail feeding them, ground rise, remote sense; Solve power tree (Ctrl+T), Group selector, Power tree tab; `solve --tree` (and `--json`) | ✅ |
-| A rail solved alone draws the regulator inputs and links it feeds, estimated at nominal voltages | ✅ in the app; CLI and MCP next |
-| Optional ground-rise limit (`max_ground_rise_mv`) on a ground net | ✅ |
+| Power tree with ground return: regulators as loads on the rail feeding them, ground rise, remote sense; Solve power tree (Ctrl+T), Group selector, Power tree tab; `solve --tree` (and `--json`); MCP `solve_tree` | ✅ |
+| A rail solved alone draws the regulator inputs and links it feeds, estimated at nominal voltages | ✅ in the app, the CLI (`solve`, `--json`, `--html`), MCP `solve_project` and the Action; MCP `solve_rail` has no project |
+| Optional ground-rise limit (`max_ground_rise_mv`) on a ground net | ✅ (single-rail solves, the power tree, MCP, report and CI summary) |
+| Verdicts list what a set limit could not judge (`not_judged`, with the reason), in JSON, CLI text, report and CI summary | ✅ |
 | Power-tree verdicts: a group passes only when everything its limits apply to was judged. Items that cannot be judged (disconnected, behind a regulator out of regulation, not converged, 0 V nominal, a limit on a net the tree does not solve) give "not judged" and are named | ✅ |
 | Regulator inputs judged as loads on the rail feeding them (across input and ground pins); limits per net, a net without its own limit takes its group's main rail's; copper judged against the strictest limit in the group, and a fail names whose limit it used | ✅ |
 | What-if copper thickness per layer (`copper_thickness_mm`, optional) | ✅ (project file and MCP; an app field comes next) |
