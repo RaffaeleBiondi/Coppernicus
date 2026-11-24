@@ -74,7 +74,9 @@ def test_html_report_and_open(demo_project, tmp_path, capsys, monkeypatch):
     out_dir = tmp_path / "out"
     assert main(["solve", str(demo_project), "--no-maps", "--out", str(out_dir), "--html"]) == EXIT_OK
     report = out_dir / "demo.coppernicus_report.html"
-    assert report.exists() and f"Report: {report}" in capsys.readouterr().out
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("Report: ")]
+    # Compared as paths: the line shows the document's value, with "/" on every system.
+    assert report.exists() and [Path(ln[len("Report: "):]) for ln in lines] == [report]
     assert opened == []
     custom = tmp_path / "elsewhere" / "r.html"
     assert main(["solve", str(demo_project), "--no-maps", "--out", str(out_dir), "--html", str(custom),
