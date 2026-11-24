@@ -137,15 +137,26 @@ draws, and the ground return is solved on the ground net, so a load sees its sup
 ground. It needs the project's v2 fields: each regulator's `kind` and `input` pins and, when a
 ground net is solved, each regulator's and load's `ground` pins (see
 `docs/engine-mapping.md`). The document has:
-- `verdict`, `verdict_note`, `failed`: judged per group against the project's limits only;
+- `verdict`, `verdict_note`, `failed` and a top-level `not_judged`: judged per group against
+  the project's limits only. `verdict_note` lists the limits per net, then ". Not judged: …";
 - `vrms`: each source and regulator, with `v_set_v`, `v_out_v`, `i_out_a`, `v_in_v`, `i_in_a`,
-  `p_loss_w` and `regulation` (why it cannot hold its voltage, if so);
+  `p_loss_w` and `regulation` (why it cannot hold its voltage, if so). A regulator's input, as
+  a load of the rail that feeds it: `input_net`, `input_drop_mv`, `input_drop_pct`,
+  `input_exceeds_drop_limit`, `input_status`;
 - `loads`: each load's `v_supply_v`, `v_ground_v`, `v_across_v`, `drop_mv` and `drop_pct`
   (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`;
-- `links` and `groups`: a rail group has `max_drop_mv` and `max_drop_pct`, a ground group
-  `max_rise_mv` (its `max_drop_pct` is `null`); each group has its `limits`, `verdict` and
-  `problems` (`load` on a rail; `rise` and `return` on a ground; `hotspot` and `via` on both);
+- `links` and `groups`. A rail group has `max_drop_mv` and `max_drop_pct`. A ground group has
+  `max_rise_mv`, **signed**: negative when the ground sinks below 0 V (under a negative rail),
+  judged by its magnitude; give it with its sign. Its `max_drop_pct` is `null`. Each group has
+  `limits` (the strictest of each kind over its nets), `limits_by_net` (the limits each net
+  sets), `verdict`, `not_judged` and `problems`: `load` on a rail, the regulator inputs it
+  feeds among them as `"U1 (input)"` (`current_a` is the input current; `drop_mv` can be
+  `null`); `rise` and `return` on a ground; `hotspot` and `via` on both;
 - `assumptions` and `warnings`.
+
+Verdicts in the tree follow the rule above: a copper limit (via, current density, rise) with
+nothing to judge passes; a `max_drop_pct` with no load to judge is not judged; a limit set on
+a net the tree does not solve is a not-judged item ("NET: not solved in the power tree").
 
 Tree groups are not kept as results: there is no `result_id` per group, so `render_map`,
 `probe`, `cut_current`, `compare_results` and `report` do not apply to them. For maps, solve
