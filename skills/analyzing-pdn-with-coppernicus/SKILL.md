@@ -18,7 +18,11 @@ why, and ask for what is missing.
 2. `list_nets(board_id)`, then `net_parts(board_id, net)`: the parts and pins on the rail.
    Through vias touch every layer, so read `layers_with_copper` (tracks or zones) to see where
    a rail really runs, not `layers`.
-3. Sources and loads come from the user.
+3. Sources and loads come from the user, or from the parts' KiCad fields (`PI_RAIL`,
+   `PI_SOURCE`, `PI_LOAD`, `PI_PINS`, `PI_LIMIT_DROP`), which `board_fields(board_id)` lists and
+   `solve_project(..., use_board_fields=true)` solves. Numbers from the fields are the
+   designer's, not yours: say "from KiCad field PI_LOAD" when you report them. A project rail
+   replaces the fields' rail of its net.
    - **Source** = where the rail is regulated, at its voltage. For a buck regulator, that is the
      output inductor's output pad or the output-capacitor node, not the SW pin.
    - **Loads** = the parts drawing current, with their worst-case current.

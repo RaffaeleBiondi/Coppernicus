@@ -31,6 +31,7 @@ import yaml
 from shapely.geometry import LineString
 from shapely.ops import unary_union
 
+from coppernicus import board_fields as BF
 from coppernicus.engine import Board, Cancelled, EngineError, solve_rail, tied_nets
 from coppernicus.engine.board import board_file_filter
 from coppernicus.fields import TriangleLocator, current_vectors
@@ -336,9 +337,12 @@ class Session:
                                        f"pins of {t.ref} on this net: {_limited(available, 64)}")
 
     def _solve(self, entry: _BoardEntry, rail: Rail, settings: Settings, top: int,
-               progress: Progress, cancelled: Cancel, project: Optional[Project] = None) -> _Live:
+               progress: Progress, cancelled: Cancel, project: Optional[Project] = None,
+               notes: Sequence[str] = (), from_board_fields: bool = False) -> _Live:
         """Solve one rail. With ``project`` (a project rail), it also draws the regulator
-        inputs and links it feeds, estimated at nominal voltages, as the app solves it."""
+        inputs and links it feeds, estimated at nominal voltages, as the app solves it.
+        ``notes`` are added to the result's assumptions (where its rail came from), and
+        the summary's ``from_board_fields`` says whether the rail came from footprint fields."""
         # The what-if thickness is in the settings; the engine applies it (to the variant
         # here, already that thickness, it is a no-op) and writes the assumption.
         thickness = dict(settings.copper_thickness_mm)
@@ -357,6 +361,7 @@ class Session:
                                    "check that the sources and loads are connected by copper of "
                                    "this net" + (", and the regulators and links it feeds"
                                                  if project is not None else "")) from None
+        res.assumptions.extend(notes)     # reaches the summary, the CLI text and the report
         layer_thickness = {lay.name: lay.thickness_mm for lay in board.layers()}
         problems = find_problems(res, rail.limits, top=max(1, int(top)))
         with self._lock:
@@ -367,6 +372,7 @@ class Session:
                                  pin_numbers=lambda pid: board.pad(pid).number,
                                  estimated=[t.name for t in res.loads[len(rail.loads):]])
         summary["warnings"] = entry.warnings() + summary["warnings"]
+        summary["from_board_fields"] = bool(from_board_fields)
         rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
                             layer_thickness, res, problems, summary, _result_nbytes(res))
         with self._lock:
@@ -397,22 +403,32 @@ class Session:
                       maps_dir=None, stop_on_error: bool = False, progress: Progress = None,
                       cancelled: Cancel = None,
                       on_rail: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-                      on_board: Optional[Callable[[Dict[str, Any], int, int], None]] = None
-                      ) -> Dict[str, Any]:
+                      on_board: Optional[Callable[[Dict[str, Any], int, int], None]] = None,
+                      use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
         """Solve the rails of a project file (all, or those named in ``rails``) with the
         project's settings and limits. With ``maps_dir``, write drop and current PNGs per
         layer there. A rail that fails to solve is reported in place unless
         ``stop_on_error``. ``on_board(board_info, n_rails, n_layers)`` is called once the board is open
         and the rails are chosen; ``on_rail(result_id, summary)`` after each rail, while its
-        full result is still in memory."""
+        full result is still in memory.
+
+        ``use_board_fields`` (default: the project file's ``use_board_fields``) also takes
+        rails from the board's KiCad footprint fields (:mod:`coppernicus.board_fields`); a
+        rail in the project file replaces the fields' rail of its net. Each summary says
+        ``from_board_fields``, and its assumptions give every value with its field."""
         path, project, board_info, entry = self._open_project(project_path)
+        merged = self._merge_board_fields(path, project, entry, use_board_fields)
+        project = merged.project
         wanted = list(rails or [])
         selected = [r for r in project.rails if not wanted or r.net in wanted]
         if not selected:
             names = ", ".join(r.net for r in project.rails) or "none"
+            hint = f"rails in the project: {names}"
+            if not project.rails and not project.use_board_fields and not use_board_fields:
+                hint += ("; to take the rails from KiCad footprint fields (PI_RAIL, PI_SOURCE, "
+                         "PI_LOAD), set use_board_fields: true in the project file")
             raise ServiceError(E.INVALID_INPUT,
-                               "No rails to solve" + (f" matching {wanted}" if wanted else ""),
-                               f"rails in the project: {names}")
+                               "No rails to solve" + (f" matching {wanted}" if wanted else ""), hint)
         if on_board is not None:
             board = entry.board
             n_layers = 0                  # copper layers the selected rails have, net ties followed
@@ -432,17 +448,20 @@ class Session:
                 # not stop the other rails.
                 message = (f"{rail.net}: no loads, and it feeds no regulator input or link"
                            if rail.sources else f"{rail.net}: no source and no loads, so not solved")
-                out_rails.append({"net": rail.net, "skipped": {
+                out_rails.append({"net": rail.net, "from_board_fields": False, "skipped": {
                     "code": E.MISSING_LOAD, "message": message,
                     "hint": "add a load, or the regulator or link it feeds, to solve it"}})
                 continue
+            from_fields = rail.net in merged.from_fields
             try:
                 live = self._solve(entry, rail, project.settings, top, progress, cancelled,
-                                   project=project)
+                                   project=project, notes=merged.notes.get(rail.net, ()),
+                                   from_board_fields=from_fields)
             except ServiceError as e:
                 if stop_on_error or e.code == E.CANCELLED:
                     raise
-                out_rails.append({"net": rail.net, "error": e.to_dict()})
+                out_rails.append({"net": rail.net, "from_board_fields": from_fields,
+                                  "error": e.to_dict()})
                 verdicts.append("error")
                 continue
             summary = dict(live.rec.summary)
@@ -502,8 +521,51 @@ class Session:
                                "use the copper layer names as in KiCad") from None
         return path, project, board_info, entry
 
+    def _merge_board_fields(self, path: Path, project: Project, entry: _BoardEntry,
+                            use: Optional[bool]) -> BF.Merged:
+        """The project with the rails of the board's KiCad footprint fields added, when
+        ``use`` (default: the project's ``use_board_fields``) is on; else the project as is."""
+        if not (project.use_board_fields if use is None else use):
+            return BF.Merged(project, [], {})
+        fields = self._part_fields(entry)
+        try:
+            return BF.merge(project, fields)
+        except BF.FieldError as e:
+            raise ServiceError(E.INVALID_BOARD_FIELD, f"{path.name}: {e}",
+                               "fix the field in KiCad (on the symbol, then update the PCB), or "
+                               "define the rail in the project file") from None
+
+    def _part_fields(self, entry: _BoardEntry) -> Dict[str, Dict[str, str]]:
+        from coppernicus.engine.kicad_fields import read_part_fields
+        try:
+            return read_part_fields(entry.path)
+        except EngineError as e:
+            raise ServiceError(E.INVALID_INPUT, str(e), "footprint fields need the KiCad board "
+                               "file (.kicad_pcb); leave use_board_fields off for other "
+                               "formats") from None
+
+    def board_fields(self, board_id: str) -> Dict[str, Any]:
+        """The KiCad footprint fields of an open board (``PI_*`` only) and the rails they
+        describe, each value with the field it came from. Nothing is solved."""
+        entry = self._entry(board_id)
+        fields = self._part_fields(entry)
+        try:
+            rails = BF.listing(fields)
+        except BF.FieldError as e:
+            raise ServiceError(E.INVALID_BOARD_FIELD, str(e),
+                               "fix the field in KiCad (on the symbol, then update the PCB)") from None
+        return C.jsonable({
+            "board_id": entry.id, "fields": [{"ref": ref, "fields": dict(f)} for ref, f in
+                                             sorted(fields.items(), key=lambda kv: BF._ref_key(kv[0]))],
+            "rails": rails,
+            "assumptions": ["Fields are read from the board file's footprints, as KiCad copies "
+                            "them from the symbols; only PI_* fields are listed. A rail needs a "
+                            "PI_SOURCE and a PI_LOAD; each value carries its unit."],
+            "warnings": entry.warnings(),
+        })
+
     def solve_tree(self, project_path, top: int = 5, progress: Progress = None,
-                   cancelled: Cancel = None) -> Dict[str, Any]:
+                   cancelled: Cancel = None, use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
         """Solve the project's whole power tree at once: every rail and ground group, with
         the regulators' input currents and the ground return computed exactly. Returns
         :func:`coppernicus.power_tree.tree_summary` unchanged (the document of
@@ -512,6 +574,8 @@ class Session:
         from coppernicus.engine.tree import solve_project_tree
         from coppernicus.power_tree import tree_summary
         path, project, _, entry = self._open_project(project_path)
+        merged = self._merge_board_fields(path, project, entry, use_board_fields)
+        project = merged.project
         with self._solve_lock:
             if progress is not None:
                 progress(f"solving the power tree of {path.name}")
@@ -524,6 +588,7 @@ class Session:
                 raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}",
                                    "fix the project file (sources, loads, their ground pins, "
                                    "links), then solve again") from None
+        tree.assumptions.extend(n for net in sorted(merged.notes) for n in merged.notes[net])
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
         return json.loads(json.dumps(tree_summary(tree, top=max(1, int(top))), allow_nan=False))
 

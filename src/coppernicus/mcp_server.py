@@ -177,6 +177,15 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         return _call("net_parts", session.net_parts, board_id, net)
 
     @mcp.tool(annotations=READ_ONLY)
+    def board_fields(board_id: str) -> dict[str, Any]:
+        """The board's KiCad footprint fields (PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS,
+        PI_LIMIT_DROP; KiCad board files only) and the rails they describe, each value with
+        the field it came from. Nothing is solved: solve them with solve_project and
+        use_board_fields. If you copy these values into solve_rail, say they come from the
+        KiCad fields."""
+        return _call("board_fields", session.board_fields, board_id)
+
+    @mcp.tool(annotations=READ_ONLY)
     def solve_rail(board_id: str, net: str, sources: list[SourceSpec], loads: list[LoadSpec],
                    ctx: Context, limits: Optional[LimitsSpec] = None,
                    settings: Optional[SettingsSpec] = None, follow_net_ties: bool = True,
@@ -249,22 +258,36 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                       ctx: Context,
                       rails: Annotated[Optional[list[str]], Field(
                           description="Nets to solve; default all.")] = None,
-                      top: Annotated[int, Field(ge=1, le=50)] = 5) -> dict[str, Any]:
+                      top: Annotated[int, Field(ge=1, le=50)] = 5,
+                      use_board_fields: Annotated[Optional[bool], Field(
+                          description="Also take rails from the board's KiCad footprint fields "
+                                      "(PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS, PI_LIMIT_DROP); "
+                                      "default: the project file's use_board_fields.")] = None,
+                      ) -> dict[str, Any]:
         """Solve the rails of a project file with its sources, loads, limits and settings
         (including its optional what-if copper_thickness_mm, named in each rail's
         assumptions). Each rail also draws the regulator inputs and links it feeds, estimated
         at nominal voltages: loads with "estimated": true. Returns one solve_rail summary
         (with result_id) per rail, a rail that fails reported in place, a rail with nothing
-        to draw as skipped, and an overall verdict."""
+        to draw as skipped, and an overall verdict. With use_board_fields, rails come from
+        the KiCad footprint fields too (a project rail replaces the fields' rail of its net):
+        each summary has from_board_fields, and its assumptions give each value with its
+        field ("from KiCad field PI_LOAD ...")."""
         bridge = _Bridge(ctx)
         return _call("solve_project", session.solve_project, project_path, rails, top,
-                     progress=bridge.progress, cancelled=bridge.cancelled)
+                     progress=bridge.progress, cancelled=bridge.cancelled,
+                     use_board_fields=use_board_fields)
 
     @mcp.tool(annotations=READ_ONLY)
     def solve_tree(project_path: Annotated[str, Field(description="Absolute path to a "
                                                                   "*.coppernicus.yml project file.")],
                    ctx: Context,
-                   top: Annotated[int, Field(ge=1, le=50)] = 5) -> dict[str, Any]:
+                   top: Annotated[int, Field(ge=1, le=50)] = 5,
+                   use_board_fields: Annotated[Optional[bool], Field(
+                       description="Also take rails from the board's KiCad footprint fields "
+                                   "(PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS, PI_LIMIT_DROP); "
+                                   "default: the project file's use_board_fields.")] = None,
+                      ) -> dict[str, Any]:
         """Solve a project's whole power tree at once: every rail and ground group together,
         with the regulators' input currents and the ground return computed exactly (when a
         ground net is solved, loads and regulators need their ground pins). Returns the VRM,
@@ -275,7 +298,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         to tree groups (solve_project per rail for maps)."""
         bridge = _Bridge(ctx)
         return _call("solve_tree", session.solve_tree, project_path, top,
-                     progress=bridge.progress, cancelled=bridge.cancelled)
+                     progress=bridge.progress, cancelled=bridge.cancelled,
+                     use_board_fields=use_board_fields)
 
     @mcp.tool(annotations=WRITES_FILE)
     def report(result_ids: Annotated[Optional[list[str]], Field(

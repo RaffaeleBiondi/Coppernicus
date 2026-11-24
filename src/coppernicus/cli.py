@@ -79,6 +79,34 @@ def _json_parts(args) -> int:
 
 
 
+def _cmd_fields(args) -> int:
+    """``fields BOARD``: the KiCad footprint fields (PI_*) of a board and the rails they make,
+    each value with the field it came from. Nothing is solved."""
+    from coppernicus.service import ServiceError, Session
+
+    def run():
+        session = Session()
+        board = session.open_board(args.board)
+        return {"board": board, **session.board_fields(board["board_id"])}, EXIT_OK
+    if args.json:
+        return _run_json(run)
+    try:
+        doc, _ = run()
+    except ServiceError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    if not doc["fields"]:
+        print(f"{doc['board']['name']}: no footprint has PI_* fields")
+        return EXIT_OK
+    for part in doc["fields"]:
+        print(f"  {part['ref']:8s} " + "  ".join(f"{k}={v}" for k, v in part["fields"].items()))
+    for rail in doc["rails"]:
+        print(f"Rail {rail['net']}" + ("" if rail["complete"] else f": not a rail yet: {rail['missing']}"))
+        if rail["note"]:
+            print(f"  {rail['note']}")
+    return EXIT_OK
+
+
 def _cmd_nets(args) -> int:
     if args.json:
         return _json_nets(args)
@@ -172,7 +200,8 @@ def _cmd_solve(args) -> int:
         doc = session.solve_project(args.project, rails=args.rail, top=args.top,
                                     maps_dir=None if args.no_maps else out_dir, stop_on_error=True,
                                     progress=progress if args.verbose else None,
-                                    on_rail=on_rail, on_board=on_board)
+                                    on_rail=on_rail, on_board=on_board,
+                                    use_board_fields=True if args.board_fields else None)
     except ServiceError as e:
         if quiet:
             _print_json({"error": e.to_dict()})
@@ -327,6 +356,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print JSON (for scripts and agents)")
     p.set_defaults(func=_cmd_parts)
 
+    p = sub.add_parser("fields", help="list a board's KiCad footprint fields (PI_*) and the rails they make")
+    p.add_argument("board", help="a KiCad board file (.kicad_pcb)")
+    p.add_argument("--json", action="store_true", help="print JSON (for scripts and agents)")
+    p.set_defaults(func=_cmd_fields)
+
     p = sub.add_parser("solve", help="solve the rails of a project file")
     p.add_argument("project")
     p.add_argument("--out", help="folder for maps and summary (default: results/ next to the project file)")
@@ -341,6 +375,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--html", nargs="?", const="", default=None, metavar="PATH",
                    help="also write an offline HTML report (default path: <out>/<project>_report.html)")
     p.add_argument("--open", action="store_true", help="open the HTML report in the browser (implies --html)")
+    p.add_argument("--board-fields", action="store_true",
+                   help="also take rails from the board's KiCad footprint fields (PI_RAIL, PI_SOURCE, "
+                        "PI_LOAD, ...), as use_board_fields: true in the project file does")
     p.set_defaults(func=_cmd_solve)
     # Power tree (Task 7): every rail and ground solved together; replaces the command run.
     p.add_argument("--tree", action="store_const", dest="func", const=_cmd_solve_tree,
@@ -381,6 +418,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         _utf8_output()
     from coppernicus.engine import EngineError
     from coppernicus.project import ProjectError
+    if args.func is _cmd_solve_tree and args.board_fields:
+        return _fail(args, "invalid_input", "--board-fields does not apply to --tree yet",
+                     "solve the rails one by one (without --tree), or define them in the project file")
     try:
         return args.func(args)
     except (EngineError, ProjectError, FileNotFoundError) as e:

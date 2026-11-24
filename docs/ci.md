@@ -58,6 +58,14 @@ the rail's copper, so the rail's other drops grow: a check that passed before th
 now fail. A rail with no loads that feeds nothing is shown as "skipped: nothing to draw". It
 is not an error and does not fail the check.
 
+Sources and loads can also come from fields on the parts in KiCad (`PI_RAIL`, `PI_SOURCE`,
+`PI_LOAD`, `PI_PINS`, `PI_LIMIT_DROP`; see [docs/agents.md](agents.md#kicad-footprint-fields)).
+The action needs no extra input for them: a project file with `board:` and
+`use_board_fields: true` is enough, and a rail it also lists replaces the fields' rail of that
+net. The summary's assumptions give every value with its field ("from KiCad field PI_LOAD
+…"). A field Coppernicus cannot use (a value without its unit, a rail with loads but no
+source) fails the step with an error naming the part and the field.
+
 A project file can set an optional what-if copper thickness per layer, in mm, under
 `settings: copper_thickness_mm:` (for example `B.Cu: 0.07`; 1 oz is 0.035). The check then
 solves with that copper instead of the board file's, and the summary's assumptions name the

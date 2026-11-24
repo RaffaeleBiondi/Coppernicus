@@ -253,6 +253,9 @@ class Project:
     # Engine-specific options, passed through to the engine and checked there (KiPI:
     # ``excluded_nets``). Saved only when not empty.
     engine_options: Dict[str, Any] = field(default_factory=dict)
+    # Also take rails from the board's KiCad footprint fields (PI_RAIL, PI_SOURCE, ...; see
+    # coppernicus.board_fields). Off unless set; saved only when on.
+    use_board_fields: bool = False
 
     # ------------------------------------------------------------------ queries
     def board_path(self) -> Path:
@@ -313,6 +316,8 @@ class Project:
             out["engine_options"] = dict(self.engine_options)
         if self.marked_rails:
             out["marked_rails"] = list(self.marked_rails)
+        if self.use_board_fields:
+            out["use_board_fields"] = True
         return out
 
     @classmethod
@@ -337,10 +342,14 @@ class Project:
             options = data.get("engine_options") or {}
             if not isinstance(options, dict):
                 raise ValueError("engine_options must be a mapping of option names to values")
+            use_fields = data.get("use_board_fields", False)
+            if not isinstance(use_fields, bool):
+                raise ValueError(f"use_board_fields must be true or false, not {use_fields!r}")
         except (KeyError, TypeError, ValueError) as e:
             raise ProjectError(f"invalid project file: {e}") from e
         return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path,
-                   marked_rails=[str(n) for n in marked], links=links, engine_options=dict(options))
+                   marked_rails=[str(n) for n in marked], links=links, engine_options=dict(options),
+                   use_board_fields=use_fields)
 
     @classmethod
     def load(cls, path) -> "Project":
