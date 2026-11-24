@@ -183,7 +183,10 @@ class Project:
         if path is None:
             raise ProjectError("no path to save the project to")
         if self.board:                    # keep the board relative to the project file
-            board = self.board_path().resolve()
+            board = Path(self.board).expanduser()
+            if not board.is_absolute():   # relative to where the project was, or will be
+                board = (Path(self.path).parent if self.path else Path(path).parent) / board
+            board = board.resolve()
             try:
                 self.board = os.path.relpath(board, Path(path).resolve().parent)
             except ValueError:            # another drive (Windows): keep it absolute

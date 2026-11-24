@@ -57,3 +57,4 @@ line-length = 110
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "B", "I"]
+ignore = ["B905"]   # zip() lengths are matched by construction (as in KiPI)

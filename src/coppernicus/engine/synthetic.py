@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from typing import Dict, List, Sequence
 
-from shapely.geometry import MultiPolygon, Point, box
-
 from kipi.core.model.board import (
     BoardSnapshot,
     CopperLayer,
@@ -23,6 +21,7 @@ from kipi.core.model.board import (
     Via,
     Zone,
 )
+from shapely.geometry import MultiPolygon, box
 
 F, B = 3, 34                    # KiCad layer ids of F.Cu and B.Cu
 OZ1 = 0.035                     # 1 oz copper
@@ -178,10 +177,11 @@ def net_tie_board() -> BoardSnapshot:
 
 def demo_board() -> BoardSnapshot:
     """A 60 × 40 mm two-layer demo: a supply connector on F.Cu stitched to a B.Cu plane that
-    a slot squeezes into a neck, three loads, one fed by a thin F.Cu track. Made to show
-    voltage drop, current crowding and via currents at a glance."""
+    a slot squeezes into a neck along the bottom edge (KiCad y points down), three loads,
+    one fed by a thin F.Cu track. Made to show voltage drop, current crowding and via
+    currents at a glance."""
     b = SyntheticBoard("demo", two_layer_stackup())
-    plane = box(2, 2, 58, 38).difference(box(28, 2, 31, 31))     # slot: neck at the top
+    plane = box(2, 2, 58, 38).difference(box(28, 2, 31, 31))     # slot from the top edge
     b.zone("+3V3", B, plane)
     # Supply J1: a large F.Cu pad stitched down with four vias.
     b.square_pad("J1", "1", "+3V3", 6.0, 20.0, 4.0, value="SUPPLY")
@@ -197,3 +197,9 @@ def demo_board() -> BoardSnapshot:
     b.via("+3V3", 18.0, 26.0)
     b.track("+3V3", F, 0.25, (18.0, 26.0), (18.0, 33.0))
     return b.snapshot(outline=box(0, 0, 60, 40))
+
+
+def save_snapshot(snapshot: BoardSnapshot, path) -> None:
+    """Write a board snapshot (``*.json.gz``) that :meth:`Board.open` reads back."""
+    from kipi.core.model.snapshot_io import save
+    save(snapshot, str(path))

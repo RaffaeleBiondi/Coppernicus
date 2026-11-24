@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
-
 from kipi.core.geometry.copper import net_layer_copper
 from kipi.core.model.board import BoardSnapshot, Pad
 from kipi.core.model.nets import classify_nets
@@ -203,3 +202,8 @@ class Board:
         for z in zones:
             used.update(lid for lid, polys in z.filled.items() if polys)
         return [c.id for c in self._snap.stackup.copper if c.id in used]
+
+
+def board_file_filter() -> str:
+    """A Qt file-dialog filter for every board format the engine reads."""
+    return registry.file_filter()

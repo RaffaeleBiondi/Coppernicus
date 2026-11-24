@@ -11,7 +11,6 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
-
 from kipi.core.progress import Canceled, ProgressReporter
 from kipi.dc.solver import (
     CurrentLoad,
@@ -22,7 +21,7 @@ from kipi.dc.solver import (
     VoltageSource,
     run,
 )
-from kipi.dc.solver.setup import RHO_CU_OHM_MM, REF_TEMP_C
+from kipi.dc.solver.setup import REF_TEMP_C, RHO_CU_OHM_MM
 from kipi.dc.solver.via_barrel import ViaRule, default_via_rules
 
 from coppernicus.engine.board import Board, EngineError, NetTie
