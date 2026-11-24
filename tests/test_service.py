@@ -321,55 +321,51 @@ def test_solve_project_reports_each_rail(tmp_path, boards, session):
     assert e.value.code == "invalid_input" and "+3V3" in e.value.hint
 
 
-# Stand-ins for fields the project model will gain (v2: regulator kind, efficiency, ground
-# pins, series links...). Any path that rebuilds terminals from dicts must carry them.
+# A field the project model does not have yet: any path that rebuilds terminals from dicts
+# must carry it, like the v2 fields (kind, efficiency, input, ground and sense pins).
 @dataclasses.dataclass
-class _SourceV2(Source):
-    kind: str = "source"
-    efficiency: float = 1.0
-
-
-@dataclasses.dataclass
-class _LoadV2(Load):
-    ground_ref: str = ""
+class _SourceLater(Source):
+    tolerance_pct: float = 0.0
 
 
 @dataclasses.dataclass
-class _RailV2(Rail):
-    links: list = dataclasses.field(default_factory=list)
+class _RailLater(Rail):
+    notes: list = dataclasses.field(default_factory=list)
 
 
 def test_dict_edits_keep_fields_the_service_does_not_know(session, boards):
     from coppernicus.service.convert import rail_from_dicts, terminal_from_dict
-    src = _SourceV2("J1", 3.3, ["2"], "Buck", kind="smps", efficiency=0.9)
+    src = _SourceLater("J1", 3.3, ["2"], "Buck", kind="smps", efficiency=0.9, input_ref="L1",
+                       ground_ref="J1", ground_pins=["3"], tolerance_pct=2.0)
     edited = terminal_from_dict({"ref": "J1", "voltage_v": 3.0}, "source", base=src)
-    assert type(edited) is _SourceV2
-    assert (edited.kind, edited.efficiency, edited.voltage) == ("smps", 0.9, 3.0)
+    assert type(edited) is _SourceLater
+    assert (edited.kind, edited.efficiency, edited.input_ref, edited.ground_pins,
+            edited.tolerance_pct, edited.voltage) == ("smps", 0.9, "L1", ["3"], 2.0, 3.0)
     assert (edited.name, edited.pins) == ("Buck", ["2"])       # not in the dict: kept
     renamed = terminal_from_dict({"ref": "J1", "voltage_v": 3.0, "name": "", "pins": "all"}, "source",
                                  base=src)
     assert (renamed.name, renamed.pins, renamed.kind) == ("", None, "smps")   # in the dict: set
-    src = _SourceV2("J1", 3.3, None, "Buck", kind="smps", efficiency=0.9)
+    src = dataclasses.replace(src, pins=None)
 
-    base = _RailV2("+3V3", sources=[src],
-                   loads=[_LoadV2("U2", 1.5, ground_ref="G2"), _LoadV2("U1", 2.0, ground_ref="G1")],
-                   links=["L1"])
+    base = _RailLater("+3V3", sources=[src],
+                      loads=[Load("U2", 1.5, ground_ref="U2", ground_pins=["4"]),
+                             Load("U1", 2.0, ground_ref="U1", ground_pins=["8"])], notes=["kept"])
     rail = rail_from_dicts("+3V3", [{"ref": "J1", "voltage_v": 3.3}],
                            [{"ref": "U1", "current_a": 1.0}, {"ref": "U2", "current_a": 0.5},
                             {"ref": "U3", "current_a": 0.3}],
                            {"max_drop_pct": 0.25}, base=base)
-    assert type(rail) is _RailV2 and rail.links == ["L1"] and rail.limits.max_drop_pct == 0.25
-    assert rail.sources[0].efficiency == 0.9
-    # Matched by ref when the rows moved; a new terminal starts from the defaults.
-    assert [(ld.ref, getattr(ld, "ground_ref", None), ld.current) for ld in rail.loads] == [
-        ("U1", "G1", 1.0), ("U2", "G2", 0.5), ("U3", None, 0.3)]
+    assert type(rail) is _RailLater and rail.notes == ["kept"] and rail.limits.max_drop_pct == 0.25
+    assert (rail.sources[0].efficiency, rail.sources[0].tolerance_pct) == (0.9, 2.0)
+    # Matched by part (project.carry_over) when the rows moved; a new part gets the defaults.
+    assert [(ld.ref, ld.ground_pins, ld.current) for ld in rail.loads] == [
+        ("U1", ["8"], 1.0), ("U2", ["4"], 0.5), ("U3", None, 0.3)]
 
     bid = session.open_board(boards["demo"])["board_id"]
     rid = session.solve_rail(bid, "+3V3", [{"ref": "J1", "voltage_v": 3.3}],
                              [{"ref": "U1", "current_a": 2.0}], base_rail=base)["result_id"]
     kept = session._results[rid].rail
-    assert kept.links == ["L1"] and kept.sources[0].kind == "smps"
-    assert kept.loads[0].ground_ref == "G1"
+    assert kept.notes == ["kept"] and kept.sources[0].kind == "smps"
+    assert kept.loads[0].ground_pins == ["8"]
 
 
 def test_layers_with_only_via_rings_and_idle_vias_are_told_apart(session, tmp_path):

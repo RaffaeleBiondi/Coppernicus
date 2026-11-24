@@ -135,10 +135,11 @@ def settings_to_dict(s: Settings, thickness: Mapping[str, float]) -> Dict[str, A
 def terminal_from_dict(data: Mapping[str, Any], kind: str, base=None):
     """A source (``voltage_v``) or load (``current_a``) from a plain dict.
 
-    With ``base`` (an existing Source or Load), the result is ``base`` with only the keys
-    the dict holds replaced: every other field of ``base`` (and its exact class) is carried
-    over, so fields this function does not know about are never dropped."""
-    from coppernicus.project import Load, Source
+    With ``base`` (an existing Source or Load of the same part), the result is ``base`` with
+    only the keys the dict holds replaced, through :func:`coppernicus.project.carry_over`:
+    every other field of ``base`` (a regulator's kind, input, ground and sense pins, and any
+    field added later) is kept. An absent "pins" or "name" keeps the base's."""
+    from coppernicus.project import Load, Source, carry_over
     if not isinstance(data, Mapping):
         raise ServiceError(E.INVALID_INPUT, f"each {kind} must be an object, not {data!r}")
     value_key = "voltage_v" if kind == "source" else "current_a"
@@ -162,38 +163,37 @@ def terminal_from_dict(data: Mapping[str, Any], kind: str, base=None):
         values = {"ref": ref, "current": _number(data[value_key], f"{ref} current_a", positive=True),
                   "pins": pins, "name": name}
         cls = Load
-    if base is not None:
-        # Only what the dict says changes: an absent "pins" or "name" keeps the base's.
-        for key in ("pins", "name"):
-            if key not in data:
-                values.pop(key)
-        return dataclasses.replace(base, **values)
-    return cls(**values)
+    terminal = cls(**values)
+    if base is None:
+        return terminal
+    return carry_over([base], [_keep_unset(terminal, data, [base])])[0]
+
+
+def _keep_unset(terminal, data: Mapping[str, Any], old: Sequence):
+    """``terminal`` with the "pins" and "name" the dict does not give taken from the first
+    terminal of ``old`` with the same part (``carry_over`` overwrites both)."""
+    same = next((o for o in old if o.ref == terminal.ref), None)
+    if same is None:
+        return terminal
+    keep = {k: getattr(same, k) for k in ("pins", "name") if k not in data}
+    return dataclasses.replace(terminal, **keep) if keep else terminal
 
 
 def rail_from_dicts(net: str, sources: Sequence[Mapping[str, Any]], loads: Sequence[Mapping[str, Any]],
                     limits: Optional[Mapping[str, Any]] = None, follow_net_ties: bool = True,
                     base=None):
     """A Rail from plain dicts. With ``base`` (an existing Rail), the result keeps every
-    field of ``base`` it does not set (and its exact class), and each terminal starts from
-    the matching terminal of ``base``: the one in the same row when its ref matches, else
-    the first unused one with that ref. Fields added to the project model later are thus
-    carried through without changes here."""
-    from coppernicus.project import Rail
+    field of ``base`` it does not set (and its exact class), and each terminal keeps the
+    fields of its match in ``base`` (:func:`coppernicus.project.carry_over`: the same part
+    with the same pins, else the same part). Fields added to the project model later are
+    thus carried through without changes here."""
+    from coppernicus.project import Rail, carry_over
 
     def build(items, old, kind):
-        used, out = set(), []
-        for i, data in enumerate(items):
-            ref = str(data.get("ref") or "").strip() if isinstance(data, Mapping) else ""
-            match = None
-            if i < len(old) and old[i].ref == ref and i not in used:
-                match = i
-            else:
-                match = next((j for j, t in enumerate(old) if t.ref == ref and j not in used), None)
-            if match is not None:
-                used.add(match)
-            out.append(terminal_from_dict(data, kind, old[match] if match is not None else None))
-        return out
+        new = [terminal_from_dict(data, kind) for data in items]
+        if not old:
+            return new
+        return carry_over(old, [_keep_unset(t, d, old) for t, d in zip(new, items)])
 
     old_sources = list(base.sources) if base is not None else []
     old_loads = list(base.loads) if base is not None else []
