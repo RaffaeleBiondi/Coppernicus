@@ -111,12 +111,16 @@ def main(argv=None) -> int:
         if window.results.get(NET) is None:
             print("the demo did not solve", file=sys.stderr)
             return 1
+        #    Isolines (equal drop) and arrows (current direction) on.
         window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+        window.show_isolines.setChecked(True)
+        window.show_arrows.setChecked(True)
         window.view.reset_view()
         window.statusBar().showMessage("Solved: the colours show how many mV each point is below the source")
         save(window, "3-drop")
 
-        # 4. Current density, with a probe readout as after a double-click.
+        # 4. Current density with the arrows, and a probe readout as after a double-click.
+        window.show_isolines.setChecked(False)
         window.field_box.setCurrentIndex(window.field_box.findData("current"))
         window.view.reset_view()
         settle()
@@ -125,6 +129,18 @@ def main(argv=None) -> int:
 
         # 5. The problems panel on its own.
         save(window.problems, "5-problems")
+
+        # 6. ΔV between two points: the source pad and U1's pad, on F.Cu where the pads are.
+        window.show_arrows.setChecked(False)
+        window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+        window.layer_box.setCurrentIndex(max(0, window.layer_box.findText("F.Cu")))
+        settle()
+        window.view.reset_view()
+        window.measure.setChecked(True)
+        window.view.measure_at(6.0, 20.0)                            # A: J1
+        window.view.measure_at(50.0, 10.0)                           # B: U1
+        save(window, "6-measure")
+        window.measure.setChecked(False)
     finally:
         for w in windows:
             w.dirty = False                  # never ask to save

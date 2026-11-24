@@ -63,8 +63,10 @@ Try it on the demo first: **Open project** → `examples/demo/demo.coppernicus.y
 
 ### 1. Open a board and choose a net
 
-Click **Open board** and choose a `.kicad_pcb` file. The list on the left shows the power and
-ground nets. Untick *Power & ground only* to see every net. Click the net you want to analyse.
+Click **Open board** and choose a `.kicad_pcb` file. The list on the left shows the rails: the
+power and ground nets, recognised by their names and copper pours. Untick *Rails only* to see
+every net. If a rail is missing, right-click its net and choose **Mark as rail**; the choice is
+saved in the project. Click the net you want to analyse.
 
 ### 2. Tell it where the current enters and leaves
 
@@ -101,8 +103,10 @@ Press **Solve** (or **F5**). The board turns into a map of **how many millivolts
 below the source**. The view opens on the layer that loses the most power, and the *Layer* menu
 shows the others. Drag to pan, use the wheel to zoom, and press **Fit** to see the whole board.
 
-In the picture at the top, the slot in the plane forces the current around it, so the loads on
-the far side get less voltage.
+Tick **Isolines** to draw lines of equal drop, at the same levels on every layer, and
+**Arrows** to show which way the current flows. A longer arrow means more current. In the
+picture at the top, the slot in the plane forces the current through the neck below it, so the
+loads on the far side get less voltage.
 
 ### 5. Find where the copper is crowded
 
@@ -112,6 +116,13 @@ point in the status bar.
 
 <p align="center">
   <img src="docs/images/guide-4-current.png" alt="Current-density map: the copper at the end of the slot is bright; the status bar shows the values at a double-clicked point" width="800">
+</p>
+
+To measure the voltage difference between two points, press **Measure ΔV** and click point A,
+then point B. The status bar shows ΔV A→B and both voltages. Press **Esc** to stop.
+
+<p align="center">
+  <img src="docs/images/guide-6-measure.png" alt="Measuring ΔV between the source pad and U1's pad: the status bar shows 9.6 mV" width="800">
 </p>
 
 ### 6. Read the Problems panel
@@ -212,13 +223,16 @@ rails:
 | Pass/fail only against limits you set | ✅ |
 | Copper loss per layer and in the vias | ✅ |
 | Net ties found automatically and solved as shorts | ✅ |
-| Sources and loads picked by clicking pads | ✅ (a real mouse click on a Retina display not yet tested) |
-| Double-click readout of V, drop and \|J\| | ✅ (the mouse double-click itself not yet tested) |
+| Sources and loads picked by clicking pads ("Pick on board"); pads of another net are refused with a message | ✅ |
+| Double-click readout of V, drop and \|J\| | ✅ |
+| Drop isolines (the same levels on every layer) and current-flow arrows (length ∝ √\|J\|) | ✅ |
+| ΔV between two clicked points ("Measure ΔV") | ✅ |
+| Nets marked as rails by hand, saved in the project (right-click a net) | ✅ |
 | Command line with exit codes for scripts and CI | ✅ |
-| Drop isolines, current-flow arrows, ΔV between two points | 🔄 in progress |
 | AI-agent interface: MCP server and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
 | Interactive HTML report, GitHub Action for KiCad repositories | ⏳ |
-| Before/after comparison of two solves | ⏳ |
+| Before/after comparison of two solves, loss-by-layer chart | 🔄 in progress |
+| Readout while hovering (today: double-click) | ⏳ |
 | Power tree with ground return, board temperature | ⏳ (KiPI's engine has both) |
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
 | Standalone `.app` / `.exe` that needs no uv | ⏳ later |
