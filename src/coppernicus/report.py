@@ -336,6 +336,7 @@ class ReportBuilder:
         top_via = max(result.vias, key=lambda v: v.current, default=None)
         busiest = max(result.layers, key=lambda lf: lf.power, default=None)
         judged = verdict(problems, limits, result)
+        judged["verdict_text"] = verdict_text(judged)
         self.rails.append({
             "net": result.net, "label": label or result.net, "nets": list(result.nets),
             "v_ref_v": result.v_ref, "v_lo_v": v_lo, "v_hi_v": v_hi,
@@ -471,6 +472,29 @@ def build_report(items: Sequence[RailReport], *, title: str = "", board_name: st
         text = builder.html()
     builder.seconds += seconds
     return builder, text
+
+
+def verdict_text(judged: Mapping[str, Any]) -> str:
+    """The verdict in words, for the page: the limits that were set, a failure, and every
+    item a set limit could not judge (both when a rail fails and has such items)."""
+    lim = judged.get("limits") or {}
+    words = {"max_drop_pct": "load drop ≤ {:.3g} % of the source voltage",
+             "max_current_density_a_mm2": "current-crowding mean |J| ≤ {:.4g} A/mm²",
+             "max_via_current_a": "current per via ≤ {:.4g} A",
+             "max_ground_rise_mv": "ground rise ≤ {:.4g} mV above 0 V"}
+    parts = "; ".join(words[k].format(v) for k, v in lim.items() if k in words)
+    unjudged = judged.get("not_judged") or []
+    items = "; ".join(f"{u['item']} ({u['limit']}): {u['reason']}" for u in unjudged)
+    failed = judged.get("failed", 0)
+    if judged.get("verdict") == "fail":
+        text = (f"Fails against the limits you set: {parts}. {failed} problem"
+                f"{'' if failed == 1 else 's'} over a limit.")
+        return f"{text} Not judged: {items}." if unjudged else text
+    if judged.get("verdict") == "pass":
+        return f"Within the limits you set: {parts}. Limits you did not set are not checked."
+    if unjudged:
+        return f"Not judged against the limits you set ({parts}): {items}."
+    return "Not judged: no limits were set, so the problems below are ranked, not judged."
 
 
 def _shown_settings(settings: Mapping[str, Any]) -> Dict[str, Any]:

@@ -212,22 +212,10 @@ function table(id, head, rows, onclick) {
     body.append(tr); });
   t.append(body);
 }
-function verdictText(rail) {   // the limits in words; only limits the user set are named
-  const lim = rail.limits, parts = [];
-  if (lim.max_drop_pct != null) parts.push(`load drop ≤ ${sig(lim.max_drop_pct, 3)} % of the source voltage`);
-  if (lim.max_current_density_a_mm2 != null) parts.push(`current-crowding mean |J| ≤ ${sig(lim.max_current_density_a_mm2, 4)} A/mm²`);
-  if (lim.max_via_current_a != null) parts.push(`current per via ≤ ${sig(lim.max_via_current_a, 4)} A`);
-  if (lim.max_ground_rise_mv != null) parts.push(`ground rise ≤ ${sig(lim.max_ground_rise_mv, 4)} mV above the source`);
-  if (rail.verdict === "fail") return `Fails against the limits you set: ${parts.join("; ")}. ${rail.failed} problem${rail.failed === 1 ? "" : "s"} over a limit.`;
-  if (rail.verdict === "pass") return `Within the limits you set: ${parts.join("; ")}. Limits you did not set are not checked.`;
-  const nj = rail.not_judged || [];
-  if (nj.length) return `Not judged against the limits you set (${parts.join("; ")}): ${nj.map((u) => `${u.item} (${u.limit}): ${u.reason}`).join("; ")}.`;
-  return "Not judged: no limits were set, so the problems below are ranked, not judged.";
-}
 function panels() {
   const rail = R(), w = rail.worst;
   const v = $("verdict"); v.textContent = ""; v.className = rail.verdict;
-  v.append(el("strong", {}, rail.label), " ", badge(rail.verdict), " ", el("span", {}, verdictText(rail)));
+  v.append(el("strong", {}, rail.label), " ", badge(rail.verdict), " ", el("span", {}, rail.verdict_text));
   if (rail.nets.length > 1) v.append(el("div", { class: "muted small" }, "Solved together through net ties: " + rail.nets.join(", ")));
   const cards = $("worst"); cards.textContent = "";
   if (w.load) cards.append(card("Worst load", `${w.load.name}: ${sig(w.load.drop_mv, 4)} mV`, `${sig(w.load.drop_pct, 3)} % ${dropSign(rail) < 0 ? "above" : "below"} ${sig(rail.v_ref_v, 4)} V`));

@@ -173,3 +173,21 @@ def test_budget_sets_the_cell_size(demo, tmp_path):
     _, m_big, _ = parse(big)
     assert m_small["rails"][0]["cell_mm"] > m_big["rails"][0]["cell_mm"]
     assert small.stat().st_size < 0.6e6 < big.stat().st_size
+
+
+def test_the_verdict_sentence_names_failures_and_what_was_not_judged(tmp_path):
+    """A rail that fails one limit and cannot judge another says both (it used to say only
+    the failure). The sentence is in the page data, so it is the same for every reader."""
+    board = Board(strip_board())
+    res = solve_rail(board, Rail(Strip.NET, sources=[Source("J1", 0.0)], loads=[Load("U1", 1.0)]))
+    limits = Limits(max_drop_pct=1.0, max_ground_rise_mv=1.0)       # % on a 0 V net; rise ~38 mV
+    path = write_report([RailReport(res, limits)], None, tmp_path / "both.html", outline=board.outline())
+    _, meta, _ = parse(path)
+    [rail] = meta["rails"]
+    assert rail["verdict"] == "fail"
+    text = rail["verdict_text"]
+    assert text.startswith("Fails against the limits you set: load drop ≤ 1 % of the source voltage; "
+                           "ground rise ≤ 1 mV above 0 V. 1 problem over a limit.")
+    assert "Not judged: U1 (max_drop_pct): 0 V nominal" in text
+    none = write_report([RailReport(res)], None, tmp_path / "none.html", outline=board.outline())
+    assert parse(none)[1]["rails"][0]["verdict_text"].startswith("Not judged: no limits were set")
