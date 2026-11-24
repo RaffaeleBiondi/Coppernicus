@@ -206,6 +206,15 @@ def run_flow_demo(window, check: Checks, args, out: Path):
     check("opening a project shows its rail, not the previous one",
           shown == [("U1", None), ("U2", None), ("U3", None)]
           and window._rail_draft is window.project.rail("+3V3"), str(shown))
+    max_drop = window.rail_panel.max_drop.text()
+    check("... with its limits", max_drop == "0.25", max_drop)
+    layers = [window.layer_box.itemText(i) for i in range(window.layer_box.count())]
+    check("... and the new board's layers", layers == ["F.Cu", "B.Cu"], str(layers))
+    # One number format whatever the system locale: dots, as in the limits and the problems.
+    spin_texts = [window.rail_panel.max_edge.text(), window.rail_panel.temp.text(),
+                  window.rail_panel.sources.table.cellWidget(0, 3).text(),
+                  window.rail_panel.loads.table.cellWidget(0, 3).text()]
+    check("numbers use dots in every spin box", all("," not in t for t in spin_texts), str(spin_texts))
     res = solve_and_wait(window, args.timeout)
     check("solve the demo project", res is not None)
     if res is None:

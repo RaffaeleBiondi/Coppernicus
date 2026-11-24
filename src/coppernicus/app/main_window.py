@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QLocale, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -43,6 +43,10 @@ PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 
 class MainWindow(QMainWindow):
     def __init__(self):
+        # One number format whatever the system locale: a dot for decimals and no group
+        # separators, as in the limits, the problems list and the project file. Must be set
+        # before any numeric widget exists.
+        QLocale.setDefault(QLocale.c())
         super().__init__()
         self.setWindowTitle(f"Coppernicus {__version__}")
         self.resize(1500, 920)
