@@ -62,14 +62,15 @@ def _loads(result: RailResult, limits: Limits) -> List[Problem]:
         x, y = t.positions[0] if t.positions else (np.nan, np.nan)
         limit = f"limit {limits.max_drop_pct:g} %" if limits.max_drop_pct is not None else "no limit set"
         share = f", {pct:.2f} %" if np.isfinite(pct) else ""        # none at 0 V
+        word = "below" if result.sign > 0 else "above"
         out.append(Problem(
             FAIL if fail else INFO, "load",
-            f"{t.name}: {t.v_min:.4f} V at its worst pin ({mv:.2f} mV{share} below "
+            f"{t.name}: {result.worst_v(t):.4f} V at its worst pin ({mv:.2f} mV{share} {word} "
             f"{result.v_ref:g} V)",
             f"{t.ref}, {len(t.pad_ids)} pin(s), {t.current:g} A; {limit}.",
             pct, float(x), float(y),
             data={"name": t.name, "ref": t.ref, "drop_mv": mv, "drop_pct": pct,
-                  "v_min_v": t.v_min, "current_a": t.current}))
+                  "v_min_v": t.v_min, "v_worst_v": result.worst_v(t), "current_a": t.current}))
     return out
 
 
@@ -359,10 +360,10 @@ def from_0v(volts: float) -> str:
 
 def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:
     """With a ``max_ground_rise_mv`` limit: the largest deviation of the net's copper from
-    its reference, and where it is. On a ground group of a power tree it is signed (below
-    0 V under a negative rail), judged by its magnitude; on a net solved alone it is the
-    magnitude (that solve draws every load current out of the copper, so its sign is not
-    the physical one)."""
+    its reference, and where it is, signed (a ground below 0 V under a negative rail) and
+    judged by its magnitude. Where the load current is drawn out of the copper
+    (``drop_sign`` +1: a rail at 0 V inside a power tree, whose sign is the opposite of a
+    ground's), it is the magnitude."""
     limit = limits.max_ground_rise_mv
     if limit is None:
         return []
@@ -375,11 +376,11 @@ def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:
         if abs(dev[i]) > abs(best[0]):
             best = (float(dev[i]), float(lf.points[i, 0]), float(lf.points[i, 1]), lf.name)
     volts, x, y, layer = best
-    if res.kind != "ground":
+    if res.sign > 0:
         volts = abs(volts)
     mv = volts * 1e3
     where = f" on {layer}" if layer else ""
-    title = (f"{res.net}: largest ground rise {from_0v(volts)}{where}" if res.kind == "ground"
+    title = (f"{res.net}: largest ground rise {from_0v(volts)}{where}" if res.sign < 0
              else f"{res.net}: largest ground rise {mv:.2f} mV{where}")
     return [Problem(
         FAIL if abs(mv) > limit else INFO, "rise", _against(title, abs(mv) > limit, limit, "mV", source),

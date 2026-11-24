@@ -890,8 +890,8 @@ class MainWindow(QMainWindow):
         c = self._diff_cache
         if not (c and c[0] is base and c[1] is run and c[2] == layer_name):
             diff = difference_layer(layer, base_layer)          # V_base − V_current per node
-            # Δ drop = (V_ref − V)_current − (V_ref − V)_baseline
-            mv = (diff.voltage + (res.v_ref - base.result.v_ref)) * 1e3
+            # Δ drop = drop_sign · ((V_ref − V)_current − (V_ref − V)_baseline)
+            mv = res.sign * (diff.voltage + (res.v_ref - base.result.v_ref)) * 1e3
             note = ("exact: same mesh" if same_mesh(layer, base_layer)
                     else "interpolated: the two solves have different meshes")
             self._diff_cache = (base, run, layer_name, (mv, note))
@@ -914,7 +914,7 @@ class MainWindow(QMainWindow):
         split = ", ".join(f"{k} {v / total:.0%}" for k, v in sorted(shares.items(), key=lambda kv: -kv[1])
                           if v / total >= 0.01)
         worst = max(res.loads, key=res.drop_pct) if res.loads else None
-        worst_txt = (f"worst load <b>{worst.name}</b> {worst.v_min:.4f} V "
+        worst_txt = (f"worst load <b>{worst.name}</b> {res.worst_v(worst):.4f} V "
                      f"({res.drop(worst) * 1e3:.2f} mV, {res.drop_pct(worst):.2f} %) · ") if worst else ""
         missing = not_judged_items(res, rail.limits)      # the per-rail rule (service), one source
         set_any = any(v is not None for v in vars(rail.limits).values())

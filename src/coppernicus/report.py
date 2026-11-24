@@ -310,7 +310,7 @@ class ReportBuilder:
             lv = lf.voltage[np.isfinite(lf.voltage)]
             layers.append({
                 "name": lf.name, "power_w": lf.power, "copper_area_mm2": float(lf.tri_area.sum()),
-                "max_drop_mv": (result.v_ref - float(lv.min())) * 1e3 if lv.size else None,
+                "max_drop_mv": float(result.drop_at(lv).max()) * 1e3 if lv.size else None,
                 "j_scale_a_mm2": max(j_scale, 1e-12), "j_hi_a_mm2": j_hi,
                 "j_point_max_a_mm2": j_hi, "triangles": int(len(lf.tris)),
                 "grid": {"x0": grid.x0, "y0": grid.y0, "nx": grid.nx, "ny": grid.ny},
@@ -338,7 +338,9 @@ class ReportBuilder:
         self.rails.append({
             "net": result.net, "label": label or result.net, "nets": list(result.nets),
             "v_ref_v": result.v_ref, "v_lo_v": v_lo, "v_hi_v": v_hi,
-            "drop_max_mv": max(result.v_ref - v_lo, 0.0) * 1e3, "cell_mm": cell,
+            # drop = drop_sign · (v_ref − V): toward 0 V on a negative rail, a rise at 0 V
+            "drop_sign": int(result.sign), "drop_unit": result.drop_unit(),
+            "drop_max_mv": max(float(result.drop_at([v_lo, v_hi]).max()), 0.0) * 1e3, "cell_mm": cell,
             **judged,
             "worst": {
                 "load": worst_load and {k: worst_load[k] for k in ("name", "drop_mv", "drop_pct")},

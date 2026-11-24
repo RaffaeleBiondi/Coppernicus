@@ -3,6 +3,7 @@ calculation of KiPI's power-chain accuracy test (tests/accuracy/test_dc_accuracy
 
 import math
 
+import numpy as np
 import pytest
 
 from coppernicus.engine import Board, EngineError, solve_rail
@@ -733,3 +734,99 @@ def test_the_note_names_a_wrong_kind_limit_when_it_is_the_only_one(board):
     assert "+3V3 (max_ground_rise_mv)" in doc["verdict_note"]
     verdict = next(line for line in tree_text(doc) if line.startswith("Verdict:"))
     assert "max_ground_rise_mv" in verdict
+
+
+# ------------------------------------------------------------------ T7.1 (d): the sign of the load current
+
+def test_a_negative_rail_solved_alone_shows_the_voltages_of_the_tree():
+    """On a negative rail the load current flows into the copper (KiPI #220): the load sits
+    closer to 0 V than the source, alone as in the tree."""
+    from coppernicus.engine.synthetic import Strip, strip_board
+    board, project = Board(strip_board()), _strip_project(-3.3)
+    alone = solve_rail(board, project.rails[0])
+    [tree_u1] = solve_project_tree(board, project).groups[Strip.NET].loads
+    [u1] = alone.loads
+    r = RHO * Strip.length() / (Strip.W * OZ1)
+    assert u1.v_max == pytest.approx(tree_u1.v_max, abs=1e-9)
+    assert u1.v_max == pytest.approx(-3.3 + r, rel=5e-3)
+    assert alone.drop_sign == -1.0 and alone.worst_v(u1) == u1.v_max
+    assert alone.drop(u1) == pytest.approx(r, rel=5e-3) and alone.drop_pct(u1) > 0
+    assert alone.max_drop == pytest.approx(r, rel=5e-3)
+    assert u1.current == 1.0 and alone.sources[0].current == pytest.approx(1.0)
+
+
+def test_the_load_current_sign_mirrors_the_copper_and_nothing_else():
+    """The same strip at +3.3 V, −3.3 V and 0 V, on the same mesh: node by node V(−3.3) =
+    −V(+3.3) and V(0) = 3.3 − V(+3.3); current density, losses and drops are the same."""
+    from coppernicus.engine.synthetic import strip_board
+    board = Board(strip_board())
+    pos, neg, zero = (solve_rail(board, _strip_project(v).rails[0]) for v in (3.3, -3.3, 0.0))
+    for a, b, c in zip(pos.layers, neg.layers, zero.layers):
+        assert np.allclose(b.voltage, -a.voltage, atol=1e-12, equal_nan=True)
+        assert np.allclose(c.voltage, 3.3 - a.voltage, atol=1e-12, equal_nan=True)
+        assert np.allclose(b.current_density, a.current_density) and np.allclose(c.tri_power, a.tri_power)
+    for res in (neg, zero):
+        assert res.power_loss == pytest.approx(pos.power_loss, rel=1e-12)
+        assert res.max_drop == pytest.approx(pos.max_drop, rel=1e-9)
+        assert res.drop(res.loads[0]) == pytest.approx(pos.drop(pos.loads[0]), rel=1e-9)
+        assert np.allclose(res.drop_at(res.layers[0].voltage), pos.drop_at(pos.layers[0].voltage),
+                           equal_nan=True)
+    assert (pos.drop_sign, neg.drop_sign, zero.drop_sign) == (1.0, -1.0, -1.0)
+
+
+def test_a_ground_net_solved_alone_rises_as_its_ground_group_in_the_tree():
+    """A net driven at 0 V solved alone (a 0 V source and the return pins as loads): the
+    return current flows into the copper, so it rises above 0 V as the tree's ground does."""
+    from coppernicus.project import Project, Rail
+    board = strip_board_with_ground()
+    tree = solve_project_tree(board, Project(rails=[
+        Rail("VCC", sources=[Source("J1", 3.3, ["1"], ground_pins=["2"], ground_net="GND")],
+             loads=[Load("U1", 1.0, ["1"], ground_pins=["2"], ground_net="GND")])]))
+    [ret] = [t for t in tree.groups["GND"].loads if t.name == "U1 (return)"]
+    alone = solve_rail(board, Rail("GND", sources=[Source("J1", 0.0, ["2"])], loads=[Load("U1", 1.0, ["2"])]))
+    [u1] = alone.loads
+    assert ret.v_max > 1e-3 and u1.v_max == pytest.approx(ret.v_max, rel=1e-6)
+    assert alone.drop(u1) == pytest.approx(ret.v_max, rel=1e-6)
+    assert alone.max_drop == pytest.approx(tree.groups["GND"].max_drop, rel=1e-6)
+
+
+def test_a_rail_driven_at_0_v_in_the_tree_warns_that_its_sign_is_opposite():
+    from coppernicus.engine.synthetic import Strip, strip_board
+    from coppernicus.power_tree import tree_summary, tree_text
+    tree = solve_project_tree(Board(strip_board()), _strip_project(0.0))
+    assert tree.groups[Strip.NET].drop_sign == 1.0
+    [w] = [w for w in tree.warnings if "opposite sign" in w]
+    assert Strip.NET in w and "ground pins" in w
+    assert w in tree.groups[Strip.NET].warnings                 # the group's notes in the GUI
+    assert any("opposite sign" in line for line in tree_text(tree_summary(tree)))
+
+
+def test_sources_on_both_sides_of_0_v_are_refused():
+    from coppernicus.engine.synthetic import strip_board
+    from coppernicus.project import Rail
+    rail = Rail("VCC", sources=[Source("J1", 3.3), Source("U1", -3.3)], loads=[Load("U1", 0.1)])
+    with pytest.raises(EngineError, match="J1.*U1.*0 V"):
+        solve_rail(Board(strip_board()), rail)
+
+
+def test_the_probe_summary_and_report_show_a_negative_rail_drop_positive(tmp_path):
+    import json
+    import re
+
+    from coppernicus.engine.synthetic import Strip, save_snapshot, strip_board
+    from coppernicus.service import Session
+    save_snapshot(strip_board(), tmp_path / "strip.kipi.json.gz")
+    session = Session(out_dir=tmp_path / "out")
+    bid = session.open_board(tmp_path / "strip.kipi.json.gz")["board_id"]
+    out = session.solve_rail(bid, Strip.NET, [{"ref": "J1", "voltage_v": -3.3}],
+                             [{"ref": "U1", "current_a": 1.0}])
+    r_mv = RHO * Strip.length() / (Strip.W * OZ1) * 1e3
+    assert out["drop_sign"] == -1 and out["layers"][0]["max_drop_mv"] == pytest.approx(r_mv, rel=5e-3)
+    probe = session.probe(out["result_id"], "F.Cu", Strip.X1 - 1.0, Strip.Y)
+    assert probe["voltage_v"] > -3.3 and probe["drop_mv"] > 0
+    page = session.report([out["result_id"]], path=tmp_path / "neg.html")["path"]
+    meta = json.loads(re.search(r'id="meta">(.*?)</script>', open(page, encoding="utf-8").read(),
+                                re.S).group(1))
+    rail = meta["rails"][0]
+    assert rail["drop_sign"] == -1 and rail["drop_max_mv"] == pytest.approx(r_mv, rel=5e-3)
+    assert "toward 0 V" in rail["drop_unit"] and rail["layers"][0]["max_drop_mv"] > 0

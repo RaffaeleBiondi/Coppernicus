@@ -136,7 +136,10 @@ def _group(board: Board, key: str, g, assumptions: List[str]) -> RailResult:
         loss_series=float(sum(s.power for s in fields.series if np.isfinite(s.power))),
         stats={"triangles": float(sol.stats["n_tris"]), "unknowns": float(sol.stats["n_unknowns"]),
                "iterations": float(g.iterations)},
-        warnings=warnings, assumptions=list(assumptions), kind=g.kind, converged=bool(g.converged))
+        warnings=warnings, assumptions=list(assumptions), kind=g.kind, converged=bool(g.converged),
+        # KiPI's sign (#220): a negative rail's loads, and a ground's returns, put current in;
+        # a rail at 0 V draws, as a positive one.
+        drop_sign=-1.0 if g.kind == "ground" or fields.v_ref < 0 else 1.0)
 
 
 def solve_project_tree(board: Board, project: Project,
@@ -176,10 +179,16 @@ def solve_project_tree(board: Board, project: Project,
     notes = [f"Rail {r.net} is solved as a ground in the power tree (from the ground pins); its "
              f"own sources and loads are used only when {r.net} is solved alone."
              for r in ground_rails(project) if r.net not in excluded]
+    notes += [f"{net} is solved as a 0 V rail (no ground pins named): KiPI draws its loads' current "
+              "out of it, so its voltages are shown with the opposite sign to a ground's; name "
+              "ground pins on it to solve it as a ground."
+              for label, g in kt.groups.items() if g.kind == "rail"
+              for net in [key_of[label]] if float(g.result.fields.v_ref) == 0.0]
     out = TreeResult(assumptions=assumptions, warnings=notes + list(kt.warnings),
                      stats={"seconds": seconds, "groups": float(len(kt.groups))})
     for label, g in kt.groups.items():
-        out.groups[key_of[label]] = _group(board, key_of[label], g, assumptions)
+        res = out.groups[key_of[label]] = _group(board, key_of[label], g, assumptions)
+        res.warnings += [w for w in notes if w.startswith(f"{res.net} is solved as a 0 V rail")]
         for s in g.result.fields.series:
             k = next((k for k in setup.links if k.name == s.name), None)
             if k is not None:

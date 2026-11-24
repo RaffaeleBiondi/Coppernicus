@@ -318,13 +318,13 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
     for lf in res.layers:
         finite = lf.voltage[np.isfinite(lf.voltage)]
         layers.append({"name": lf.name, "power_w": lf.power, "loss_share_pct": 100.0 * lf.power / total,
-                       "max_drop_mv": (v_ref - finite.min()) * 1e3 if finite.size else None,
+                       "max_drop_mv": float(res.drop_at(finite).max()) * 1e3 if finite.size else None,
                        "copper_area_mm2": float(lf.tri_area.sum()),
                        "thickness_mm": layer_thickness.get(lf.name), "triangles": int(len(lf.tris))})
     busiest = max(res.layers, key=lambda lf: lf.power).name if res.layers else None
     out = {
         "result_id": result_id, "board_id": board_id, "net": res.net, "nets_solved": res.nets,
-        "v_ref_v": v_ref, "sources": sources, "loads": loads,
+        "v_ref_v": v_ref, "drop_sign": int(res.sign), "sources": sources, "loads": loads,
         "max_drop_mv": res.max_drop * 1e3, "max_drop_pct": pct(res.max_drop),
         "worst_load": max(loads, key=lambda d: d["drop_mv"])["name"] if loads else None,
         "power_loss_w": res.power_loss, "loss_breakdown_w": res.loss_breakdown(),
