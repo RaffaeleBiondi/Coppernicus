@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from coppernicus.cli import EXIT_ERROR, EXIT_LIMIT, EXIT_OK, main
+from coppernicus.cli import EXIT_ERROR, EXIT_LIMIT, EXIT_NOT_JUDGED, EXIT_OK, main
 from coppernicus.engine.synthetic import power_chain_board, power_chain_project, save_snapshot
 from coppernicus.project import Limits
 
@@ -53,14 +53,14 @@ def test_tree_errors(chain, tmp_path, capsys):
 
 
 def test_tree_text_names_what_was_not_judged_and_regulator_input_drops(chain, tmp_path, capsys):
-    """The text output says which items a limit could not judge (exit code 0, as the
-    per-rail solve), and each regulator's input drop on the rail feeding it."""
+    """The text output says which items a limit could not judge (exit code 3, as the
+    per-rail solve: the owner's rule), and each regulator's input drop on the rail feeding it."""
     from coppernicus.project import Project
     p = Project.load(chain)
     p.rail("+1V8").sources[0].voltage = 3.4                  # an LDO cannot boost
     p.rail("+1V8").limits = Limits(max_drop_pct=1.0)
     p.save(chain)
-    assert main(["solve", str(chain), "--tree", "--out", str(tmp_path / "o")]) == EXIT_OK
+    assert main(["solve", str(chain), "--tree", "--out", str(tmp_path / "o")]) == EXIT_NOT_JUDGED
     out = capsys.readouterr().out
     verdict = next(line for line in out.splitlines() if line.startswith("Verdict:"))
     assert "not_judged" in verdict and "U3" in verdict and "OUT OF REGULATION" in verdict

@@ -5,13 +5,17 @@
     coppernicus nets BOARD [--all] [--json]   power and ground nets (all nets with --all)
     coppernicus parts BOARD NET [--json]      parts and pins on a net (to write sources and loads)
     coppernicus solve PROJECT [--out DIR] [--rail NET ...] [--no-maps] [--top N] [--json]
-                              [--html [PATH]] [--open]
-    coppernicus solve PROJECT --tree [--out DIR] [--top N] [--json]   the whole power tree
+                              [--html [PATH]] [--open] [--no-board-fields]
+    coppernicus solve PROJECT --tree [--out DIR] [--top N] [--json] [--html [PATH]] [--open]
+                                                the whole power tree
+    coppernicus fields BOARD [--json]          the KiCad footprint fields (PI_*) of a board
     coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
 
-``solve`` exits with 0 when every rail solved and no user limit was exceeded, 1 when a
-limit was exceeded, 2 on an error (missing file, invalid project file, part not on the net,
-no copper path...). It writes ``<project>_summary.json`` into the output folder: the same
+``solve`` exits with 0 when every rail solved and no user limit was exceeded (or none was
+set), 1 when a limit was exceeded, 3 when a limit that was set could not judge something (a
+% limit on a 0 V net, a limit of the wrong kind, a rail not solved), 2 on an error (missing
+file, invalid project file, part not on the net, no copper path...). Precedence: 2, 1, 3, 0.
+It writes ``<project>_summary.json`` into the output folder: the same
 document ``--json`` prints. ``--html`` also writes an offline, interactive HTML report.
 
 With ``--json`` a command prints one JSON document on stdout (the data the MCP tools
@@ -31,7 +35,19 @@ from typing import List, Optional
 
 from coppernicus import __version__
 
-EXIT_OK, EXIT_LIMIT, EXIT_ERROR = 0, 1, 2
+EXIT_OK, EXIT_LIMIT, EXIT_ERROR, EXIT_NOT_JUDGED = 0, 1, 2, 3
+EXIT_CODES = ("exit codes: 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit that "
+              "was set could not judge something (listed as NOT JUDGED), 2 an error; "
+              "precedence 2, 1, 3, 0")
+
+
+def _exit_for(doc) -> int:
+    """The exit code of a solve document: 1 when a limit is exceeded, else 3 when a limit
+    that was set could not judge something (its ``not_judged`` list), else 0. With no limit
+    at all, 0: nothing to judge is not an error."""
+    if doc.get("verdict") == "fail":
+        return EXIT_LIMIT
+    return EXIT_NOT_JUDGED if doc.get("not_judged") else EXIT_OK
 
 
 def _print_json(doc) -> None:
@@ -238,7 +254,7 @@ def _cmd_solve(args) -> int:
     if args.open and "report_file" in doc:
         import webbrowser
         webbrowser.open(Path(doc["report_file"]).resolve().as_uri())
-    return EXIT_LIMIT if doc["verdict"] == "fail" else EXIT_OK
+    return _exit_for(doc)
 
 
 def _cmd_solve_tree(args) -> int:
@@ -303,7 +319,7 @@ def _cmd_solve_tree(args) -> int:
               f"in {tree.stats['seconds']:.1f} s")
         print("\n".join(tree_text(doc)))
         print(f"Summary: {summary_path}")
-    return EXIT_LIMIT if doc["verdict"] == "fail" else EXIT_OK
+    return _exit_for(doc)
 
 
 def _print_rail(res, problems):
@@ -378,7 +394,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print JSON (for scripts and agents)")
     p.set_defaults(func=_cmd_fields)
 
-    p = sub.add_parser("solve", help="solve the rails of a project file")
+    p = sub.add_parser("solve", help="solve the rails of a project file", epilog=EXIT_CODES)
     p.add_argument("project")
     p.add_argument("--out", help="folder for maps and summary (default: results/ next to the project file)")
     p.add_argument("--rail", action="append", help="solve only this net (repeatable)")

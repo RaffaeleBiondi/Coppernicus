@@ -8,8 +8,9 @@ Used by the GitHub Action (``action.yml`` at the repository root), and usable fr
 ``solve`` runs ``coppernicus solve PROJECT --json`` once per matching ``*.coppernicus.yml``,
 each in its own process and into its own subfolder of DIR, never next to a board. It writes
 ``DIR/coppernicus-ci.json`` (every project's JSON document and exit code) and exits with
-0 (no limit exceeded), 1 (a limit set in a project is exceeded) or 2 (an error, or no project
-matched). ``summary`` turns that file into Markdown for a job summary.
+0 (no limit exceeded), 1 (a limit set in a project is exceeded), 3 (a limit that was set could
+not judge something) or 2 (an error, or no project matched); precedence 2, 1, 3, 0.
+``summary`` turns that file into Markdown for a job summary.
 """
 
 from __future__ import annotations
@@ -26,7 +27,10 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from coppernicus.maps import safe_file_name
 
 INDEX = "coppernicus-ci.json"
-EXIT_OK, EXIT_LIMIT, EXIT_ERROR = 0, 1, 2
+EXIT_OK, EXIT_LIMIT, EXIT_ERROR, EXIT_NOT_JUDGED = 0, 1, 2, 3
+# Which code wins when projects differ: an error, then a limit exceeded, then a limit that
+# could not judge, then all clear.
+PRECEDENCE = (EXIT_ERROR, EXIT_LIMIT, EXIT_NOT_JUDGED, EXIT_OK)
 
 
 # ---------------------------------------------------------------------- solving
@@ -110,10 +114,7 @@ def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool =
         else:
             entry["doc"] = doc
         entries.append(entry)
-    codes = [e["exit_code"] for e in entries]
-    exit_code = (EXIT_ERROR if not entries or unmatched or EXIT_ERROR in codes
-                 or any(c not in (0, 1) for c in codes)
-                 else EXIT_LIMIT if EXIT_LIMIT in codes else EXIT_OK)
+    exit_code = EXIT_ERROR if unmatched else overall_exit_code(entries)
     verdict = "error" if unmatched else overall_verdict(entries)
     index = {"patterns": [str(p) for p in patterns], "projects": entries, "unmatched": unmatched,
              "exit_code": exit_code, "verdict": verdict, "top": top}
@@ -124,6 +125,14 @@ def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool =
                                   "repository root"}
     (out_dir / INDEX).write_text(json.dumps(index, indent=1, ensure_ascii=False), encoding="utf-8")
     return index
+
+
+def overall_exit_code(entries: Sequence[Dict[str, Any]]) -> int:
+    """The code of the whole run, by :data:`PRECEDENCE`; none, or an unknown code, is an error."""
+    codes = {e["exit_code"] for e in entries}
+    if not entries or not codes <= set(PRECEDENCE):
+        return EXIT_ERROR
+    return next(c for c in PRECEDENCE if c in codes)
 
 
 def overall_verdict(entries: Sequence[Dict[str, Any]]) -> str:

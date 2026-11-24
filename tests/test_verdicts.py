@@ -10,7 +10,7 @@ import re
 import pytest
 
 from coppernicus import ci
-from coppernicus.cli import EXIT_OK, main
+from coppernicus.cli import EXIT_LIMIT, EXIT_NOT_JUDGED, EXIT_OK, main
 from coppernicus.engine.synthetic import Strip, save_snapshot, strip_board
 from coppernicus.project import Limits, Load, Project, Rail, Source
 from coppernicus.service import Session
@@ -100,7 +100,7 @@ def test_not_judged_items_are_listed_in_the_cli_text_and_the_ci_summary(strip, t
         Strip.NET, sources=[Source("J1", 0.0)], loads=[Load("U1", 1.0)], limits=Limits(max_drop_pct=1.0))])
     project = p.save(tmp_path / "gnd.coppernicus.yml")
     out = tmp_path / "out"
-    assert main(["solve", str(project), "--no-maps", "--out", str(out)]) == EXIT_OK   # not a failure
+    assert main(["solve", str(project), "--no-maps", "--out", str(out)]) == EXIT_NOT_JUDGED
     text = capsys.readouterr().out
     assert "  NOT JUDGED U1 (max_drop_pct): 0 V nominal" in text
     [load_line] = [ln for ln in text.splitlines() if ln.startswith("  load   U1")]
@@ -137,11 +137,11 @@ def test_a_skipped_rail_with_limits_is_not_judged_not_passed(tmp_path, monkeypat
     item = {"item": "GND", "limit": "max_ground_rise_mv", "reason": SKIPPED_REASON}
     assert gnd["not_judged"] == [item]
     assert doc["verdict"] == "not_judged" and {"rail": "GND", **item} in doc["not_judged"]
-    assert main(["solve", str(path), "--no-maps", "--out", str(tmp_path / "o")]) == EXIT_OK
+    assert main(["solve", str(path), "--no-maps", "--out", str(tmp_path / "o")]) == EXIT_NOT_JUDGED
     assert f"  NOT JUDGED GND (max_ground_rise_mv): {SKIPPED_REASON}" in capsys.readouterr().out
     monkeypatch.chdir(tmp_path)
     index = ci.solve_all(["chain/power_chain.coppernicus.yml"], Path("res"), html=False)
-    assert index["verdict"] == "not_judged" and index["exit_code"] == 0
+    assert index["verdict"] == "not_judged" and index["exit_code"] == EXIT_NOT_JUDGED
     assert f"- NOT JUDGED GND (max_ground_rise_mv): {SKIPPED_REASON}" in ci.summary_markdown(index)
 
 
@@ -152,3 +152,45 @@ def test_each_load_gives_its_worst_pin_voltage(session, strip, volts):
     out = solve(session, strip, volts)
     [load] = out["loads"]
     assert load["v_worst_v"] == (load["v_min_v"] if volts > 0 else load["v_max_v"])
+
+
+# ---------------------------------------------------------------------- exit codes
+
+def test_exit_codes_put_a_limit_that_could_not_judge_between_a_pass_and_a_failure(strip, tmp_path):
+    """The owner's rule: 2 error > 1 limit exceeded > 3 a set limit could not judge > 0; with
+    no limit at all the exit stays 0 (nothing to judge is not an error)."""
+    def code(*rails, name):
+        p = Project(board="boards/strip.kipi.json.gz", rails=list(rails))
+        return main(["solve", str(p.save(tmp_path / f"{name}.coppernicus.yml")), "--no-maps",
+                     "--out", str(tmp_path / "o")])
+
+    def rail(volts, **limits):
+        return Rail(Strip.NET, sources=[Source("J1", volts)], loads=[Load("U1", 1.0)],
+                    limits=Limits(**limits))
+    assert code(rail(1.0), name="none") == EXIT_OK
+    assert code(rail(1.0, max_drop_pct=50.0), name="pass") == EXIT_OK
+    assert code(rail(0.0, max_drop_pct=1.0), name="unjudged") == EXIT_NOT_JUDGED
+    assert code(rail(1.0, max_drop_pct=0.1), rail(0.0, max_drop_pct=1.0), name="both") == EXIT_LIMIT
+
+
+def test_ci_index_exit_code_follows_the_same_precedence():
+    entries = lambda *codes: [{"exit_code": c, "doc": {"verdict": "x"}} for c in codes]  # noqa: E731
+    assert ci.overall_exit_code(entries(0, 3)) == 3
+    assert ci.overall_exit_code(entries(3, 1)) == 1
+    assert ci.overall_exit_code(entries(1, 3, 2)) == 2
+    assert ci.overall_exit_code(entries(0, 0)) == 0
+    assert ci.overall_exit_code(entries(0, 5)) == 2          # an unknown code is an error
+
+
+def test_solve_tree_exits_3_when_a_set_limit_could_not_judge(tmp_path, capsys):
+    """A rise limit on a supply rail is of the wrong kind: the tree lists it as not judged."""
+    import shutil
+    from pathlib import Path
+    shutil.copytree(Path(__file__).resolve().parents[1] / "examples" / "power_chain", tmp_path / "c")
+    path = tmp_path / "c" / "power_chain.coppernicus.yml"
+    p = Project.load(path)
+    p.rail("+3V3").limits = Limits(max_ground_rise_mv=1.0)
+    p.save()
+    assert main(["solve", str(path), "--tree", "--json", "--out", str(tmp_path / "o")]) == EXIT_NOT_JUDGED
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["verdict"] == "not_judged" and doc["not_judged"]
