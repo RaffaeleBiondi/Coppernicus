@@ -186,6 +186,10 @@ def _cmd_solve(args) -> int:
     if quiet:
         _print_json(doc)
     else:
+        for rail in doc["rails"]:
+            if "skipped" in rail:
+                print(f"\nRail {rail['net']}: skipped. {rail['skipped']['message']}; "
+                      f"{rail['skipped']['hint']}.")
         print(f"Summary: {summary_path}")
         if "report_file" in doc:
             print(f"Report: {doc['report_file']}")

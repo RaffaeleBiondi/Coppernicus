@@ -440,6 +440,15 @@ class Session:
         for i, rail in enumerate(selected, start=1):
             if progress is not None:
                 progress(f"rail {i}/{len(selected)}: {rail.net}")
+            if not rail.loads:
+                # In a power tree a rail can feed only a regulator's input: it has no load of
+                # its own yet (a later version estimates one). Skip it with a note; this is not
+                # an error and does not stop the other rails.
+                out_rails.append({"net": rail.net, "skipped": {
+                    "code": E.MISSING_LOAD, "message": f"{rail.net}: no loads, so not solved",
+                    "hint": "add a load to solve it now; if it only feeds a regulator's input, "
+                            "an estimated input load will come in a later version"}})
+                continue
             try:
                 live = self._solve(entry, rail, project.settings, {}, top, progress, cancelled)
             except ServiceError as e:
@@ -456,13 +465,15 @@ class Session:
                 on_rail(live.rec.id, summary)
             out_rails.append(summary)
             verdicts.append(summary["verdict"])
+        # Skipped rails (no loads) are left out of the verdict.
         overall = ("error" if "error" in verdicts else "fail" if "fail" in verdicts else
                    "pass" if verdicts and all(v == "pass" for v in verdicts) else
                    "pass_partially_judged" if "pass" in verdicts else "not_judged")
         return C.jsonable({
             "project": path.resolve(), "board": board_info, "rails": out_rails, "verdict": overall,
             "verdict_note": "fail: a limit you set is exceeded on some rail; pass: every rail has "
-                            "limits and none is exceeded; not_judged: no limits set.",
+                            "limits and none is exceeded; not_judged: no limits set. Rails skipped "
+                            "for having no loads are left out.",
             "assumptions": [], "warnings": entry.warnings(),
         })
 

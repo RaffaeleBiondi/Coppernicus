@@ -42,6 +42,9 @@ The results (PNG maps, HTML report, JSON) are attached to the run as the
 Without limits in the project file, nothing is judged: the numbers are reported and the check
 passes. Coppernicus has no built-in thresholds.
 
+A rail with no loads is shown as "skipped: no loads". In a power tree this is a rail that only
+feeds a regulator's input. It is not an error and does not fail the check.
+
 ## Inputs
 
 | Input | Default | Meaning |

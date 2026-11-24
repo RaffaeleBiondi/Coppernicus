@@ -207,6 +207,10 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
                 lines.append(f"| {project} | {_cell(rail.get('net', '?'))} | – | – | – | – | "
                              f"**error**: {_cell(rail['error'].get('message', ''))} |")
                 continue
+            if "skipped" in rail:                    # no loads: not solved, not an error
+                lines.append(f"| {project} | {_cell(rail.get('net', '?'))} | – | – | – | – | "
+                             "skipped: no loads |")
+                continue
             worst = next((ld for ld in rail.get("loads", [])
                           if ld.get("name") == rail.get("worst_load")), None)
             worst_text = (f"{_cell(worst['name'])}: {_num(worst.get('drop_mv'), '.3g')} mV"
