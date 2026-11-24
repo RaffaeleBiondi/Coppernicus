@@ -46,7 +46,7 @@ You need [uv](https://docs.astral.sh/uv/). It installs Python and everything els
 included.
 
 ```sh
-git clone git@github.com:RaffaeleBiondi/Coppernicus.git
+git clone https://github.com/RaffaeleBiondi/Coppernicus.git
 cd Coppernicus
 uv sync
 uv run coppernicus            # opens the app

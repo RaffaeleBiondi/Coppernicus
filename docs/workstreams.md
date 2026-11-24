@@ -6,7 +6,10 @@ Status and split of the work as of 2026-11-24, agreed with the owner. Update it 
 
 - Coppernicus is GPL-3.0-or-later. It reuses KiPI's engine as a dependency pinned to v1.0.1,
   and only `src/coppernicus/engine/` imports KiPI.
-- It is distributed free on GitHub. The repository stays private until the owner decides.
+- It is distributed free on GitHub. The repository is public since 2026-11-24, recreated with a
+  clean history; the earlier private repository is kept as `Coppernicus-private`. Commits use
+  the GitHub no-reply address (repo-local git config). Nothing about real boards or the owner's
+  employer goes into the repository, commit messages included.
 - Real boards live only in the git-ignored `boards_local/`. Nothing board-derived is committed.
 - The agent interface is an MCP server (stdio) on an engine-independent service layer, plus
   CLI `--json`. No HTTP API for now. See `docs/agent-interface-brief.md`.
