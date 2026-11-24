@@ -86,6 +86,27 @@ First make Coppernicus functional; efficiency and packaging come afterwards.
 - First test run on Windows.
 - GitHub Actions CI for the repository's own tests (synthetic boards only).
 
+## WS5: documentation and the local launcher (coordinator)
+
+The owner's goal (2026-11-24): every feature can be tried from the local launcher
+(`tools/make_mac_launcher.sh`, which runs `main`), and the README is a short, visual guide.
+
+- The coordinator owns `README.md`. The other streams send status-table lines in their
+  hand-over messages instead of editing it.
+- Screenshots come only from synthetic boards, made by `tools/make_docs_screenshots.py`. They
+  are regenerated at merges that change the UI.
+- `docs/agents.md` is the guide for AI agents that use Coppernicus (MCP and CLI `--json`). WS1
+  writes it with Phase 1.
+- Every Part B task ships a synthetic example in `examples/` that the app opens and that
+  exercises the feature from the GUI.
+- After every merge: pytest on `main`, then one start through the launcher, then check
+  `~/Library/Logs/Coppernicus/launcher.log`.
+- The owner gave a standing go-ahead: once a delivery is verified and merged, the coordinator
+  dispatches the next phase or task without asking. Decisions that stay with the owner:
+  - permission for agents to open windows;
+  - for WS1 Phase 3, defining sources and loads inside KiCad;
+  - anything about packaging, efficiency or Triangle.
+
 ## Coordination rules
 
 - WS1 owns: `src/coppernicus/service*`, `src/coppernicus/mcp*`, `src/coppernicus/report*`,
