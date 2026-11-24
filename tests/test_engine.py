@@ -182,3 +182,9 @@ def test_per_rail_solve_says_what_it_leaves_to_the_power_tree():
     [note] = [a for a in res.assumptions if "power-tree" in a]
     assert "U2" in note and "ldo" in note and "sense" in note and "U3" in note
     assert not any("power-tree" in a for a in solve_rail(Board(strip_board()), strip_rail()).assumptions)
+
+
+def test_part_nets():
+    board = Board(power_chain_board())
+    assert board.part_nets("U1") == ["+3V3", "GND", "VIN"]
+    assert board.part_nets("NOPE") == []

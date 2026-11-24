@@ -58,3 +58,20 @@ def test_macos_app_name_is_written_to_the_main_bundle():
     from Foundation import NSBundle
     assert set_macos_app_name("Coppernicus") is True
     assert NSBundle.mainBundle().infoDictionary()["CFBundleName"] == "Coppernicus"
+
+
+def test_drop_mv_is_a_rise_on_a_ground_group():
+    from coppernicus.app.board_view import drop_mv
+    from coppernicus.results import RailResult
+    rail = RailResult("VCC", ["VCC"], 3.3, [], [], [], [], 0.0, 0.0, 0.0, 0.0)
+    gnd = RailResult("GND", ["GND"], 0.0, [], [], [], [], 0.0, 0.0, 0.0, 0.0, kind="ground")
+    v = np.array([3.29, 0.002])
+    assert np.allclose(drop_mv(rail, v), [10.0, 3298.0])
+    assert np.allclose(drop_mv(gnd, v), [3290.0, 2.0])
+
+
+def test_rail_index_skips_rows_without_a_part():
+    from coppernicus.app.panels import rail_index
+    has_part = [True, False, True]
+    assert [rail_index(has_part, r) for r in range(3)] == [0, None, 1]
+    assert rail_index(has_part, -1) is None and rail_index(has_part, 5) is None

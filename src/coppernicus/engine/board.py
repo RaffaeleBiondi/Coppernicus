@@ -192,6 +192,14 @@ class Board:
         mine = [p for p in mine if p.shapes or p.number not in shaped]
         return sorted(mine, key=lambda p: _pin_key(p.number))
 
+    def part_nets(self, ref: str) -> List[str]:
+        """The nets part ``ref`` has pads on, sorted (empty for an unknown part)."""
+        fp = next((f for f in self._snap.footprints if f.reference == ref), None)
+        if fp is None:
+            return []
+        nets = {self._pads_by_id[pid].net for pid in fp.pad_ids if pid in self._pads_by_id}
+        return sorted((n for n in nets if n), key=str.casefold)
+
     def pad(self, pad_id: str) -> Pad:
         return self._pads_by_id[pad_id]
 

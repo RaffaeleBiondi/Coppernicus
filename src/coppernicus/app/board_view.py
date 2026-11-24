@@ -144,6 +144,13 @@ class ColorBar(QWidget):
         p.end()
 
 
+def drop_mv(result: RailResult, v: np.ndarray) -> np.ndarray:
+    """The 'drop' map's values in mV: below the source voltage on a rail, the rise above
+    0 V on a ground net of a power-tree solve."""
+    v = np.asarray(v, dtype=float)
+    return (v - result.v_ref) * 1e3 if result.kind == "ground" else (result.v_ref - v) * 1e3
+
+
 class BoardView(QWidget):
     probed = Signal(str)            # a readout of the values under a double-click
     pad_picked = Signal(float, float)   # pick mode: board point (mm, KiCad frame) under a click
@@ -230,16 +237,21 @@ class BoardView(QWidget):
             clim = [-max(top, 1e-9), max(top, 1e-9)]             # symmetric: white = no change
         else:
             v = layer.voltage
-            values = (result.v_ref - v) * 1e3 if field == "drop" else v
+            values = drop_mv(result, v) if field == "drop" else v
             mesh.point_data[title] = values
             # Same scale on every layer: the rail's full range.
             all_v = np.concatenate([lf.voltage for lf in result.layers])
             all_v = all_v[np.isfinite(all_v)]
             lo, hi = (all_v.min(), all_v.max()) if all_v.size else (0.0, 1.0)
-            clim = [0.0, max((result.v_ref - lo) * 1e3, 1e-9)] if field == "drop" else [lo, hi]
+            if field == "drop":            # a boost (remote sense) shows below zero
+                d = drop_mv(result, np.array([lo, hi]))
+                clim = [min(0.0, float(d.min())), max(float(d.max()), 1e-9)]
+            else:
+                clim = [lo, hi]
         self.plotter.add_mesh(mesh, scalars=title, cmap=cmap, clim=clim, nan_color="#dddddd",
                               show_edges=False, name="field", show_scalar_bar=False)
-        units = {"drop": "mV below source", "voltage": "V", "current": "A/mm²",
+        units = {"drop": ("mV above 0 V (ground rise)" if result.kind == "ground"
+                          else "mV below source"), "voltage": "V", "current": "A/mm²",
                  "difference": "mV of drop, current − baseline (red: more)"}[field]
         note = f"\ntop clipped at {J_CLIP_PERCENTILE:g}th pct" if field == "current" else ""
         if field == "difference" and difference_note:
@@ -268,8 +280,8 @@ class BoardView(QWidget):
         all_v = all_v[np.isfinite(all_v)]
         if not all_v.size:
             return None
-        levels = drop_levels((result.v_ref - all_v.min()) * 1e3, ISOLINE_COUNT)
-        lines = isoline_paths(layer, (result.v_ref - layer.voltage) * 1e3, levels)
+        levels = drop_levels(float(drop_mv(result, all_v).max()), ISOLINE_COUNT)
+        lines = isoline_paths(layer, drop_mv(result, layer.voltage), levels)
         mesh = _polyline_mesh(lines, 0.012, closed=False)
         if mesh is not None:
             self.plotter.add_mesh(mesh, color=color, line_width=1.2, name="isolines")
@@ -463,7 +475,8 @@ class BoardView(QWidget):
                 delta = (f", Δ drop vs baseline = {d:+.3f} mV" if np.isfinite(d)
                          else ", Δ drop vs baseline: no baseline copper here")
             self.probed.emit(f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: V = {p.voltage_v:.5f} V, "
-                             f"drop = {(self._result.v_ref - p.voltage_v) * 1e3:.3f} mV, "
+                             f"{'rise' if self._result.kind == 'ground' else 'drop'} = "
+                             f"{float(drop_mv(self._result, p.voltage_v)):.3f} mV, "
                              f"|J| = {p.current_density_a_mm2:.2f} A/mm²{delta}")
 
     def closeEvent(self, event):
