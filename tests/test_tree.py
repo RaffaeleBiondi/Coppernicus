@@ -353,3 +353,14 @@ def test_a_ground_net_set_up_as_a_rail_is_solved_as_a_ground_in_the_tree(board):
     assert tree.groups["GND"].max_drop == pytest.approx(_hand()["U3.gnd"], abs=2e-5)
     assert any("GND" in w and "solved alone" in w for w in tree.warnings)
     assert tree.limits["GND"].max_ground_rise_mv == 50.0
+
+
+def test_tree_honours_the_copper_thickness_setting(board, tree):
+    """The optional what-if ``copper_thickness_mm`` applies to the power tree too: doubling
+    every copper layer halves the ground strip's rise, and the assumptions say so."""
+    project = power_chain_project()
+    project.settings.copper_thickness_mm = {"F.Cu": 2 * OZ1, "B.Cu": 2 * OZ1}
+    thick = solve_project_tree(board, project)
+    assert _load(thick, "U3").v_ground_v == pytest.approx(_load(tree, "U3").v_ground_v / 2, rel=1e-3)
+    assert any("copper_thickness_mm" in a for a in thick.assumptions)
+    assert not any("copper_thickness_mm" in a for a in tree.assumptions)

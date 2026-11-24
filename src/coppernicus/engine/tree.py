@@ -23,7 +23,7 @@ from kipi.dc.solver.setup import REF_TEMP_C
 
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import ground_nets, ground_rails, terminal_names, to_pisetup
-from coppernicus.engine.solve import Cancelled, _Progress, engine_settings, mesh_fields
+from coppernicus.engine.solve import Cancelled, _Progress, engine_settings, mesh_fields, thickness_note
 from coppernicus.power_tree import judge_loads
 from coppernicus.project import Project, pin_ref, pins_text
 from coppernicus.results import (
@@ -131,6 +131,8 @@ def solve_project_tree(board: Board, project: Project,
                        cancelled: Callable[[], bool] = lambda: False) -> TreeResult:
     """Every rail and ground group of the project, solved together (KiPI ``solve_tree``)."""
     check_grounds(project)
+    thickness = dict(project.settings.copper_thickness_mm or {})
+    board = board.with_copper_thickness(thickness) if thickness else board
     setup = to_pisetup(board, project)
     temperature = None
     if project.settings.copper_temp_c != REF_TEMP_C:
@@ -156,6 +158,7 @@ def solve_project_tree(board: Board, project: Project,
             key_of[label] = next((n for n in grounds if n in g.nets), sorted(g.nets)[0])
 
     assumptions = _assumptions(project, setup)
+    assumptions += thickness_note(thickness, board.file_thickness_mm)
     notes = [f"Rail {r.net} is solved as a ground in the power tree (from the ground pins); its "
              f"own sources and loads are used only when {r.net} is solved alone."
              for r in ground_rails(project)]
