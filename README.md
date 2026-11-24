@@ -125,9 +125,9 @@ then point B. The status bar shows ΔV A→B and both voltages. Press **Esc** to
   <img src="docs/images/guide-6-measure.png" alt="Measuring ΔV between the source pad and U1's pad: the status bar shows 9.6 mV" width="800">
 </p>
 
-### 6. Read the Problems panel
+### 6. Read the results
 
-The panel at the bottom lists, in order:
+The *Results* panel at the bottom has three tabs. **Problems** lists, in order:
 
 - every load, with the voltage it gets;
 - the most crowded spots;
@@ -143,6 +143,16 @@ listed: via plating, copper temperature and mesh size.
 
 > The two FAIL rows come from the demo project's own limit, a 0.25 % maximum drop, which is
 > deliberately tight. Coppernicus has no built-in thresholds.
+
+**Loss by layer** draws the copper loss of each layer as a bar chart.
+
+**Compare** shows what a change does. Press **Pin as baseline** (Ctrl+B), change something (a
+current, the via plating, or the board itself in KiCad), and solve again. The tab lists the
+change in drop of every load and in loss per layer. *Show → Δ drop vs baseline* paints where
+the drop grew (red) or shrank.
+
+**Export report** (Ctrl+R) writes the offline HTML report described under
+[Command line](#command-line), to send to someone who does not have Coppernicus.
 
 Finally, **Save project**. It writes a small `*.coppernicus.yml` file with the board path, the
 rails, their sources, loads and limits. Open it again later, or use it from the command line.
@@ -256,7 +266,9 @@ rails:
 | AI-agent interface: MCP server and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
 | Offline interactive HTML report (`solve --html`, MCP `report` tool) | ✅ (tested in Chromium and Chrome; Safari and Firefox not yet) |
 | GitHub Action for KiCad repositories | ⏳ next |
-| Before/after comparison of two solves, loss-by-layer chart | 🔄 in progress |
+| Before/after comparison: "Pin as baseline", Compare tab (per-load, total and per-layer deltas, settings that changed), "Δ drop vs baseline" map | ✅ |
+| Copper loss by layer as a chart (baseline beside current) | ✅ |
+| Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
 | Readout while hovering (today: double-click) | ⏳ |
 | Power tree with ground return, board temperature | ⏳ (KiPI's engine has both) |
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
