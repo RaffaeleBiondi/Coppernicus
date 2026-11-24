@@ -315,7 +315,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Before/after comparison: "Pin as baseline", Compare tab (per-load, total and per-layer deltas, settings that changed), "Δ drop vs baseline" map | ✅ |
 | Copper loss by layer as a chart (baseline beside current) | ✅ |
 | Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
-| Readout while hovering (today: double-click) | ⏳ |
+| Readout while hovering: a label next to the pointer; View → Hover shows picks V, drop, \|J\|, layer, net (double-click still pins a point) | ✅ |
 | Project file v2: regulator kind (source / LDO / switcher), efficiency, quiescent current; input, ground and remote-sense pins; load ground pins; links (ferrites, sense resistors, fuses). Old project files load and save unchanged | ✅ (regulators editable in the app; links set in the project file) |
 | Power tree with ground return: regulators as loads on the rail feeding them, ground rise, remote sense; Solve power tree (Ctrl+T), Group selector, Power tree tab; `solve --tree` (and `--json`); MCP `solve_tree` | ✅ |
 | A rail solved alone draws the regulator inputs and links it feeds, estimated at nominal voltages | ✅ in the app, the CLI (`solve`, `--json`, `--html`), MCP `solve_project` and the Action; MCP `solve_rail` has no project |
