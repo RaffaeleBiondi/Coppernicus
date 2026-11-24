@@ -233,14 +233,18 @@ EXAMPLES = sorted((Path(__file__).resolve().parents[1] / "examples").glob("*/*.c
 @pytest.mark.parametrize("example", EXAMPLES, ids=lambda p: p.name)
 def test_files_without_thickness_round_trip_byte_identical(example, tmp_path):
     """The optional setting writes nothing while empty: a project file saved again is
-    the same bytes."""
+    the same bytes (line ends aside: on Windows the checkout and a save may use CRLF)."""
     copy = tmp_path / example.parent.name / example.name
     copy.parent.mkdir()
     copy.write_bytes(example.read_bytes())
     project = Project.load(copy)
     assert project.settings.copper_thickness_mm == {}
     project.save()
-    assert copy.read_bytes() == example.read_bytes()
+
+    def lf(path):
+        return path.read_bytes().replace(b"\r\n", b"\n")
+
+    assert lf(copy) == lf(example)
 
 
 def test_copper_thickness_round_trip(tmp_path):
