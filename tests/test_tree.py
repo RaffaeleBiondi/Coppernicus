@@ -830,3 +830,26 @@ def test_the_probe_summary_and_report_show_a_negative_rail_drop_positive(tmp_pat
     rail = meta["rails"][0]
     assert rail["drop_sign"] == -1 and rail["drop_max_mv"] == pytest.approx(r_mv, rel=5e-3)
     assert "toward 0 V" in rail["drop_unit"] and rail["layers"][0]["max_drop_mv"] > 0
+    assert rail["loads"][0]["v_worst_v"] == pytest.approx(-3.3 + r_mv / 1e3, rel=5e-3)
+
+
+def test_an_estimated_draw_on_a_negative_rail_flows_into_the_copper():
+    """A negative rail feeding a regulator, solved alone with the project: the estimated
+    input draw has the rail's sign too, so its pin sits toward 0 V, its current positive."""
+    from coppernicus.engine.synthetic import F, SyntheticBoard, two_layer_stackup
+    from coppernicus.project import Project, Rail
+    b = SyntheticBoard("neg_chain", two_layer_stackup())
+    b.square_pad("J1", "1", "VNEG", 0.0, 0.0, 1.5)
+    b.square_pad("U1", "1", "VNEG", 40.0, 0.0, 1.5)
+    b.square_pad("U1", "2", "VEE", 40.0, 5.0, 1.5)
+    b.square_pad("U2", "1", "VEE", 60.0, 5.0, 1.5)
+    b.track("VNEG", F, 0.5, (0.0, 0.0), (40.0, 0.0))
+    b.track("VEE", F, 0.5, (40.0, 5.0), (60.0, 5.0))
+    project = Project(rails=[
+        Rail("VNEG", sources=[Source("J1", -5.0)]),
+        Rail("VEE", sources=[Source("U1", -3.3, ["2"], kind="ldo", input_pins=["1"], input_net="VNEG")],
+             loads=[Load("U2", 1.0)])])
+    res = solve_rail(Board(b.snapshot()), project.rail("VNEG"), project.settings, project=project)
+    [est] = res.loads
+    assert est.name == "U1 (input, estimated)" and est.current == pytest.approx(1.0)
+    assert est.v_max > -5.0 and res.drop(est) > 0

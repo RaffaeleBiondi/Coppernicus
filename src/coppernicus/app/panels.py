@@ -5,6 +5,7 @@ engine directly; the main window wires them together."""
 from __future__ import annotations
 
 import copy
+import html
 from typing import Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
@@ -329,7 +330,7 @@ class TerminalTable(QWidget):
         self.table.setCellWidget(r, 2, pins_edit)
         spin = DecimalSpinBox()
         spin.setDecimals(4)
-        spin.setRange(0.0, 1e4)
+        spin.setRange(-1e4 if self._unit == "V" else 0.0, 1e4)   # a negative rail's source
         spin.setValue(float(value))
         spin.setSuffix(f" {self._unit}")
         spin.valueChanged.connect(lambda *_: self.changed.emit())
@@ -973,6 +974,8 @@ class TreePanel(QWidget):
         self.loads = self._table(self.LOAD_HEADERS)
         self.links = QLabel()
         self.links.setWordWrap(True)
+        self.notes = QLabel()                    # the tree's warnings, e.g. a 0 V rail's sign
+        self.notes.setWordWrap(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.summary)
@@ -981,6 +984,7 @@ class TreePanel(QWidget):
         layout.addWidget(QLabel("<b>Loads</b> (the voltage across their supply and ground pins)"))
         layout.addWidget(self.loads, 3)
         layout.addWidget(self.links)
+        layout.addWidget(self.notes)
 
     def _table(self, headers):
         table = QTableWidget(0, len(headers))
@@ -1015,6 +1019,7 @@ class TreePanel(QWidget):
         self._fill(self.vrms, [])
         self._fill(self.loads, [])
         self.links.clear()
+        self.notes.clear()
 
     def set_tree(self, tree, verdict_html: str = ""):
         vrms = [(v.name, v.kind, v.group, f"{v.v_set_v:g}", _cell(v.v_out_v, ".5f"),
@@ -1047,6 +1052,8 @@ class TreePanel(QWidget):
             f"{k['name']} {k['resistance_ohm']:g} Ω, {' ↔ '.join(k['nets'])}: {k['current_a']:.4f} A, "
             f"{k['power_w'] * 1e3:.3g} mW" for k in tree.links if not k["name"].startswith("net tie "))
             if any(not k["name"].startswith("net tie ") for k in tree.links) else "")
+        self.notes.setText("<span style='color:#b9770e'><b>Warnings</b></span>: " + " · ".join(
+            html.escape(w) for w in tree.warnings) if tree.warnings else "")
         groups = ", ".join(f"{k} ({r.kind})" for k, r in tree.groups.items())
         self.summary.setText(f"<b>Power tree</b>: {len(tree.groups)} groups ({groups}) solved in "
                              f"{tree.stats.get('seconds', 0.0):.1f} s · {verdict_html}")

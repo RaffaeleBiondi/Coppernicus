@@ -271,7 +271,7 @@ def _print_rail(res, problems):
     for t in res.loads:
         pct = res.drop_pct(t)                   # NaN on a 0 V net: no percentage there
         pct_text = f"{pct:5.2f} %" if math.isfinite(pct) else "  n/a"
-        print(f"  load   {t.name:14s} {t.v_min:8.4f} V  draws    {t.current:7.3f} A  "
+        print(f"  load   {t.name:14s} {res.worst_v(t):8.4f} V  draws    {t.current:7.3f} A  "
               f"drop {res.drop(t) * 1e3:8.2f} mV ({pct_text})")
     shares = res.loss_breakdown()
     total = sum(shares.values()) or 1.0

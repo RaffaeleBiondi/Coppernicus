@@ -913,9 +913,11 @@ class MainWindow(QMainWindow):
         total = sum(shares.values()) or 1.0
         split = ", ".join(f"{k} {v / total:.0%}" for k, v in sorted(shares.items(), key=lambda kv: -kv[1])
                           if v / total >= 0.01)
-        worst = max(res.loads, key=res.drop_pct) if res.loads else None
+        worst = max(res.loads, key=res.drop) if res.loads else None     # by mV: a % is NaN at 0 V
+        pct = res.drop_pct(worst) if worst else float("nan")
+        share = f", {pct:.2f} %" if pct == pct else ""
         worst_txt = (f"worst load <b>{worst.name}</b> {res.worst_v(worst):.4f} V "
-                     f"({res.drop(worst) * 1e3:.2f} mV, {res.drop_pct(worst):.2f} %) · ") if worst else ""
+                     f"({res.drop(worst) * 1e3:.2f} mV{share}) · ") if worst else ""
         missing = not_judged_items(res, rail.limits)      # the per-rail rule (service), one source
         set_any = any(v is not None for v in vars(rail.limits).values())
         verdict = verdict_html("fail" if fails else "not_judged" if missing or not set_any else "pass",

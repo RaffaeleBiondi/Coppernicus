@@ -321,7 +321,8 @@ class ReportBuilder:
                {t.name for t in result.loads if t.name.endswith(", estimated)")})
         loads = [{"name": t.name, "ref": t.ref, "pins": len(t.pad_ids), "current_a": t.current,
                   "estimated": t.name in est,
-                  "v_min_v": t.v_min, "drop_mv": result.drop(t) * 1e3, "drop_pct": result.drop_pct(t),
+                  "v_min_v": t.v_min, "v_worst_v": result.worst_v(t),   # toward 0 V on a negative rail
+                  "drop_mv": result.drop(t) * 1e3, "drop_pct": result.drop_pct(t),
                   "exceeds": (None if limits.max_drop_pct is None
                               or not math.isfinite(result.drop_pct(t))
                               else bool(result.drop_pct(t) > limits.max_drop_pct)),

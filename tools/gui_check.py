@@ -656,7 +656,7 @@ def run_marked(window, check: Checks, out: Path):
     check("marking makes the project dirty", window.dirty)
     path = out / "marked.coppernicus.yml"
     window._save(path)
-    check("saved with marked_rails", "marked_rails" in path.read_text())
+    check("saved with marked_rails", "marked_rails" in path.read_text(encoding="utf-8"))
     window.open_project(path)
     QApplication.processEvents()
     check("reopened: OTHER still marked and listed", window.nets.marked == ["OTHER"] and "OTHER" in listed())
@@ -950,6 +950,52 @@ def run_power_tree(window, check: Checks, args, out: Path):
     assert g.I_U4 == 0.5       # the example itself is unchanged
 
 
+def run_signs(window, check: Checks, args, out: Path):
+    """T7.1 (d): a strip solved alone at -3.3 V and at 0 V shows the loads toward 0 V, and a
+    ground's rise, with positive drops and no NaN; a 0 V rail in the power tree warns, in the
+    Power tree tab, that its voltages have the opposite sign."""
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.engine.synthetic import Strip, save_snapshot, strip_board
+    from coppernicus.project import Load, Project, Rail, Source
+    save_snapshot(strip_board(), out / "strip.kipi.json.gz")
+    project = Project(board="strip.kipi.json.gz", rails=[Rail(
+        Strip.NET, sources=[Source("J1", -3.3)], loads=[Load("U1", 1.0)])])
+    path = project.save(out / "strip.coppernicus.yml")
+    window.dirty = False
+    window.open_project(path)
+    QApplication.processEvents()
+    window.nets.select(Strip.NET)
+    QApplication.processEvents()
+    spin = window.rail_panel.sources.table.cellWidget(0, 3)
+    check("signs: the source table shows a negative source voltage as set", spin.value() == -3.3,
+          str(spin.value()))
+    res = solve_and_wait(window, args.timeout)
+    title = window.view.colorbar._title
+    window.view._on_double_click((Strip.X1 - 1.0, -Strip.Y))
+    msg = window.statusBar().currentMessage()
+    header = window.problems.summary.text()
+    check("signs: a -3.3 V rail alone reads its load toward 0 V, the drop positive",
+          res is not None and res.loads[0].v_max > -3.3 and "toward 0 V" in title
+          and "drop = 3" in msg and "-3.26" in header and "nan" not in header.lower(),
+          f"{title} | {msg} | {header[-140:]}")
+    window.rail_panel.sources.table.cellWidget(0, 3).setValue(0.0)
+    QApplication.processEvents()
+    res = solve_and_wait(window, args.timeout)
+    title = window.view.colorbar._title
+    window.view._on_double_click((Strip.X1 - 1.0, -Strip.Y))
+    msg = window.statusBar().currentMessage()
+    header = window.problems.summary.text()
+    check("... at 0 V it is a ground: it rises above 0 V, read as a rise, no NaN %",
+          res is not None and res.loads[0].v_max > 0 and "ground rise" in title and "rise = 3" in msg
+          and "nan" not in header.lower(), f"{title} | {msg} | {header[-140:]}")
+    tree = solve_tree_and_wait(window, args.timeout)
+    tab = window.tree_panel.summary.text() + " " + window.tree_panel.notes.text()
+    check("... solved in the power tree as a 0 V rail, the Power tree tab warns of the opposite sign",
+          tree is not None and "opposite sign" in tab, tab[-200:])
+    window.dirty = False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
@@ -978,6 +1024,7 @@ def main(argv=None) -> int:
         run_marked(window, check, out)
         run_power_chain(window, check, args, out)
         run_power_tree(window, check, args, out)
+        run_signs(window, check, args, out)
         run_demo(window, check, args, out)
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:
