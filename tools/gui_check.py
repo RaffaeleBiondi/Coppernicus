@@ -998,6 +998,262 @@ def run_signs(window, check: Checks, args, out: Path):
     window.dirty = False
 
 
+def view_point(window, x_mm: float, y_mm: float):
+    """The view widget's pixel (logical, y down) over board point (x, y) mm."""
+    from PySide6.QtCore import QPoint
+    ren = window.view.plotter.renderer
+    ren.SetWorldPoint(x_mm, -y_mm, 0.0, 1.0)
+    ren.WorldToDisplay()
+    dx, dy, _ = ren.GetDisplayPoint()                     # device pixels, origin bottom-left
+    dpr = window.view.plotter.interactor.devicePixelRatioF()
+    height_px = window.view.plotter.ren_win.GetSize()[1]
+    return QPoint(round(dx / dpr), round((height_px - 1 - dy) / dpr))
+
+
+def board_point(window, pos):
+    """The board point (mm) under the view widget's pixel ``pos``: the inverse of view_point."""
+    widget = window.view.plotter.interactor
+    dpr, height_px = widget.devicePixelRatioF(), window.view.plotter.ren_win.GetSize()[1]
+    return window.view.display_to_board(pos.x() * dpr, height_px - 1 - pos.y() * dpr)
+
+
+def mouse_move(window, pos, buttons=None):
+    """A Qt mouse move over the view widget at ``pos`` (logical pixels), as a real pointer
+    sends it, without moving the real cursor. Real window only."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    widget = window.view.plotter.interactor
+    buttons = Qt.NoButton if buttons is None else buttons
+    event = QMouseEvent(QEvent.MouseMove, QPointF(pos), QPointF(widget.mapToGlobal(pos)),
+                        Qt.NoButton, buttons, Qt.NoModifier)
+    QApplication.sendEvent(widget, event)
+
+
+def hover_settings():
+    from PySide6.QtCore import QSettings
+    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, "Coppernicus", "Coppernicus")
+
+
+def time_hover(window, n: int = 200):
+    """Time ``n`` mouse moves over the shown layer's copper (real window): through ``n`` of its
+    connected triangles, swept corner to corner. Returns seconds for the probes alone
+    (``hover_at`` at each point), for the moves each followed at once by the readout's tick
+    (probe and label, no coalescing), and for the same moves 4 ms apart through the event
+    loop, with the ticks the 40 ms timer let through; how many points showed a readout, and
+    how many times VTK rendered the view during the probed moves."""
+    import time
+
+    import numpy as np
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    view = window.view
+    layer = view._layer
+    cents = layer.centroids()[np.isfinite(layer.voltage[layer.tris]).all(axis=1)]
+    order = np.argsort(cents[:, 0] + cents[:, 1])
+    path = [view_point(window, float(x), float(y))
+            for x, y in cents[order[np.linspace(0, len(order) - 1, n).astype(int)]]]
+    board = [board_point(window, p) for p in path]
+    t0 = time.perf_counter()
+    shown = sum(bool(view.hover_at(x, y)) for x, y in board)
+    probes = time.perf_counter() - t0
+    renders = []
+    tag = view.plotter.ren_win.AddObserver("EndEvent", lambda *_: renders.append(1))
+    t0 = time.perf_counter()
+    for p in path:
+        mouse_move(window, p)
+        view._hover_timer.stop()
+        view._hover_tick()
+        QApplication.processEvents()
+    ticked = time.perf_counter() - t0
+    view.plotter.ren_win.RemoveObserver(tag)
+    ticks = []
+
+    def count():
+        ticks.append(1)
+    view._hover_timer.timeout.connect(count)
+    t0 = time.perf_counter()
+    for p in path:
+        mouse_move(window, p)
+        QTest.qWait(4)
+    loop = time.perf_counter() - t0
+    view._hover_timer.timeout.disconnect(count)
+    return probes, ticked, loop, len(ticks), shown, len(renders)
+
+
+def report_hover_times(window, check: Checks, what: str, n: int = 200):
+    probes, ticked, loop, ticks, shown, renders = time_hover(window, n)
+    print(f"  hover, {n} moves on {what}: probes alone {probes:.3f} s ({shown} showed a readout); "
+          f"each move probed and its label placed {ticked:.3f} s ({ticked / n * 1e3:.2f} ms/move, "
+          f"{renders} VTK render(s)); "
+          f"moves 4 ms apart through the event loop {loop:.3f} s, {ticks} probe(s) let through by "
+          f"the 40 ms timer ({ticks / loop:.0f}/s)", flush=True)
+    check(f"hover: {n} moves timed on {what}", True)
+
+
+def run_hover(window, check: Checks, args, out: Path):
+    """The hover readout: View → Hover shows lists the values (V, drop and layer by default,
+    kept in the settings); over the demo board the readout shows them beside the pointer,
+    nothing off the copper, "not connected" on a copper island and, on a ground group of the
+    power tree, the rise the double-click reads. Hidden after the pointer leaves and while
+    panning. Times 200 moves."""
+    from PySide6.QtCore import QEvent, QPoint, QRect, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.app.hover import chosen_from_setting
+    from coppernicus.engine.synthetic import F, SyntheticBoard, save_snapshot, two_layer_stackup
+    from coppernicus.project import Load, Project, Rail, Source
+    view = window.view
+    actions = getattr(view, "hover_actions", {})
+    menus = [a.text() for a in window.menuBar().actions()]
+    check("hover: View → Hover shows lists V, drop, |J|, layer, net", "View" in menus
+          and [a.text() for a in actions.values()] == ["V", "drop", "|J| (A/mm²)", "layer", "net"],
+          f"menus {menus}, actions {[a.text() for a in actions.values()]}")
+    check("... V, drop and layer checked by default",
+          [k for k, a in actions.items() if a.isChecked()] == ["v", "drop", "layer"])
+    if not actions:
+        return
+    window.dirty = False
+    window.open_project(ROOT / "examples" / "demo" / "demo.coppernicus.yml")
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    res = solve_and_wait(window, args.timeout)
+    check("hover: solve the demo project", res is not None)
+    if res is None:
+        return
+    window.group_box.setCurrentIndex(0)
+    window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+    window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
+    window.view.reset_view()
+    QApplication.processEvents()
+    at_u1 = view.hover_at(50.0, 10.0)
+    check("... at U1 on F.Cu: V, the drop below 3.3 V and the layer",
+          at_u1.startswith("V = 3.2") and "mV below 3.3 V" in at_u1 and at_u1.endswith("F.Cu"), at_u1)
+    check("... nothing off the copper", view.hover_at(30.0, 1.0) == "", view.hover_at(30.0, 1.0))
+
+    if args.window:
+        label = view.hover_label
+        widget = view.plotter.interactor
+        u1 = view_point(window, 50.0, 10.0)
+        mouse_move(window, u1)
+        QTest.qWait(150)
+        check("... a mouse move over U1 shows it beside the pointer",
+              label.isVisible() and label.text() == at_u1, f"visible {label.isVisible()}, {label.text()!r}")
+        box = label.geometry()
+        check("... 14 px from the cursor, inside the view",
+              QRect(0, 0, widget.width(), widget.height()).contains(box)
+              and not box.contains(u1) and abs(box.left() - u1.x()) in (14, 14 + box.width()),
+              f"label {box.getRect()}, cursor ({u1.x()}, {u1.y()})")
+        window.grab().save(str(out / "hover_window.png"))
+        mouse_move(window, view_point(window, 30.0, 1.0))
+        QTest.qWait(150)
+        check("... hidden off the copper", not label.isVisible(), f"visible {label.isVisible()}")
+        mouse_move(window, u1)
+        QTest.qWait(150)
+        QApplication.sendEvent(widget, QEvent(QEvent.Leave))
+        QApplication.processEvents()
+        check("... hidden when the pointer leaves the view", not label.isVisible())
+        mouse_move(window, u1)
+        QTest.qWait(150)
+        QTest.mousePress(widget, Qt.LeftButton, Qt.NoModifier, u1)
+        mouse_move(window, u1 + QPoint(20, 0), Qt.LeftButton)
+        QTest.qWait(150)
+        check("... hidden while panning", not label.isVisible())
+        QTest.mouseRelease(widget, Qt.LeftButton, Qt.NoModifier, u1 + QPoint(20, 0))
+        window.view.reset_view()
+        QApplication.processEvents()
+
+    actions["j"].setChecked(True)
+    at_u1 = view.hover_at(50.0, 10.0)
+    check("hover: checking |J| adds it", "A/mm²" in at_u1, at_u1)
+    stored = hover_settings().value("view/hover_shows")
+    check("... and keeps the choice in the settings", stored == "v,drop,j,layer", repr(stored))
+    for act in actions.values():
+        act.setChecked(False)
+    stored = hover_settings().value("view/hover_shows")
+    check("... none checked: the readout is off, and stays off when read back",
+          view.hover_at(50.0, 10.0) == "" and chosen_from_setting(stored) == (), repr(stored))
+    if args.window:
+        mouse_move(window, view_point(window, 50.0, 10.0))
+        QTest.qWait(150)
+        check("... no label while it is off", not view.hover_label.isVisible())
+    for key in ("v", "drop", "layer"):
+        actions[key].setChecked(True)
+    actions["net"].setChecked(True)
+    if args.window:
+        report_hover_times(window, check, "the demo board (F.Cu, +3V3)")
+    actions["net"].setChecked(False)
+
+    # A copper island: U2's pad is VCC copper joined to nothing.
+    board = SyntheticBoard("island", two_layer_stackup())
+    board.square_pad("J1", "1", "VCC", 0.0, 0.0, 1.5)
+    board.square_pad("U1", "1", "VCC", 40.0, 0.0, 1.5)
+    board.track("VCC", F, 0.5, (0.0, 0.0), (40.0, 0.0))
+    board.square_pad("U2", "1", "VCC", 20.0, 10.0, 1.5)
+    save_snapshot(board.snapshot(), out / "island.kipi.json.gz")
+    path = Project(board="island.kipi.json.gz", rails=[Rail("VCC", sources=[Source("J1", 1.0)],
+                                                            loads=[Load("U1", 1.0)])]).save(
+        out / "island.coppernicus.yml")
+    window.dirty = False
+    window.open_project(path)
+    window.nets.select("VCC")
+    QApplication.processEvents()
+    res = solve_and_wait(window, args.timeout)
+    island = view.hover_at(20.0, 10.0)
+    check("hover: on a copper island it says not connected", res is not None
+          and island == "not connected\nF.Cu", repr(island))
+    if args.window:
+        window.view.reset_view()
+        QApplication.processEvents()
+        mouse_move(window, view_point(window, 20.0, 10.0))
+        QTest.qWait(150)
+        check("... and so does the label under the pointer",
+              view.hover_label.isVisible() and view.hover_label.text() == island, view.hover_label.text())
+
+    # A ground group of the power tree: the readout uses the group, as the double-click does.
+    window.dirty = False
+    window.open_project(CHAIN_PROJECT)
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    tree = solve_tree_and_wait(window, args.timeout)
+    window.group_box.setCurrentIndex(window.group_box.findData("GND"))
+    QApplication.processEvents()
+    window.view._on_double_click((97.5, -1.0))
+    clicked = window.statusBar().currentMessage()
+    hovered = view.hover_at(97.5, 1.0)
+    rise = clicked.split("rise = ")[1].split(" mV")[0] if "rise = " in clicked else "?"
+    check("hover: on the GND group it reads the double-click's rise", tree is not None
+          and f"rise = {rise} mV above 0 V (ground rise)" in hovered, f"{hovered!r} | {clicked}")
+    window.dirty = False
+
+
+def run_hover_local(window, check: Checks, args):
+    """The hover readout on the local rail run_local left shown: one reading, and 200 moves
+    timed (real window)."""
+    from PySide6.QtTest import QTest
+    view = window.view
+    layer = view._layer
+    if layer is None or not len(layer.tris):
+        check("hover on the local rail: a solved layer is shown", False)
+        return
+    import numpy as np
+    ok = np.isfinite(layer.voltage[layer.tris]).all(axis=1)
+    cents = layer.centroids()[ok]
+    x, y = cents[len(cents) // 2]
+    text = view.hover_at(float(x), float(y))
+    check("hover on the local rail: V and the layer at a point of its copper",
+          text.startswith("V = ") and layer.name in text, repr(text))
+    if args.window:
+        pos = view_point(window, float(x), float(y))
+        mouse_move(window, pos)
+        QTest.qWait(150)
+        under = view.hover_at(*board_point(window, pos))
+        check("... and the label under the pointer reads the point under it",
+              view.hover_label.isVisible() and view.hover_label.text() == under, view.hover_label.text())
+        report_hover_times(window, check, f"the local rail ({len(layer.tris):,} triangles, shown layer)")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
@@ -1016,6 +1272,9 @@ def main(argv=None) -> int:
 
     from coppernicus.app.main_window import MainWindow
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    from PySide6.QtCore import QSettings
+    QSettings.setDefaultFormat(QSettings.IniFormat)       # the app's settings go into --out,
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(out / "settings"))   # never the user's
     _quiet_dialogs()
     window = MainWindow()
     window.show()
@@ -1031,10 +1290,12 @@ def main(argv=None) -> int:
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:
             run_local(window, check, args, out)
+            run_hover_local(window, check, args)
         run_review_fixes(window, check, args, out)
         run_compare(window, check, args, out)
         run_report(window, check, args, out)
         run_open_asks(window, check, out)
+        run_hover(window, check, args, out)
         run_close_asks(window, check, args, out)
     finally:
         if window.isVisible():
