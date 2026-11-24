@@ -157,7 +157,18 @@ was built, in one pass:
 - `docs/agents.md` and the MCP tools: every feature reachable by an agent, as the owner scopes it;
 - the skill in `skills/` (and its installed copy): what Coppernicus can do with Claude and how;
 - `docs/technical.md`, `docs/ci.md`, the examples' descriptions.
-The owner is asked first what the MCP and the skill must include.
+Owner's scope (2026-11-24):
+- MCP: the T8–T11 analyses; creating and editing projects (rails, sources, loads, limits, saved
+  to `.coppernicus.yml`); proposing KiCad `PI_*` fields part by part (never editing KiCad
+  files); comparing two board revisions (before and after a change in KiCad); a copper-weight
+  what-if limited to one standard step (e.g. 0.5 oz → 1 oz on a layer, no bigger changes) to
+  see whether it solves a problem.
+- Skill: analysis and verdicts, the new analyses, and helping the user write `PI_*` fields
+  (library symbol versus schematic instance). Not layout-fix proposals.
+- Human docs: the README as the quick guide plus one page per feature in `docs/`, with
+  screenshots. English only.
+- WS1 starts the MCP items that do not depend on T8–T11 (project editing, field proposals,
+  revision compare, copper-weight step) after phase 4c.
 
 ## Coordination rules
 
