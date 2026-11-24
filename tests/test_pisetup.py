@@ -5,11 +5,14 @@ import pytest
 from coppernicus.engine import Board, EngineError
 from coppernicus.engine.pisetup import terminal_names, to_pisetup, validate_setup
 from coppernicus.engine.synthetic import (
+    F,
     PowerChain,
+    SyntheticBoard,
     net_tie_board,
     pins_board,
     power_chain_board,
     power_chain_project,
+    two_layer_stackup,
 )
 from coppernicus.project import Link, Load, Project, Rail, Settings, Source
 
@@ -166,3 +169,52 @@ def test_pads_on_two_tied_nets_are_refused():
     project = Project(rails=[Rail("VA", sources=[Source("J1", 1.0)], loads=[Load("NT1", 0.1)])])
     with pytest.raises(EngineError, match="NT1.*VA.*VB"):
         to_pisetup(board, project)
+
+
+def test_a_load_on_a_link_pad_would_count_twice(chain_board):
+    """A load standing in for what flows through a ferrite (the way a single-rail solve is
+    set up) and the ferrite as a link would draw the downstream current twice."""
+    project = power_chain_project()
+    project.rail("+3V3").loads.append(Load("FB1", 2.0, ["1"], name="To +3V3_F"))
+    with pytest.raises(EngineError, match="To \\+3V3_F.*FB1.*remove the load or the link"):
+        to_pisetup(chain_board, project)
+
+
+def test_ties_of_a_rail_that_does_not_follow_them_are_left_out():
+    """follow_net_ties: false on VA keeps VA apart, even when the tie is reached from VB."""
+    board = Board(net_tie_board())
+    project = Project(rails=[
+        Rail("VA", sources=[Source("J1", 1.0)], follow_net_ties=False),
+        Rail("VB", sources=[Source("U1", 1.0)]),
+    ])
+    setup = to_pisetup(board, project)
+    assert setup.links == []
+    assert validate_setup(setup) == []
+
+
+def _four_net_tie_board():
+    """NT1, one net-tie footprint on VA, VB, VC and VD (three ties with one reference)."""
+    b = SyntheticBoard("tie4", two_layer_stackup())
+    lib = "NetTie:NetTie-4"
+    b.square_pad("J1", "1", "VA", 0.0, 0.0, 1.5)
+    for i, net in enumerate(("VA", "VB", "VC", "VD"), start=1):
+        b.square_pad("NT1", str(i), net, 10.0 + i, 0.0, 0.5, value="NetTie_4", lib_id=lib)
+        b.track(net, F, 0.5, (10.0 + i, 0.0), (10.0 + i, 5.0))
+    b.square_pad("U1", "1", "VD", 14.0, 5.0, 1.0)
+    b.track("VA", F, 0.5, (0.0, 0.0), (11.0, 0.0))
+    return b.snapshot()
+
+
+def test_names_never_collide():
+    board = Board(_four_net_tie_board())
+    project = Project(rails=[Rail("VA", sources=[Source("J1", 1.0)], loads=[Load("U1", 1.0)])])
+    setup = to_pisetup(board, project)
+    names = [k.name for k in setup.links]
+    assert len(names) == 3 and len(set(names)) == 3, names
+    assert validate_setup(setup) == []
+    # A label typed by hand that looks like a generated one.
+    project = power_chain_project()
+    project.rail("+3V3").loads = [Load("U4", 0.1, ["1"], name="X"), Load("U4", 0.1, ["1"], name="X"),
+                                  Load("U4", 0.1, ["1"], name="X (+3V3) (2)")]
+    names = list(terminal_names(project).values())
+    assert len(names) == len(set(names)), names

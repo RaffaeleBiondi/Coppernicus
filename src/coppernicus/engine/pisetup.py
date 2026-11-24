@@ -16,7 +16,7 @@ from kipi.dc.pi.model import DcLink, PinRef, PISetup, Vrm, validate
 from kipi.dc.pi.model import Load as KipiLoad
 
 from coppernicus.engine.board import Board, EngineError
-from coppernicus.engine.solve import _unique, engine_settings, tied_nets
+from coppernicus.engine.solve import engine_settings, tied_nets
 from coppernicus.project import PinSpec, Project, Rail, pin_ref
 
 SWITCHING_KINDS = ("smps",)          # input power = output power / efficiency
@@ -33,6 +33,16 @@ def _mapped(project: Project) -> List[Rail]:
     return [r for r in project.rails if r.sources or r.loads]
 
 
+def _fresh(base: str, taken: set) -> str:
+    """``base``, or ``base (2)``, ``base (3)``… the first one not in ``taken`` (added to it)."""
+    name, k = base, 1
+    while name in taken:
+        k += 1
+        name = f"{base} ({k})"
+    taken.add(name)
+    return name
+
+
 def terminal_names(project: Project) -> Dict[Key, str]:
     """The unique name each source, load and link gets in the engine's setup (KiPI wants
     every VRM, load and link name unique). A label used once is kept; a source or load label
@@ -42,8 +52,11 @@ def terminal_names(project: Project) -> Dict[Key, str]:
     entries += [(("load", r.net, i), ld.label, r.net) for r in rails for i, ld in enumerate(r.loads)]
     entries += [(("link", "", i), k.name, "") for i, k in enumerate(project.links)]
     count = Counter(label for _, label, _ in entries)
-    names = _unique([f"{label} ({net})" if net and count[label] > 1 else label
-                     for _, label, net in entries])
+    wanted = [f"{label} ({net})" if net and count[label] > 1 else label for _, label, net in entries]
+    # A name used once keeps it; repeats are numbered, never onto a name already in use.
+    once = {n for n, c in Counter(wanted).items() if c == 1}
+    taken = set(once)
+    names = [n if n in once else _fresh(n, taken) for n in wanted]
     return {key: name for (key, _, _), name in zip(entries, names)}
 
 
@@ -98,18 +111,18 @@ def _excluded_nets(options: Dict) -> List[str]:
 
 def _tie_links(board: Board, nets: Sequence[str], skip: set, taken: set) -> List[DcLink]:
     """Net-tie footprints as 0 Ω links, as the per-rail solve has them, for the ties reached
-    from ``nets`` (the nets of rails that do not follow ties, ``skip``, start no search)."""
+    from ``nets``. A tie touching a net in ``skip`` (a rail with ``follow_net_ties: false``)
+    is left out, so that rail stays apart."""
     out, seen = [], set()
     for net in nets:
         if net in skip:
             continue
         for t in tied_nets(board, net)[1]:
             key = (t.ref, t.pad_a, t.pad_b)
-            if key in seen:
+            if key in seen or t.net_a in skip or t.net_b in skip:
                 continue
             seen.add(key)
-            name = _unique([*taken, f"net tie {t.ref}"])[-1]
-            taken.add(name)
+            name = _fresh(f"net tie {t.ref}", taken)
             out.append(DcLink(name, PinRef(t.ref, t.net_a, [board.pad(t.pad_a).number]),
                               PinRef(t.ref, t.net_b, [board.pad(t.pad_b).number]), 0.0))
     return out
@@ -172,6 +185,15 @@ def to_pisetup(board: Board, project: Project) -> PISetup:
         b = _pads(board, [k.net_b], k.ref, k.pins_b, owner)
         links.append(DcLink(names[("link", "", i)], PinRef(k.ref, k.net_a, _numbers(a, k.pins_a)),
                             PinRef(k.ref, k.net_b, _numbers(b, k.pins_b)), float(k.resistance_ohm)))
+    for k in links:
+        for side, ref in (("a", k.side_a), ("b", k.side_b)):
+            for ld in loads:
+                if _overlap(ref, ld.supply):
+                    raise EngineError(
+                        f"Load {labels[ld.name]} on {ld.supply.net} draws from {ld.supply.label()}, "
+                        f"which is also side {side} of link {k.name}: the current through the "
+                        "link is already drawn by what is on its other side, so it would be "
+                        "counted twice; remove the load or the link")
 
     used = [p.net for v in vrms for p in v.pin_refs()]
     used += [p.net for ld in loads for p in (ld.supply, ld.ground) if p]

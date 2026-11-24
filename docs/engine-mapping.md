@@ -27,6 +27,8 @@ part:
 - a switcher without an efficiency;
 - a load on a regulator's input pins, whose current KiPI would count twice: the message
   names the load and the VRM and says to remove the load or the VRM input;
+- a load on a link's pads, for example one standing in for what flows through a ferrite,
+  as a single-rail setup would have it: the message says to remove the load or the link;
 - an unknown engine option.
 
 `validate_setup(setup)` returns KiPI's `validate()` messages. `terminal_names(project)`
@@ -101,7 +103,7 @@ spread over several tied nets raise `EngineError`: pick the pins on one net.
 | `resistance_ohm` | `resistance` | Ω | required | Must be ≥ 0. A value of 0 is a short (KiPI's `SHORT_OHMS` = 1e-9 Ω). |
 | — | `esl_h` | H | `None` | AC only (Task 9). |
 | — | `spice`, `more_sides` | — | none | Not exposed. |
-| a net-tie footprint on the board | `DcLink("net tie <ref>", PinRef(ref, net_a, [number of pad_a]), PinRef(ref, net_b, [number of pad_b]), 0.0)` | Ω | 0 | Added automatically, as the per-rail solve does, for every net in the setup. The nets of a rail with `follow_net_ties: false` are skipped. `NetTie` holds pad ids, which become pad numbers through `Board.pad(id).number`. KiPI's `tree._links_in` turns the link into a `SeriesLink` with `dc_resistance()` = 0, the same short the per-rail solve builds. |
+| a net-tie footprint on the board | `DcLink("net tie <ref>", PinRef(ref, net_a, [number of pad_a]), PinRef(ref, net_b, [number of pad_b]), 0.0)` | Ω | 0 | Added automatically, as the per-rail solve does, for every net in the setup. A tie that touches a net of a rail with `follow_net_ties: false` is left out, even when it is reached from another net, so that rail stays apart. `NetTie` holds pad ids, which become pad numbers through `Board.pad(id).number`. KiPI's `tree._links_in` turns the link into a `SeriesLink` with `dc_resistance()` = 0, the same short the per-rail solve builds. |
 
 ### Project and settings → `PISetup`
 
@@ -135,7 +137,8 @@ spread over several tied nets raise `EngineError`: pick the pins on one net.
   - A source or load label used more than once becomes `"<label> (<net>)"`. A typical case
     is the same IC loading two rails.
   - Any duplicate still left gets `" (2)"`, `" (3)"`, … in order (VRMs, then loads, then
-    links), as `solve_rail` already does.
+    links), never onto a name already in use. Net-tie links take `"net tie <ref>"` the same
+    way.
 
 ### Project file (v2 additions; every one is omitted while at its default)
 
