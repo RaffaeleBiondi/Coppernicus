@@ -158,18 +158,19 @@ def test_json_solve_exit_codes(demo_project, tmp_path, capsys):
     assert "U99 has no pads" in out.err
 
 
-def test_a_rail_without_loads_is_skipped_not_an_error(tmp_path, capsys):
-    """The v2 power-chain example: VIN feeds only a regulator's input, so it has no load of
-    its own. Solving the whole project skips it with a note and solves the others."""
+def test_a_rail_that_only_feeds_a_regulator_draws_its_estimated_input(tmp_path, capsys):
+    """The v2 power-chain example: VIN has no load of its own but feeds U1's input. Solved
+    with its project, it draws U1's input current, estimated at nominal voltages, as in the
+    app; it is listed as an estimated load and said in the assumptions."""
     project = Path(__file__).resolve().parents[1] / "examples" / "power_chain" / "power_chain.coppernicus.yml"
     assert main(["solve", str(project), "--no-maps", "--out", str(tmp_path), "--json"]) == EXIT_OK
     doc = json.loads(capsys.readouterr().out)
-    skipped = [r for r in doc["rails"] if "skipped" in r]
-    solved = [r for r in doc["rails"] if "verdict" in r]
-    assert [r["net"] for r in skipped] == ["VIN"] and skipped[0]["skipped"]["code"] == "missing_load"
-    assert solved and doc["verdict"] != "error"
+    assert not [r for r in doc["rails"] if "skipped" in r] and doc["verdict"] != "error"
+    [vin] = [r for r in doc["rails"] if r["net"] == "VIN"]
+    assert [(ld["name"], ld["estimated"]) for ld in vin["loads"]] == [("U1 (input, estimated)", True)]
     assert main(["solve", str(project), "--no-maps", "--out", str(tmp_path)]) == EXIT_OK
-    assert "Rail VIN: skipped. VIN: no loads, so not solved" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "load   U1 (input, estimated)" in out and "estimated at nominal voltages" in out
 
 
 def test_project_copper_thickness_in_text_json_and_report(demo_project, tmp_path, capsys):
@@ -198,3 +199,26 @@ def test_project_copper_thickness_in_text_json_and_report(demo_project, tmp_path
     p.save()
     assert main(["solve", str(demo_project), "--no-maps", "--out", str(out_dir)]) == EXIT_ERROR
     assert "copper layers: F.Cu, B.Cu" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("tree", [False, True], ids=["solve", "solve --tree"])
+def test_a_crash_exits_2_never_1(demo_project, tmp_path, capsys, monkeypatch, tree):
+    """An exception nothing handles must not exit 1, which means "limit exceeded" (CI would
+    read a crash as a failed check): it exits 2 with a one-line error, and with --json the
+    usual error document on stdout."""
+    def boom(*args, **kwargs):
+        raise ZeroDivisionError("forced for the test")
+    if tree:
+        monkeypatch.setattr("coppernicus.engine.tree.solve_project_tree", boom)
+    else:
+        monkeypatch.setattr("coppernicus.service.Session.solve_project", boom)
+    args = ["solve", str(demo_project), "--no-maps", "--out", str(tmp_path)] + (["--tree"] if tree else [])
+    assert main(args) == EXIT_ERROR
+    err = capsys.readouterr().err
+    assert err == "error: internal error: ZeroDivisionError: forced for the test\n"
+    assert main(args + ["--json"]) == EXIT_ERROR
+    out = capsys.readouterr()
+    assert json.loads(out.out)["error"] == {
+        "code": "internal_error", "message": "ZeroDivisionError: forced for the test",
+        "hint": "this is a bug in Coppernicus: please report it with the command you ran"}
+    assert out.err.count("\n") == 1

@@ -74,7 +74,8 @@ input.
 | `probe` | `result_id`, `layer`, `x_mm`, `y_mm` | Voltage, drop and current density (magnitude and vector) at a point. Off copper, it says which layers have copper there and where the nearest copper is. |
 | `cut_current` | `result_id`, `layer`, `x1_mm`, `y1_mm`, `x2_mm`, `y2_mm` | A cross-section along a segment: the copper width crossed, the current through it (∫ J·n t ds, signed along `normal`), and the mean and max \|J\|. Use it to measure a neck. |
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
-| `solve_project` | `project_path`, `rails`?, `top`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings. Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. A rail with no loads, such as one that only feeds a regulator's input in a power tree, is reported as `skipped`; that is not an error, and it is left out of the verdict. |
+| `solve_project` | `project_path`, `rails`?, `top`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings. Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. |
+| `solve_tree` | `project_path`, `top`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. |
 | `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
 
 A summary's `problems` list is complete: every load, then the `top` current-crowding spots and
@@ -83,7 +84,10 @@ under a millionth of the rail current are left out. That current is solver round
 leaving them out is not a judgement.
 
 On a **ground rail**, which is solved with the source at 0 V, `v_ref_v` is 0. A percentage has
-no meaning there: `max_drop_pct` and `drop_pct` are `null`. Give the drops in mV.
+no meaning there: `max_drop_pct` and `drop_pct` are `null`, and a `max_drop_pct` limit cannot
+judge its loads (they are listed in `not_judged`). Give the drops in mV, and judge a ground
+with `max_ground_rise_mv`. On a **negative rail** percentages are of |`v_ref_v`|, so they are
+positive like the drops.
 
 `solve_rail` settings, all optional:
 - `max_edge_mm`: the largest mesh edge on planes (default 0.5).
@@ -107,10 +111,75 @@ no meaning there: `max_drop_pct` and `drop_pct` are `null`. Give the drops in mV
   slightly through its vias. The result's assumptions say which layers were overridden, with
   the board file's value next to each.
 
+### Estimated draws
+
+A rail solved from a project (`solve_project`, the CLI, the GitHub Action, the app) also
+delivers the current of the regulator inputs and links (`links:`) it feeds, estimated at
+nominal voltages without copper losses: an LDO's input is its output current plus I_q, a
+switcher's is |V_out|·I_out / (η·|V_in|) + I_q, a link carries what its far side draws. Each is
+a load named `"U1 (input, estimated)"` or `"FB1 (link, estimated)"` on those pins, listed in
+`loads` with `"estimated": true` (and `pins` as pad numbers). Its load problem carries
+`"estimated": true` too. One assumption line names them; the power-tree solve computes the
+same currents exactly. A rail with no loads now solves when it feeds something, which is how a
+regulator's input rail is checked.
+
+The MCP `solve_rail` tool has no project, so it draws only the loads you give it, and every
+load it lists has `"estimated": false`. `compare_results` warns when two results' estimated
+draws differ (for example a `solve_project` result against a `solve_rail` what-if of the same
+rail): the deltas then mix copper and current. For a what-if on a project rail, change the
+project's settings and solve the project again.
+
+### Power tree
+
+`solve_tree(project_path)` solves every rail and ground of a project together, as
+`coppernicus solve --tree` does. A regulator's input current is computed from what its output
+draws, and the ground return is solved on the ground net, so a load sees its supply minus its
+ground. It needs the project's v2 fields: each regulator's `kind` and `input` pins and, when a
+ground net is solved, each regulator's and load's `ground` pins (see
+`docs/engine-mapping.md`). The document has:
+- `verdict`, `verdict_note`, `failed` and a top-level `not_judged`: judged per group against
+  the project's limits only. `verdict_note` lists the limits per net, then ". Not judged: …";
+- `vrms`: each source and regulator, with `v_set_v`, `v_out_v`, `i_out_a`, `v_in_v`, `i_in_a`,
+  `p_loss_w` and `regulation` (why it cannot hold its voltage, if so). A regulator's input, as
+  a load of the rail that feeds it: `input_net`, `input_drop_mv`, `input_drop_pct`,
+  `input_exceeds_drop_limit`, `input_status`;
+- `loads`: each load's `v_supply_v`, `v_ground_v`, `v_across_v`, `drop_mv` and `drop_pct`
+  (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`;
+- `links` and `groups`. A rail group has `max_drop_mv` and `max_drop_pct`. A ground group has
+  `max_rise_mv`, **signed**: negative when the ground sinks below 0 V (under a negative rail),
+  judged by its magnitude; give it with its sign. Its `max_drop_pct` is `null`. Each group has
+  `limits` (the strictest of each kind over its nets), `limits_by_net` (the limits each net
+  sets), `verdict`, `not_judged` and `problems`: `load` on a rail, the regulator inputs it
+  feeds among them as `"U1 (input)"` (`current_a` is the input current; `drop_mv` can be
+  `null`); `rise` and `return` on a ground; `hotspot` and `via` on both;
+- `assumptions` and `warnings`.
+
+Verdicts in the tree follow the rule above: a copper limit (via, current density, rise) with
+nothing to judge passes; a `max_drop_pct` with no load to judge is not judged; a limit set on
+a net the tree does not solve is a not-judged item ("NET: not solved in the power tree").
+
+Tree groups are not kept as results: there is no `result_id` per group, so `render_map`,
+`probe`, `cut_current`, `compare_results` and `report` do not apply to them. For maps, solve
+the rails with `solve_project`.
+
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;
 - `max_current_density_a_mm2`;
-- `max_via_current_a`.
+- `max_via_current_a`;
+- `max_ground_rise_mv`: for a ground net solved on its own (a 0 V source at the reference
+  point, its return pins as loads), the largest allowed rise of its copper above the source,
+  in mV. A single-rail solve judges it on any net it is set on. In the power tree
+  (`solve_tree`, `coppernicus solve --tree`) it judges ground groups only, and is ignored on a
+  supply rail.
+
+Problem kinds, in `problems` of every summary and of `get_problems`:
+- `load`: a load's drop at its worst pin (`drop_mv`, `drop_pct`);
+- `hotspot`: a current-crowding spot (`mean_j_a_mm2`, `peak_j_a_mm2`, `area_mm2`);
+- `via`: a via or plated hole by barrel current (`current_a`);
+- `rise`: only with `max_ground_rise_mv` set, the copper furthest from the source voltage
+  (`rise_mv`, `limit_mv`), with its layer and x/y;
+- `return`: in a power-tree ground group, one ground return pin and its rise above 0 V
+  (`rise_mv`, `current_a`), judged against `max_ground_rise_mv`.
 
 ## Conventions
 
@@ -128,9 +197,19 @@ Limits, all optional:
   `result_evicted`, `cut_misses_copper`, `solve_failed`, `cancelled`, `internal_error`. An
   argument of the wrong type is rejected by the tool's input schema before it runs.
 - **Verdicts.** A verdict exists only against limits the user gives:
-  - `fail`: a limit you set is exceeded;
-  - `pass`: limits are set and none is exceeded;
-  - `not_judged`: no limits are set, so problems are ranked and nothing is judged.
+  - `fail`: an item exceeds a limit you set;
+  - `not_judged`: no limits are set, so problems are ranked and nothing is judged; or the
+    drop limit you set applies to a load it could not judge. `not_judged` then lists each item
+    with `limit` and `reason`: a load of a 0 V net (a % has no meaning there), a load with no
+    voltage at its pins, no load at all. A failure elsewhere still makes the verdict `fail`;
+  - `pass`: limits are set and none is exceeded. A copper limit (`max_via_current_a`,
+    `max_current_density_a_mm2`, `max_ground_rise_mv`) with nothing to judge, such as a via
+    limit on a rail with no vias, passes, as in the power tree.
+
+  `solve_project` adds a top-level `not_judged` with the rail of each item, and its verdict is
+  `not_judged` when any rail has such items (`pass_partially_judged` stays for "the rails with
+  limits pass, others have none"). The CLI text and the CI job summary print each item as
+  "NOT JUDGED …". Exit code 0, as for `pass`.
 
   Coppernicus invents no thresholds, and an agent should not either.
 - **`assumptions` and `warnings` come with every answer.** Read them. They say:
@@ -276,7 +355,7 @@ Exit codes:
 |---|---|
 | 0 | Done, and no limit you set was exceeded. |
 | 1 | `solve` only: a limit you set was exceeded on some rail. |
-| 2 | Error. stdout holds `{"error": {"code", "message", "hint"}}` and stderr a one-line message. |
+| 2 | Error, including a crash (a bug: code `internal_error`). stdout holds `{"error": {"code", "message", "hint"}}` with `--json`, and stderr a one-line message. A crash never exits 1. |
 
 `solve` writes the PNG maps and `<project>_summary.json` to `--out`, with or without `--json`.
 The summary file **is** the document that `--json` prints, unit-keyed like the MCP tools. Its
@@ -319,9 +398,11 @@ setting with the others.
   used results, within `--max-result-mb`, keep their fields. An older result keeps its summary,
   so `compare_results` still works on it. Maps, probes and cuts on it return `result_evicted`,
   whose hint says which rail to solve again.
-- **DC only, one net at a time.** The ground return is not included; solve the ground net as its
-  own rail. The power tree, thermal, AC impedance and DC-DC ripple, which KiPI's engine has, are
-  not exposed yet.
+- **DC only.** A single-rail solve does not include the ground return; solve the ground net as
+  its own rail, or the whole project with `solve_tree`. Thermal, AC impedance and DC-DC
+  ripple, which KiPI's engine has, are not exposed yet.
+- **No maps of tree groups.** `solve_tree` returns tables and problems with their x/y, not
+  result ids.
 - **What-ifs are settings only:** copper thickness, via plating and temperature, in `solve_rail`
   or in a project file. Adding vias or editing copper is a later step; real changes are made in
   KiCad.

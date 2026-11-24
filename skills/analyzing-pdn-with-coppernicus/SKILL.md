@@ -32,7 +32,11 @@ why, and ask for what is missing.
      - at fixed temperature the drops add up: drop_k = Σ_j R_kj · I_j.
 4. `solve_rail(board_id, net, sources=[{ref, voltage_v, pins?}], loads=[{ref, current_a, pins?}], limits?)`.
    Pass `limits` only if the user gave them.
-5. `get_problems(result_id, limits?)` re-judges without re-solving.
+5. `get_problems(result_id, limits?)` re-judges without re-solving. Limits:
+   `max_drop_pct`, `max_current_density_a_mm2`, `max_via_current_a`, and
+   `max_ground_rise_mv` for a ground net solved on its own (0 V source, return pins as loads).
+   Problem kinds: `load`, `hotspot`, `via`; `rise` (the copper furthest from the source,
+   only with `max_ground_rise_mv`); `return` (a ground return pin in the power tree).
 6. Explain with `render_map` (field `drop`, `current` or `voltage`; `region_mm` zooms; look at the
    image), `probe(layer, x_mm, y_mm)` and `cut_current(layer, x1, y1, x2, y2)`. Use the cut to
    **measure** a neck or track width and the current through it. Do not back-compute widths
@@ -46,7 +50,12 @@ why, and ask for what is missing.
      copper effect.
    - A project file can hold the same setting. If a result's assumptions start with
      "What-if copper thickness", say so: the numbers are not the board file's copper.
-8. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
+8. Power tree: `solve_tree(project_path)` solves a project's rails and grounds together
+   (regulator input currents and the ground return exact; when a ground net is solved, it
+   needs every load's and regulator's ground pins). Read `loads[].drop_mv` / `drop_pct`
+   (supply minus ground, from nominal), the VRMs' `regulation`, and each group's problems.
+   It returns no result ids: for maps, use `solve_project`.
+9. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
    layer's maps with zoom, pan and a hover readout, plus the problems, worst values and
    assumptions. Give the user its `path`; you cannot read the page yourself.
 
@@ -65,9 +74,12 @@ follow the hint. `result_evicted` means you must solve again.
 - Write the YAML and the outputs outside the board's folder.
 - stdout and the file named by `summary_file` hold the same document. Its `problems` lists every
   load plus the top N spots and vias (`--top N`, default 5).
-- A rail with no loads comes back as `skipped`, both here and from the MCP `solve_project`.
-  In a power tree it only feeds a regulator's input. Say that it was not solved; do not invent
-  an input current for it.
+- A project rail also draws the regulator inputs and links it feeds, estimated at nominal
+  voltages: loads named "U1 (input, estimated)" / "FB1 (link, estimated)", with
+  `"estimated": true`. Say that these currents are estimates, not the user's numbers. A rail
+  with no loads that feeds nothing comes back as `skipped`: say it was not solved; do not
+  invent a current for it. MCP `solve_rail` has no project and draws only the loads given, so
+  for a what-if on a project rail, change the project's settings and solve the project again.
 - `--html` also writes an offline report for the user; its path is in `report_file`. It lets the
   user zoom and read values by hovering, but you cannot read it.
 - The CLI has no cut, probe, zoomed map or compare for you. Say that widths and point values
@@ -110,6 +122,9 @@ to a measured cross-section (`cut_current`).
    crowding spots by **mean** |J| with their area, and the top vias by current. On a ground rail
    (`v_ref_v` 0) the % is n/a (`null`): give mV only.
 3. **Verdict:** only against user limits. Otherwise write "not judged", followed by what you need.
+   A `not_judged` verdict with items listed means a limit was set but could not judge them
+   (a % drop limit on a load of a 0 V net, a load with no voltage): name each item and its
+   reason; never report it as a pass.
 4. **Where and why:** the layer, the location in mm, and the cause (a neck, a slot, a single via,
    a thin track), with the cut that proves it.
 5. **Assumptions** from the `assumptions` field: plating, temperature, mesh, the equal split

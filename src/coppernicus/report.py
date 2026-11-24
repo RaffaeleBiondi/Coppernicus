@@ -207,6 +207,9 @@ class RailReport:
     problems: Optional[List[Problem]] = None
     label: str = ""
     notes: Sequence[str] = ()
+    # The names of its estimated draws (regulator inputs and links a project rail feeds);
+    # None: told by the engine's name suffix ", estimated)".
+    estimated: Optional[Sequence[str]] = None
 
 
 def _median_edge_mm(result: RailResult) -> float:
@@ -276,9 +279,11 @@ class ReportBuilder:
 
     def add_rail(self, result: RailResult, limits: Optional[Limits] = None,
                  problems: Optional[List[Problem]] = None, label: str = "",
-                 notes: Sequence[str] = ()) -> None:
+                 notes: Sequence[str] = (), estimated: Optional[Sequence[str]] = None) -> None:
         """Sample and add one solved rail. ``limits`` are the user's (judged only against
-        them); ``problems`` default to :func:`find_problems` with those limits."""
+        them); ``problems`` default to :func:`find_problems` with those limits. ``estimated``
+        names the loads that are estimated draws; without it, the engine's name suffix
+        ", estimated)" tells them (results from the app, which has no list)."""
         from coppernicus.service.convert import RAIL_CAVEATS, problem_dict, verdict
         t0 = time.perf_counter()
         limits = limits or Limits()
@@ -312,9 +317,13 @@ class ReportBuilder:
                 "v": vid, "j": jid,
             })
         self.layers_added += len(result.layers)
+        est = (set(estimated) if estimated is not None else
+               {t.name for t in result.loads if t.name.endswith(", estimated)")})
         loads = [{"name": t.name, "ref": t.ref, "pins": len(t.pad_ids), "current_a": t.current,
+                  "estimated": t.name in est,
                   "v_min_v": t.v_min, "drop_mv": result.drop(t) * 1e3, "drop_pct": result.drop_pct(t),
                   "exceeds": (None if limits.max_drop_pct is None
+                              or not math.isfinite(result.drop_pct(t))
                               else bool(result.drop_pct(t) > limits.max_drop_pct)),
                   "pads": [list(p) for p in t.positions[:200]]} for t in result.loads]
         sources = [{"name": t.name, "ref": t.ref, "pins": len(t.pad_ids), "current_a": t.current,
@@ -325,7 +334,7 @@ class ReportBuilder:
         top_hot = max(hot, key=lambda p: p.value, default=None)
         top_via = max(result.vias, key=lambda v: v.current, default=None)
         busiest = max(result.layers, key=lambda lf: lf.power, default=None)
-        judged = verdict(problems, limits)
+        judged = verdict(problems, limits, result)
         self.rails.append({
             "net": result.net, "label": label or result.net, "nets": list(result.nets),
             "v_ref_v": result.v_ref, "v_lo_v": v_lo, "v_hi_v": v_hi,
@@ -334,7 +343,7 @@ class ReportBuilder:
             "worst": {
                 "load": worst_load and {k: worst_load[k] for k in ("name", "drop_mv", "drop_pct")},
                 "max_drop_mv": result.max_drop * 1e3,
-                "max_drop_pct": 100.0 * result.max_drop / result.v_ref if result.v_ref else None,
+                "max_drop_pct": 100.0 * result.max_drop / abs(result.v_ref) if result.v_ref else None,
                 "power_loss_w": result.power_loss,
                 "busiest_layer": busiest.name if busiest else None,
                 "hotspot": top_hot and {"mean_j_a_mm2": top_hot.data.get("mean_j_a_mm2", top_hot.value),
@@ -442,7 +451,8 @@ def build_report(items: Sequence[RailReport], *, title: str = "", board_name: st
                           settings=settings, budget_mb=budget_mb, cell_scale=scale,
                           expected_layers=sum(len(i.result.layers) for i in items))
         for item in items:
-            b.add_rail(item.result, item.limits, item.problems, item.label, item.notes)
+            b.add_rail(item.result, item.limits, item.problems, item.label, item.notes,
+                       item.estimated)
         return b
 
     scale, seconds = 1.0, 0.0

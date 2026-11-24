@@ -7,11 +7,12 @@ from __future__ import annotations
 import dataclasses
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
 from coppernicus.problems import FAIL, Problem
+from coppernicus.problems import LIMIT_KEYS as PROBLEM_LIMIT_KEYS
 from coppernicus.project import Limits, ProjectError, Settings, check_copper_thickness, parse_pins, pins_text
 from coppernicus.results import RailResult
 from coppernicus.service import errors as E
@@ -29,10 +30,9 @@ RAIL_CAVEATS = [
 NET_KIND_CAVEAT = ("Net kind (power / ground / signal) is a name-and-zone heuristic, not a "
                    "certainty.")
 
-# Limits: our unit-keyed names <-> project.Limits fields.
-LIMIT_KEYS = {"max_drop_pct": "max_drop_pct",
-              "max_current_density_a_mm2": "max_current_density",
-              "max_via_current_a": "max_via_current"}
+# Limits: our unit-keyed names <-> project.Limits fields (one table, problems.LIMIT_KEYS,
+# so a limit added to the model is accepted, judged and named everywhere at once).
+LIMIT_KEYS = PROBLEM_LIMIT_KEYS
 SETTING_KEYS = ("max_edge_mm", "via_plating_um", "copper_temp_c", "copper_thickness_mm")
 
 
@@ -212,46 +212,98 @@ def rail_from_dicts(net: str, sources: Sequence[Mapping[str, Any]], loads: Seque
 
 # ---------------------------------------------------------------------- outputs
 
-def problem_dict(p: Problem) -> Dict[str, Any]:
+def problem_dict(p: Problem, estimated: Sequence[str] = ()) -> Dict[str, Any]:
+    """A problem as plain data. A load problem of one of the ``estimated`` draws (by name;
+    names are unique within a result) gets ``"estimated": true``."""
     out: Dict[str, Any] = {"severity": p.severity, "kind": p.kind, "title": p.title,
                            "detail": p.detail, "layer": p.layer, "x_mm": p.x, "y_mm": p.y}
     out.update(p.data)
+    if p.kind == "load" and p.data.get("name") in estimated:
+        out["estimated"] = True
     return out
 
 
-def verdict(problems: List[Problem], limits: Limits) -> Dict[str, Any]:
-    """``fail`` when a limit the user set is exceeded, ``pass`` when limits are set and none
-    is, ``not_judged`` without limits (problems are then only ranked)."""
+def not_judged_items(res: RailResult, limits: Limits) -> List[Dict[str, str]]:
+    """What the drop limit the user set applies to but could not judge, each with the
+    reason: a load of a 0 V net (a % has no meaning there), a load with no voltage at its
+    pins, or no load at all. As in the power tree, a copper limit (via current, current
+    density, ground rise) with nothing to judge passes: it is not listed."""
+    out = []
+    if limits.max_drop_pct is not None:
+        if not res.loads:
+            out.append({"item": res.net, "limit": "max_drop_pct", "reason": "no load to judge"})
+        for t in res.loads:
+            if math.isfinite(res.drop_pct(t)):
+                continue
+            reason = ("0 V nominal: a % drop limit does not apply (give the drop in mV, or set "
+                      "max_ground_rise_mv)" if not res.v_ref else
+                      "no voltage at its pins: not connected to the source by copper")
+            out.append({"item": t.name, "limit": "max_drop_pct", "reason": reason})
+    return out
+
+
+def not_judged_text(items: Sequence[Mapping[str, str]]) -> str:
+    return "; ".join(f"{u['item']} ({u['limit']}): {u['reason']}" for u in items)
+
+
+def verdict(problems: List[Problem], limits: Limits, result: Optional[RailResult] = None
+            ) -> Dict[str, Any]:
+    """``fail`` when an item exceeds a limit the user set; else ``not_judged`` when a set
+    limit applies to something it could not judge (``not_judged`` lists each, with the
+    reason; needs ``result``) or when no limit is set; else ``pass``."""
     checked = limits_to_dict(limits)
     failed = [p for p in problems if p.severity == FAIL]
+    unjudged = not_judged_items(result, limits) if result is not None else []
     if failed:
         v = "fail"
-    elif checked:
+    elif checked and not unjudged:
         v = "pass"
     else:
         v = "not_judged"
     note = ("Judged only against the limits you set: " + ", ".join(f"{k} = {val:g}"
                                                                    for k, val in checked.items())
             if checked else "No limits set: nothing is judged, problems are ranked only.")
-    return {"verdict": v, "limits": checked, "failed": len(failed), "verdict_note": note}
+    if unjudged:
+        note += ". Not judged: " + not_judged_text(unjudged)
+    return {"verdict": v, "limits": checked, "failed": len(failed), "verdict_note": note,
+            "not_judged": unjudged}
 
 
 def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems: List[Problem],
                  settings: Settings, thickness: Mapping[str, float],
-                 layer_thickness: Mapping[str, float], top: int = 5) -> Dict[str, Any]:
+                 layer_thickness: Mapping[str, float], top: int = 5,
+                 pin_numbers: Optional[Callable[[str], str]] = None,
+                 estimated: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     """The compact summary of a solved rail. ``problems`` are listed in full: every load,
     then the ``top`` current-crowding spots and the ``top`` vias (more when they exceed a
-    limit), as :func:`coppernicus.problems.find_problems` ranked them."""
+    limit), as :func:`coppernicus.problems.find_problems` ranked them.
+
+    ``loads`` lists every load of the result: the rail's own (``pins`` as set), then any
+    other terminal (``pins`` as pad numbers through ``pin_numbers``, pad id → number). Those
+    named in ``estimated`` (the draws a project rail makes for the regulator inputs and links
+    it feeds, which the session knows by position) get ``"estimated": true``; without the
+    list, the engine's name suffix ", estimated)" tells them, so the exact terminals of a
+    power-tree group ("U2 (input)", "U1 (gnd)") are never marked."""
     v_ref = res.v_ref
-    pct = (lambda volts: 100.0 * volts / v_ref) if v_ref else (lambda volts: float("nan"))
+    # Of |v_ref|, so a negative rail's percentages are positive, as its drops are.
+    pct = (lambda volts: 100.0 * volts / abs(v_ref)) if v_ref else (lambda volts: float("nan"))
     limits = rail.limits
     loads = []
-    for t, spec in zip(res.loads, rail.loads):
+    own = len(rail.loads)
+    estimated = (list(estimated) if estimated is not None else
+                 [t.name for t in res.loads if t.name.endswith(", estimated)")])
+    for i, t in enumerate(res.loads):
+        spec = rail.loads[i] if i < own else None
+        if spec is not None:
+            pins = pins_text(spec.pins)
+        else:
+            pins = (pins_text(sorted({pin_numbers(p) for p in t.pad_ids}, key=lambda s: (len(s), s)))
+                    if pin_numbers is not None else None)
         drop = res.drop(t)
-        exceeds = (None if limits.max_drop_pct is None
+        exceeds = (None if limits.max_drop_pct is None or not math.isfinite(res.drop_pct(t))
                    else bool(res.drop_pct(t) > limits.max_drop_pct))
         x, y = t.positions[0] if t.positions else (float("nan"), float("nan"))
-        loads.append({"name": t.name, "ref": t.ref, "pins": pins_text(spec.pins),
+        loads.append({"name": t.name, "ref": t.ref, "pins": pins, "estimated": t.name in estimated,
                       "pin_count": len(t.pad_ids), "current_a": t.current, "v_min_v": t.v_min,
                       "v_max_v": t.v_max, "drop_mv": drop * 1e3, "drop_pct": res.drop_pct(t),
                       "exceeds_drop_limit": exceeds, "x_mm": x, "y_mm": y})
@@ -279,8 +331,8 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         "busiest_layer": busiest, "layers": layers,
         "via_count": len(res.vias), "via_current_max_a": max((v.current for v in res.vias), default=0.0),
         "j_point_max_a_mm2": res.j_max,
-        **verdict(problems, limits),
-        "problems": [problem_dict(p) for p in problems],
+        **verdict(problems, limits, res),
+        "problems": [problem_dict(p, estimated) for p in problems],
         "problems_total": len(problems),
         "problems_note": f"Every load, then the top {top} current-crowding spots and the top {top} "
                          "vias by current (more when they exceed a limit you set). Vias carrying "

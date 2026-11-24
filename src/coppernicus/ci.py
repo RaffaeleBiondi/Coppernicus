@@ -136,6 +136,8 @@ def overall_verdict(entries: Sequence[Dict[str, Any]]) -> str:
         return "error"
     if "fail" in verdicts:
         return "fail"
+    if any(e["doc"].get("not_judged") for e in entries):    # a set limit could not judge
+        return "not_judged"
     if all(v == "pass" for v in verdicts):
         return "pass"
     return "pass_partially_judged" if any(v in ("pass", "pass_partially_judged") for v in verdicts) \
@@ -162,6 +164,8 @@ def _limits_text(limits: Dict[str, Any]) -> str:
         parts.append(f"|J| ≤ {limits['max_current_density_a_mm2']:g} A/mm²")
     if limits.get("max_via_current_a") is not None:
         parts.append(f"via ≤ {limits['max_via_current_a']:g} A")
+    if limits.get("max_ground_rise_mv") is not None:
+        parts.append(f"ground rise ≤ {limits['max_ground_rise_mv']:g} mV")
     return ", ".join(parts)
 
 
@@ -171,6 +175,8 @@ def _verdict_cell(rail: Dict[str, Any]) -> str:
         return f"**FAIL** ({_cell(lim)})"
     if v == "pass":
         return f"PASS ({_cell(lim)})"
+    if rail.get("not_judged"):
+        return f"NOT JUDGED ({_cell(lim)})"
     return "not judged (no limits)"
 
 
@@ -186,10 +192,11 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
     verdict = index.get("verdict", "error")
     headline = {"fail": "**FAIL**: a limit set in a project file is exceeded.",
                 "pass": "PASS: every rail is within the limits set in its project file.",
-                "not_judged": "Not judged: no limits are set in the project files; the numbers are "
-                              "ranked only.",
-                "pass_partially_judged": "PASS where limits are set; some rails have none and are "
-                                         "not judged.",
+                "not_judged": "Not judged: no limits are set in the project files, or a limit set "
+                              "could not judge some items (listed below); the numbers are ranked "
+                              "only.",
+                "pass_partially_judged": "PASS where limits judge; some rails have no limits, or "
+                                         "items a limit could not judge (listed below).",
                 "error": "**Error**: a project could not be solved."}.get(verdict, verdict)
     lines += [headline, "",
               "| Project | Rail | Worst load | Max drop (mV) | Max drop (%) | Copper loss (mW) | Verdict |",
@@ -207,9 +214,9 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
                 lines.append(f"| {project} | {_cell(rail.get('net', '?'))} | – | – | – | – | "
                              f"**error**: {_cell(rail['error'].get('message', ''))} |")
                 continue
-            if "skipped" in rail:                    # no loads: not solved, not an error
+            if "skipped" in rail:      # no loads, feeds nothing: not solved, not an error
                 lines.append(f"| {project} | {_cell(rail.get('net', '?'))} | – | – | – | – | "
-                             "skipped: no loads |")
+                             "skipped: nothing to draw |")
                 continue
             worst = next((ld for ld in rail.get("loads", [])
                           if ld.get("name") == rail.get("worst_load")), None)
@@ -224,8 +231,11 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
             shown = [p for p in problems if p.get("severity") == "fail"]
             room = max(0, problems_per_rail - len(shown))
             shown += [p for p in problems if p.get("severity") != "fail"][:room]
-            if shown:
+            unjudged = rail.get("not_judged") or []
+            if shown or unjudged:
                 details += ["", f"**{_cell(rail['net'])}** ({_cell(e['project'])}): top problems", ""]
+                details += [f"- NOT JUDGED {_cell(u['item'])} ({_cell(u['limit'])}): {_cell(u['reason'])}"
+                            for u in unjudged]
                 for p in shown:
                     tag = "**FAIL** " if p.get("severity") == "fail" else ""
                     layer = p.get("layer")
@@ -268,6 +278,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for stream in (sys.stdout, sys.stderr):          # the summary holds ≤, µ, Ω...
         if hasattr(stream, "reconfigure") and (stream.encoding or "").lower().replace("-", "") != "utf8":
             stream.reconfigure(encoding="utf-8", errors="replace")
+    try:
+        return _run(args)
+    except Exception as e:      # a bug: never exit 1, which reads as "a limit was exceeded"
+        print(f"error: internal error: {type(e).__name__}: {e}".replace("\n", " "), file=sys.stderr)
+        return EXIT_ERROR
+
+
+def _run(args) -> int:
     if args.command == "solve":
         index = solve_all(args.patterns, Path(args.out), top=args.top, html=not args.no_html)
         if "error" in index:

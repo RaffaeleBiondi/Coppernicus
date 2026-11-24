@@ -22,6 +22,7 @@ function xy(x, y) { return `(${fix(x, 2)}, ${fix(y, 2)}) mm`; }
 const S = { rail: 0, layer: 0, field: "drop", view: null, mark: null, drag: null,
   show: { sources: true, loads: true, hotspots: true } };
 const FIELDS = [["drop", "Drop"], ["voltage", "Voltage"], ["current", "Current density"]];
+const KINDS = { rise: "ground rise", return: "ground return" };   // other kinds read as they are
 const data = new Map(), images = new Map(), luts = new Map();
 const canvas = $("map"), ctx = canvas.getContext("2d");
 const R = () => M.rails[S.rail], L = () => R().layers[S.layer];
@@ -166,7 +167,7 @@ async function readout(ev) {
   let text;
   if (cv === 1) text = `${where}: copper with no path to a source (no voltage); |J| = 0.`;
   else { const V = rail.v_lo_v + (cv - 2) * vstep, drop = (rail.v_ref_v - V) * 1e3;
-    text = `${where}: V = ${sig(V, 7)} V · drop = ${sig(drop, 4)} mV (${sig(100 * drop / 1e3 / rail.v_ref_v, 3)} %) · |J| = ${sig(J, 4)} A/mm²`; }
+    text = `${where}: V = ${sig(V, 7)} V · drop = ${sig(drop, 4)} mV (${rail.v_ref_v ? sig(100 * drop / 1e3 / Math.abs(rail.v_ref_v), 3) : "n/a"} %) · |J| = ${sig(J, 4)} A/mm²`; }
   out.textContent = "";
   out.append(text, el("br"), el("span", { class: "muted small" },
     `Values at the centre of the ${sig(c, 3)} mm cell under the pointer, (${fix(g.x0 + (i + 0.5) * c, 3)}, ${fix(g.y0 + (j + 0.5) * c, 3)}) mm, ` +
@@ -211,8 +212,11 @@ function verdictText(rail) {   // the limits in words; only limits the user set 
   if (lim.max_drop_pct != null) parts.push(`load drop ≤ ${sig(lim.max_drop_pct, 3)} % of the source voltage`);
   if (lim.max_current_density_a_mm2 != null) parts.push(`current-crowding mean |J| ≤ ${sig(lim.max_current_density_a_mm2, 4)} A/mm²`);
   if (lim.max_via_current_a != null) parts.push(`current per via ≤ ${sig(lim.max_via_current_a, 4)} A`);
+  if (lim.max_ground_rise_mv != null) parts.push(`ground rise ≤ ${sig(lim.max_ground_rise_mv, 4)} mV above the source`);
   if (rail.verdict === "fail") return `Fails against the limits you set: ${parts.join("; ")}. ${rail.failed} problem${rail.failed === 1 ? "" : "s"} over a limit.`;
   if (rail.verdict === "pass") return `Within the limits you set: ${parts.join("; ")}. Limits you did not set are not checked.`;
+  const nj = rail.not_judged || [];
+  if (nj.length) return `Not judged against the limits you set (${parts.join("; ")}): ${nj.map((u) => `${u.item} (${u.limit}): ${u.reason}`).join("; ")}.`;
   return "Not judged: no limits were set, so the problems below are ranked, not judged.";
 }
 function panels() {
@@ -228,15 +232,15 @@ function panels() {
     `${w.hotspot.layer} at ${xy(w.hotspot.x_mm, w.hotspot.y_mm)}, over ${sig(w.hotspot.area_mm2, 3)} mm²; peak ${sig(w.hotspot.peak_j_a_mm2, 4)} A/mm² is mesh-dependent at sharp corners`));
   if (w.via) cards.append(card("Most loaded via", `${sig(w.via.current_a, 4)} A`, `at ${xy(w.via.x_mm, w.via.y_mm)}, drill ${sig(w.via.drill_mm, 3)} mm`));
   table("problems", [["", ""], ["Kind", ""], ["Problem", ""], ["Layer", ""], ["Where", ""]],
-    rail.problems.map((p) => [[p.severity === "fail" ? el("span", { class: "badge fail" }, "FAIL") : "", ""], [p.kind, ""],
+    rail.problems.map((p) => [[p.severity === "fail" ? el("span", { class: "badge fail" }, "FAIL") : "", ""], [KINDS[p.kind] || p.kind, ""],
       [el("span", {}, p.title, el("br"), el("span", { class: "muted small" }, p.detail)), ""], [p.layer || "–", ""], [xy(p.x_mm, p.y_mm), ""]]),
     (n) => { const p = rail.problems[n];
       if (p.layer) { const li = rail.layers.findIndex((l) => l.name === p.layer); if (li >= 0) setLayer(li, false); }
       S.mark = [p.x_mm, p.y_mm]; zoomTo(p.x_mm, p.y_mm, 8); $("map").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
   const lim = rail.limits.max_drop_pct;
   table("loads", [["Load", ""], ["Ref", ""], ["Pins", "num"], ["Current (A)", "num"], ["V min (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"], [lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""]],
-    rail.loads.map((t) => [[t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"], [sig(t.v_min_v, 7), "num"], [sig(t.drop_mv, 4), "num"],
-      [sig(t.drop_pct, 3), "num"], [t.exceeds === null ? "no limit set" : (t.exceeds ? el("span", { class: "badge fail" }, "FAIL") : "within"), ""]]));
+    rail.loads.map((t) => [[t.estimated ? el("span", { title: "estimated at nominal voltages, without copper losses" }, t.name, " ", el("span", { class: "muted small" }, "estimated draw")) : t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"], [sig(t.v_min_v, 7), "num"], [sig(t.drop_mv, 4), "num"],
+      [sig(t.drop_pct, 3), "num"], [t.exceeds === null ? (lim ? "not judged" : "no limit set") : (t.exceeds ? el("span", { class: "badge fail" }, "FAIL") : "within"), ""]]));
   table("sources", [["Source", ""], ["Ref", ""], ["Pins", "num"], ["Voltage (V)", "num"], ["Current (A)", "num"]],
     rail.sources.map((t) => [[t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.v_v, 6), "num"], [sig(t.current_a, 4), "num"]]));
   const losses = $("losses"); losses.textContent = "";
