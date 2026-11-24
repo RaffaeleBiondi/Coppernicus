@@ -46,3 +46,38 @@ def write_strip_board(path: Path, fields: Optional[Dict[str, Dict[str, str]]] = 
     lines.append(")")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
+
+
+def write_board(path: Path, parts: Sequence[tuple], tracks: Sequence[tuple]) -> Path:
+    """Write a multi-net synthetic board: ``parts`` as (ref, [(pad, x, y, net)], {field: text})
+    with pads at board coordinates (ref None: no reference), ``tracks`` as (net, (x0, y0),
+    (x1, y1), width) on F.Cu."""
+    ids = (f"00000000-0000-4000-8000-{n:012d}" for n in itertools.count(1))
+    nets = sorted({p[3] for _, pads, _ in parts for p in pads} | {t[0] for t in tracks})
+    code = {n: i for i, n in enumerate(nets, start=1)}
+    lines = ['(kicad_pcb (version 20240108) (generator "pcbnew") (generator_version "8.0")',
+             "  (general (thickness 1.6))",
+             '  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))', '  (net 0 "")']
+    lines += [f"  (net {i} {_q(n)})" for n, i in code.items()]
+    xs, ys = [0.0], [0.0]
+    for ref, pads, fields in parts:
+        lines.append(f'  (footprint "Synthetic:Part" (layer "F.Cu") (uuid "{next(ids)}") (at 0 0)')
+        props = ([("Reference", ref)] if ref is not None else []) + list(fields.items())
+        for name, text in props:
+            lines.append(f'    (property {_q(name)} {_q(text)} (at 0 0 0) (layer "F.Fab") '
+                         f'(uuid "{next(ids)}"))')
+        for number, x, y, net in pads:
+            xs.append(x)
+            ys.append(y)
+            lines.append(f'    (pad {_q(number)} smd rect (at {x} {y}) (size {PAD} {PAD}) (layers "F.Cu") '
+                         f'(net {code[net]} {_q(net)}) (uuid "{next(ids)}"))')
+        lines.append("  )")
+    for net, a, b, width in tracks:
+        lines.append(f'  (segment (start {a[0]} {a[1]}) (end {b[0]} {b[1]}) (width {width}) '
+                     f'(layer "F.Cu") (net {code[net]}) (uuid "{next(ids)}"))')
+    lines.append(f'  (gr_rect (start {min(xs) - 5} {min(ys) - 5}) (end {max(xs) + 5} {max(ys) + 5}) '
+                 f'(stroke (width 0.1) (type default)) (fill none) (layer "Edge.Cuts") '
+                 f'(uuid "{next(ids)}"))')
+    lines.append(")")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path

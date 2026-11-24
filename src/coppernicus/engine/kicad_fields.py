@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict
 
 from kipi.sources.kicad_pcb.reader import KiCadFileError, Nets, load_tree
-from kipi.sources.kicad_pcb.sexpr import children
+from kipi.sources.kicad_pcb.sexpr import child, children, xy
 
 from coppernicus.board_fields import PREFIX, BoardFields
 from coppernicus.engine.board import EngineError
@@ -48,6 +48,10 @@ def read_board_fields(path, prefix: str = PREFIX) -> BoardFields:
             continue
         ref = props.get("Reference") or next(
             (t[2] for t in children(fp, "fp_text") if len(t) > 2 and t[1] == "reference"), "")
+        if not ref.strip():
+            x, y = xy(child(fp, "at"))
+            raise EngineError(f"{path.name}: a footprint at ({x:g}, {y:g}) mm has {prefix}* fields "
+                              "but no reference: set its reference in KiCad")
         if ref in out.fields:
             raise EngineError(f"{path.name}: two footprints are {ref!r} and both carry "
                               f"{prefix}* fields; give each part its own reference")
