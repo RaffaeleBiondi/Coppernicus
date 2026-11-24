@@ -483,17 +483,19 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
             merged.origins[r.net] = Origin(r.net, "project", list(link_notes.get(r.net, [])))
         elif r.override_board_fields:
             new_rails.append(r)
-            merged.origins[r.net] = Origin(
+            origin = merged.origins[r.net] = Origin(
                 r.net, "overridden",
                 [f"Rail {r.net} from the project file: override_board_fields is set, so it replaces "
                  f"the rail of the KiCad footprint fields ({fr.values_text()})."]
                 + link_notes.get(r.net, []), board_fields=fr.listing())
+            _kicad_drop_limit(fr, r, origin, "even under override_board_fields")
         elif missing[r.net] is not None:
             new_rails.append(r)
-            merged.origins[r.net] = Origin(
+            origin = merged.origins[r.net] = Origin(
                 r.net, "project", list(link_notes.get(r.net, [])),
                 [f"KiCad fields on {r.net} are incomplete ({missing[r.net]}): the project file's "
                  "rail is used"], board_fields=fr.listing())
+            _kicad_drop_limit(fr, r, origin, "even though the fields' rail is incomplete")
         else:
             rail, origin = _from_fields(fr, r, pad_nets)
             origin.notes += link_notes.get(r.net, [])
@@ -535,6 +537,23 @@ def _feeds(project: Project, net: str, ties: Sequence[Tuple[str, str]] = ()) -> 
         return True
 
 
+def _kicad_drop_limit(fr: FieldRail, rail: Rail, origin: Origin, why: str = "") -> None:
+    """Set the fields' PI_LIMIT_DROP on ``rail``: a KiCad limit always applies to its net (a
+    project rail cannot loosen it), with a warning when the project's max_drop_pct differs."""
+    if fr.limit is None:
+        return
+    pct = rail.limits.max_drop_pct
+    if pct is not None and not math.isclose(pct, fr.limit[0], rel_tol=1e-9):
+        origin.warnings.append(f"KiCad field PI_LIMIT_DROP gives max_drop_pct {fr.limit[0]:g} on "
+                               f"{fr.net} ({fr.limit[1].origin()}); the project file's {pct:g} is "
+                               "not used")
+    rail.limits = dataclasses.replace(rail.limits, max_drop_pct=fr.limit[0])
+    if why:
+        origin.notes.append(f"Rail {fr.net}: limit max_drop_pct {fr.limit[0]:g} "
+                            f"({fr.limit[1].origin()}), {why}: a KiCad limit always applies to "
+                            "its net.")
+
+
 def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = None
                  ) -> Tuple[Rail, Origin]:
     """The fields' rail, with what it keeps from the project rail ``own`` of its net, and its
@@ -550,11 +569,8 @@ def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = N
                                f"({'; '.join(diffs)}); set override_board_fields: true on the rail "
                                "to use the project's values")
     pct = own.limits.max_drop_pct
-    if fr.limit is not None and pct is not None and not math.isclose(pct, fr.limit[0], rel_tol=1e-9):
-        origin.warnings.append(f"KiCad field PI_LIMIT_DROP gives max_drop_pct {fr.limit[0]:g} on "
-                               f"{fr.net} ({fr.limit[1].origin()}); the project file's {pct:g} is "
-                               "not used")
-    rail.limits = dataclasses.replace(own.limits, max_drop_pct=fr.limit[0] if fr.limit else pct)
+    rail.limits = copy.deepcopy(own.limits)
+    _kicad_drop_limit(fr, rail, origin)
     if fr.limit is None and pct is not None:
         origin.notes.append(f"Rail {fr.net}: limit max_drop_pct {pct:g} from the project file (no "
                             "PI_LIMIT_DROP on this net).")
