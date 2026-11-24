@@ -42,6 +42,9 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
 
 ## WS2: GUI (peer session, branch `feat/gui`)
 
+Detailed tasks are in `docs/superpowers/plans/2026-11-24-coppernicus-roadmap.md`, Part A.
+
+
 - Pick sources and loads by clicking pads on the board.
 - Drop isolines, current-flow arrows, ΔV between two picked points, hover readout.
 - Mark nets as rails by hand, saved in the project, to override the heuristic.
@@ -51,6 +54,9 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
 - Default load names, cosmetics (the macOS menu shows "Python").
 
 ## WS3: expose KiPI's other analyses (peer session, after WS2 merges)
+
+Detailed tasks are in the same plan, Part B (Tasks 6–11).
+
 
 The project model must grow first: VRMs and loads with ground pins, series links, AC probes,
 capacitor models and noise aggressors, mapped to KiPI's `PISetup` inside `engine/`.
@@ -65,7 +71,12 @@ Order (each step needs the previous one):
 Each step gets synthetic tests (KiPI's validation boards as a model) and is exposed in the
 CLI, MCP and GUI.
 
-## WS4: distribution and quality
+## WS4: distribution and quality (later, by the owner's decision)
+
+First make Coppernicus functional; efficiency and packaging come afterwards.
+
+- Efficiency: PARDISO and solver work, mesh and factorization caching, coarsening far from
+  current paths.
 
 - Decide on Triangle; then packaging (`.app` / `.exe`, signing / notarization).
 - First test run on Windows.
