@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import traceback
 from pathlib import Path
@@ -268,8 +269,10 @@ def _print_rail(res, problems):
     for t in res.sources:
         print(f"  source {t.name:14s} {t.v_max:8.4f} V  delivers {t.current:7.3f} A")
     for t in res.loads:
+        pct = res.drop_pct(t)                   # NaN on a 0 V net: no percentage there
+        pct_text = f"{pct:5.2f} %" if math.isfinite(pct) else "  n/a"
         print(f"  load   {t.name:14s} {t.v_min:8.4f} V  draws    {t.current:7.3f} A  "
-              f"drop {res.drop(t) * 1e3:8.2f} mV ({res.drop_pct(t):5.2f} %)")
+              f"drop {res.drop(t) * 1e3:8.2f} mV ({pct_text})")
     shares = res.loss_breakdown()
     total = sum(shares.values()) or 1.0
     split = ", ".join(f"{k} {v / total:.0%}" for k, v in sorted(shares.items(), key=lambda kv: -kv[1])

@@ -92,6 +92,8 @@ def test_not_judged_items_are_listed_in_the_cli_text_and_the_ci_summary(strip, t
     assert main(["solve", str(project), "--no-maps", "--out", str(out)]) == EXIT_OK   # not a failure
     text = capsys.readouterr().out
     assert "  NOT JUDGED U1 (max_drop_pct): 0 V nominal" in text
+    [load_line] = [ln for ln in text.splitlines() if ln.startswith("  load   U1")]
+    assert load_line.endswith("mV (  n/a)")                      # no % on a 0 V net
     doc = json.loads((out / "gnd.coppernicus_summary.json").read_text(encoding="utf-8"))
     assert doc["verdict"] == "not_judged" and doc["not_judged"] == [
         {"rail": Strip.NET, **doc["rails"][0]["not_judged"][0]}]
