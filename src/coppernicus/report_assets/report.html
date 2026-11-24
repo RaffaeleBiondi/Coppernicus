@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="Coppernicus">
+<title>__TITLE__</title>
+<style>__STYLE__</style>
+</head>
+<body>
+<header>
+  <h1 id="title"></h1>
+  <p id="subtitle" class="muted"></p>
+</header>
+<nav id="rails" aria-label="Rails"></nav>
+<main>
+  <section id="verdict" aria-live="polite"></section>
+  <section id="worst" class="cards" aria-label="Worst values"></section>
+  <section class="mapsec" aria-label="Map">
+    <div class="toolbar">
+      <div id="layers" class="seg" role="group" aria-label="Layer"></div>
+      <div id="fields" class="seg" role="group" aria-label="Field"></div>
+      <label><input type="checkbox" id="t-sources" checked> Sources</label>
+      <label><input type="checkbox" id="t-loads" checked> Loads</label>
+      <label><input type="checkbox" id="t-hotspots" checked> Hotspots</label>
+      <button id="fit" type="button" title="Fit the board in the view">Fit</button>
+    </div>
+    <div class="mapwrap">
+      <div class="mapbox"><canvas id="map" aria-label="Field map; scroll to zoom, drag to pan"></canvas>
+        <div id="busy" class="busy" hidden>Decoding…</div></div>
+      <div class="bar"><span id="bar-top"></span><canvas id="bar" width="18" height="256"></canvas>
+        <span id="bar-bottom"></span><span id="bar-unit" class="muted"></span></div>
+    </div>
+    <p id="readout" class="readout">Point at the map for values. Scroll to zoom, drag to pan.</p>
+    <p id="scalenote" class="muted small"></p>
+  </section>
+  <section><h2>Problems</h2>
+    <p class="muted small">Click a row to zoom to it. FAIL appears only against the limits you set.</p>
+    <div class="tablewrap"><table id="problems"></table></div></section>
+  <section class="two">
+    <div><h2>Loads</h2><div class="tablewrap"><table id="loads"></table></div>
+      <h2>Sources</h2><div class="tablewrap"><table id="sources"></table></div></div>
+    <div><h2>Where the power is lost</h2><div id="losses"></div>
+      <h2>Settings</h2><ul id="settings" class="small"></ul></div>
+  </section>
+  <section class="two">
+    <div><h2>Assumptions</h2><ul id="assumptions" class="small"></ul></div>
+    <div><h2>Warnings</h2><ul id="warnings" class="small"></ul></div>
+  </section>
+</main>
+<footer id="footer" class="muted small"></footer>
+<script type="application/json" id="meta">__META__</script>
+__BLOCKS__
+<script>__SCRIPT__</script>
+</body>
+</html>
