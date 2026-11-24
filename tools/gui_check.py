@@ -1012,10 +1012,12 @@ def view_point(window, x_mm: float, y_mm: float):
 
 
 def board_point(window, pos):
-    """The board point (mm) under the view widget's pixel ``pos``: the inverse of view_point."""
+    """The board point (mm) under the view widget's pixel ``pos``, through the display point
+    pyvistaqt hands VTK for a mouse event there (its rounding and y flip)."""
     widget = window.view.plotter.interactor
-    dpr, height_px = widget.devicePixelRatioF(), window.view.plotter.ren_win.GetSize()[1]
-    return window.view.display_to_board(pos.x() * dpr, height_px - 1 - pos.y() * dpr)
+    dpr = widget.devicePixelRatioF()
+    x, y = int(round(pos.x() * dpr)), int(round((widget.height() - pos.y() - 1) * dpr))
+    return window.view.display_to_board(x, y)
 
 
 def mouse_move(window, pos, buttons=None):
@@ -1029,6 +1031,17 @@ def mouse_move(window, pos, buttons=None):
     event = QMouseEvent(QEvent.MouseMove, QPointF(pos), QPointF(widget.mapToGlobal(pos)),
                         Qt.NoButton, buttons, Qt.NoModifier)
     QApplication.sendEvent(widget, event)
+
+
+def hover_settle(window, timeout_ms: int = 1000):
+    """Process events until the hover readout's 40 ms timer has fired: it can wait behind a
+    slow render, so a fixed wait could look at the label before its update."""
+    from PySide6.QtTest import QTest
+    QTest.qWait(60)
+    for _ in range(timeout_ms // 20):
+        if not window.view._hover_timer.isActive():
+            break
+        QTest.qWait(20)
 
 
 def hover_settings():
@@ -1099,10 +1112,12 @@ def run_hover(window, check: Checks, args, out: Path):
     nothing off the copper, "not connected" on a copper island and, on a ground group of the
     power tree, the rise the double-click reads. Hidden after the pointer leaves and while
     panning. Times 200 moves."""
-    from PySide6.QtCore import QEvent, QPoint, QRect, Qt
+    from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
+    from PySide6.QtGui import QWheelEvent
     from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QMenu
 
+    from coppernicus.app.board_view import BoardView
     from coppernicus.app.hover import chosen_from_setting
     from coppernicus.engine.synthetic import F, SyntheticBoard, save_snapshot, two_layer_stackup
     from coppernicus.project import Load, Project, Rail, Source
@@ -1139,7 +1154,7 @@ def run_hover(window, check: Checks, args, out: Path):
         widget = view.plotter.interactor
         u1 = view_point(window, 50.0, 10.0)
         mouse_move(window, u1)
-        QTest.qWait(150)
+        hover_settle(window)
         check("... a mouse move over U1 shows it beside the pointer",
               label.isVisible() and label.text() == at_u1, f"visible {label.isVisible()}, {label.text()!r}")
         box = label.geometry()
@@ -1149,20 +1164,47 @@ def run_hover(window, check: Checks, args, out: Path):
               f"label {box.getRect()}, cursor ({u1.x()}, {u1.y()})")
         window.grab().save(str(out / "hover_window.png"))
         mouse_move(window, view_point(window, 30.0, 1.0))
-        QTest.qWait(150)
+        hover_settle(window)
         check("... hidden off the copper", not label.isVisible(), f"visible {label.isVisible()}")
         mouse_move(window, u1)
-        QTest.qWait(150)
+        hover_settle(window)
         QApplication.sendEvent(widget, QEvent(QEvent.Leave))
         QApplication.processEvents()
         check("... hidden when the pointer leaves the view", not label.isVisible())
         mouse_move(window, u1)
-        QTest.qWait(150)
+        hover_settle(window)
         QTest.mousePress(widget, Qt.LeftButton, Qt.NoModifier, u1)
         mouse_move(window, u1 + QPoint(20, 0), Qt.LeftButton)
-        QTest.qWait(150)
+        hover_settle(window)
         check("... hidden while panning", not label.isVisible())
         QTest.mouseRelease(widget, Qt.LeftButton, Qt.NoModifier, u1 + QPoint(20, 0))
+        # On the B.Cu plane the values change from point to point: a zoom under a still pointer
+        # reads the new point under it, and a layer switch drops the old layer's reading.
+        window.layer_box.setCurrentIndex(window.layer_box.findText("B.Cu"))
+        window.view.reset_view()
+        QApplication.processEvents()
+        pos = view_point(window, 22.0, 12.0)
+        mouse_move(window, pos)
+        hover_settle(window)
+        before, scale = label.text(), view.plotter.camera.parallel_scale
+        for _ in range(3):
+            wheel = QWheelEvent(QPointF(pos), QPointF(widget.mapToGlobal(pos)), QPoint(), QPoint(0, 120),
+                                Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+            QApplication.sendEvent(widget, wheel)
+        hover_settle(window)
+        under = view.hover_at(*board_point(window, pos))
+        check("... a zoom under a still pointer reads the point now under it",
+              view.plotter.camera.parallel_scale < scale and label.isVisible() and label.text() == under
+              and under != before, f"{before!r} -> {label.text()!r} (under it: {under!r})")
+        window.view.reset_view()
+        QApplication.processEvents()
+        mouse_move(window, view_point(window, 22.0, 12.0))
+        hover_settle(window)
+        shown = label.isVisible()
+        window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
+        QApplication.processEvents()
+        check("... a layer switch hides the old layer's reading", shown and not label.isVisible(),
+              f"shown {shown}, after the switch {label.isVisible()}")
         window.view.reset_view()
         QApplication.processEvents()
 
@@ -1178,11 +1220,19 @@ def run_hover(window, check: Checks, args, out: Path):
           view.hover_at(50.0, 10.0) == "" and chosen_from_setting(stored) == (), repr(stored))
     if args.window:
         mouse_move(window, view_point(window, 50.0, 10.0))
-        QTest.qWait(150)
+        hover_settle(window)
         check("... no label while it is off", not view.hover_label.isVisible())
+    actions["j"].setChecked(True)
+    actions["net"].setChecked(True)
+    other, menu = BoardView(), QMenu()                     # a later start reads the stored choice
+    other.add_hover_menu(menu)
+    restored = [k for k, a in other.hover_actions.items() if a.isChecked()]
+    other.close()
+    other.deleteLater()
+    check("hover: the choice is restored at the next start", restored == ["j", "net"], str(restored))
     for key in ("v", "drop", "layer"):
         actions[key].setChecked(True)
-    actions["net"].setChecked(True)
+    actions["j"].setChecked(False)
     if args.window:
         report_hover_times(window, check, "the demo board (F.Cu, +3V3)")
     actions["net"].setChecked(False)
@@ -1209,7 +1259,7 @@ def run_hover(window, check: Checks, args, out: Path):
         window.view.reset_view()
         QApplication.processEvents()
         mouse_move(window, view_point(window, 20.0, 10.0))
-        QTest.qWait(150)
+        hover_settle(window)
         check("... and so does the label under the pointer",
               view.hover_label.isVisible() and view.hover_label.text() == island, view.hover_label.text())
 
@@ -1233,7 +1283,6 @@ def run_hover(window, check: Checks, args, out: Path):
 def run_hover_local(window, check: Checks, args):
     """The hover readout on the local rail run_local left shown: one reading, and 200 moves
     timed (real window)."""
-    from PySide6.QtTest import QTest
     view = window.view
     layer = view._layer
     if layer is None or not len(layer.tris):
@@ -1249,7 +1298,7 @@ def run_hover_local(window, check: Checks, args):
     if args.window:
         pos = view_point(window, float(x), float(y))
         mouse_move(window, pos)
-        QTest.qWait(150)
+        hover_settle(window)
         under = view.hover_at(*board_point(window, pos))
         check("... and the label under the pointer reads the point under it",
               view.hover_label.isVisible() and view.hover_label.text() == under, view.hover_label.text())
