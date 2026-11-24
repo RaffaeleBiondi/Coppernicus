@@ -36,22 +36,32 @@ why, and ask for what is missing.
    **measure** a neck or track width and the current through it. Do not back-compute widths
    from J or read them off a PNG.
 7. What-if: re-solve with `settings={"copper_thickness_mm": {"B.Cu": 0.07}}`,
-   `via_plating_um` or `copper_temp_c`, then `compare_results(a, b)`. Real changes are made in
-   KiCad.
+   `via_plating_um` or `copper_temp_c`, then `compare_results(a, b)`. `copper_thickness_mm` is
+   a quick test that exists only here, not in project files. Real changes are made in KiCad.
+8. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
+   layer's maps with zoom, pan and a hover readout, plus the problems, worst values and
+   assumptions. Give the user its `path`; you cannot read the page yourself.
+
+A summary's `problems` lists every load, then the top `top` current-crowding spots and the top
+`top` vias (default 5 each). Pass a larger `top` to see more vias.
 
 Coordinates are in mm in KiCad's frame, with **y down**. Errors return `{"error": {code, message, hint}}`:
 follow the hint. `result_evicted` means you must solve again.
 
 **Without MCP**, use the CLI:
 - `uv run --project <Coppernicus repo> coppernicus nets|parts BOARD [NET] --json`;
-- `coppernicus solve PROJECT.coppernicus.yml --json --out DIR`. The project YAML takes
-  `settings: {max_edge_mm, via_plating_um, copper_temp_c}`.
+- `coppernicus solve PROJECT.coppernicus.yml --json --out DIR [--top N] [--html]`. The project
+  YAML takes `settings: {max_edge_mm, via_plating_um, copper_temp_c}`.
 - Write the YAML and the outputs outside the board's folder.
-- stdout lists only the top problems. The full list is in the file named by `summary_file`.
-- The CLI has no cut, probe, zoomed map or compare. Say that widths and point values were not
-  measured. Do not estimate them from J or from a PNG, and do not parse the board file for
-  geometry. For those, point the user to the MCP tools or to the app:
-  `coppernicus gui PROJECT --solve NET`, then double-click or **Measure ΔV**.
+- stdout and the file named by `summary_file` hold the same document. Its `problems` lists every
+  load plus the top N spots and vias (`--top N`, default 5).
+- `--html` also writes an offline report for the user; its path is in `report_file`. It lets the
+  user zoom and read values by hovering, but you cannot read it.
+- The CLI has no cut, probe, zoomed map or compare for you. Say that widths and point values
+  were not measured. Do not estimate them from J or from a PNG, and do not parse the board file
+  for geometry. For those, point the user to the MCP tools, to the `--html` report (hover
+  readout), or to the app: `coppernicus gui PROJECT --solve NET`, then double-click or
+  **Measure ΔV**.
 
 ## Limits: never invent them
 
@@ -90,6 +100,8 @@ to a measured cross-section (`cut_current`).
    a thin track), with the cut that proves it.
 5. **Assumptions** from the `assumptions` field: plating, temperature, mesh, the equal split
    across pins, and **no ground return** (solve GND as its own rail).
+6. **The report path**, if you wrote one (`report` tool or `solve --html`), so the user can look
+   at the maps themselves.
 
 ## Common mistakes
 

@@ -9,6 +9,10 @@ runs the same DC analyses as the app and reasons about the results. There are tw
 
 Both go through the same service layer (`src/coppernicus/service/`) and return the same data.
 
+The Claude Code skill [`skills/analyzing-pdn-with-coppernicus`](../skills/analyzing-pdn-with-coppernicus/SKILL.md)
+teaches an agent the workflow and the rules (no invented limits, mean |J| rather than peaks).
+Install it with `cp -r skills/analyzing-pdn-with-coppernicus ~/.claude/skills/`.
+
 ## Register the server
 
 The server speaks MCP over stdio. It opens no network port. Use absolute paths everywhere,
@@ -217,9 +221,16 @@ about 30 MB), and never finer than a sixth of the median mesh edge. Measured on 
 4-layer board with 3.07 M triangles (80 × 60 mm planes):
 - cells of 0.032 mm, 2498 × 1874 per layer;
 - a 19.7 MB file, written in 5–7 s;
-- in headless Chromium on an Apple-silicon Mac, the first map shows within 0.16 s of opening
-  the page, each further layer decodes in about 45 ms, and the page holds about 190 MB of
-  JavaScript memory after every layer has been shown.
+- in the Chromium that Playwright drives on an Apple-silicon Mac, with the page served from
+  localhost:
+  - the first map was up at most 0.16 s after navigation started (an upper bound);
+  - each further layer decodes in about 45 ms;
+  - the page holds about 190 MB of JavaScript memory after every layer has been shown.
+
+These numbers come from smooth synthetic planes. Real boards, with more edges and holes,
+compress less well, and their sizes have not been measured yet. If a page would pass 30 MB,
+`write_report` and the `report` tool coarsen the cells and rebuild it. The rail-by-rail
+`solve --html` path warns instead.
 
 The demo board's report is 2.2 MB, with 0.027 mm cells.
 
