@@ -126,3 +126,46 @@ def test_drop_levels_are_evenly_spaced_and_bounded():
     assert np.allclose(np.diff(levels), levels[0])
     assert len(drop_levels(9.6, 50)) == 20
     assert drop_levels(0.0) == [] and drop_levels(float("nan")) == []
+
+
+def test_locator_finds_points_held_only_by_long_thin_triangles():
+    """A node held only by 500 slivers (aspect ~570, centroids ~3.3 mm away), next to a
+    patch of 1800 small triangles whose centroids are all nearer: neither the first nor
+    the widened nearest-centroid pass reaches a sliver, the exact box pass does."""
+    patch = np.stack(np.meshgrid(np.linspace(0.05, 0.35, 31), np.linspace(0.05, 0.35, 31)),
+                     -1).reshape(-1, 2)
+    tris = []
+    for j in range(30):
+        for i in range(30):
+            a = j * 31 + i
+            tris += [[a, a + 1, a + 31], [a + 1, a + 32, a + 31]]
+    angles = np.radians(np.arange(200.0, 250.05, 0.1))
+    fan = np.column_stack([10 * np.cos(angles), 10 * np.sin(angles)])
+    origin = len(patch) + len(fan)
+    pts = np.vstack([patch, fan, [[0.0, 0.0]]])
+    first_fan = len(patch)
+    tris += [[origin, first_fan + k, first_fan + k + 1] for k in range(len(fan) - 1)]
+    tris = np.array(tris)
+    slivers = np.arange(1800, len(tris))
+    loc = TriangleLocator(pts, tris)
+    inside_sliver = 0.01 * np.array([np.cos(np.radians(225.05)), np.sin(np.radians(225.05))])
+    found = loc.locate_many(np.array([[0.0, 0.0], inside_sliver, [0.2, 0.2], [5.0, 5.0]]))
+    assert found[0] in slivers and found[1] in slivers
+    assert 0 <= found[2] < 1800 and found[3] == -1          # the patch, and nothing at all
+    w = loc.weights(int(found[1]), *inside_sliver)
+    assert w.min() >= -1e-9 and np.allclose(w @ pts[tris[found[1]]], inside_sliver)
+    assert loc.locate(0.0, 0.0) in slivers                   # the single-point API too
+
+
+def test_locator_finds_every_node_of_a_random_mesh_of_thin_triangles():
+    """Delaunay of random points on 50 horizontal lines: ~400k triangles, median aspect
+    ratio ~120 and a long tail of slivers (the case the GUI review found misses in). Every
+    node must be found, in a triangle it is a vertex of."""
+    from scipy.spatial import Delaunay
+    rng = np.random.default_rng(0)
+    n = 200_000
+    pts = np.column_stack([rng.random(n), rng.integers(0, 50, n) / 50 + 1e-7 * rng.random(n)])
+    tris = Delaunay(pts).simplices
+    found = TriangleLocator(pts, tris).locate_many(pts)
+    assert (found >= 0).all()
+    assert (tris[found] == np.arange(n)[:, None]).any(axis=1).all()

@@ -135,12 +135,23 @@ class TriangleLocator:
 
     Vectorised: the barycentric maps of all triangles are computed once, so
     :meth:`locate_many` places thousands of points (a cross-section cut) in one pass.
-    Degenerate (zero-area) triangles never match."""
+    Degenerate (zero-area) triangles never match.
+
+    A point inside a long, thin triangle can be far from that triangle's centroid, farther
+    than the centroids of many small triangles around it. Points the nearest ``candidates``
+    centroids do not resolve get a wider pass (``WIDE`` centroids), then an exact one: the
+    triangles whose bounding box holds the point, through a uniform grid of boxes built the
+    first time it is needed."""
+
+    WIDE = 256                 # candidates in the second pass
+    GRID_FILL = 16             # triangles per grid cell, on average, in the exact pass
+    BIG_SPAN = 64              # triangles whose box covers more cells are always tested
 
     def __init__(self, points: np.ndarray, tris: np.ndarray, candidates: int = 24):
         self.points = np.asarray(points, dtype=float)
         self.tris = np.asarray(tris, dtype=np.int64)
         self.k = min(candidates, len(self.tris))
+        self._grid = None
         self.centroids = self.points[self.tris].mean(axis=1) if len(self.tris) else np.zeros((0, 2))
         self.tree = cKDTree(self.centroids) if len(self.tris) else None
         if len(self.tris):
@@ -188,18 +199,78 @@ class TriangleLocator:
         out = np.full(len(pts), -1, dtype=np.int64)
         if self.tree is None or not len(pts):
             return out
-        _, idx = self.tree.query(pts, k=self.k)
-        idx = idx.reshape(len(pts), -1)
-        for col in range(idx.shape[1]):                      # nearest centroid first
+        self._nearest_pass(pts, out, np.arange(len(pts)), self.k, tol)
+        todo = np.flatnonzero(out < 0)
+        if todo.size and len(self.tris) > self.k:            # long thin triangles: look wider
+            self._nearest_pass(pts, out, todo, min(self.WIDE, len(self.tris)), tol)
             todo = np.flatnonzero(out < 0)
-            if not todo.size:
+        if todo.size:                                        # exact: every box that holds it
+            self._box_pass(pts, out, todo, tol)
+        return out
+
+    def _nearest_pass(self, pts, out, todo, k, tol):
+        """Test the ``k`` triangles with the nearest centroids, nearest first."""
+        _, idx = self.tree.query(pts[todo], k=k)
+        idx = idx.reshape(len(todo), -1)
+        rows = np.arange(len(todo))
+        for col in range(idx.shape[1]):
+            if not rows.size:
                 break
-            ks = idx[todo, col]
+            ks = idx[rows, col]
             valid = ks < len(self.tris)                      # cKDTree pads with n when k > n
-            todo, ks = todo[valid], ks[valid]
-            w = self._weights(ks, pts[todo])
+            rows, ks = rows[valid], ks[valid]
+            w = self._weights(ks, pts[todo[rows]])
             hit = self._ok[ks] & (w.min(axis=1) >= -tol)
-            out[todo[hit]] = ks[hit]
+            out[todo[rows[hit]]] = ks[hit]
+            rows = rows[~hit]
+
+    def _boxes(self):
+        """A uniform grid over the mesh: per cell, the triangles whose bounding box overlaps
+        it (CSR arrays); triangles covering many cells are kept apart and always tested."""
+        if self._grid is None:
+            p = self.points[self.tris]
+            lo, hi = p.min(axis=1), p.max(axis=1)
+            x0, y0 = lo.min(axis=0)
+            x1, y1 = hi.max(axis=0)
+            g = max(1, int(np.sqrt(len(self.tris) / self.GRID_FILL)))
+            cw, ch = max((x1 - x0) / g, 1e-12), max((y1 - y0) / g, 1e-12)
+            ix0 = np.clip(((lo[:, 0] - x0) / cw).astype(np.int64), 0, g - 1)
+            ix1 = np.clip(((hi[:, 0] - x0) / cw).astype(np.int64), 0, g - 1)
+            iy0 = np.clip(((lo[:, 1] - y0) / ch).astype(np.int64), 0, g - 1)
+            iy1 = np.clip(((hi[:, 1] - y0) / ch).astype(np.int64), 0, g - 1)
+            w, span = ix1 - ix0 + 1, (ix1 - ix0 + 1) * (iy1 - iy0 + 1)
+            usable = self._ok
+            big = np.flatnonzero(usable & (span > self.BIG_SPAN))
+            small = np.flatnonzero(usable & (span <= self.BIG_SPAN))
+            n = span[small]
+            rep = np.repeat(small, n)
+            off = np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n)
+            cell = (iy0[rep] + off // w[rep]) * g + ix0[rep] + off % w[rep]
+            order = np.argsort(cell, kind="stable")
+            starts = np.searchsorted(cell[order], np.arange(g * g + 1))
+            self._grid = (x0, y0, x1, y1, cw, ch, g, starts, rep[order], big, lo, hi)
+        return self._grid
+
+    def _box_pass(self, pts, out, todo, tol):
+        x0, y0, x1, y1, cw, ch, g, starts, ids, big, lo, hi = self._boxes()
+        eps = 1e-9 * max(x1 - x0, y1 - y0, 1.0)
+        for i in todo:
+            x, y = pts[i]
+            if not (x0 - eps <= x <= x1 + eps and y0 - eps <= y <= y1 + eps):
+                continue                                     # outside every triangle's box
+            cx = min(max(int((x - x0) / cw), 0), g - 1)
+            cy = min(max(int((y - y0) / ch), 0), g - 1)
+            c = cy * g + cx
+            cand = np.concatenate([ids[starts[c]:starts[c + 1]], big])
+            inside = ((lo[cand, 0] - eps <= x) & (x <= hi[cand, 0] + eps)
+                      & (lo[cand, 1] - eps <= y) & (y <= hi[cand, 1] + eps))
+            cand = cand[inside]
+            if not cand.size:
+                continue
+            w = self._weights(cand, np.broadcast_to(pts[i], (len(cand), 2)))
+            hit = np.flatnonzero(w.min(axis=1) >= -tol)
+            if hit.size:
+                out[i] = cand[hit[0]]
         return out
 
     def nearest(self, x: float, y: float) -> Tuple[int, float]:
