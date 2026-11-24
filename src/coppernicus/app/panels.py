@@ -1006,14 +1006,25 @@ class TreePanel(QWidget):
                  _cell(v.p_loss_w, ".1f", 1e3), _cell(v.v_ground_v, ".2f", 1e3), v.regulation)
                 for v in tree.vrms]
         loads, fails = [], set()
-        for i, ld in enumerate(tree.loads):
+        for ld in tree.loads:
             verdict = ld.status or ("FAIL" if ld.passed is False else "pass" if ld.passed else "not judged")
             if ld.passed is False:
-                fails.add(i)
+                fails.add(len(loads))
             loads.append((ld.name, ld.group, _cell(ld.current_a, ".4g"), f"{ld.nominal_v:g}",
                           _cell(ld.v_supply_v, ".5f"), _cell(ld.v_ground_v, ".2f", 1e3),
                           _cell(ld.v_across_v, ".5f"), _cell(ld.drop_v, ".2f", 1e3),
                           _cell(ld.drop_pct, ".2f"), verdict))
+        # A regulator's input is a load on the rail feeding it, judged as one.
+        for v in (v for v in tree.vrms if v.input_group):
+            verdict = v.input_status or ("FAIL" if v.input_passed is False
+                                         else "pass" if v.input_passed else "not judged")
+            if v.input_passed is False:
+                fails.add(len(loads))
+            across = (v.v_in_v - (v.v_ground_v or 0.0)) if v.v_in_v is not None else None
+            loads.append((f"{v.name} (input)", v.input_group, _cell(v.i_in_a, ".4g"),
+                          _cell(v.input_nominal_v, "g"), _cell(v.v_in_v, ".5f"),
+                          _cell(v.v_ground_v, ".2f", 1e3), _cell(across, ".5f"),
+                          _cell(v.input_drop_v, ".2f", 1e3), _cell(v.input_drop_pct, ".2f"), verdict))
         self._fill(self.vrms, vrms)
         self._fill(self.loads, loads, fails)
         self.links.setText("Links (edit them in the project file): " + "; ".join(

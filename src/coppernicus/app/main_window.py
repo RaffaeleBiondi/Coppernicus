@@ -39,12 +39,27 @@ from coppernicus.app.worker import ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
-from coppernicus.power_tree import judge_loads
-from coppernicus.problems import FAIL, find_problems, find_tree_problems, from_0v, limits_dict
+from coppernicus.power_tree import apply_limits, group_verdict, tree_verdicts
+from coppernicus.problems import FAIL, find_problems, from_0v
 from coppernicus.project import Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
 
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
+
+
+def verdict_html(verdict: str, fails: int, not_judged, has_limits: bool) -> str:
+    """A power-tree verdict for the summary lines: what failed, and what a limit set could not
+    judge (a group passes only when everything was judged)."""
+    missing = (f"<span style='color:#b9770e'><b>not judged</b>: {'; '.join(not_judged)}</span>"
+               if not_judged else "")
+    if verdict == "fail":
+        text = f"<span style='color:#c0392b'><b>{fails} limit(s) exceeded</b></span>"
+        return f"{text} · {missing}" if missing else text
+    if verdict == "pass":
+        return "no limits exceeded"
+    if has_limits:
+        return missing or "<span style='color:#b9770e'><b>limits set, nothing judged</b></span>"
+    return "no limits set: nothing is judged"
 
 
 class MainWindow(QMainWindow):
@@ -449,12 +464,13 @@ class MainWindow(QMainWindow):
 
     def _limits_edited(self):
         rail = self._adopt_draft()
-        if self.tree is not None and rail.net in self.tree.groups:     # re-judge, no re-solve
-            self.tree.limits[rail.net] = rail.limits
-            judge_loads(self.tree)
+        if self.tree is not None and self.tree.group_of(rail.net) is not None:   # re-judge, no re-solve
+            apply_limits(self.tree, self.project)
             self.tree_panel.set_tree(self.tree, self._tree_verdict())
-        res = self.results.get(rail.net)
-        if res is not None:                                        # re-rank; the solve is still valid
+        group = self.group_box.currentData()
+        if group and self.tree is not None and group in self.tree.groups:
+            self._show_tree_problems(group)                        # what the view shows
+        elif (res := self.results.get(rail.net)) is not None:      # re-rank; the solve is still valid
             self._show_problems(res)
 
     def _marked_edited(self, nets):
@@ -680,6 +696,9 @@ class MainWindow(QMainWindow):
             self.tree_panel.clear(msg)
             self.statusBar().showMessage(msg)
             return
+        # Limits do not change the solve: judge it by the ones set now (one may have been
+        # edited while it solved, on the copy the worker took).
+        apply_limits(tree, self.project)
         self.tree = tree
         self.tree_panel.set_tree(tree, self._tree_verdict())
         self.group_box.blockSignals(True)
@@ -698,14 +717,12 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "Cannot solve the power tree", message)
 
     def _tree_verdict(self) -> str:
-        tree = self.tree
-        if tree is None:
+        if self.tree is None:
             return ""
-        fails = sum(p.severity == FAIL for key in tree.groups
-                    for p in find_tree_problems(tree, key, tree.limits.get(key)))
-        judged = any(limits_dict(tree.limits.get(k), r.kind) for k, r in tree.groups.items())
-        return (f"<span style='color:#c0392b'><b>{fails} limit(s) exceeded</b></span>" if fails
-                else "no limits exceeded" if judged else "no limits set: nothing is judged")
+        overall, groups = tree_verdicts(self.tree)
+        return verdict_html(overall, sum(v.failed for v in groups.values()),
+                            [x for v in groups.values() for x in v.not_judged],
+                            any(v.limits for v in groups.values()))
 
     def _drop_tree(self, reason: str):
         """The power-tree result no longer matches the project (or the board)."""
@@ -771,19 +788,15 @@ class MainWindow(QMainWindow):
         self.refresh_view(fit=True)
 
     def _show_tree_problems(self, key: str):
-        res, tree = self.tree.groups[key], self.tree
-        limits = tree.limits.get(key)
-        problems = find_tree_problems(tree, key, limits)
-        fails = sum(p.severity == FAIL for p in problems)
+        res = self.tree.groups[key]
+        gv = group_verdict(self.tree, key)
         worst = (f"max ground rise {from_0v(res.max_drop)}" if res.kind == "ground"
                  else f"max drop {res.max_drop * 1e3:.2f} mV below the {res.v_ref:.4g} V set point")
-        judged = bool(limits_dict(limits, res.kind))
-        verdict = (f"<span style='color:#c0392b'><b>{fails} limit(s) exceeded</b></span>" if fails
-                   else "no limits exceeded" if judged else "no limits set")
+        verdict = verdict_html(gv.verdict, gv.failed, gv.not_judged, bool(gv.limits))
         nets = " + ".join(res.nets)
         self.problems.set_result(
             f"<b>{key}</b> ({res.kind} of the power tree: {nets}): {worst} · copper loss "
-            f"{res.power_loss * 1e3:.3g} mW · {verdict}", problems, res.warnings + res.assumptions)
+            f"{res.power_loss * 1e3:.3g} mW · {verdict}", gv.problems, res.warnings + res.assumptions)
 
     # ------------------------------------------------------------------ before / after
     def pin_baseline(self):

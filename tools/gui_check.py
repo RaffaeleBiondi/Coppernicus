@@ -766,6 +766,8 @@ def run_power_tree(window, check: Checks, args, out: Path):
     check("... the VRM table lists J1, U1, U2", [r[0] for r in vrms] == ["J1", "U1", "U2"], str(vrms))
     u3 = next((r for r in loads if r[0] == "U3"), None)
     check("... the load table shows U3 at 1.80000 V across", u3 is not None and "1.80000" in u3, str(u3))
+    u1_in = next((r for r in loads if r[0] == "U1 (input)"), None)
+    check("... and U1's input as a load on VIN", u1_in is not None and u1_in[1] == "VIN", str(u1_in))
     check("... and the ferrite link", "FB1" in window.tree_panel.links.text(), window.tree_panel.links.text())
     keys = {window.group_box.itemData(i) for i in range(window.group_box.count())}
     check("... the group selector lists the rails and GND", keys == {None, "VIN", "+3V3", "+1V8", "GND"},
@@ -840,6 +842,25 @@ def run_power_tree(window, check: Checks, args, out: Path):
     i_in = next(v.i_in_a for v in tree.vrms if v.name == "U1") if tree else None
     check("power tree: a lower efficiency draws more input current", i_in is not None and i_in > i_in_before,
           f"{i_in_before:.4f} → {i_in}")
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    window.solve_tree()                                   # a limit edited while it solves…
+    window.rail_panel.max_drop.setText("0.01")
+    window.rail_panel.max_drop.editingFinished.emit()
+    window.tree_worker.wait(int(args.timeout * 1000))
+    QApplication.processEvents()
+    QApplication.processEvents()
+    u4 = next((r for r in window.tree_panel.load_rows() if r[0] == "U4"), None)
+    check("power tree: a limit edited while the tree solves judges the tree it brings",
+          window.tree is not None and u4 is not None and u4[-1] == "FAIL"
+          and "limit(s) exceeded" in window.tree_panel.summary.text(),
+          f"{u4} | {window.tree_panel.summary.text()[-80:]}")
+    window.rail_panel.max_drop.setText("")
+    window.rail_panel.max_drop.editingFinished.emit()
+    QApplication.processEvents()
+    u4 = next((r for r in window.tree_panel.load_rows() if r[0] == "U4"), None)
+    check("... and clearing it judges nothing again", u4 is not None and u4[-1] == "not judged"
+          and "no limits set" in window.tree_panel.summary.text(), str(u4))
     window.nets.select("GND")                             # a ground-rise limit on GND
     QApplication.processEvents()
     window.rail_panel.max_rise.setText("10")
@@ -856,6 +877,22 @@ def run_power_tree(window, check: Checks, args, out: Path):
           "limit(s) exceeded" in window.tree_panel.summary.text() and top is not None
           and top.text(0).upper().startswith("FAIL"),
           f"{window.tree_panel.summary.text()} | {top.text(0) if top else ''} {top.text(1) if top else ''}")
+    window.rail_panel.max_rise.setText("100")           # edited while GND is shown
+    window.rail_panel.max_rise.editingFinished.emit()
+    QApplication.processEvents()
+    top = window.problems.tree.topLevelItem(0)
+    check("... a looser limit edited while GND is shown re-judges its Problems list",
+          top is not None and not top.text(0).upper().startswith("FAIL")
+          and "no limits exceeded" in window.tree_panel.summary.text(),
+          f"{top.text(0) if top else ''} {top.text(1) if top else ''} | "
+          f"{window.tree_panel.summary.text()[-60:]}")
+    window.rail_panel.max_rise.setText("10")
+    window.rail_panel.max_rise.editingFinished.emit()
+    QApplication.processEvents()
+    top = window.problems.tree.topLevelItem(0)
+    check("... and the tighter one again fails it",
+          top is not None and top.text(0).upper().startswith("FAIL"),
+          f"{top.text(0) if top else ''} {top.text(1) if top else ''}")
     path = out / "power_tree_edited.coppernicus.yml"
     window._save(path)
     saved = Project.load(path)
