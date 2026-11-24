@@ -51,8 +51,10 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
    - Checked by the coordinator: `solve --json` on a local real board gives the same numbers
      as the human report.
    - Not yet tried: registration in a real Claude Code or Claude Desktop host; Windows.
-   - Open questions for the owner: `copper_thickness_mm` in the project YAML; unit-keyed
-     `*_summary.json`; the default memory bound (8 results, 2 GB).
+   - Owner's decisions (2026-11-24): `copper_thickness_mm` stays an MCP-only what-if (real
+     changes are made in KiCad); `*_summary.json` moves to the unit-keyed format in Phase 2;
+     the memory bound stays at 8 results / 2 GB; the HTML report may take up to about 30 MB.
+   - The MCP server is registered for the owner in Claude Code (user scope).
 2. **Phase 2:** interactive offline HTML report per rail (zoom/pan, drop and current maps per
    layer, loads, problems, assumptions), `solve --html` / `--open`, and per-rail worst values
    summarised.
