@@ -88,8 +88,8 @@ boards_local/
 *.tgz
 *.gbr
 *.drl
-# ... except the synthetic demo, and small boards drawn on purpose for tests.
-!examples/demo/demo.kipi.json.gz
+# ... except the synthetic examples, and small boards drawn on purpose for tests.
+!examples/*/*.kipi.json.gz
 !tests/boards/*.kicad_pcb
 !tests/boards/*.kicad_pro
 
