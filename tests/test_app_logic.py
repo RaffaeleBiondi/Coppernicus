@@ -85,3 +85,26 @@ def test_the_drop_map_of_a_negative_rail_is_positive_toward_0_v():
     assert "toward 0 V" in neg.drop_unit()
     gnd_alone = RailResult("GND", ["GND"], 0.0, [], [], [], [], 0.0, 0.0, 0.0, 0.0, drop_sign=-1.0)
     assert np.allclose(drop_mv(gnd_alone, np.array([0.002])), [2.0]) and gnd_alone.is_rise()
+
+
+def test_the_tree_header_of_a_negative_rail_reads_its_drop_toward_0_v():
+    from coppernicus.app.main_window import tree_header_html
+    from coppernicus.power_tree import GroupVerdict
+    from coppernicus.results import RailResult
+    neg = RailResult("VEE", ["VEE"], -3.3, [], [], [], [], 0.01234, 0.0, 0.002, 0.0, drop_sign=-1.0)
+    head = tree_header_html("VEE", neg, GroupVerdict("not_judged", 0, {}, {}))
+    assert "max drop 12.34 mV above -3.3 V (toward 0 V)" in head and "below" not in head
+    gnd = RailResult("GND", ["GND"], 0.0, [], [], [], [], -0.00567, 0.0, 0.002, 0.0, kind="ground")
+    head = tree_header_html("GND", gnd, GroupVerdict("pass", 0, {}, {}))
+    assert "max ground rise 5.67 mV below 0 V" in head
+
+
+def test_the_rail_header_of_a_net_at_0_v_solved_alone_reads_a_rise():
+    from coppernicus.app.main_window import rail_header_html
+    from coppernicus.project import Limits
+    from coppernicus.results import RailResult
+    gnd = RailResult("GND", ["GND"], 0.0, [], [], [], [], 0.00567, 0.0, 0.002, 0.0, drop_sign=-1.0)
+    head = rail_header_html(gnd, Limits(), [])
+    assert "max ground rise 5.67 mV above 0 V" in head and "max drop" not in head
+    neg = RailResult("VEE", ["VEE"], -3.3, [], [], [], [], 0.01234, 0.0, 0.002, 0.0, drop_sign=-1.0)
+    assert "max drop 12.34 mV above -3.3 V (toward 0 V)" in rail_header_html(neg, Limits(), [])

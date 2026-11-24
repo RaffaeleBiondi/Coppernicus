@@ -47,3 +47,25 @@ def test_via_and_density_limits(demo):
     via_fails = [p for p in problems if p.kind == "via" and p.severity == FAIL]
     assert via_fails and all(p.value > 0.95 for p in via_fails)
     assert not [p for p in problems if p.kind == "hotspot"]   # nothing above 1e6 A/mm²
+
+
+def _result(net, v_ref, max_drop, **kw):
+    from coppernicus.results import RailResult
+    return RailResult(net, [net], v_ref, [], [], [], [], max_drop, 0.0, 0.0, 0.0, **kw)
+
+
+@pytest.mark.parametrize("res, text", [
+    (_result("+3V3", 3.3, 0.01234), "max drop 12.34 mV below 3.3 V"),
+    # a negative rail loses its voltage toward 0 V: above its set point
+    (_result("-3V3", -3.3, 0.01234, drop_sign=-1.0), "max drop 12.34 mV above -3.3 V (toward 0 V)"),
+    # a net at 0 V solved alone: the return current lifts it, a rise
+    (_result("GND", 0.0, 0.00567, drop_sign=-1.0), "max ground rise 5.67 mV above 0 V"),
+    # a ground group: its rise is signed (below 0 V under a negative rail)
+    (_result("GND", 0.0, 0.00567, kind="ground"), "max ground rise 5.67 mV above 0 V"),
+    (_result("GND", 0.0, -0.00567, kind="ground"), "max ground rise 5.67 mV below 0 V"),
+    # a rail driven at 0 V inside a power tree draws its loads' current: a drop below 0 V
+    (_result("VZ", 0.0, 0.00567), "max drop 5.67 mV below 0 V"),
+])
+def test_the_worst_drop_reads_above_or_below_its_reference_and_rise_on_a_ground(res, text):
+    from coppernicus.problems import max_drop_text
+    assert max_drop_text(res) == text

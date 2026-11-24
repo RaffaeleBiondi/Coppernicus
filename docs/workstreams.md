@@ -148,6 +148,28 @@ The owner's goal (2026-11-24): every feature can be tried from the local launche
   - for WS1 Phase 3, defining sources and loads inside KiCad;
   - anything about packaging, efficiency or Triangle.
 
+**Final task, after T11 (owner's request, 2026-11-24): documentation refresh.** Before the
+project is called complete, bring every user-facing document up to date with everything that
+was built, in one pass:
+- the README guide and its screenshots (all regenerated from synthetic boards), the status table;
+- per-feature user documentation in `docs/` (how to use each analysis: power tree, KiCad
+  fields, thermal, AC impedance, ripple, tolerance), with screenshots;
+- `docs/agents.md` and the MCP tools: every feature reachable by an agent, as the owner scopes it;
+- the skill in `skills/` (and its installed copy): what Coppernicus can do with Claude and how;
+- `docs/technical.md`, `docs/ci.md`, the examples' descriptions.
+Owner's scope (2026-11-24):
+- MCP: the T8–T11 analyses; creating and editing projects (rails, sources, loads, limits, saved
+  to `.coppernicus.yml`); proposing KiCad `PI_*` fields part by part (never editing KiCad
+  files); comparing two board revisions (before and after a change in KiCad); a copper-weight
+  what-if limited to one standard step (e.g. 0.5 oz → 1 oz on a layer, no bigger changes) to
+  see whether it solves a problem.
+- Skill: analysis and verdicts, the new analyses, and helping the user write `PI_*` fields
+  (library symbol versus schematic instance). Not layout-fix proposals.
+- Human docs: the README as the quick guide plus one page per feature in `docs/`, with
+  screenshots. English only.
+- WS1 starts the MCP items that do not depend on T8–T11 (project editing, field proposals,
+  revision compare, copper-weight step) after phase 4c.
+
 ## Coordination rules
 
 - WS1 owns: `src/coppernicus/service*`, `src/coppernicus/mcp*`, `src/coppernicus/report*`,

@@ -323,23 +323,24 @@ def _cmd_solve_tree(args) -> int:
 
 
 def _print_rail(res, problems):
-    from coppernicus.problems import FAIL
+    from coppernicus.problems import FAIL, max_drop_text
     others = [n for n in res.nets if n != res.net]
     nets = f" (with {', '.join(others)} via net ties)" if others else ""
     print(f"\nRail {res.net}{nets}: solved in {res.stats['seconds']:.1f} s, "
           f"{int(res.stats['triangles']):,} triangles")
     for t in res.sources:
         print(f"  source {t.name:14s} {t.v_max:8.4f} V  delivers {t.current:7.3f} A")
+    word = "rise" if res.is_rise() else "drop"  # a net at 0 V: the return current lifts it
     for t in res.loads:
         pct = res.drop_pct(t)                   # NaN on a 0 V net: no percentage there
         pct_text = f"{pct:5.2f} %" if math.isfinite(pct) else "  n/a"
         print(f"  load   {t.name:14s} {res.worst_v(t):8.4f} V  draws    {t.current:7.3f} A  "
-              f"drop {res.drop(t) * 1e3:8.2f} mV ({pct_text})")
+              f"{word} {res.drop(t) * 1e3:8.2f} mV ({pct_text})")
     shares = res.loss_breakdown()
     total = sum(shares.values()) or 1.0
     split = ", ".join(f"{k} {v / total:.0%}" for k, v in sorted(shares.items(), key=lambda kv: -kv[1])
                       if v / total >= 0.01)
-    print(f"  max drop {res.max_drop * 1e3:.2f} mV · copper loss {res.power_loss * 1e3:.3g} mW ({split})")
+    print(f"  {max_drop_text(res)} · copper loss {res.power_loss * 1e3:.3g} mW ({split})")
     print("  problems (fails first, then ranked):")
     for p in problems:
         tag = "FAIL" if p.severity == FAIL else "    "

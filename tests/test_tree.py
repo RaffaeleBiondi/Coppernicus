@@ -402,6 +402,46 @@ def test_tree_text_prints_a_rail_at_0_v_without_a_percentage():
     assert "—" in lines and Strip.NET in lines
 
 
+def _mv_in(title, words):
+    """The mV figure of a problem title that ends "(<mV> mV <words>)"."""
+    import re
+    m = re.search(r"\((\d+\.\d\d) mV " + re.escape(words) + r"\)$", title)
+    assert m, title
+    return float(m.group(1))
+
+
+def test_a_load_on_a_rail_at_0_v_in_the_tree_has_no_nan_percentage():
+    """A 0 V rail has no drop percentage: its load's title gives the mV only, below 0 V
+    (the tree draws its current out of it), never "nan %"."""
+    from coppernicus.engine.synthetic import Strip, strip_board
+    tree = solve_project_tree(Board(strip_board()), _strip_project(0.0))
+    [u1] = [p for p in find_tree_problems(tree, Strip.NET) if p.kind == "load"]
+    r_mv = RHO * Strip.length() / (Strip.W * OZ1) * 1e3
+    assert "nan" not in u1.title.lower()
+    assert _mv_in(u1.title, "below 0 V") == pytest.approx(r_mv, rel=5e-3)
+
+
+def test_a_regulator_input_on_a_rail_at_0_v_in_the_tree_has_no_nan_percentage():
+    from coppernicus.engine.synthetic import F, SyntheticBoard, two_layer_stackup
+    from coppernicus.project import Project, Rail
+    b = SyntheticBoard("zero_chain", two_layer_stackup())
+    b.square_pad("J1", "1", "VZ", 0.0, 0.0, 1.5)
+    b.square_pad("U1", "1", "VZ", 40.0, 0.0, 1.5)
+    b.square_pad("U1", "2", "VO", 40.0, 5.0, 1.5)
+    b.square_pad("U2", "1", "VO", 60.0, 5.0, 1.5)
+    b.track("VZ", F, 0.5, (0.0, 0.0), (40.0, 0.0))
+    b.track("VO", F, 0.5, (40.0, 5.0), (60.0, 5.0))
+    project = Project(rails=[
+        Rail("VZ", sources=[Source("J1", 0.0)]),
+        Rail("VO", sources=[Source("U1", 1.0, ["2"], kind="ldo", input_pins=["1"], input_net="VZ")],
+             loads=[Load("U2", 0.5)])])
+    tree = solve_project_tree(Board(b.snapshot()), project)
+    [inp] = [p for p in find_tree_problems(tree, "VZ") if p.kind == "load"]
+    assert inp.data["name"] == "U1 (input)" and "nan" not in inp.title.lower()
+    # 0.5 A through 40 mm of 0.5 mm track (pad edge to pad edge: 38.5 mm)
+    assert _mv_in(inp.title, "below 0 V") == pytest.approx(0.5 * RHO * 38.5 / (0.5 * OZ1) * 1e3, rel=2e-2)
+
+
 def test_an_excluded_ground_rail_is_not_said_to_be_solved_as_a_ground(board):
     from coppernicus.project import Rail
     project = power_chain_project()
@@ -410,6 +450,26 @@ def test_an_excluded_ground_rail_is_not_said_to_be_solved_as_a_ground(board):
     tree = solve_project_tree(board, project)
     assert "GND" not in tree.groups
     assert not any("solved as a ground" in w for w in tree.warnings)
+
+
+@pytest.mark.parametrize("excluded, present, absent", [
+    ([], ["at the ground pins of J1;", "U2 holds 1.8 V at U3 pins 1 on +1V8 (remote sense), above U3 pins 2 "
+          "on GND.", "Link FB1:"], []),
+    # U2's output is not solved: it is an estimated load on +3V3_F, its remote sense is gone
+    (["+1V8"], ["at the ground pins of J1;", "Link FB1:"], ["U2 holds"]),
+    # no ground solved: no 0 V reference, no ground sense
+    (["GND"], ["U2 holds 1.8 V at U3 pins 1 on +1V8 (remote sense)."], ["Ground nets are held", "on GND"]),
+    # FB1's group is not solved; U2, fed from it, is an ideal source and references the ground
+    (["+3V3_F"], ["at the ground pins of J1, U2;"], ["Link FB1"]),
+    # J1 drives VIN, not solved: U1, fed from it, is the source referencing the ground
+    (["VIN"], ["at the ground pins of U1;"], ["of J1"]),
+])
+def test_tree_assumptions_name_only_parts_that_are_solved(board, excluded, present, absent):
+    project = power_chain_project()
+    project.engine_options = {"excluded_nets": excluded}
+    text = "\n".join(solve_project_tree(board, project).assumptions)
+    assert all(p in text for p in present), text
+    assert not any(a in text for a in absent), text
 
 
 def test_a_ground_below_0_v_is_a_rise_by_its_magnitude():

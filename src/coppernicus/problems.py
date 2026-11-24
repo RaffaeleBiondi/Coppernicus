@@ -261,6 +261,11 @@ def _limit_text(value: Optional[float], unit: str, origin: str, own: str) -> str
     return f"limit {value:g} {unit}" + (f" (from {origin})" if origin and origin != own else "")
 
 
+def _share(pct: float) -> str:
+    """", 1.23 %" after a drop in mV; nothing at 0 V nominal, where there is no %."""
+    return f", {abs(pct):.2f} %" if np.isfinite(pct) else ""
+
+
 def _word(drop: float, nominal: float) -> str:
     """Which side of the nominal a pin that lost ``drop`` toward 0 V sits on."""
     return "below" if (drop >= 0) == (nominal >= 0) else "above"
@@ -278,7 +283,7 @@ def _tree_loads(tree: TreeResult, group: str, res: RailResult, per_net: NetLimit
             title, value = f"{ld.name}: {ld.status}", float("inf")
         else:
             title = (f"{ld.name}: {ld.v_worst_v:.4f} V across its supply and ground pins "
-                     f"({abs(ld.drop_v) * 1e3:.2f} mV, {abs(ld.drop_pct):.2f} % "
+                     f"({abs(ld.drop_v) * 1e3:.2f} mV{_share(ld.drop_pct)} "
                      f"{_word(ld.drop_v, ld.nominal_v)} {ld.nominal_v:g} V)")
             value = ld.drop_pct
         ground = ("no ground pins" if ld.v_ground_v is None
@@ -309,7 +314,7 @@ def _tree_inputs(tree: TreeResult, group: str, res: RailResult, per_net: NetLimi
         else:
             pct = v.input_drop_pct if v.input_drop_pct is not None else float("nan")
             title = (f"{name}: {v.v_in_worst_v:.4f} V across its input and ground pins "
-                     f"({abs(v.input_drop_v) * 1e3:.2f} mV, {abs(pct):.2f} % "
+                     f"({abs(v.input_drop_v) * 1e3:.2f} mV{_share(pct)} "
                      f"{_word(v.input_drop_v, v.input_nominal_v or 0.0)} {v.input_nominal_v:g} V)")
             value = pct
         status = f" {v.input_status}." if v.input_status and v.input_status not in title else ""
@@ -356,6 +361,15 @@ def _signed_max(a: float, b: float) -> float:
 def from_0v(volts: float) -> str:
     """A ground's rise in words: "12.34 mV above 0 V" or "12.34 mV below 0 V"."""
     return f"{abs(volts) * 1e3:.2f} mV {'above' if volts >= 0 else 'below'} 0 V"
+
+
+def max_drop_text(res: RailResult) -> str:
+    """The worst of the copper for a summary line: "max drop 12.34 mV below 3.3 V", "max
+    drop 12.34 mV above -3.3 V (toward 0 V)", or, on a ground (a ground group, a net at 0 V
+    solved alone), "max ground rise 5.67 mV above 0 V" (signed on a ground group)."""
+    if res.is_rise():
+        return f"max ground rise {from_0v(res.max_drop)}"
+    return f"max drop {res.max_drop * 1e3:.2f} {res.drop_unit()}"
 
 
 def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:

@@ -17,6 +17,7 @@ from typing import Callable, Dict, List, Optional
 
 import numpy as np
 from kipi.core.progress import Canceled
+from kipi.dc.pi.model import active_setup
 from kipi.dc.pi.tree import solve_tree
 from kipi.dc.solver import SolveError
 from kipi.dc.solver.setup import REF_TEMP_C
@@ -64,6 +65,11 @@ def check_grounds(project: Project) -> None:
 
 
 def _assumptions(project: Project, setup) -> List[str]:
+    # Only what KiPI solves: excluded groups dropped, a regulator fed from one an ideal source.
+    setup = active_setup(setup)[0]
+    names = terminal_names(project)
+    vrms = {v.name: v for v in setup.vrms}
+    links = {k.name for k in setup.links}
     settings_notes = engine_settings(project.settings)[1][:3]      # plating, ρ(T), mesh
     out = settings_notes + [
         "Power tree: each net group (nets joined by links and net ties) is solved from its one "
@@ -80,15 +86,17 @@ def _assumptions(project: Project, setup) -> List[str]:
         out.append(f"Ground nets are held at 0 V at the ground pins of {', '.join(refs)}; every "
                    "other ground voltage is a rise above that reference.")
     for r in project.rails:
-        for s in r.sources:
-            sense = pin_ref(s, "sense")
+        for i, s in enumerate(r.sources):
+            vrm = vrms.get(names.get(("source", r.net, i)))
+            sense = pin_ref(s, "sense") if vrm is not None else None
             if sense:
-                gs = pin_ref(s, "ground_sense")
+                gs = pin_ref(s, "ground_sense") if vrm.ground_sense is not None else None
                 above = f", above {gs[0]} pins {pins_text(gs[1])} on {gs[2]}" if gs else ""
                 out.append(f"{s.label} holds {s.voltage:g} V at {sense[0]} pins "
                            f"{pins_text(sense[1])} on {sense[2]} (remote sense){above}.")
-    for k in project.links:
-        out.append(f"Link {k.name}: {k.resistance_ohm:g} Ω between {k.net_a} and {k.net_b}.")
+    for i, k in enumerate(project.links):
+        if names.get(("link", "", i)) in links:
+            out.append(f"Link {k.name}: {k.resistance_ohm:g} Ω between {k.net_a} and {k.net_b}.")
     ties = [k.name for k in setup.links if k.name.startswith("net tie ")]
     if ties:
         out.append("Net ties solved as shorts: " + ", ".join(t[len("net tie "):] for t in ties) + ".")

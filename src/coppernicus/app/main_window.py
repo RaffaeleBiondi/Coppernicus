@@ -48,8 +48,8 @@ from coppernicus.power_tree import (
     tree_verdicts,
     unsolved_limits,
 )
-from coppernicus.problems import FAIL, find_problems, from_0v
-from coppernicus.project import Project, ProjectError, Rail
+from coppernicus.problems import FAIL, find_problems, max_drop_text
+from coppernicus.project import Limits, Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
 from coppernicus.service.convert import not_judged_items
 
@@ -69,6 +69,34 @@ def verdict_html(verdict: str, fails: int, not_judged, has_limits: bool) -> str:
     if has_limits:
         return missing or "<span style='color:#b9770e'><b>limits set, nothing judged</b></span>"
     return "no limits set: nothing is judged"
+
+
+def tree_header_html(key: str, res: RailResult, gv) -> str:
+    """The Problems header of group ``key`` of a power tree (``gv``: its GroupVerdict)."""
+    verdict = verdict_html(gv.verdict, gv.failed, gv.not_judged, has_limits(gv))
+    return (f"<b>{key}</b> ({res.kind} of the power tree: {' + '.join(res.nets)}): {max_drop_text(res)} "
+            f"· copper loss {res.power_loss * 1e3:.3g} mW · {verdict}")
+
+
+def rail_header_html(res: RailResult, limits: Limits, problems) -> str:
+    """The Problems header of a rail solved alone, judged against ``limits`` (``problems``:
+    its find_problems list)."""
+    fails = sum(p.severity == FAIL for p in problems)
+    shares = res.loss_breakdown()
+    total = sum(shares.values()) or 1.0
+    split = ", ".join(f"{k} {v / total:.0%}" for k, v in sorted(shares.items(), key=lambda kv: -kv[1])
+                      if v / total >= 0.01)
+    worst = max(res.loads, key=res.drop) if res.loads else None     # by mV: a % is NaN at 0 V
+    pct = res.drop_pct(worst) if worst else float("nan")
+    share = f", {pct:.2f} %" if pct == pct else ""
+    worst_txt = (f"worst load <b>{worst.name}</b> {res.worst_v(worst):.4f} V "
+                 f"({res.drop(worst) * 1e3:.2f} mV{share}) · ") if worst else ""
+    missing = not_judged_items(res, limits)      # the per-rail rule (service), one source
+    set_any = any(v is not None for v in vars(limits).values())
+    verdict = verdict_html("fail" if fails else "not_judged" if missing or not set_any else "pass",
+                           fails, missing, set_any)
+    return (f"<b>{res.net}</b>: {worst_txt}{max_drop_text(res)} · copper loss "
+            f"{res.power_loss * 1e3:.3g} mW ({split}) · {verdict}")
 
 
 class MainWindow(QMainWindow):
@@ -810,13 +838,7 @@ class MainWindow(QMainWindow):
     def _show_tree_problems(self, key: str):
         res = self.tree.groups[key]
         gv = group_verdict(self.tree, key)
-        worst = (f"max ground rise {from_0v(res.max_drop)}" if res.kind == "ground"
-                 else f"max drop {res.max_drop * 1e3:.2f} mV below the {res.v_ref:.4g} V set point")
-        verdict = verdict_html(gv.verdict, gv.failed, gv.not_judged, has_limits(gv))
-        nets = " + ".join(res.nets)
-        self.problems.set_result(
-            f"<b>{key}</b> ({res.kind} of the power tree: {nets}): {worst} · copper loss "
-            f"{res.power_loss * 1e3:.3g} mW · {verdict}", gv.problems, res.warnings + res.assumptions)
+        self.problems.set_result(tree_header_html(key, res, gv), gv.problems, res.warnings + res.assumptions)
 
     # ------------------------------------------------------------------ before / after
     def pin_baseline(self):
@@ -908,24 +930,8 @@ class MainWindow(QMainWindow):
     def _show_problems(self, res: RailResult):
         rail = self.project.rail(res.net) or Rail(res.net)
         problems = find_problems(res, rail.limits)
-        fails = sum(p.severity == FAIL for p in problems)
-        shares = res.loss_breakdown()
-        total = sum(shares.values()) or 1.0
-        split = ", ".join(f"{k} {v / total:.0%}" for k, v in sorted(shares.items(), key=lambda kv: -kv[1])
-                          if v / total >= 0.01)
-        worst = max(res.loads, key=res.drop) if res.loads else None     # by mV: a % is NaN at 0 V
-        pct = res.drop_pct(worst) if worst else float("nan")
-        share = f", {pct:.2f} %" if pct == pct else ""
-        worst_txt = (f"worst load <b>{worst.name}</b> {res.worst_v(worst):.4f} V "
-                     f"({res.drop(worst) * 1e3:.2f} mV{share}) · ") if worst else ""
-        missing = not_judged_items(res, rail.limits)      # the per-rail rule (service), one source
-        set_any = any(v is not None for v in vars(rail.limits).values())
-        verdict = verdict_html("fail" if fails else "not_judged" if missing or not set_any else "pass",
-                               fails, missing, set_any)
-        self.problems.set_result(
-            f"<b>{res.net}</b>: {worst_txt}max drop {res.max_drop * 1e3:.2f} mV · copper loss "
-            f"{res.power_loss * 1e3:.3g} mW ({split}) · {verdict}",
-            problems, res.warnings + res.assumptions)
+        self.problems.set_result(rail_header_html(res, rail.limits, problems), problems,
+                                 res.warnings + res.assumptions)
 
     def go_to_problem(self, problem):
         if problem.layer:
@@ -942,10 +948,14 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self.worker is not None and self.worker.isRunning():
+            # Cancelled, it reports "Solve cancelled": no box or drawing after the window has gone.
+            for signal in (self.worker.message, self.worker.succeeded, self.worker.failed,
+                           self.worker.finished):
+                signal.disconnect()
             self.worker.cancel()
             self.worker.wait(5000)
         if self.tree_worker is not None and self.tree_worker.isRunning():
-            for signal in (self.tree_worker.succeeded, self.tree_worker.failed):
+            for signal in (self.tree_worker.message, self.tree_worker.succeeded, self.tree_worker.failed):
                 signal.disconnect()
             self.tree_worker.cancel()
             self.tree_worker.wait(5000)
