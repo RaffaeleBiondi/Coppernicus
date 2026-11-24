@@ -25,6 +25,7 @@ from coppernicus.results import LayerField, RailResult
 FAIL, INFO = "fail", "info"
 HOTSPOT_TOP_SHARE = 0.01      # without a limit: the top 1 % of a layer's copper area by |J|
 HOTSPOT_GROW = 0.8            # ... grown through neighbours above 80 % of that threshold
+VIA_NOISE_SHARE = 1e-6        # vias below this share of the rail current carry nothing (round-off)
 
 
 @dataclass
@@ -132,12 +133,15 @@ def _hotspots(result: RailResult, limits: Limits, top: int) -> List[Problem]:
 
 def _vias(result: RailResult, limits: Limits, top: int) -> List[Problem]:
     vias = sorted(result.vias, key=lambda v: -v.current)
+    # Vias carrying a numerically zero current (solver round-off, ~1e-21 W) are not listed.
+    # This is display noise, not a verdict: below VIA_NOISE_SHARE of the rail's current.
+    floor = VIA_NOISE_SHARE * sum(abs(t.current) for t in result.sources)
     out = []
     for v in vias:
         fail = limits.max_via_current is not None and v.current > limits.max_via_current
         if not fail and len(out) >= top:
             continue
-        if v.current <= 0:
+        if v.current <= floor:
             continue
         what = "Via" if v.kind == "via" else "Plated hole"
         limit = (f"limit {limits.max_via_current:g} A" if limits.max_via_current is not None

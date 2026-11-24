@@ -290,6 +290,27 @@ class Board:
             used.update(lid for lid, polys in z.filled.items() if polys)
         return [c.id for c in self._snap.stackup.copper if c.id in used]
 
+    def net_layer_kinds(self, net: str) -> Dict[int, set]:
+        """Per copper layer id where ``net`` has copper, what is there: a set of "track",
+        "zone", "via" and "pad". Through vias and through-hole pads reach every layer they
+        cross, so a layer can hold nothing of the net but their rings."""
+        tracks, vias, pads, zones = self._snap.items_on_net(net)
+        kinds: Dict[int, set] = {}
+        for t in tracks:
+            kinds.setdefault(t.layer, set()).add("track")
+        for z in zones:
+            for lid, polys in z.filled.items():
+                if polys:
+                    kinds.setdefault(lid, set()).add("zone")
+        for v in vias:
+            for lid in v.layers:
+                kinds.setdefault(lid, set()).add("via")
+        for p in pads:
+            for lid in p.shapes:
+                kinds.setdefault(lid, set()).add("pad")
+        order = [c.id for c in self._snap.stackup.copper]
+        return {lid: kinds[lid] for lid in order if lid in kinds}
+
 
 def board_file_filter() -> str:
     """A Qt file-dialog filter for every board format the engine reads."""

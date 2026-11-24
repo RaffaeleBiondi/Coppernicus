@@ -66,7 +66,8 @@ def test_open_board_list_nets_and_parts(session, boards):
 
     nets = strict_json(session.list_nets("b1"))
     assert [n["name"] for n in nets["nets"]] == ["+3V3"]
-    assert nets["nets"][0] == {"name": "+3V3", "kind": "power", "layers": ["F.Cu", "B.Cu"]}
+    assert nets["nets"][0] == {"name": "+3V3", "kind": "power", "layers": ["F.Cu", "B.Cu"],
+                               "layers_with_copper": ["F.Cu", "B.Cu"], "layers_with_only_vias_or_pads": []}
     assert session.list_nets("b1", filter="+3v*")["count"] == 1          # a glob matches whole names
     assert session.list_nets("b1", filter="3v")["count"] == 1            # a plain filter is a substring
     assert session.list_nets("b1", filter="gnd")["count"] == 0
@@ -365,3 +366,22 @@ def test_dict_edits_keep_fields_the_service_does_not_know(session, boards):
     kept = session._results[rid].rail
     assert kept.links == ["L1"] and kept.sources[0].kind == "smps"
     assert kept.loads[0].ground_ref == "G1"
+
+
+def test_layers_with_only_via_rings_and_idle_vias_are_told_apart(session, tmp_path):
+    """A track on F.Cu with a through via down to an empty B.Cu: B.Cu holds only the via's
+    ring, and the via carries nothing but round-off, so it is not listed as a problem."""
+    b = SyntheticBoard("idle_via", two_layer_stackup())
+    b.square_pad("J1", "1", "VCC", 0.0, 0.0, 1.5)
+    b.square_pad("U1", "1", "VCC", 40.0, 0.0, 1.5)
+    b.track("VCC", F, 0.5, (0.0, 0.0), (40.0, 0.0))
+    b.via("VCC", 20.0, 0.0)
+    save_snapshot(b.snapshot(), tmp_path / "idle_via.kipi.json.gz")
+    bid = session.open_board(tmp_path / "idle_via.kipi.json.gz")["board_id"]
+    [net] = session.list_nets(bid, kind="all")["nets"]
+    assert net["layers"] == ["F.Cu", "B.Cu"]
+    assert net["layers_with_copper"] == ["F.Cu"] and net["layers_with_only_vias_or_pads"] == ["B.Cu"]
+    res = session.solve_rail(bid, "VCC", [{"ref": "J1", "voltage_v": 1.0}], [{"ref": "U1", "current_a": 1.0}])
+    assert res["via_count"] == 1 and res["via_current_max_a"] < 1e-6
+    assert not [p for p in res["problems"] if p["kind"] == "via"]
+    assert "round-off" in res["problems_note"]

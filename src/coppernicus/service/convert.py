@@ -272,7 +272,9 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         "problems": [problem_dict(p) for p in problems],
         "problems_total": len(problems),
         "problems_note": f"Every load, then the top {top} current-crowding spots and the top {top} "
-                         "vias by current (more when they exceed a limit you set).",
+                         "vias by current (more when they exceed a limit you set). Vias carrying "
+                         "under a millionth of the rail current are left out: that is solver "
+                         "round-off, not a judgement.",
         "settings": settings_to_dict(settings, thickness),
         "energy_balance_rel_error": res.energy_balance_error,
         "stats": {"triangles": int(res.stats.get("triangles", 0)),

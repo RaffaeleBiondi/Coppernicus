@@ -66,7 +66,7 @@ input.
 | Tool | Inputs | What it returns |
 |---|---|---|
 | `open_board` | `path` | Opens a board read-only. Returns `board_id`, copper layers with thickness, counts, the outline bounding box and import warnings. Reopening an unchanged file returns the same `board_id`. |
-| `list_nets` | `board_id`, `kind`?, `filter`?, `limit`? | Nets with their kind (`power_or_ground` by default, or `power`, `ground`, `signal`, `all`) and the copper layers each net is on. `filter` is a case-insensitive substring, or a glob over whole names such as `+3V*`. |
+| `list_nets` | `board_id`, `kind`?, `filter`?, `limit`? | Nets with their kind (`power_or_ground` by default, or `power`, `ground`, `signal`, `all`) and their copper layers: `layers` (all touched), `layers_with_copper` (tracks or zones) and `layers_with_only_vias_or_pads`. Through vias touch every layer, so `layers_with_copper` is the guide to where a rail runs. `filter` is a case-insensitive substring, or a glob over whole names such as `+3V*`. |
 | `net_parts` | `board_id`, `net` | Parts on the net with value, footprint and pins, used to choose sources and loads. Also the net ties that join the net to others, which are solved as shorts. |
 | `solve_rail` | `board_id`, `net`, `sources`, `loads`, `limits`?, `settings`?, `follow_net_ties`?, `top`? | Solves one rail. A source is `{ref, voltage_v, pins?, name?}`; a load is `{ref, current_a, pins?, name?}`. Returns `result_id` and a summary: load voltages and drops, max drop, loss per layer, busiest layer, top problems, verdict. |
 | `get_problems` | `result_id`, `limits`?, `top`? | Ranked problems: loads by drop, current-crowding spots by mean \|J\|, vias by current. Each has a layer and x/y in mm. Pass `limits` to re-judge without solving again. |
@@ -78,7 +78,12 @@ input.
 | `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
 
 A summary's `problems` list is complete: every load, then the `top` current-crowding spots and
-the `top` vias by current (default 5 each), plus any that exceed a limit you set.
+the `top` vias by current (default 5 each), plus any that exceed a limit you set. Vias carrying
+under a millionth of the rail current are left out. That current is solver round-off, and
+leaving them out is not a judgement.
+
+On a **ground rail**, which is solved with the source at 0 V, `v_ref_v` is 0. A percentage has
+no meaning there: `max_drop_pct` and `drop_pct` are `null`. Give the drops in mV.
 
 `solve_rail` settings, all optional:
 - `max_edge_mm`: the largest mesh edge on planes (default 0.5).
@@ -89,6 +94,9 @@ the `top` vias by current (default 5 each), plus any that exceed a limit you set
   board file is not changed. This is a quick test for agents, available only here in
   `solve_rail`. It is deliberately not part of project files: a real change of copper weight is
   made in KiCad, which then becomes the board that is solved.
+
+  The stack is rebuilt around the new thickness, so plated holes get longer or shorter. Even a
+  net with no copper on the changed layer then moves slightly through its via barrels.
 
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;

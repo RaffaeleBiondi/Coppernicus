@@ -248,12 +248,25 @@ class Session:
                                         else pat in n.casefold())]
         limit = max(1, int(limit))
         shown = nets[:limit]
+
+        def described(n):
+            per_layer = board.net_layer_kinds(n)
+            copper = [lid for lid, what in per_layer.items() if what & {"track", "zone"}]
+            return {"name": n, "kind": board.net_kind(n),
+                    "layers": [names[i] for i in per_layer],
+                    "layers_with_copper": [names[i] for i in copper],
+                    "layers_with_only_vias_or_pads": [names[i] for i in per_layer if i not in copper]}
+
         return C.jsonable({
             "board_id": entry.id, "kind": kind, "filter": filter, "count": len(nets),
             "returned": len(shown), "truncated": len(nets) > len(shown),
-            "nets": [{"name": n, "kind": board.net_kind(n),
-                      "layers": [names[i] for i in board.net_layers(n)]} for n in shown],
-            "assumptions": [C.NET_KIND_CAVEAT], "warnings": entry.warnings(),
+            "nets": [described(n) for n in shown],
+            "assumptions": [C.NET_KIND_CAVEAT,
+                            "'layers' lists every copper layer the net touches. Through vias and "
+                            "through-hole pads reach every layer they cross, so 'layers_with_copper' "
+                            "(tracks or zones of the net) is the better guide to where it runs; "
+                            "'layers_with_only_vias_or_pads' holds only their rings or pads."],
+            "warnings": entry.warnings(),
         })
 
     def net_parts(self, board_id: str, net: str) -> Dict[str, Any]:
@@ -342,7 +355,9 @@ class Session:
         if thickness:
             res.assumptions.append("What-if copper thickness (not the board file's): " + ", ".join(
                 f"{name} {mm:g} mm (board file: {original.get(name, float('nan')):g} mm)"
-                for name, mm in sorted(thickness.items())) + ".")
+                for name, mm in sorted(thickness.items())) + ". The stack is rebuilt around the new "
+                "thickness, so plated holes get longer or shorter: even a net with no copper on "
+                "that layer changes slightly through its via barrels.")
         problems = find_problems(res, rail.limits, top=max(1, int(top)))
         with self._lock:
             self._n_results += 1

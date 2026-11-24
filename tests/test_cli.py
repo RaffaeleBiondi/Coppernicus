@@ -97,7 +97,8 @@ def test_json_nets_and_parts(demo_project, capsys):
     assert main(["nets", board, "--json"]) == EXIT_OK
     doc = json.loads(capsys.readouterr().out)
     assert doc["board"]["name"] == "demo.kipi.json.gz"
-    assert doc["nets"] == [{"name": "+3V3", "kind": "power", "layers": ["F.Cu", "B.Cu"]}]
+    assert doc["nets"] == [{"name": "+3V3", "kind": "power", "layers": ["F.Cu", "B.Cu"],
+                            "layers_with_copper": ["F.Cu", "B.Cu"], "layers_with_only_vias_or_pads": []}]
     assert main(["parts", board, "+3V3", "--json"]) == EXIT_OK
     doc = json.loads(capsys.readouterr().out)
     assert [p["ref"] for p in doc["parts"]] == ["J1", "U1", "U2", "U3"]

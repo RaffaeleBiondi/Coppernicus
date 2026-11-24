@@ -16,6 +16,8 @@ why, and ask for what is missing.
 
 1. `open_board(path)`: absolute path. The board file is opened read-only. Never edit it.
 2. `list_nets(board_id)`, then `net_parts(board_id, net)`: the parts and pins on the rail.
+   Through vias touch every layer, so read `layers_with_copper` (tracks or zones) to see where
+   a rail really runs, not `layers`.
 3. Sources and loads come from the user.
    - **Source** = where the rail is regulated, at its voltage. For a buck regulator, that is the
      output inductor's output pad or the output-capacitor node, not the SW pin.
@@ -38,12 +40,15 @@ why, and ask for what is missing.
 7. What-if: re-solve with `settings={"copper_thickness_mm": {"B.Cu": 0.07}}`,
    `via_plating_um` or `copper_temp_c`, then `compare_results(a, b)`. `copper_thickness_mm` is
    a quick test that exists only here, not in project files. Real changes are made in KiCad.
+   The stack is rebuilt around the new thickness, so via barrels change length. A net with no
+   copper on that layer can still move slightly. Do not read that shift as a copper effect.
 8. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
    layer's maps with zoom, pan and a hover readout, plus the problems, worst values and
    assumptions. Give the user its `path`; you cannot read the page yourself.
 
 A summary's `problems` lists every load, then the top `top` current-crowding spots and the top
-`top` vias (default 5 each). Pass a larger `top` to see more vias.
+`top` vias (default 5 each). Pass a larger `top` to see more vias. Vias carrying under a
+millionth of the rail current are left out as round-off.
 
 Coordinates are in mm in KiCad's frame, with **y down**. Errors return `{"error": {code, message, hint}}`:
 follow the hint. `result_evicted` means you must solve again.
@@ -94,7 +99,8 @@ to a measured cross-section (`cut_current`).
 
 1. **Inputs:** net, sources and loads with their currents, and who gave each number.
 2. **Numbers:** the drop per load in mV and %, the copper loss per layer and in the vias, the top
-   crowding spots by **mean** |J| with their area, and the top vias by current.
+   crowding spots by **mean** |J| with their area, and the top vias by current. On a ground rail
+   (`v_ref_v` 0) the % is n/a (`null`): give mV only.
 3. **Verdict:** only against user limits. Otherwise write "not judged", followed by what you need.
 4. **Where and why:** the layer, the location in mm, and the cause (a neck, a slot, a single via,
    a thin track), with the cut that proves it.
