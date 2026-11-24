@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import fnmatch
 import math
 import re
 from dataclasses import dataclass, field
@@ -494,7 +495,7 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
                 [f"KiCad fields on {r.net} are incomplete ({missing[r.net]}): the project file's "
                  "rail is used"], board_fields=fr.listing())
         else:
-            rail, origin = _from_fields(fr, r)
+            rail, origin = _from_fields(fr, r, pad_nets)
             origin.notes += link_notes.get(r.net, [])
             new_rails.append(rail)
             merged.origins[r.net] = origin
@@ -503,7 +504,7 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
         if missing[net] is not None:
             errors.append(missing[net])
             continue
-        rail, origin = _from_fields(rails[net], None)
+        rail, origin = _from_fields(rails[net], None, pad_nets)
         origin.notes += link_notes.get(net, [])
         new_rails.append(rail)
         merged.origins[net] = origin
@@ -534,7 +535,8 @@ def _feeds(project: Project, net: str, ties: Sequence[Tuple[str, str]] = ()) -> 
         return True
 
 
-def _from_fields(fr: FieldRail, own: Optional[Rail]) -> Tuple[Rail, Origin]:
+def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = None
+                 ) -> Tuple[Rail, Origin]:
     """The fields' rail, with what it keeps from the project rail ``own`` of its net, and its
     origin (notes and warnings)."""
     rail = fr.rail()
@@ -542,7 +544,7 @@ def _from_fields(fr: FieldRail, own: Optional[Rail]) -> Tuple[Rail, Origin]:
     if own is None:
         return rail, origin
     # A project rail with no sources and no loads only adds limits: nothing to compare.
-    diffs = _differences(rail, own) if own.sources or own.loads else []
+    diffs = _differences(rail, own, pads) if own.sources or own.loads else []
     if diffs:
         origin.warnings.append(f"project file rail {fr.net} ignored: KiCad fields define it "
                                f"({'; '.join(diffs)}); set override_board_fields: true on the rail "
@@ -580,17 +582,38 @@ _SOURCE_KEYS = ("voltage", "pins", "kind", "efficiency", "quiescent_a", "input_r
 _LOAD_KEYS = ("current", "pins", "ground_ref", "ground_pins", "ground_net")
 
 
-def _key(t: Union[Source, Load]) -> Tuple:
+PadNets = Mapping[str, Mapping[str, str]]
+
+
+def _key(t: Union[Source, Load], net: str = "", pads: Optional[PadNets] = None) -> Tuple:
+    """What is compared of a terminal on ``net``: its values, and its pins as the set of pads
+    they select when the part's pads are known (``pads``: reference → {pad: net}), so that
+    "all" and a list of the same pads agree."""
     keys = _SOURCE_KEYS if isinstance(t, Source) else _LOAD_KEYS
     out = []
     for k in keys:
         v = getattr(t, k)
         if k.endswith("_ref") and v == t.ref:
             v = ""                                     # the part's own pins either way
+        if k.endswith("pins"):
+            where = {"pins": net, "input_pins": getattr(t, "input_net", ""),
+                     "ground_pins": t.ground_net}[k]
+            ref = t.ref if k == "pins" else (getattr(t, k.replace("pins", "ref")) or t.ref)
+            v = _pad_set(ref, v, where, pads)
         if isinstance(v, float):
             v = round(v, 12)
         out.append(v)
     return tuple(out)
+
+
+def _pad_set(ref: str, pins: PinSpec, net: str, pads: Optional[PadNets]):
+    """The pads of ``ref`` on ``net`` that ``pins`` selects (None: all of them), when the
+    part's pads are known; else the pins as written."""
+    known = (pads or {}).get(ref)
+    if known is None or not net:
+        return tuple(pins) if pins is not None else None
+    on_net = [n for n, pad_net in known.items() if pad_net == net]
+    return frozenset(n for n in on_net if pins is None or any(fnmatch.fnmatchcase(n, p) for p in pins))
 
 
 def _term_text(t: Union[Source, Load]) -> str:
@@ -613,24 +636,23 @@ def _term_text(t: Union[Source, Load]) -> str:
     return s
 
 
-def _differences(kicad: Rail, project: Rail) -> List[str]:
+def _differences(kicad: Rail, project: Rail, pads: Optional[PadNets] = None) -> List[str]:
     """What differs between the fields' rail and the project's, part by part (names, limits
-    and remote sense are not compared)."""
+    and remote sense are not compared; pins as the pads they select, when known)."""
     out = []
+
+    def key(t):
+        return _key(t, kicad.net, pads)
     for what, ks, ps in (("source", kicad.sources, project.sources), ("load", kicad.loads, project.loads)):
         for ref in sorted({t.ref for t in ks} | {t.ref for t in ps}, key=_ref_key):
-            a = sorted((t for t in ks if t.ref == ref), key=_key_text)
-            b = sorted((t for t in ps if t.ref == ref), key=_key_text)
+            a = sorted((t for t in ks if t.ref == ref), key=lambda t: repr(key(t)))
+            b = sorted((t for t in ps if t.ref == ref), key=lambda t: repr(key(t)))
             for x, y in zip(a, b):
-                if _key(x) != _key(y):
+                if key(x) != key(y):
                     out.append(f"KiCad {_term_text(x)}, project {_term_text(y)}")
             out += [f"KiCad has {what} {_term_text(x)}, project does not" for x in a[len(b):]]
             out += [f"project has {what} {_term_text(y)}, KiCad does not" for y in b[len(a):]]
     return out
-
-
-def _key_text(t) -> str:
-    return repr(_key(t))
 
 
 def _same_link(a: Link, b: Link) -> bool:
