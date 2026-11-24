@@ -205,8 +205,8 @@ KiPI's own `SolveError`s become `EngineError` too.
 
 ### VRMs → `TreeResult.vrms: List[VrmReport]` (new, `results.py`)
 
-| KiPI `VrmReport` | Coppernicus `VrmReport` | Unit |
-|---|---|---|
+| KiPI `VrmReport` | Coppernicus `VrmReport` | Unit | Notes |
+|---|---|---|---|
 | `name` | `name` | — | The setup name (`terminal_names`). |
 | `kind`, `group` | `kind`, `group` (our key) | — |
 | `v_set` | `v_set_v` | V |
