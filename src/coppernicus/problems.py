@@ -363,6 +363,15 @@ def from_0v(volts: float) -> str:
     return f"{abs(volts) * 1e3:.2f} mV {'above' if volts >= 0 else 'below'} 0 V"
 
 
+def max_drop_text(res: RailResult) -> str:
+    """The worst of the copper for a summary line: "max drop 12.34 mV below 3.3 V", "max
+    drop 12.34 mV above -3.3 V (toward 0 V)", or, on a ground (a ground group, a net at 0 V
+    solved alone), "max ground rise 5.67 mV above 0 V" (signed on a ground group)."""
+    if res.is_rise():
+        return f"max ground rise {from_0v(res.max_drop)}"
+    return f"max drop {res.max_drop * 1e3:.2f} {res.drop_unit()}"
+
+
 def _rise(res: RailResult, limits: Limits, source: str = "") -> List[Problem]:
     """With a ``max_ground_rise_mv`` limit: the largest deviation of the net's copper from
     its reference, and where it is, signed (a ground below 0 V under a negative rail) and
