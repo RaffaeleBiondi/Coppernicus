@@ -315,6 +315,7 @@ class ReportBuilder:
         loads = [{"name": t.name, "ref": t.ref, "pins": len(t.pad_ids), "current_a": t.current,
                   "v_min_v": t.v_min, "drop_mv": result.drop(t) * 1e3, "drop_pct": result.drop_pct(t),
                   "exceeds": (None if limits.max_drop_pct is None
+                              or not math.isfinite(result.drop_pct(t))
                               else bool(result.drop_pct(t) > limits.max_drop_pct)),
                   "pads": [list(p) for p in t.positions[:200]]} for t in result.loads]
         sources = [{"name": t.name, "ref": t.ref, "pins": len(t.pad_ids), "current_a": t.current,
@@ -325,7 +326,7 @@ class ReportBuilder:
         top_hot = max(hot, key=lambda p: p.value, default=None)
         top_via = max(result.vias, key=lambda v: v.current, default=None)
         busiest = max(result.layers, key=lambda lf: lf.power, default=None)
-        judged = verdict(problems, limits)
+        judged = verdict(problems, limits, result)
         self.rails.append({
             "net": result.net, "label": label or result.net, "nets": list(result.nets),
             "v_ref_v": result.v_ref, "v_lo_v": v_lo, "v_hi_v": v_hi,
@@ -334,7 +335,7 @@ class ReportBuilder:
             "worst": {
                 "load": worst_load and {k: worst_load[k] for k in ("name", "drop_mv", "drop_pct")},
                 "max_drop_mv": result.max_drop * 1e3,
-                "max_drop_pct": 100.0 * result.max_drop / result.v_ref if result.v_ref else None,
+                "max_drop_pct": 100.0 * result.max_drop / abs(result.v_ref) if result.v_ref else None,
                 "power_loss_w": result.power_loss,
                 "busiest_layer": busiest.name if busiest else None,
                 "hotspot": top_hot and {"mean_j_a_mm2": top_hot.data.get("mean_j_a_mm2", top_hot.value),

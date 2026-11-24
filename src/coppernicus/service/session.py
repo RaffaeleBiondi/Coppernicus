@@ -469,11 +469,17 @@ class Session:
         overall = ("error" if "error" in verdicts else "fail" if "fail" in verdicts else
                    "pass" if verdicts and all(v == "pass" for v in verdicts) else
                    "pass_partially_judged" if "pass" in verdicts else "not_judged")
+        unjudged = [{"rail": r["net"], **u} for r in out_rails for u in r.get("not_judged", [])]
+        note = ("fail: a limit you set is exceeded on some rail; pass: every rail has limits, "
+                "each judges what it applies to, and none is exceeded; not_judged: no limits set, "
+                "or a limit set could not judge some items (listed in not_judged). Rails skipped "
+                "for having no loads are left out.")
+        if unjudged:
+            note += " Not judged: " + "; ".join(f"{u['rail']}: {u['item']} ({u['limit']}): "
+                                                f"{u['reason']}" for u in unjudged)
         return C.jsonable({
             "project": path.resolve(), "board": board_info, "rails": out_rails, "verdict": overall,
-            "verdict_note": "fail: a limit you set is exceeded on some rail; pass: every rail has "
-                            "limits and none is exceeded; not_judged: no limits set. Rails skipped "
-                            "for having no loads are left out.",
+            "verdict_note": note, "not_judged": unjudged,
             "assumptions": [], "warnings": entry.warnings(),
         })
 
@@ -604,7 +610,7 @@ class Session:
         lim = rec.rail.limits if limits is None else C.limits_from_dict(limits)
         problems = find_problems(live.res, lim, top=max(1, int(top)))
         return C.jsonable({
-            "result_id": rec.id, "net": live.res.net, **C.verdict(problems, lim),
+            "result_id": rec.id, "net": live.res.net, **C.verdict(problems, lim, live.res),
             "problems": [C.problem_dict(p) for p in problems],
             "assumptions": [
                 "Loads are ranked by drop at their worst pin; hotspots are connected regions in the "
@@ -680,7 +686,7 @@ class Session:
         out.update({
             "on_copper": True, "connected": connected, "voltage_v": v,
             "drop_mv": (res.v_ref - v) * 1e3,
-            "drop_pct": 100.0 * (res.v_ref - v) / res.v_ref if res.v_ref else None,
+            "drop_pct": 100.0 * (res.v_ref - v) / abs(res.v_ref) if res.v_ref else None,
             "j_a_mm2": float(lf.current_density[k]), "j_vector_a_mm2": jv[k],
             "assumptions": ["Voltage is interpolated linearly in the mesh triangle; |J| is constant "
                             "per triangle and uniform through the copper thickness."],

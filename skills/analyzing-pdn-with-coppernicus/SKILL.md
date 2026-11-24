@@ -114,6 +114,9 @@ to a measured cross-section (`cut_current`).
    crowding spots by **mean** |J| with their area, and the top vias by current. On a ground rail
    (`v_ref_v` 0) the % is n/a (`null`): give mV only.
 3. **Verdict:** only against user limits. Otherwise write "not judged", followed by what you need.
+   A `not_judged` verdict with items listed means a limit was set but could not judge them
+   (a % limit on a 0 V net, a load with no voltage, no vias for a via limit): name each item
+   and its reason; never report it as a pass.
 4. **Where and why:** the layer, the location in mm, and the cause (a neck, a slot, a single via,
    a thin track), with the cut that proves it.
 5. **Assumptions** from the `assumptions` field: plating, temperature, mesh, the equal split

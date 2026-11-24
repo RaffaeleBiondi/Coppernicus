@@ -167,7 +167,7 @@ async function readout(ev) {
   let text;
   if (cv === 1) text = `${where}: copper with no path to a source (no voltage); |J| = 0.`;
   else { const V = rail.v_lo_v + (cv - 2) * vstep, drop = (rail.v_ref_v - V) * 1e3;
-    text = `${where}: V = ${sig(V, 7)} V · drop = ${sig(drop, 4)} mV (${sig(100 * drop / 1e3 / rail.v_ref_v, 3)} %) · |J| = ${sig(J, 4)} A/mm²`; }
+    text = `${where}: V = ${sig(V, 7)} V · drop = ${sig(drop, 4)} mV (${rail.v_ref_v ? sig(100 * drop / 1e3 / Math.abs(rail.v_ref_v), 3) : "n/a"} %) · |J| = ${sig(J, 4)} A/mm²`; }
   out.textContent = "";
   out.append(text, el("br"), el("span", { class: "muted small" },
     `Values at the centre of the ${sig(c, 3)} mm cell under the pointer, (${fix(g.x0 + (i + 0.5) * c, 3)}, ${fix(g.y0 + (j + 0.5) * c, 3)}) mm, ` +
@@ -215,6 +215,8 @@ function verdictText(rail) {   // the limits in words; only limits the user set 
   if (lim.max_ground_rise_mv != null) parts.push(`ground rise ≤ ${sig(lim.max_ground_rise_mv, 4)} mV above the source`);
   if (rail.verdict === "fail") return `Fails against the limits you set: ${parts.join("; ")}. ${rail.failed} problem${rail.failed === 1 ? "" : "s"} over a limit.`;
   if (rail.verdict === "pass") return `Within the limits you set: ${parts.join("; ")}. Limits you did not set are not checked.`;
+  const nj = rail.not_judged || [];
+  if (nj.length) return `Not judged against the limits you set (${parts.join("; ")}): ${nj.map((u) => `${u.item} (${u.limit}): ${u.reason}`).join("; ")}.`;
   return "Not judged: no limits were set, so the problems below are ranked, not judged.";
 }
 function panels() {

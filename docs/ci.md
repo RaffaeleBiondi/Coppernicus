@@ -44,6 +44,11 @@ passes. Coppernicus has no built-in thresholds. The limits are `max_drop_pct`,
 `max_current_density`, `max_via_current` and, for a ground net solved on its own,
 `max_ground_rise_mv`; the summary names the ones that were set ("ground rise ≤ 10 mV").
 
+A rail is "NOT JUDGED" when a limit you set applies to something it cannot judge: a % drop
+limit on a 0 V net, a load with no voltage at its pins, or `max_via_current` on a rail with no
+vias. The summary lists each such item with its reason. This does not fail the check (exit
+code 0, as for a pass); a limit exceeded elsewhere on the rail still fails it.
+
 A rail with no loads is shown as "skipped: no loads". In a power tree this is a rail that only
 feeds a regulator's input. It is not an error and does not fail the check.
 

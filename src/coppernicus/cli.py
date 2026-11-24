@@ -151,6 +151,8 @@ def _cmd_solve(args) -> int:
         res, problems = session.rail_result(rid), session.rail_problems(rid)
         if not quiet:
             _print_rail(res, problems)
+            for u in summary.get("not_judged", []):
+                print(f"  NOT JUDGED {u['item']} ({u['limit']}): {u['reason']}")
             for m in summary.get("maps", []):
                 print(f"    map: {m}")
         builder = report.get("builder")

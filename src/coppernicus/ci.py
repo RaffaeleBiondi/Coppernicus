@@ -173,6 +173,8 @@ def _verdict_cell(rail: Dict[str, Any]) -> str:
         return f"**FAIL** ({_cell(lim)})"
     if v == "pass":
         return f"PASS ({_cell(lim)})"
+    if rail.get("not_judged"):
+        return f"NOT JUDGED ({_cell(lim)})"
     return "not judged (no limits)"
 
 
@@ -188,10 +190,11 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
     verdict = index.get("verdict", "error")
     headline = {"fail": "**FAIL**: a limit set in a project file is exceeded.",
                 "pass": "PASS: every rail is within the limits set in its project file.",
-                "not_judged": "Not judged: no limits are set in the project files; the numbers are "
-                              "ranked only.",
-                "pass_partially_judged": "PASS where limits are set; some rails have none and are "
-                                         "not judged.",
+                "not_judged": "Not judged: no limits are set in the project files, or a limit set "
+                              "could not judge some items (listed below); the numbers are ranked "
+                              "only.",
+                "pass_partially_judged": "PASS where limits judge; some rails have no limits, or "
+                                         "items a limit could not judge (listed below).",
                 "error": "**Error**: a project could not be solved."}.get(verdict, verdict)
     lines += [headline, "",
               "| Project | Rail | Worst load | Max drop (mV) | Max drop (%) | Copper loss (mW) | Verdict |",
@@ -226,8 +229,11 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
             shown = [p for p in problems if p.get("severity") == "fail"]
             room = max(0, problems_per_rail - len(shown))
             shown += [p for p in problems if p.get("severity") != "fail"][:room]
-            if shown:
+            unjudged = rail.get("not_judged") or []
+            if shown or unjudged:
                 details += ["", f"**{_cell(rail['net'])}** ({_cell(e['project'])}): top problems", ""]
+                details += [f"- NOT JUDGED {_cell(u['item'])} ({_cell(u['limit'])}): {_cell(u['reason'])}"
+                            for u in unjudged]
                 for p in shown:
                     tag = "**FAIL** " if p.get("severity") == "fail" else ""
                     layer = p.get("layer")

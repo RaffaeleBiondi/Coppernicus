@@ -83,7 +83,10 @@ under a millionth of the rail current are left out. That current is solver round
 leaving them out is not a judgement.
 
 On a **ground rail**, which is solved with the source at 0 V, `v_ref_v` is 0. A percentage has
-no meaning there: `max_drop_pct` and `drop_pct` are `null`. Give the drops in mV.
+no meaning there: `max_drop_pct` and `drop_pct` are `null`, and a `max_drop_pct` limit cannot
+judge its loads (they are listed in `not_judged`). Give the drops in mV, and judge a ground
+with `max_ground_rise_mv`. On a **negative rail** percentages are of |`v_ref_v`|, so they are
+positive like the drops.
 
 `solve_rail` settings, all optional:
 - `max_edge_mm`: the largest mesh edge on planes (default 0.5).
@@ -141,9 +144,16 @@ Problem kinds, in `problems` of every summary and of `get_problems`:
   `result_evicted`, `cut_misses_copper`, `solve_failed`, `cancelled`, `internal_error`. An
   argument of the wrong type is rejected by the tool's input schema before it runs.
 - **Verdicts.** A verdict exists only against limits the user gives:
-  - `fail`: a limit you set is exceeded;
-  - `pass`: limits are set and none is exceeded;
-  - `not_judged`: no limits are set, so problems are ranked and nothing is judged.
+  - `fail`: an item exceeds a limit you set;
+  - `not_judged`: no limits are set, so problems are ranked and nothing is judged; or a limit
+    you set applies to something it could not judge. `not_judged` then lists each item with
+    `limit` and `reason`: a % limit on a 0 V net, a load with no voltage at its pins, a limit
+    that judges nothing on this rail (`max_via_current_a` on a rail with no vias). A failure
+    elsewhere still makes the verdict `fail`;
+  - `pass`: limits are set, each judges what it applies to, and none is exceeded.
+
+  `solve_project` adds a top-level `not_judged` with the rail of each item. The CLI text and
+  the CI job summary print each item as "NOT JUDGED …". Exit code 0, as for `pass`.
 
   Coppernicus invents no thresholds, and an agent should not either.
 - **`assumptions` and `warnings` come with every answer.** Read them. They say:

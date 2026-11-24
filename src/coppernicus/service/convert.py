@@ -219,21 +219,56 @@ def problem_dict(p: Problem) -> Dict[str, Any]:
     return out
 
 
-def verdict(problems: List[Problem], limits: Limits) -> Dict[str, Any]:
-    """``fail`` when a limit the user set is exceeded, ``pass`` when limits are set and none
-    is, ``not_judged`` without limits (problems are then only ranked)."""
+def not_judged_items(res: RailResult, limits: Limits) -> List[Dict[str, str]]:
+    """What a limit the user set applies to but could not judge, each with the reason: a %
+    limit on a load of a 0 V net, a load with no voltage at its pins, a limit that judges
+    nothing on this rail (no vias, no copper)."""
+    out = []
+    if limits.max_drop_pct is not None:
+        for t in res.loads:
+            if math.isfinite(res.drop_pct(t)):
+                continue
+            reason = ("0 V nominal: a % drop limit does not apply (give the drop in mV, or set "
+                      "max_ground_rise_mv)" if not res.v_ref else
+                      "no voltage at its pins: not connected to the source by copper")
+            out.append({"item": t.name, "limit": "max_drop_pct", "reason": reason})
+    if limits.max_via_current is not None and not res.vias:
+        out.append({"item": res.net, "limit": "max_via_current_a",
+                    "reason": "the rail has no vias: the limit judges nothing"})
+    solved = [lf for lf in res.layers if np.isfinite(lf.voltage).any()]
+    if not solved:
+        for key in ("max_current_density_a_mm2", "max_ground_rise_mv"):
+            if getattr(limits, LIMIT_KEYS[key]) is not None:
+                out.append({"item": res.net, "limit": key,
+                            "reason": "no copper solved: the limit judges nothing"})
+    return out
+
+
+def not_judged_text(items: Sequence[Mapping[str, str]]) -> str:
+    return "; ".join(f"{u['item']} ({u['limit']}): {u['reason']}" for u in items)
+
+
+def verdict(problems: List[Problem], limits: Limits, result: Optional[RailResult] = None
+            ) -> Dict[str, Any]:
+    """``fail`` when an item exceeds a limit the user set; else ``not_judged`` when a set
+    limit applies to something it could not judge (``not_judged`` lists each, with the
+    reason; needs ``result``) or when no limit is set; else ``pass``."""
     checked = limits_to_dict(limits)
     failed = [p for p in problems if p.severity == FAIL]
+    unjudged = not_judged_items(result, limits) if result is not None else []
     if failed:
         v = "fail"
-    elif checked:
+    elif checked and not unjudged:
         v = "pass"
     else:
         v = "not_judged"
     note = ("Judged only against the limits you set: " + ", ".join(f"{k} = {val:g}"
                                                                    for k, val in checked.items())
             if checked else "No limits set: nothing is judged, problems are ranked only.")
-    return {"verdict": v, "limits": checked, "failed": len(failed), "verdict_note": note}
+    if unjudged:
+        note += ". Not judged: " + not_judged_text(unjudged)
+    return {"verdict": v, "limits": checked, "failed": len(failed), "verdict_note": note,
+            "not_judged": unjudged}
 
 
 def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems: List[Problem],
@@ -243,12 +278,13 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
     then the ``top`` current-crowding spots and the ``top`` vias (more when they exceed a
     limit), as :func:`coppernicus.problems.find_problems` ranked them."""
     v_ref = res.v_ref
-    pct = (lambda volts: 100.0 * volts / v_ref) if v_ref else (lambda volts: float("nan"))
+    # Of |v_ref|, so a negative rail's percentages are positive, as its drops are.
+    pct = (lambda volts: 100.0 * volts / abs(v_ref)) if v_ref else (lambda volts: float("nan"))
     limits = rail.limits
     loads = []
     for t, spec in zip(res.loads, rail.loads):
         drop = res.drop(t)
-        exceeds = (None if limits.max_drop_pct is None
+        exceeds = (None if limits.max_drop_pct is None or not math.isfinite(res.drop_pct(t))
                    else bool(res.drop_pct(t) > limits.max_drop_pct))
         x, y = t.positions[0] if t.positions else (float("nan"), float("nan"))
         loads.append({"name": t.name, "ref": t.ref, "pins": pins_text(spec.pins),
@@ -279,7 +315,7 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         "busiest_layer": busiest, "layers": layers,
         "via_count": len(res.vias), "via_current_max_a": max((v.current for v in res.vias), default=0.0),
         "j_point_max_a_mm2": res.j_max,
-        **verdict(problems, limits),
+        **verdict(problems, limits, res),
         "problems": [problem_dict(p) for p in problems],
         "problems_total": len(problems),
         "problems_note": f"Every load, then the top {top} current-crowding spots and the top {top} "
