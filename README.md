@@ -172,6 +172,8 @@ together. Try it on `examples/power_chain/power_chain.coppernicus.yml`.
 - Click a regulator under **Sources** to set its kind (LDO or switcher), efficiency, quiescent
   current and input, ground and sense pins.
 - On a ground net, **Max ground rise (mV)** is an optional limit.
+- A group passes only when everything its limits apply to was judged. A load behind a regulator
+  out of regulation, or a disconnected one, is listed as *not judged*, never as a pass.
 
 A rail solved on its own (F5) also draws the regulators it feeds, with their input current
 estimated at nominal voltages; its assumptions say so.
@@ -311,6 +313,8 @@ and links such as ferrites are described in [docs/engine-mapping.md](docs/engine
 | Power tree with ground return: regulators as loads on the rail feeding them, ground rise, remote sense; Solve power tree (Ctrl+T), Group selector, Power tree tab; `solve --tree` (and `--json`) | ✅ |
 | A rail solved alone draws the regulator inputs and links it feeds, estimated at nominal voltages | ✅ in the app; CLI and MCP next |
 | Optional ground-rise limit (`max_ground_rise_mv`) on a ground net | ✅ |
+| Power-tree verdicts: a group passes only when everything its limits apply to was judged. Items that cannot be judged (disconnected, behind a regulator out of regulation, not converged, 0 V nominal, a limit on a net the tree does not solve) give "not judged" and are named | ✅ |
+| Regulator inputs judged as loads on the rail feeding them (across input and ground pins); limits per net, a net without its own limit takes its group's main rail's; copper judged against the strictest limit in the group, and a fail names whose limit it used | ✅ |
 | What-if copper thickness per layer (`copper_thickness_mm`, optional) | ✅ (project file and MCP; an app field comes next) |
 | Board temperature (electro-thermal) | 🔄 next |
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
