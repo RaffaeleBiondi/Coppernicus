@@ -259,6 +259,17 @@ def test_copper_thickness_round_trip(tmp_path):
     assert "copper_thickness_mm" not in out.read_text(encoding="utf-8")
 
 
+def test_copper_thickness_is_at_most_1_mm():
+    """The owner's bound: 1 mm, the thickest copper a value may be (a larger one is µm or oz
+    written as mm); 1 mm itself is allowed."""
+    assert Settings(copper_thickness_mm={"B.Cu": 1.0}).copper_thickness_mm == {"B.Cu": 1.0}
+    for value in (1.5, 2, 35):
+        with pytest.raises(ProjectError) as e:
+            Settings(copper_thickness_mm={"B.Cu": value})
+        assert str(e.value) == (f"copper_thickness_mm[B.Cu] = {value!r}: give the thickness in mm, "
+                                "> 0 and at most 1 mm (1 oz copper is 0.035, not 35)")
+
+
 @pytest.mark.parametrize("value", [35, 0, -0.035, float("nan"), float("inf"), "thick", True, None])
 def test_copper_thickness_values_are_checked(value, tmp_path):
     path = tmp_path / "bad.coppernicus.yml"

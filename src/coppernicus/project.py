@@ -214,12 +214,12 @@ class Settings:
         self.copper_thickness_mm = check_copper_thickness(self.copper_thickness_mm)
 
 
-# A sanity bound, far above the copper of any PCB: a larger number is µm written as mm.
-MAX_COPPER_MM = 10.0
+# The owner's bound: a thicker value is surely µm or oz written as mm.
+MAX_COPPER_MM = 1.0
 
 
 def check_copper_thickness(values) -> Dict[str, float]:
-    """``{layer name: thickness in mm}``, checked: each a finite number, > 0 and below
+    """``{layer name: thickness in mm}``, checked: each a finite number, > 0 and at most
     ``MAX_COPPER_MM``. Raises :class:`ProjectError` saying the unit."""
     if values is None:
         return {}
@@ -229,9 +229,9 @@ def check_copper_thickness(values) -> Dict[str, float]:
     out = {}
     for layer, mm in values.items():
         x = None if isinstance(mm, bool) else _float_or_none(mm)
-        if x is None or not math.isfinite(x) or x <= 0 or x >= MAX_COPPER_MM:
+        if x is None or not math.isfinite(x) or x <= 0 or x > MAX_COPPER_MM:
             raise ProjectError(f"copper_thickness_mm[{layer}] = {mm!r}: give the thickness in mm, "
-                               f"> 0 and below {MAX_COPPER_MM:g} (1 oz copper is 0.035, not 35)")
+                               f"> 0 and at most {MAX_COPPER_MM:g} mm (1 oz copper is 0.035, not 35)")
         out[str(layer)] = x
     return out
 

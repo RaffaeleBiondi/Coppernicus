@@ -476,7 +476,7 @@ is not changed. Real changes of copper weight are made in KiCad. Each rail's ass
 the overridden layers, with the board file's value next to each; the HTML report lists the
 setting with the others.
 
-- Values are in mm, finite, above 0 and below 10: 1 oz copper is 0.035, not 35. A value such as
+- Values are in mm, finite, above 0 and at most 1: 1 oz copper is 0.035, not 35. A value such as
   35 makes the project file invalid.
 - A layer name the board does not have fails the whole project, with one `layer_not_found`
   error listing the board's copper layers.
