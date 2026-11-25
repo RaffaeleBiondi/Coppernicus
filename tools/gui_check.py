@@ -2141,9 +2141,12 @@ def solve_ac_and_wait(window, timeout_s: float, cancel_in_solve: bool = False):
     t0 = time.monotonic()
     while panel.busy and time.monotonic() - t0 < timeout_s:
         QApplication.processEvents()
-        if cancel_in_solve and panel.worker is not None and panel.worker.phase == "solve":
-            panel.cancel()
-            cancel_in_solve = False
+        if panel.worker is not None and panel.worker.phase == "solve":
+            if not any(h.startswith("label during the solve: ") for h in heard):
+                heard.append("label during the solve: " + panel.estimate.text())
+            if cancel_in_solve:
+                panel.cancel()
+                cancel_in_solve = False
         time.sleep(0.01)
     QApplication.processEvents()
     panel.estimated.disconnect(heard.append)
@@ -2162,8 +2165,10 @@ def run_ac(window, check: Checks, args, out: Path):
     from PySide6.QtWidgets import QApplication
 
     import coppernicus.engine.ac as engine_ac
-    from coppernicus.impedance import ASSUMED_LABEL, rail_verdict
+    from coppernicus.app.ac_panel import LAST_SOLVE_SETTING, _settings
+    from coppernicus.impedance import rail_verdict
     panel = window.ac_panel
+    _settings().remove(LAST_SOLVE_SETTING)        # "no earlier solve" holds in a reused --out too
     window.dirty = False
     window.open_project(PDN_DIR / "pdn.coppernicus.yml")
     window.results_tabs.setCurrentWidget(panel)
@@ -2178,8 +2183,11 @@ def run_ac(window, check: Checks, args, out: Path):
     n_boxes = len(DIALOGS)
     res, heard = solve_ac_and_wait(window, args.timeout)
     check("ac: the cost estimate (triangles × ports) is shown before the solve starts",
-          len(heard) == 1 and "triangles ×" in heard[0] and "ports" in heard[0]
+          len(heard) == 2 and "triangles ×" in heard[0] and "ports" in heard[0]
           and "no earlier solve" in heard[0], heard[0][:160] if heard else "none")
+    check("ac: ... and stays on its own line through the solve and after it",
+          heard[1:] == ["label during the solve: " + heard[0]] and panel.estimate.text() == heard[0],
+          panel.estimate.text()[:120])
     ax = panel.figure.axes[0] if panel.figure.axes else None
     title = ax.get_title() if ax else ""
     check("ac: pdn solved, |Z| and its target drawn, FAIL against the 50 mΩ target",
@@ -2218,10 +2226,17 @@ def run_ac(window, check: Checks, args, out: Path):
     res, _ = solve_ac_and_wait(window, args.timeout)
     ax = panel.figure.axes[0]
     legend = [t.get_text() for t in ax.get_legend().get_texts()] if ax.get_legend() else []
-    check("ac: without a bandwidth the band is drawn with impedance's label, nothing judged",
-          res is not None and ASSUMED_LABEL in legend and "bandwidth not given" in ax.get_title()
-          and rail_verdict(res)[0] == "not_judged" and panel.table.item(0, 8).text() == "not judged",
-          f"{legend} | {ax.get_title()}")
+    # The band as draw_impedance drew it (its wording is the core's): from the sweep's start
+    # to the assumed bandwidth, in the legend.
+    panel.canvas.draw()
+    bands = [(ax.transData.inverted().transform(pt.get_window_extent())[:, 0], pt.get_label())
+             for pt in ax.patches if pt.get_label() and not pt.get_label().startswith("_")]
+    band_ok = res is not None and res.bandwidth_assumed and any(
+        abs(x[0] / res.freq_hz[0] - 1) < 0.05 and abs(x[1] / res.open_loop_hz - 1) < 0.05
+        and label in legend for x, label in bands)
+    check("ac: without a bandwidth the band to the assumed bandwidth is drawn, nothing judged",
+          band_ok and rail_verdict(res)[0] == "not_judged" and panel.table.item(0, 8).text() == "not judged",
+          f"{[(list(map(float, x)), lb) for x, lb in bands]} | {legend}")
     check("ac: ... solved at the quick preset's 10 per decade, as its assumption says",
           res is not None and res.stats["field_frequencies"] == 56
           and any("(10 per decade)" in a for a in res.assumptions),

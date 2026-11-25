@@ -297,7 +297,8 @@ def test_the_impedance_tab_follows_the_power_tree_and_opening_changes_nothing():
     run_in_window(f'''
         tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
         assert tabs[tabs.index("Power tree") + 1] == "Impedance", tabs
-        before = window.minimumSizeHint()
+        window.show()                                         # sizes are laid out only when shown
+        app.processEvents()
         window.open_project({PDN!r})
         app.processEvents()
         panel = window.ac_panel
@@ -312,8 +313,12 @@ def test_the_impedance_tab_follows_the_power_tree_and_opening_changes_nothing():
             if hasattr(w, "editingFinished"):
                 w.editingFinished.emit()
         assert window.dirty is False and window.project.to_dict() == before_dict
-        after = window.minimumSizeHint()
-        assert after.height() <= max(before.height(), 600) and after.width() <= 1440, (before, after)
+        with_tab = window.minimumSizeHint()                  # the laptop fit: the tab grows nothing
+        window.results_tabs.removeTab(window.results_tabs.indexOf(panel))
+        app.processEvents()
+        without = window.minimumSizeHint()
+        assert with_tab.height() <= without.height() and with_tab.width() <= without.width(), (
+            with_tab, without)
     ''')
 
 
@@ -448,6 +453,7 @@ def test_a_result_goes_stale_on_a_setup_edit_not_on_a_save_or_a_marked_net():
     p.board = "/abs/b.kipi.json.gz"
     key = _project_key(p)
     p.board, p.marked_rails = "b.kipi.json.gz", ["+1V8"]
+    p.rails[0].limits.max_drop_pct = 1.0                   # a DC limit: no AC solve reads it
     assert _project_key(p) == key
     p.probes[0].target_ohm = 0.05
     assert _project_key(p) != key

@@ -67,10 +67,12 @@ from coppernicus.project import (
 
 # ---------------------------------------------------------------------- numbers
 
-# The quick preset: the copper solved at this many frequencies per decade instead of KiPI's
-# 20 (kipi/ac/model.py:242), as KiPI's own decoupling and ferrite validation boards are
-# (tests/accuracy/test_ac_accuracy.py, field 10/dec). Applied only when the user presses it.
+# The quick preset (Coppernicus's choice; KiPI has none): the copper solved at this many
+# frequencies per decade instead of KiPI's 20 (kipi/ac/model.py:242), as KiPI's own decoupling
+# and ferrite validation boards are (examples/validation/make_boards.py:406, :447), which its
+# tests/accuracy/test_ac_accuracy.py holds to its tolerances. Applied only when pressed.
 QUICK_FIELD_POINTS = 10
+KIPI_FIELD_POINTS = AcOptions().field_points_per_decade       # KiPI's default (AcOptions copies it)
 
 _SI = {"p": -12, "n": -9, "u": -6, "µ": -6, "μ": -6, "m": -3, "k": 3, "K": 3, "M": 6, "G": 9}
 _SI_RE = re.compile(r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*([pnuµμmkKMG]?)$")
@@ -415,11 +417,13 @@ def result_rows(r) -> List[Tuple[str, ...]]:
 
 def _project_key(project: Project) -> Dict[str, Any]:
     """What a solve depends on, to tell when a result no longer matches the project: not the
-    board's path (a save rewrites it; another board clears the results) nor the nets marked
-    as rails."""
+    board's path (a save rewrites it; another board clears the results), the nets marked as
+    rails or the rails' DC limits."""
     d = project.to_dict()
     d.pop("marked_rails", None)
     d.pop("board", None)
+    for rail in d.get("rails", []):
+        rail.pop("limits", None)              # DC limits: no AC solve reads them
     return d
 
 
@@ -531,7 +535,7 @@ class AcPanel(QWidget):
         window.view.pad_picked.connect(self._pad_picked)
         window.rail_panel.pick_changed.connect(lambda kind: kind and self._leave_pick())
         window.measure.toggled.connect(lambda on: on and self._leave_pick())
-        window.rail_panel.rail_changed.connect(self._check_stale)
+        window.rail_panel.rail_changed.connect(self._setup_changed)
         window.rail_panel.settings_changed.connect(self._check_stale)
         self.load_project()
 
@@ -603,14 +607,14 @@ class AcPanel(QWidget):
         self.opt["field_points_per_decade"].setSpecialValueText("every point")
         self.opt["field_points_per_decade"].setToolTip(
             "The copper is solved at this many frequencies per decade and interpolated between "
-            "them (KiPI's default 20); the run time grows with it")
+            f"them (KiPI's default {KIPI_FIELD_POINTS}); the run time grows with it")
         form.addRow("Points / decade", self.opt["points_per_decade"])
         self.quick = QPushButton(f"Quick ({QUICK_FIELD_POINTS})")
         self.quick.setToolTip(f"Solve the copper at {QUICK_FIELD_POINTS} frequencies per decade instead "
-                              "of KiPI's 20, as KiPI's own decoupling and ferrite validation boards; "
-                              "about half the time. Set here, visible and saved: never applied by itself.")
-        kipi_default = QPushButton("KiPI's 20")
-        kipi_default.setToolTip("Back to KiPI's default, 20 copper solves per decade")
+                              f"of KiPI's {KIPI_FIELD_POINTS}, as KiPI's own decoupling and ferrite "
+                              "validation boards. Set here, visible and saved: never applied by itself.")
+        kipi_default = QPushButton(f"KiPI's {KIPI_FIELD_POINTS}")
+        kipi_default.setToolTip(f"Back to KiPI's default, {KIPI_FIELD_POINTS} copper solves per decade")
         form.addRow("Copper solves / decade", self.opt["field_points_per_decade"])
         row = QHBoxLayout()
         row.addWidget(self.quick)
@@ -658,6 +662,10 @@ class AcPanel(QWidget):
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.estimate = QLabel()                  # the pre-solve estimate, kept through the solve
+        self.estimate.setWordWrap(True)
+        self.estimate.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.estimate.setStyleSheet("color: #52514e")
         # Editor: rail, Solve and progress on top (always in sight in a short dock), then the tabs.
         editor = QWidget()
         el = QVBoxLayout(editor)
@@ -665,6 +673,7 @@ class AcPanel(QWidget):
         el.addLayout(top)
         el.addLayout(run)
         el.addWidget(self.status)
+        el.addWidget(self.estimate)
         el.addWidget(self.tabs, 1)
         scroll = QScrollArea()
         scroll.setWidget(editor)
@@ -733,7 +742,7 @@ class AcPanel(QWidget):
             else:
                 w.editingFinished.connect(lambda k=key: self._option_edited(k))
         self.quick.clicked.connect(self.use_quick_preset)
-        kipi_default.clicked.connect(lambda: self.opt["field_points_per_decade"].setValue(20))
+        kipi_default.clicked.connect(lambda: self.opt["field_points_per_decade"].setValue(KIPI_FIELD_POINTS))
         self.solve_button.clicked.connect(self.solve)
         self.cancel_button.clicked.connect(self.cancel)
         self.export_button.clicked.connect(self._export_dialog)
@@ -950,6 +959,10 @@ class AcPanel(QWidget):
         except EngineError as e:
             return self._report(f"Cannot import: {e}")
         model.name = self._unique_name(model.name)
+        try:
+            check_ac([], [model])
+        except ProjectError as e:
+            return self._report(f"Cannot import {Path(path).name}: {e}")
         self.add_model(model)
         return self._report(f"Imported capacitor model {model.name} from {Path(path).name}"
                             + "".join(f"; {w}" for w in warnings) + ": pick or type its parts")
@@ -1009,7 +1022,7 @@ class AcPanel(QWidget):
             return self._report(f"Quick preset not applied: {e}")
         self.opt["field_points_per_decade"].setValue(QUICK_FIELD_POINTS)
         return self._report(f"Quick preset: the copper is solved at {QUICK_FIELD_POINTS} frequencies per "
-                            "decade instead of KiPI's 20 (the result's assumptions say so)")
+                            f"decade instead of KiPI's {KIPI_FIELD_POINTS} (the result's assumptions say so)")
 
     def _source(self, rail: str) -> Optional[Source]:
         return rail_source(self.project, rail) or (
@@ -1072,6 +1085,16 @@ class AcPanel(QWidget):
         self.rail_box.setCurrentIndex(i if i >= 0 else (0 if rails else -1))
         self.rail_box.blockSignals(False)
         self._rail_shown()
+
+    def _setup_changed(self):
+        """The rail setup changed elsewhere (a source, a pad picked): the rail list follows,
+        refilled only when it changed, and the shown result is checked again."""
+        rails = solvable_rails(self.project)
+        if self._merged_project is not None:
+            rails += [n for n in solvable_rails(self._merged_project) if n not in rails]
+        if rails != [self.rail_box.itemText(i) for i in range(self.rail_box.count())]:
+            self.refresh_rails()
+        self._check_stale()
 
     def _rail_shown(self):
         rail = self.rail_box.currentText()
@@ -1232,7 +1255,7 @@ class AcPanel(QWidget):
             win.view.set_click_mode(None)
 
     def _pad_picked(self, x: float, y: float) -> str:
-        QTimer.singleShot(0, self._check_stale)            # a rail pad picked changes the setup too
+        QTimer.singleShot(0, self._setup_changed)          # a rail pad picked changes the setup too
         kind, board = self.pick_kind, self._win.board
         if not kind or board is None:
             return ""
@@ -1336,6 +1359,7 @@ class AcPanel(QWidget):
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
         self.last_estimate = ""
+        self.estimate.setText("Estimating: meshing the rail as the AC solve will…")
         project = copy.deepcopy(self.project)
         self._solving = (rail, _project_key(project))
         self._start(AcWorker(win.board, project, rail, "size", parent=self))
@@ -1380,7 +1404,7 @@ class AcPanel(QWidget):
         cost = cost_estimate(size.triangles, size.ports, size.field_frequencies, self._last_solve())
         ram = ram_estimate(size.unknowns, total_memory_bytes(), free_memory_bytes())
         self.last_estimate = estimate_text(cost, ram)
-        self._say(self.last_estimate, bar=False)
+        self.estimate.setText(self.last_estimate)
         self.estimated.emit(self.last_estimate)
         yes = False
         if ram.risk:
@@ -1458,6 +1482,7 @@ class AcPanel(QWidget):
         self.results.clear()
         self._merged_project = None
         self.last_estimate = ""
+        self.estimate.setText("")
         self._say("")
         self.load_project()
 
