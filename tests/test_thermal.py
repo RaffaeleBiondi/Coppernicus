@@ -60,6 +60,18 @@ def test_thermal_values_are_checked(thermal, words):
         Project.from_dict(data)
 
 
+@pytest.mark.parametrize("values", [{"iterations": 0}, {"iterations": 2.5}, {"airflow_m_s": -1.0},
+                                    {"grid_mm": -0.5}, {"regulator_heat": "package"},
+                                    {"ambient_c": float("nan")}, {"enabled": 1}])
+def test_options_are_checked_when_made_as_when_loaded(values):
+    """The app builds ThermalOptions itself: the same checks, the same messages."""
+    with pytest.raises(ProjectError) as made:
+        ThermalOptions(**values)
+    with pytest.raises(ProjectError) as loaded:
+        Project.from_dict({"thermal": values})
+    assert str(made.value) and str(made.value) in str(loaded.value)
+
+
 def test_whole_number_iterations_and_empty_limits_load():
     t = Project.from_dict({"thermal": {"iterations": 4.0, "max_temp_c": None}}).thermal
     assert t.iterations == 4 and isinstance(t.iterations, int) and t.max_temp_c is None

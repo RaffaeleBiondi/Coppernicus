@@ -237,10 +237,38 @@ class ThermalOptions:
     max_rise_c: Optional[float] = None      # above ambient_c
     regulator_heat: str = "output_pads"     # see REGULATOR_HEAT
 
+    def __post_init__(self):
+        """Checked whether made by the app or loaded from a file, with the same messages:
+        non-finite numbers, ``iterations`` not a whole number ≥ 1, a negative airflow or
+        grid and an unknown ``regulator_heat`` raise :class:`ProjectError`."""
+        for k in ("enabled", "load_heat"):
+            if not isinstance(getattr(self, k), bool):
+                raise ProjectError(f"thermal: {k} must be true or false, not {getattr(self, k)!r}")
+        for k in ("ambient_c", "airflow_m_s", "grid_mm", "max_temp_c", "max_rise_c"):
+            value = getattr(self, k)
+            if value is None and k.startswith("max_"):
+                continue
+            if isinstance(value, bool):
+                raise ProjectError(f"thermal: {k} must be a number, not {value!r}")
+            try:
+                x = _number(value, f"thermal: {k}")
+            except ValueError as e:
+                raise ProjectError(str(e)) from None
+            if k in ("airflow_m_s", "grid_mm") and x < 0:
+                raise ProjectError(f"thermal: {k} cannot be negative (grid_mm 0 = automatic)")
+            setattr(self, k, x)
+        n = self.iterations
+        if isinstance(n, bool) or not isinstance(n, (int, float)) or not float(n).is_integer() or n < 1:
+            raise ProjectError(f"thermal: iterations must be a whole number, at least 1, not {n!r}")
+        self.iterations = int(n)
+        if self.regulator_heat not in REGULATOR_HEAT:
+            raise ProjectError(f"thermal: regulator_heat must be one of {', '.join(REGULATOR_HEAT)}, "
+                               f"not {self.regulator_heat!r}")
+
 
 def _thermal_in(data: Any) -> ThermalOptions:
-    """The ``thermal:`` block, checked: unknown keys, non-finite numbers, ``iterations`` not a
-    whole number ≥ 1, a negative airflow or grid, and an unknown ``regulator_heat`` raise."""
+    """The ``thermal:`` block: unknown keys raise; the values are checked by
+    :class:`ThermalOptions` itself."""
     if data is None:
         return ThermalOptions()
     if not isinstance(data, dict):
@@ -249,25 +277,7 @@ def _thermal_in(data: Any) -> ThermalOptions:
     unknown = [str(k) for k in data if k not in known]
     if unknown:
         raise ValueError(f"thermal: unknown option {', '.join(unknown)} (known: {', '.join(sorted(known))})")
-    values: Dict[str, Any] = {k: _flag(data, k, False) for k in ("enabled", "load_heat") if k in data}
-    for k in ("ambient_c", "airflow_m_s", "grid_mm", "max_temp_c", "max_rise_c"):
-        if k in data and not (k.startswith("max_") and data[k] is None):
-            if isinstance(data[k], bool):
-                raise ValueError(f"thermal: {k} must be a number, not {data[k]!r}")
-            values[k] = _number(data[k], f"thermal: {k}")
-            if k in ("airflow_m_s", "grid_mm") and values[k] < 0:
-                raise ValueError(f"thermal: {k} cannot be negative (grid_mm 0 = automatic)")
-    if "iterations" in data:
-        n = data["iterations"]
-        if isinstance(n, bool) or not isinstance(n, (int, float)) or not float(n).is_integer() or n < 1:
-            raise ValueError(f"thermal: iterations must be a whole number, at least 1, not {n!r}")
-        values["iterations"] = int(n)
-    if "regulator_heat" in data:
-        if data["regulator_heat"] not in REGULATOR_HEAT:
-            raise ValueError(f"thermal: regulator_heat must be one of {', '.join(REGULATOR_HEAT)}, "
-                             f"not {data['regulator_heat']!r}")
-        values["regulator_heat"] = data["regulator_heat"]
-    return ThermalOptions(**values)
+    return ThermalOptions(**{str(k): v for k, v in data.items()})
 
 
 def _thermal_out(options: ThermalOptions) -> Dict[str, Any]:
