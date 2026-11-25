@@ -120,7 +120,8 @@ positive like the drops.
   thickness is the board file's (an in-process caller's `base_settings` give a project's).
   From a design that is not a standard weight, no step is offered. Anything else is refused
   (`invalid_input`); the hint points to `copper_step` and to KiCad. `write_project` applies
-  the same rule to the layers you name in `settings.copper_thickness_mm` (see
+  the same rule, from the board file's thickness, to the layers you change in
+  `settings.copper_thickness_mm` (see
   [Editing projects](#editing-projects)). A project the user edits (the app, by hand, the
   CLI) keeps the free value (more than 0, at most 1 mm): that is the user's own what-if.
 
@@ -167,12 +168,13 @@ app or CI. It writes one file, at the path you give (a `*.coppernicus.yml`):
   `ground`; `limits`; `follow_net_ties`; `override_board_fields`); `remove_rails` removes by
   net; `links` and `remove_links` work by name; `settings` keys are set, and null removes one
   (its default again); `use_board_fields: false` turns the KiCad fields off;
-- `settings.copper_thickness_mm` replaces the project's whole mapping. Each layer you name
-  takes a standard weight at most one step from the design: the project's own value for that
-  layer when it has one, else the board file's. Giving back the value the project already
-  holds is not a change, so a value the user typed stays as it is. Anything else is refused
-  (`invalid_input`) and nothing is written. `copper_thickness_mm: null` goes back to the
-  board file's copper;
+- `settings.copper_thickness_mm` is merged layer by layer: the layers you name are set, a
+  layer set to null goes back to the board file's copper, the others stay as they are. Each
+  layer you change takes a standard weight at most one step from the **board file's**
+  thickness, never from a value already in the project. Giving back the value the project
+  already holds is not a change, so a value the user typed stays as it is. Anything else is
+  refused (`invalid_input`) and nothing is written. `copper_thickness_mm: null` removes every
+  layer's value;
 - an existing file is replaced only with `overwrite: true`, else `file_exists`;
 - the file is rewritten from its data: **comments are lost**, keys Coppernicus does not know
   are kept (a replaced rail's included); the board path is written relative to the project's

@@ -439,9 +439,10 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                       settings: Annotated[Optional[dict[str, Any]], Field(
                           description="Settings keys to set (max_edge_mm, via_plating_um, copper_temp_c, "
                                       "copper_thickness_mm); null removes one (its default). "
-                                      "copper_thickness_mm replaces the whole mapping; each layer "
-                                      "named takes a standard weight at most one step from the "
-                                      "design (the project's value, else the board file's).")] = None,
+                                      "copper_thickness_mm merges by layer (a layer set to null "
+                                      "goes back to the board file); each layer changed takes a "
+                                      "standard weight at most one step from the board file's "
+                                      "thickness.")] = None,
                       use_board_fields: Annotated[Optional[bool], Field(
                           description="false: ignore the board's KiCad footprint fields.")] = None,
                       from_project: Annotated[Optional[str], Field(
