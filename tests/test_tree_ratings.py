@@ -187,6 +187,29 @@ def test_a_rating_of_a_group_that_did_not_converge_is_not_judged():
     assert {v["name"]: v for v in doc["vrms"]}["U1"]["exceeds_current_limit"] is None
 
 
+def test_a_rating_is_not_judged_while_a_rail_it_feeds_has_not_converged():
+    """U1's output current includes U2's input: +1V8 unsettled, U1 is not judged either. A
+    load KiPI marks NOT CONVERGED (its outer iteration did not settle) stops it too."""
+    from coppernicus.power_tree import apply_limits, tree_summary
+    from coppernicus.results import NOT_CONVERGED
+    tree, project = solved_chain({"+3V3": 2.0, "+1V8": 3.0})
+    tree.groups["+1V8"].converged = False
+    apply_limits(tree, project)
+    doc = tree_summary(tree)
+    assert doc["verdict"] == "not_judged" and doc["failed"] == 0, doc["verdict"]
+    assert {"item": "U1", "net": "+3V3", "limit": "current_limit_a",
+            "reason": "+1V8, which it feeds, did not converge"} in doc["not_judged"], doc["not_judged"]
+    assert {"item": "U2", "net": "+1V8", "limit": "current_limit_a",
+            "reason": "its iteration did not converge"} in doc["not_judged"], doc["not_judged"]
+    tree, project = solved_chain({"+3V3": 2.0})
+    next(ld for ld in tree.loads if ld.name == "U3").status = NOT_CONVERGED
+    apply_limits(tree, project)
+    doc = tree_summary(tree)
+    assert {"item": "U1", "net": "+3V3", "limit": "current_limit_a",
+            "reason": "the power-tree iteration did not converge"} in doc["not_judged"], doc["not_judged"]
+    assert doc["failed"] == 0, doc["failed"]
+
+
 def test_the_rating_origin_follows_where_the_merged_rail_came_from():
     """KiCad fields define the rail: the part carrying PI_IMAX; the project file's rail (its
     own, overriding the fields, or the fields incomplete there): the project file."""

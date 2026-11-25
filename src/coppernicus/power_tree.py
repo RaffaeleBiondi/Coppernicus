@@ -258,11 +258,10 @@ def judge_ratings(tree) -> None:
     """Judge each regulator's output current against the rated output current the user wrote
     for it (``VrmReport.current_limit_a``), as KiPI's check does (|I out| <= the rating, within
     :data:`RATING_ROUND_OFF`): ``current_passed`` True or False; None without a rating (no
-    limit was set: not judged, and not listed as not judged) or when it cannot be judged (its
-    group did not converge, or I out was not solved: see :func:`rating_why_not`)."""
+    limit was set: not judged, and not listed as not judged) or when it cannot be judged (I out
+    not settled, or not solved: see :func:`rating_why_not`)."""
     for v in tree.vrms:
-        res = tree.groups.get(v.group)
-        if (v.current_limit_a is None or res is None or not res.converged
+        if (v.current_limit_a is None or v.group not in tree.groups or _unsettled(tree, v)
                 or not math.isfinite(v.i_out_a)):
             v.current_passed = None
             continue
@@ -271,11 +270,31 @@ def judge_ratings(tree) -> None:
                                 or math.isclose(amps, v.current_limit_a, rel_tol=RATING_ROUND_OFF))
 
 
+def _unsettled(tree, v) -> str:
+    """Why regulator ``v``'s output current is not settled ("" when it is). It includes what
+    every rail it feeds draws, through their regulators' inputs, so each of those groups must
+    have converged; and KiPI marks a load NOT CONVERGED when its group's or the tree's outer
+    iteration did not settle."""
+    fed, todo = [v.group], [v.group]
+    while todo:
+        key = todo.pop()
+        for u in tree.vrms:
+            if u.input_group == key and u.group not in fed:
+                fed.append(u.group)
+                todo.append(u.group)
+    for key in fed:
+        res = tree.groups.get(key)
+        if res is not None and not res.converged:
+            return ("its iteration did not converge" if key == v.group
+                    else f"{key}, which it feeds, did not converge")
+    if any(ld.status == NOT_CONVERGED for ld in tree.loads if ld.group in fed):
+        return "the power-tree iteration did not converge"
+    return ""
+
+
 def rating_why_not(tree, v) -> str:
     """Why rated regulator ``v``'s output current was not judged."""
-    res = tree.groups.get(v.group)
-    return ("its iteration did not converge" if res is not None and not res.converged
-            else "its output current was not solved")
+    return _unsettled(tree, v) or "its output current was not solved"
 
 
 def rated_from(v) -> str:
@@ -594,7 +613,7 @@ def _group_worst(gr: Dict[str, Any]) -> str:
 
 def tree_text(doc: Dict[str, Any]) -> List[str]:
     """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
-    # I max: a source's rated output current (PI_IMAX), shown, not judged; only when some VRM
+    # I max: a source's rated output current (PI_IMAX; judged: _rating_text); only when some VRM
     # has one, so the table is unchanged otherwise.
     rated = any(v.get("i_max_a") is not None for v in doc["vrms"])
     lines = ["VRMs (sources and regulators)",

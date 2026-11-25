@@ -253,7 +253,7 @@ def test_i_max_is_shown_next_to_i_out_and_judged_in_the_tree(tmp_path, capsys):
     tree = session.solve_tree(project)
     rows = {v["name"]: v for v in tree["vrms"]}
     assert rows["U1"]["i_max_a"] == 2.0 and rows["J1"]["i_max_a"] is None
-    assert any("I_max" in a and "not judged" in a for a in tree["assumptions"])
+    assert any("I_max" in a for a in tree["assumptions"])
     assert tree["verdict"] == "pass"                               # the rating, the only limit
     assert "I max (A)" in "\n".join(ci.tree_markdown("buck", tree))
     capsys.readouterr()

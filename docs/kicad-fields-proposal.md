@@ -175,7 +175,8 @@ Decided by the owner for annotating a real KiCad library, additive:
   no `PI_RAIL`, and a part carrying only them is part data. With `PI_RAIL`, one value applies
   to every rail where the part is a source, or one per rail with `;`. `PI_VOUT` is the source
   voltage when the instance has no `PI_SOURCE`; when both differ, `PI_SOURCE` wins with a
-  warning. `PI_IMAX` becomes `Source.current_limit_a`, shown next to I_out and not judged yet;
+  warning. `PI_IMAX` becomes `Source.current_limit_a`, shown next to I_out and judged in the power tree
+  (an I_out over it fails: docs/engine-mapping.md, Verdicts);
   `PI_FSW` becomes `Source.fsw_hz`, stored for later use.
 - `PI_SOURCE_REF=<ref>` on an external-inductor buck's IC names the part whose pads hold the
   rail (the inductor); `PI_PINS` selects that part's pads. It maps to

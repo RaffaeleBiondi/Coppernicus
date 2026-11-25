@@ -298,8 +298,10 @@ Which limit judges what (`power_tree.LIMITS_RULE`, also an assumption line of ev
   project's origins (`power_tree.rating_origins`: a rail from the KiCad fields, or the project
   file's rail, its override, or a rail the fields leave incomplete); where that is not known
   (a caller that did not pass the merged project), "(from KiCad field PI_IMAX or the project
-  file)". In a group that did not converge it is not judged (`{"item": "U1", "net": "+3V3",
-  "limit": "current_limit_a", "reason": "its iteration did not converge"}`). A source without
+  file)". It is not judged while its I out is not settled: its group, or a group it feeds
+  (I out includes their regulators' inputs), did not converge, or KiPI marks a load there NOT
+  CONVERGED (`{"item": "U1", "net": "+3V3", "limit": "current_limit_a", "reason": "+1V8, which
+  it feeds, did not converge"}`). A source without
   a rating is not judged and not listed. The rating stays out of the groups' `limits` (keyed by
   the net limits); a group judged only by a rating passes or fails by it. VRM rows of
   `tree_summary`: `exceeds_current_limit` (None: no rating, or not judged) and
