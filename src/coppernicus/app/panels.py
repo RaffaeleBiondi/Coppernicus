@@ -40,6 +40,9 @@ from coppernicus.app.fields_view import FieldsBanner
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.problems import ATTENTION, FAIL, Problem
 from coppernicus.project import (
+    LOAD_PART_KEYS,
+    LOAD_TOLERANCE_KEYS,
+    SOURCE_ACCURACY_KEYS,
     SOURCE_KINDS,
     Limits,
     Load,
@@ -55,6 +58,21 @@ from coppernicus.project import (
 # Attention rows (a spot above Coppernicus's current-density default) and their count in the
 # Problems header: a dark amber, 4.9:1 on white.
 ATTENTION_COLOR = "#9a6700"
+
+
+def without_tolerances(d: Dict) -> Dict:
+    """A project's ``to_dict()`` without what no solve reads (Task 11): the loads' tolerances
+    and entered parts, the sources' DC accuracy and the ``tolerance:`` options. For the keys
+    that tell when a held result no longer matches the project: typing a tolerance never makes
+    a result stale. Changes ``d`` and returns it."""
+    d.pop("tolerance", None)
+    for rail in d.get("rails", []):
+        for key, names in (("sources", SOURCE_ACCURACY_KEYS),
+                           ("loads", LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS)):
+            for t in rail.get(key, []):
+                for name in names:
+                    t.pop(name, None)
+    return d
 
 # ---------------------------------------------------------------------- numbers
 

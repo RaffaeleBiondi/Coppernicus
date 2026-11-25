@@ -65,7 +65,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from coppernicus.app.panels import FieldComboBox, OptionalDecimalValidator, WheelWhenFocused
+from coppernicus.app.panels import (
+    FieldComboBox,
+    OptionalDecimalValidator,
+    WheelWhenFocused,
+    without_tolerances,
+)
 from coppernicus.engine.pisetup import terminal_names  # engine names; fsw_default mirrors the engine
 from coppernicus.impedance import hz_text
 from coppernicus.project import (
@@ -719,8 +724,10 @@ def header_html(r, stale: bool) -> str:
 def project_key(project: Project) -> Dict[str, Any]:
     """What a noise solve depends on, to tell when a result no longer matches the project:
     not the board's path (a save rewrites it; another board clears the results), the nets
-    marked as rails, the rails' DC limits or the board temperature (no noise solve reads them)."""
-    d = project.to_dict()
+    marked as rails, the rails' DC limits, the board temperature, or the tolerances, entered
+    parts and accuracies (no noise solve reads them). Taken of the merged project, what is
+    solved: a project rail ignored for the KiCad fields' changes nothing."""
+    d = without_tolerances(project.to_dict())
     for key in ("marked_rails", "board", "thermal"):
         d.pop(key, None)
     for rail in d.get("rails", []):

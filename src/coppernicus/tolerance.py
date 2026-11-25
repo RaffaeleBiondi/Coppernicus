@@ -78,10 +78,13 @@ def _deviation(pair: Pair) -> Pair:
 
 # ---------------------------------------------------------------------- parts
 
-def _dc(tree: TreeResult, rep: Optional[LoadReport]) -> Tuple[Optional[TolerancePart], str]:
+def _dc(tree: Optional[TreeResult], rep: Optional[LoadReport],
+        tree_note: str = "") -> Tuple[Optional[TolerancePart], str]:
     """The DC part from the worst pins on both sides (brief Q1): below = nominal − v_low,
     above = v_high − nominal, each at least 0; the mean (KiPI's tolerance table, gather.py:75)
-    in the detail."""
+    in the detail. Without a ``tree`` (none held: the app's), missing with ``tree_note``."""
+    if tree is None:
+        return None, tree_note or "the power tree is not solved, so its DC drop is not known"
     if rep is None:
         return None, ("not in the power tree (its net is excluded, or solved as a ground), so its "
                       "DC drop is not known")
@@ -311,9 +314,10 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
          rep: Optional[LoadReport], sources: Dict[str, Source], probe: Optional[str],
          shown: Dict[str, ProbeImpedance], noise: Dict[str, NoiseResult],
          ac_notes: Dict[str, str], noise_notes: Dict[str, str], rail_source: Dict[str, str],
-         lost_accuracy: Dict[str, str], source_net: Dict[str, str]) -> ToleranceRow:
+         lost_accuracy: Dict[str, str], source_net: Dict[str, str], tree_note: str = "") -> ToleranceRow:
     from coppernicus.engine.tolerance import load_limits, stack
-    driver = next((v.name for v in tree.vrms if rep is not None and v.group == rep.group), None)
+    vrms = tree.vrms if tree is not None else []
+    driver = next((v.name for v in vrms if rep is not None and v.group == rep.group), None)
     driver = driver if driver is not None else rail_source.get(rail)
     source = sources.get(driver) if driver else None
     nominal = rep.nominal_v if rep is not None else (source.voltage if source is not None else None)
@@ -321,9 +325,9 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
                        None if nominal is None else float(nominal),
                        source.label if source is not None else "", probe or "")
     from coppernicus.temperature import _not_settled
-    found = {"dc": _dc(tree, rep),
+    found = {"dc": _dc(tree, rep, tree_note),
              "accuracy": _accuracy(source, nominal, lost_accuracy.get(source_net.get(driver or ""), ""))}
-    unsettled = _not_settled(tree.thermal) if tree.thermal is not None else ""
+    unsettled = _not_settled(tree.thermal) if tree is not None and tree.thermal is not None else ""
     if unsettled and found["dc"][0] is not None:      # temperature.py's rule: fail, never pass
         dc = found["dc"][0]
         row.floors["dc"] = dc
@@ -368,14 +372,15 @@ def _note(verdict: str, failed, not_judged) -> str:
     return "No tolerance set: the loads' parts are shown, not judged"
 
 
-def assumptions(project: Project, tree: TreeResult) -> List[str]:
+def assumptions(project: Project, tree: Optional[TreeResult]) -> List[str]:
     t = project.tolerance
+    heated = tree is not None and tree.thermal is not None
     out = [
         "Tolerance stack-up (KiPI kipi/tolerance): per load, each side apart (below and above "
         "nominal), every part a deviation in volts: DC = the DC drop + the source's DC accuracy, "
         "against dc_tol; AC = ripple + transient, against ac_tol; total = DC + AC, against tol.",
         "Nominal is the set voltage of the source driving the load's rail.",
-        "DC drop from the power tree" + (" (electro-thermal)" if tree.thermal is not None else "")
+        "DC drop from the power tree" + (" (electro-thermal)" if heated else "")
         + " on the worst pins: below = nominal − (lowest supply pin − highest ground pin), above "
         "= (highest supply pin − lowest ground pin) − nominal, each at least 0. KiPI's tolerance "
         "table uses the mean of the pins instead (shown in the detail), which reads less on a "
@@ -409,11 +414,11 @@ def assumptions(project: Project, tree: TreeResult) -> List[str]:
     return out
 
 
-def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceResult] = (),
+def compose(project: Project, tree: Optional[TreeResult], impedance: Sequence[ImpedanceResult] = (),
             noise: Sequence[NoiseResult] = (), pairs: Optional[Dict[str, Optional[str]]] = None,
             ac_notes: Optional[Dict[str, str]] = None, noise_notes: Optional[Dict[str, str]] = None,
             warnings: Sequence[str] = (), not_judged: Sequence[Dict[str, Any]] = (),
-            lost_accuracy: Optional[Dict[str, str]] = None) -> ToleranceResult:
+            lost_accuracy: Optional[Dict[str, str]] = None, tree_note: str = "") -> ToleranceResult:
     """Every load's stack-up from the power ``tree``, the AC results (``impedance``: KiPI's
     transient estimate at each probe, shown), the ``noise`` results (the ripple at each probe)
     and what the project enters. ``pairs``: engine load name -> its probe
@@ -421,7 +426,9 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
     not solved in AC; ``noise_notes``: aggressor -> why it was not solved; ``not_judged``: more
     not-judged entries ``{item, net, limit, reason}`` (a tolerance set on a load the solve does
     not hold: a rail from KiCad fields); ``lost_accuracy``: rail net -> why the accuracy entered
-    for its source in the project file was lost (the accuracy hint says so)."""
+    for its source in the project file was lost (the accuracy hint says so). ``tree`` None: no
+    power tree is held (the app's, not solved or stale), so every DC part is missing with
+    ``tree_note`` (what to do) and each nominal is the set voltage of its rail's own source."""
     from coppernicus.engine.pisetup import terminal_names
     from coppernicus.engine.tolerance import loads_by_name, mismatch_warnings
     pairs, ac_notes, noise_notes = pairs or {}, ac_notes or {}, noise_notes or {}
@@ -430,14 +437,15 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
                if what == "source"}
     rail_source = {net: name for (what, net, i), name in names.items() if what == "source" and i == 0}
     source_net = {name: net for (what, net, _i), name in names.items() if what == "source"}
-    reports = {ld.name: ld for ld in tree.loads}
+    reports = {ld.name: ld for ld in (tree.loads if tree is not None else [])}
     shown = {p.name: p for r in impedance for p in r.probes}
     by_noise = {r.aggressor: r for r in noise}
     out = ToleranceResult(options={"ripple_sum": project.tolerance.ripple_sum,
                                    "bw_limit_20mhz": project.tolerance.bw_limit_20mhz})
     for name, (rail, load) in loads_by_name(project).items():
         row = _row(project, tree, name, rail, load, reports.get(name), sources, pairs.get(name),
-                   shown, by_noise, ac_notes, noise_notes, rail_source, lost_accuracy or {}, source_net)
+                   shown, by_noise, ac_notes, noise_notes, rail_source, lost_accuracy or {}, source_net,
+                   tree_note)
         out.rows.append(row)
         for c in row.checks.values():
             if c.passed is False:
@@ -453,8 +461,10 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
     # What the numbers rest on (I3): the tree's assumptions and warnings, those of each noise
     # result used (named by aggressor), and the AC warnings behind each estimate shown.
     used = list(dict.fromkeys(a for r in out.rows for a in r.ripple_from))
-    carried = list(tree.assumptions) + [f"{a}: {x}" for a in used for x in by_noise[a].assumptions
-                                        if x not in tree.assumptions]
+    tree_assumptions = list(tree.assumptions) if tree is not None else []
+    tree_warnings = list(tree.warnings) if tree is not None else []
+    carried = tree_assumptions + [f"{a}: {x}" for a in used for x in by_noise[a].assumptions
+                                  if x not in tree_assumptions]
     negative = [r.load for r in out.rows if r.verdict and r.nominal_v is not None and r.nominal_v < 0]
     sides = ([f"Negative rail ({', '.join(negative)}): a _pct pair follows the magnitude of nominal "
               "(KiPI's pct_to_volts: −5 % lies toward 0 V, above it), while a _mv pair and the entered "
@@ -468,9 +478,9 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
         z = next((x for x in impedance if r.transient_estimate_v is not None and x.probe(r.probe)), None)
         if z is not None:
             behind += [f"AC {z.rail}, behind KiPI's transient estimate at {r.probe} (shown, never "
-                       f"judged): {w}" for w in z.warnings if w not in tree.warnings and w not in q9]
-    noise_warnings = [f"{a}: {w}" for a in used for w in by_noise[a].warnings if w not in tree.warnings]
-    out.warnings = list(dict.fromkeys(list(warnings) + list(tree.warnings) + noise_warnings + behind + q9))
+                       f"judged): {w}" for w in z.warnings if w not in tree_warnings and w not in q9]
+    noise_warnings = [f"{a}: {w}" for a in used for w in by_noise[a].warnings if w not in tree_warnings]
+    out.warnings = list(dict.fromkeys(list(warnings) + tree_warnings + noise_warnings + behind + q9))
     return out
 
 
@@ -485,6 +495,13 @@ SOURCE_KEYS = ("name", "ref", "pins", "voltage", "kind", "efficiency", "quiescen
 # one (acuracy_pct: difflib's ratio at least LOOKS_CLOSE).
 LOOKS_LIKE = ("tol", "acc", "ripple", "transient")
 LOOKS_CLOSE = 0.8
+KNOWN_KEYS = LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS + SOURCE_ACCURACY_KEYS
+
+
+def meant_key(key: str) -> str:
+    """The known tolerance key a misspelt ``key`` most likely meant (difflib)."""
+    import difflib
+    return difflib.get_close_matches(key, list(KNOWN_KEYS), n=1, cutoff=0.0)[0]
 
 
 def misspelt_keys(data: Any) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -494,7 +511,7 @@ def misspelt_keys(data: Any) -> Tuple[List[str], List[Dict[str, Any]]]:
     meant to set would be missing: the entry ``{item, net, limit: the misspelt key, reason}``
     keeps the verdict from a silent pass."""
     import difflib
-    known = list(LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS + SOURCE_ACCURACY_KEYS)
+    known = list(KNOWN_KEYS)
     warnings, entries = [], []
     rails = data.get("rails") if isinstance(data, dict) else None
     for rd in rails if isinstance(rails, list) else []:
@@ -511,7 +528,7 @@ def misspelt_keys(data: Any) -> Tuple[List[str], List[Dict[str, Any]]]:
                     if not (any(stem in key.lower() for stem in LOOKS_LIKE)
                             or difflib.get_close_matches(key, known, n=1, cutoff=LOOKS_CLOSE)):
                         continue
-                    guess = difflib.get_close_matches(key, known, n=1, cutoff=0.0)[0]
+                    guess = meant_key(key)
                     if (guess in SOURCE_ACCURACY_KEYS) != (what == "Source"):
                         guess += f"' (a {'source' if what == 'Load' else 'load'} key"
                         meant = f"did you mean '{guess})?"
@@ -522,6 +539,52 @@ def misspelt_keys(data: Any) -> Tuple[List[str], List[Dict[str, Any]]]:
                     entries.append({"item": label, "net": net, "limit": key,
                                     "reason": f"{text} What it was meant to set is not judged"})
     return warnings, entries
+
+
+# ---------------------------------------------------------------------- KiCad-fields rails
+
+def fields_losses(loaded: Project, project: Project, from_fields: Sequence[str]
+                  ) -> Tuple[List[str], List[Dict[str, Any]], Dict[str, str]]:
+    """What the project file (``loaded``) enters on a rail taken from the board's KiCad
+    footprint fields (``from_fields``, nets of the merged ``project``) that no part of the
+    fields' rail takes (:func:`coppernicus.board_fields.carried_by_ref`): ``(warnings,
+    not-judged entries, lost accuracy)``. Each tolerance set on such a load is a not-judged
+    entry ``{item, net, limit, reason}`` (never a silent pass); ``lost accuracy``: rail net ->
+    why the accuracy entered for its source was lost (the accuracy hint says so, not "enter
+    it"). Shared by ``coppernicus tolerance`` and the app's Tolerance tab."""
+    from coppernicus import board_fields
+    warnings: List[str] = []
+    dropped: List[Dict[str, Any]] = []
+    lost_accuracy: Dict[str, str] = {}
+    for net in from_fields:               # the fields' rail keeps by ref what the project gives
+        own, kept = loaded.rail(net), project.rail(net)
+        if own is None:
+            continue
+        sides = ((kept.sources if kept else [], own.sources, SOURCE_ACCURACY_KEYS),
+                 (kept.loads if kept else [], own.loads, board_fields.TOLERANCE_KEYS))
+        lost = [t for ts, own_ts, keys in sides for t in board_fields.carried_by_ref(ts, own_ts, keys)[1]]
+        if not lost:
+            continue
+        others = ", ".join(s.label for s in kept.sources) if kept is not None and kept.sources else "none"
+        names = ", ".join(t.label for t in lost)
+        warnings.append(f"Rail {net} comes from the board's KiCad footprint fields: the tolerances, accuracy "
+                        f"and entered parts of {names} in the project file are not used (no part of the "
+                        "fields' rail takes them); set override_board_fields: true on the rail to use the "
+                        "project's")
+        # A tolerance the user set that cannot be judged: not judged (exit 3), never a pass.
+        dropped += [{"item": t.label, "net": net, "limit": key,
+                     "reason": f"rail {net} comes from the board's KiCad footprint fields, where no part "
+                               f"takes {t.label}'s tolerances: set override_board_fields: true on the rail "
+                               "to use the project's"}
+                    for t in lost if isinstance(t, Load) for key in LOAD_TOLERANCE_KEYS
+                    if getattr(t, key) is not None]
+        for t in lost:                    # an accuracy entered, then lost: say so, not "enter it"
+            key = next((k for k in SOURCE_ACCURACY_KEYS if getattr(t, k, None) is not None), None)
+            if key is not None:
+                lost_accuracy[net] = (f"{t.label}'s {key} in the project file was lost: rail {net} comes "
+                                      f"from the board's KiCad footprint fields, whose source is {others} "
+                                      "(set override_board_fields: true on the rail to use the project's)")
+    return warnings, dropped, lost_accuracy
 
 
 # ---------------------------------------------------------------------- summary and text

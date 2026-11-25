@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app.panels import without_tolerances
 from coppernicus.impedance import ac_summary, ac_text, draw_impedance, hz_text, ohm_text, rail_verdict
 from coppernicus.project import (
     AcOptions,
@@ -469,9 +470,10 @@ def result_rows(r) -> List[Tuple[str, ...]]:
 def _project_key(project: Project) -> Dict[str, Any]:
     """What a solve depends on, to tell when a result no longer matches the project: not the
     board's path (a save rewrites it; another board clears the results), the nets marked as
-    rails, the rails' DC limits, or the aggressors, victims and noise options (no AC solve
-    reads them)."""
-    d = project.to_dict()
+    rails, the rails' DC limits, the aggressors, victims and noise options, or the tolerances,
+    entered parts and accuracies (no AC solve reads them). Taken of the merged project, what is
+    solved: a project rail ignored for the KiCad fields' changes nothing."""
+    d = without_tolerances(project.to_dict())
     for key in ("marked_rails", "board", "aggressors", "victims", "noise"):
         d.pop(key, None)
     for rail in d.get("rails", []):
