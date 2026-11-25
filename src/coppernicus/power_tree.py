@@ -666,7 +666,7 @@ def attention_text(groups: Sequence[Dict[str, Any]]) -> List[str]:
         strongest = (f"; the strongest {p['mean_j_a_mm2']:.1f} A/mm² on {p.get('layer')} ({key}), "
                      f"default {p['default_j_a_mm2']:.3g} A/mm²")
     return [f"{ATTENTION_HEAD}: " + ", ".join(f"{k}: {n}" for k, n in counts) + strongest
-            + "; the problems list each one."]
+            + "; each is listed in its group's problems."]
 
 
 def tree_text(doc: Dict[str, Any]) -> List[str]:
