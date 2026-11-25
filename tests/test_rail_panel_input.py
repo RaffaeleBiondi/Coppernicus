@@ -164,3 +164,42 @@ def test_the_wheel_over_an_unfocused_combo_box_changes_nothing(tmp_path):
         assert rail.sources[0].kind != "ldo", rail.sources[0].kind
     ''', tmp_path)
 
+
+def test_clearing_plating_efficiency_or_quiescent_sets_them_back_to_not_set(tmp_path):
+    """An empty field means what the project file means by leaving it out: the engine's via
+    plating (None), no efficiency (None), no quiescent current (0.0)."""
+    run_in_window('''
+        rp.sources.table.setCurrentCell(0, 0)
+        box = rp.source_box
+        box.kind.setCurrentIndex(box.kind.findData("smps"))
+        app.processEvents()
+        source, settings = window.project.rail("+3V3").sources[0], window.project.settings
+        assert source.kind == "smps", source.kind
+
+        def clear(edit):
+            QTest.keyClick(edit, Qt.Key_End)
+            for _ in range(len(edit.text())):
+                QTest.keyClick(edit, Qt.Key_Backspace)
+            assert edit.text() == ""
+
+        for edit, text in ((box.efficiency, "0,9"), (box.quiescent, "0,002"), (rp.plating, "25")):
+            QTest.keyClicks(edit, text)
+            QTest.keyClick(edit, Qt.Key_Return)
+        assert (source.efficiency, source.quiescent_a, settings.via_plating_um) == (0.9, 0.002, 25.0), \\
+            (source.efficiency, source.quiescent_a, settings.via_plating_um)
+
+        clear(box.efficiency)
+        QTest.keyClick(box.efficiency, Qt.Key_Return)
+        clear(box.quiescent)
+        QApplication.sendEvent(box.quiescent, QFocusEvent(QEvent.FocusOut, Qt.TabFocusReason))
+        clear(rp.plating)
+        QTest.keyClick(rp.plating, Qt.Key_Return)
+        assert (source.efficiency, source.quiescent_a, settings.via_plating_um) == (None, 0.0, None), \\
+            (source.efficiency, source.quiescent_a, settings.via_plating_um)
+
+        window._save(PROJECT)
+        saved = yaml.safe_load(PROJECT.read_text(encoding="utf-8"))
+        written = saved["rails"][0]["sources"][0]
+        assert "efficiency" not in written and "quiescent_a" not in written, written
+        assert saved["settings"]["via_plating_um"] is None, saved["settings"]
+    ''', tmp_path)
