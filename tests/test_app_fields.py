@@ -500,10 +500,12 @@ def test_a_kicad_drop_limit_stays_locked_under_override_and_over_incomplete_fiel
         assert window.merged.project.rail("VCC").limits.max_drop_pct == 2.0
         rp.max_via.setText("2")
         rp.max_via.editingFinished.emit()
-        assert window.project.rail("VCC").limits == Limits(max_drop_pct=5.0, max_via_current=2.0)
+        mine = window.project.rail("VCC").limits
+        assert mine == Limits(max_drop_pct=5.0, max_via_current=2.0), mine
         locked()
         rp.set_pick("source")
-        window.pick_pad(0.0, 0.0)                    # J1: the panel is filled again
+        said = window.pick_pad(0.0, 0.0)             # J1: the panel is filled again
+        assert said == "J1 already uses all its pins as a source", said
         rp.set_pick("")
         locked()
         window.save_project()
