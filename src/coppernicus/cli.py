@@ -8,6 +8,7 @@
                               [--html [PATH]] [--open] [--no-board-fields]
     coppernicus solve PROJECT --tree [--out DIR] [--top N] [--json] [--html [PATH]] [--open]
                                                 the whole power tree
+    coppernicus solve PROJECT --thermal [--out DIR] [--top N] [--json]   power tree with board temperature
     coppernicus fields BOARD [--json]          the KiCad footprint fields (PI_*) of a board
     coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
 
@@ -330,7 +331,8 @@ def _cmd_solve_tree(args) -> int:
     stream = sys.stderr if quiet else sys.stdout
     try:
         tree = solve_project_tree(board, project, progress=(
-            (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None))
+            (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None),
+            thermal=True if args.thermal else None)
     except EngineError as e:
         return fail("solve_failed", str(e), "fix the project file or the KiCad fields (PI_GND, "
                     "PI_INPUT, PI_LINK...), then solve again")
@@ -339,6 +341,12 @@ def _cmd_solve_tree(args) -> int:
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / f"{safe_name(Path(args.project).stem)}_tree_summary.json"
+    maps = [] if tree.thermal is None or args.no_maps else tree.thermal.maps   # board temperature
+    pngs = [out_dir / f"{safe_name(Path(args.project).stem)}_temperature_{safe_name(m.layer_name)}.png"
+            for m in maps]
+    for m, png in zip(maps, pngs):
+        from coppernicus.temperature import write_png
+        write_png(tree.thermal, m.layer_name, png, board.outline())
     if args.html is not None or args.open:     # one page: every group, the VRM and load tables
         from coppernicus.report import write_tree_report
         html_path = (Path(args.html) if args.html else
@@ -356,7 +364,7 @@ def _cmd_solve_tree(args) -> int:
         print(f"Board: {board.name} · power tree: {len(tree.groups)} groups solved "
               f"in {tree.stats['seconds']:.1f} s")
         print("\n".join(tree_text(doc)))
-        print(f"Summary: {summary_path}")
+        print("".join(f"Map: {png}\n" for png in pngs) + f"Summary: {summary_path}")
         if "report_file" in doc:
             print(f"Report: {doc['report_file']}")
     if args.open and "report_file" in doc:
@@ -462,6 +470,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tree", action="store_const", dest="func", const=_cmd_solve_tree,
                    help="solve the whole power tree: rails and grounds together, regulator input "
                         "currents, ground return (prints VRM, load and group tables)")
+    p.add_argument("--thermal", action="store_true",
+                   help="the power tree with the board temperature (electro-thermal; implies --tree; "
+                        "writes a temperature map per copper layer)")
 
     p = sub.add_parser("mcp", help="run the MCP server for AI agents (stdio; see README)")
     p.add_argument("--out", help="folder for maps, one session-... subfolder per run "
@@ -493,6 +504,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     if not getattr(args, "func", None):
         args = build_parser().parse_args(["gui", *(argv or [])])
+    args.func = _cmd_solve_tree if getattr(args, "thermal", False) else args.func
     if args.command != "mcp":                    # under MCP, stdout belongs to the SDK
         _utf8_output()
     from coppernicus.engine import EngineError
