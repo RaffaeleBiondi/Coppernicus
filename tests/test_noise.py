@@ -512,3 +512,156 @@ def test_seed_phases_reads_the_board_and_a_solve_never_calls_it(monkeypatch):
     monkeypatch.setattr(noise, "_kipi_seed_phases", boom)
     assert _quick(p).hot_loops
     assert noise.guess_ends(_board(), "SIG_LOOP") == (("U5", ["1"]), ("U6", ["1"]))
+
+
+# ---------------------------------------------------------------------- verdicts (hand-built)
+
+def _victim(name="V", peak=0.5, margin=0.8, stand_ins=(), limit="noise_margin_v (V)"):
+    import numpy as np
+
+    from coppernicus.results import VictimResult
+    return VictimResult(name, "SIG", "U1[1]", "U2[1]", True, "cmos", margin,
+                        "noise_margin_v" if margin is not None else "", limit if margin else "",
+                        peak, {"capacitive": peak / 2, "inductive": peak}, "inductive",
+                        peak / margin if margin else None, [], 10.0, 5.0, {}, {}, [], np.zeros(8),
+                        stand_ins=list(stand_ins))
+
+
+def _result(victims, name="A"):
+    import numpy as np
+
+    from coppernicus.results import NoiseResult
+    return NoiseResult(name, "U1", "VOUT", "VIN", "GND", "buck", 12.0, 1.8, 5.0, 0.83, 0.15, 0.9, 1,
+                       [], 1e6, 2e-9, 2e-9, 1.6e9, 1600, False, [1.5], [], np.zeros(8),
+                       [np.zeros(8)], [np.zeros(8)], [""], victims=list(victims))
+
+
+def test_no_margin_is_ranked_an_entered_margin_passes_or_fails():
+    from coppernicus.coupled_noise import judge
+    r = judge(_result([_victim(margin=None)]))
+    assert (r.verdict, r.not_judged, r.victims[0].passed) == ("not_judged", [], None)
+    assert r.verdict_note.startswith("No noise margins set: nothing is judged")
+    assert judge(_result([_victim(peak=0.5)])).verdict == "pass"
+    r = judge(_result([_victim(peak=0.9), _victim("W", peak=0.1)]))
+    assert r.verdict == "fail" and [e["item"] for e in r.failed] == ["V"]
+    assert r.failed[0]["limit"] == "noise_margin_v (V)" and "above its margin 800 mV" in r.failed[0]["reason"]
+
+
+def test_a_stand_in_is_not_judged_even_over_the_margin_and_aggressors_combine():
+    from coppernicus.coupled_noise import judge, noise_verdict
+    over = judge(_result([_victim(peak=1.6, stand_ins=["Coss not entered on phase 1: x"])], "A"))
+    assert over.verdict == "not_judged" and over.victims[0].passed is None
+    assert over.not_judged[0]["reason"] == ("Coss not entered on phase 1: x; peak 1600 mV = 200 % of "
+                                            "the margin")
+    ok = judge(_result([_victim(peak=0.1)], "B"))
+    bad = judge(_result([_victim(peak=0.9)], "C"))
+    none = judge(_result([_victim(margin=None)], "D"))
+    assert noise_verdict([ok, none])[0] == "pass"
+    assert noise_verdict([ok, over])[0] == "not_judged"
+    verdict, note, failed, not_judged = noise_verdict([ok, over, bad])
+    assert verdict == "fail" and failed[0]["aggressor"] == "C" and not_judged[0]["aggressor"] == "A"
+    assert noise_verdict([none])[:2] == ("not_judged", "No noise margins set: nothing is judged; "
+                                                       "the victims are ranked")
+
+
+# ---------------------------------------------------------------------- outputs
+
+def test_summary_keys_and_no_nan(solved, tmp_path):
+    import json
+
+    from coppernicus.coupled_noise import noise_summary
+    r, _k = solved
+    doc = noise_summary([r], {"U1": ("a.csv", ["a.png"])}, warnings=["w"])
+    json.dumps(doc, allow_nan=False)
+    assert set(doc) == {"kind", "verdict", "verdict_note", "failed", "not_judged", "warnings",
+                        "aggressors"}
+    assert doc["kind"] == "noise" and doc["warnings"] == ["w"]
+    (a,) = doc["aggressors"]
+    assert {"aggressor", "vrm", "rail", "input_net", "ground", "topology", "vin_v", "vout_v", "iout_a",
+            "iin_a", "duty", "efficiency", "phases", "operating_notes", "fsw_hz", "rise_s", "fall_s",
+            "f_max_hz", "harmonics", "harmonics_capped", "inductor_ripple_a", "hot_loops", "ripple",
+            "victims", "board", "emi", "stand_ins", "verdict", "verdict_note", "failed", "not_judged",
+            "csv_file", "png_files", "assumptions", "warnings", "stats"} == set(a)
+    assert (a["csv_file"], a["png_files"]) == ("a.csv", ["a.png"])
+    load = next(x for x in a["ripple"] if x["name"] == "LOAD")
+    assert {"name", "where", "net", "ground_net", "ref", "pins", "pp_mv", "pp_20mhz_mv", "below_mv",
+            "above_mv", "below_20mhz_mv", "above_20mhz_mv", "rms_mv"} == set(load)
+    assert load["below_mv"] == pytest.approx(r.ripple_at("LOAD").below_v * 1e3)
+    v = next(x for x in a["victims"] if x["name"] == "SIG_LOOP")
+    assert {"name", "net", "driver", "receiver", "ends_entered", "preset", "margin_mv", "margin_from",
+            "limit", "peak_mv", "peak_by_mv", "dominant", "ratio", "states", "length_mm",
+            "coupled_mm", "cm_f", "m_h", "splits", "stand_ins", "passed", "not_judged",
+            "warnings"} == set(v)
+    assert v["margin_mv"] == pytest.approx(800.0) and v["passed"] is None
+    assert set(v["states"][0]) == {"name", "level_v", "threshold_v", "driver_ohm", "excursion_mv",
+                                   "margin_mv"}
+    assert {"phase", "loop_l_h", "c_sw_f", "coss_entered", "qrr_nc", "qrr_entered", "f_ring_hz",
+            "zeta"} <= set(a["hot_loops"][0])
+    assert {"used", "note", "unknowns", "field_solves", "ports", "caps_modelled", "caps_missing"} == \
+        set(a["board"])
+    assert {"height_mm", "distance_m", "hotspots", "radiated_dbuv_m", "radiated_hz",
+            "cispr32_b_dbuv_m", "radiated_source", "notes"} == set(a["emi"])
+    assert {"seconds", "triangles", "unknowns", "ports", "field_solves", "memory_peak_mb",
+            "memory_peak_raised"} <= set(a["stats"])
+    assert doc["not_judged"][0]["aggressor"] == "U1"
+
+
+def test_text_csv_and_pngs(solved, tmp_path):
+    import csv
+
+    from coppernicus.coupled_noise import (
+        map_xy,
+        noise_summary,
+        noise_text,
+        write_csv,
+        write_field_png,
+        write_png,
+    )
+    r, _k = solved
+    lines = noise_text(noise_summary([r]))
+    text = "\n".join(lines)
+    for words in ("Aggressor U1", "ripple LOAD", "victim SIG_LOOP", "NOT JUDGED SIG_LOOP",
+                  "assumption: Coupled noise (KiPI)", "for scale, not judged", "Verdict: not_judged"):
+        assert words in text, words
+    path = write_csv(r, tmp_path / "n.csv")
+    rows = list(csv.reader(path.open(encoding="utf-8")))
+    assert rows[0][:3] == ["t_s", "phase1_switch_node_v", "phase1_inductor_a"]
+    assert {"ripple_LOAD_v", "ripple_LOAD_20mhz_v", "victim_SIG_LOOP_v"} <= set(rows[0])
+    assert len(rows) == 1 + len(r.t_s)
+    assert write_png(r, tmp_path / "w.png").stat().st_size > 1000
+    outline = _board().outline()
+    for kind in ("H", "E"):
+        assert write_field_png(r, kind, tmp_path / f"{kind}.png", outline).stat().st_size > 1000
+    # The map's strongest point is where KiPI's strongest hotspot is (rows from y0, y down).
+    import numpy as np
+    m = r.emi.h_map
+    i, j = np.unravel_index(np.argmax(m.values), m.values.shape)
+    x, y = map_xy(m, i, j)
+    spot = next(s for s in r.emi.hotspots if s["kind"] == "H")
+    cell = (m.bounds[2] - m.bounds[0]) / (m.values.shape[1] - 1)
+    assert math.hypot(x - spot["x_mm"], y - spot["y_mm"]) < 3 * cell + 1.0
+
+
+# ---------------------------------------------------------------------- cost and memory
+
+def test_mesh_estimate_meshes_as_the_solve_does(solved):
+    from coppernicus.engine.noise import mesh_estimate, noise_cost_estimate
+    from coppernicus.engine.synthetic import coupled_noise_project
+    r, _k = solved
+    size = mesh_estimate(_board(), coupled_noise_project(logic_v=3.3), "U1")
+    assert size.board_model and size.triangles == int(r.stats["triangles"])
+    assert size.ports == int(r.stats["ports"]) and size.field_solves == int(r.stats["field_solves"])
+    assert size.harmonics == r.harmonics and size.unknowns >= int(r.stats["unknowns"])
+    est = noise_cost_estimate(size, r.stats)
+    assert est.seconds == pytest.approx(r.stats["seconds"], rel=1e-6)
+    assert noise_cost_estimate(size).seconds is None
+
+
+def test_the_ram_estimate_is_the_measured_upper_bound_and_warns_past_the_machine():
+    from coppernicus.engine.noise import noise_ram_estimate
+    e = noise_ram_estimate(175_084, 24e9)
+    assert e.bytes == pytest.approx(0.2e9 + 36e3 * 175_084) and not e.risk
+    assert e.bytes > 5.05e9                       # above KiPI's four-phase example's measured peak
+    big = noise_ram_estimate(1_000_000, 16e9)
+    assert big.risk and "could swap" in big.text and "extrapolated" in big.text
+    assert "cannot be read" in noise_ram_estimate(1000, None).text
