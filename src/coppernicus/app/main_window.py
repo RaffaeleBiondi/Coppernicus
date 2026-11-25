@@ -547,15 +547,13 @@ class MainWindow(QMainWindow):
         return self.merged.project.rail(net) or self.project.rail(net) or draft or Rail(net)
 
     def _rail_warnings(self, net: str) -> Tuple[List[str], List[str]]:
-        """(notes, warnings) of where the rail of ``net`` came from, for its result: the
-        origin's, and the warnings about links on that net."""
+        """(notes, warnings) of where the rail of ``net`` came from, for its result and its
+        banner: the origin's, and the warnings about links on that net (the merge files each
+        under both nets of the link, a net that is no rail too)."""
         origin = self.merged.origins.get(net)
+        links = list(self.merged.link_warnings.get(net, []))
         if origin is None:
-            return [], []
-        own = {w for o in self.merged.origins.values() for w in o.warnings}
-        refs = [k.ref for k in self.merged.project.links if net in (k.net_a, k.net_b)]
-        links = [w for w in self.merged.warnings
-                 if w not in own and any(f"link {ref} " in w for ref in refs)]
+            return [], links
         return list(origin.notes), list(origin.warnings) + links
 
     def save_project(self):

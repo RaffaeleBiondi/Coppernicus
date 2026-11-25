@@ -281,6 +281,43 @@ def test_loads_on_a_net_tied_to_a_kicad_rail_are_solved_in_it_as_the_cli_does(tm
     ''', tmp_path, project=str(project), rail=cli)
 
 
+def test_a_pi_link_that_differs_from_the_projects_link_warns_on_both_of_its_nets(tmp_path):
+    """FB1's PI_LINK (50 mOhm, VCC to VCC_F) replaces the project's link FB1 (0.1 Ohm): the
+    warning is shown on VCC and on VCC_F, whether or not VCC_F is a rail."""
+    run_in_window('''
+        from kicad_fixture import write_board
+        from coppernicus.project import Link
+
+        def link_board(folder, u2_fields):
+            folder.mkdir()
+            parts = [("J1", [("1", 0.0, 0.0, "VCC")], {"PI_RAIL": "VCC", "PI_SOURCE": "1V"}),
+                     ("U1", [("1", 18.0, 0.0, "VCC")], {"PI_RAIL": "VCC", "PI_LOAD": "1A"}),
+                     ("FB1", [("1", 19.5, 0.0, "VCC"), ("2", 20.5, 0.0, "VCC_F")], {"PI_LINK": "50mOhm"}),
+                     ("U2", [("1", 40.0, 0.0, "VCC_F")], u2_fields)]
+            write_board(folder / "link.kicad_pcb", parts,
+                        [("VCC", (0.0, 0.0), (19.5, 0.0), 0.5), ("VCC_F", (20.5, 0.0), (40.0, 0.0), 0.5)])
+            mine = Link("FB1", "FB1", ["1"], "VCC", ["2"], "VCC_F", 0.1)
+            return Project(board="link.kicad_pcb", links=[mine]).save(folder / "link.coppernicus.yml")
+
+        for name, u2_fields, rails in (("plain", {}, {"VCC"}),
+                                       ("rail", {"PI_RAIL": "VCC_F", "PI_LOAD": "0.2A"}, {"VCC", "VCC_F"})):
+            open_net(link_board(TMP / name, u2_fields))
+            [warning] = window.merged.warnings
+            assert warning.startswith("project file link FB1 ignored"), warning
+            assert set(window.merged.origins) == rails, (name, window.merged.origins)
+            for net in ("VCC", "VCC_F"):
+                window.nets.select(net)
+                app.processEvents()
+                assert not rp.banner.warnings.isHidden() and rp.banner.warnings.text() == warning, \
+                    (name, net, rp.banner.warnings.text())
+            window.nets.select("VCC")
+            app.processEvents()
+            res = solve()
+            assert res is not None and res.warnings.count(warning) == 1, (name, res and res.warnings)
+            assert warning in window.problems.notes.toPlainText()
+    ''', tmp_path)
+
+
 def test_an_ignored_project_rail_warns_and_the_kicad_values_are_shown_and_solved(tmp_path):
     run_in_window('''
         own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 3.0)])
