@@ -42,7 +42,11 @@ All the pictures on this page come from the synthetic demo board in `examples/de
 
 ## Install
 
-You need [uv](https://docs.astral.sh/uv/). It installs Python and everything else, solver
+**Packaged app (no Python needed):** a macOS `.dmg` (Apple silicon, macOS 14+) or a Windows `.zip`,
+see [docs/install.md](docs/install.md). On first start it downloads the Triangle mesher from PyPI
+once (its licence forbids bundling it), checks it against a known hash, and then works offline.
+
+**From source:** you need [uv](https://docs.astral.sh/uv/). It installs Python and everything else, solver
 included.
 
 ```sh
@@ -335,13 +339,14 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | The window fits a 1440 px screen (map bar on two rows) | ✅ |
 | Board temperature (electro-thermal) | 🔄 next |
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
-| Standalone `.app` / `.exe` that needs no uv | ⏳ later |
+| Packaged app: macOS `.dmg`, Windows `.zip`; Triangle fetched once on first start, checked against `uv.lock` ([install](docs/install.md)) | ✅ macOS built and tried; Windows built by CI, not yet tried; unsigned |
 
 Tested on macOS. The test suite runs in CI on Ubuntu, macOS and Windows, all required; the desktop app itself has not been tried on Windows yet. The engine also reads ODB++
 and HyperLynx files, which have not been tried through Coppernicus yet.
 
 ## More documentation
 
+- [Installing the packaged app](docs/install.md).
 - [How it works](docs/technical.md): architecture, physics, validation, repository layout.
 - [Stage-1 analysis of KiPI](docs/kipi-analysis.md), the engine underneath.
 - [Workstreams](docs/workstreams.md) and the [roadmap plan](docs/superpowers/plans/2026-11-24-coppernicus-roadmap.md).
