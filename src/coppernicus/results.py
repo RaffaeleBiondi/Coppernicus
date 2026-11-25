@@ -165,6 +165,101 @@ class RailResult:
         return out
 
 
+# ---------------------------------------------------------------------- board temperature
+
+@dataclass
+class TemperatureMap:
+    """The board temperature on one copper layer: square grid cells, centres ``x_mm`` and
+    ``y_mm`` (KiCad mm), one temperature each, NaN outside the board. A cell holds its
+    layer's copper and laminate together (KiPI's layered heat model)."""
+    layer_id: int
+    layer_name: str
+    x_mm: np.ndarray               # (nx,) cell centres
+    y_mm: np.ndarray               # (ny,)
+    t_c: np.ndarray                # (ny, nx) °C, NaN outside the board
+
+    @property
+    def cell_mm(self) -> float:
+        return float(self.x_mm[1] - self.x_mm[0]) if len(self.x_mm) > 1 else 0.0
+
+    @property
+    def peak_c(self) -> float:
+        return float(np.nanmax(self.t_c))
+
+    def hottest(self) -> Tuple[float, float, float]:
+        """``(x, y, °C)`` of the hottest cell."""
+        i, j = np.unravel_index(np.nanargmax(self.t_c), self.t_c.shape)
+        return float(self.x_mm[j]), float(self.y_mm[i]), float(self.t_c[i, j])
+
+    def at(self, x: float, y: float) -> float:
+        """The temperature of the cell holding (x, y); NaN off the grid or outside the board."""
+        d = self.cell_mm
+        if d <= 0:
+            return float("nan")
+        j = int(np.floor((x - self.x_mm[0]) / d + 0.5))
+        i = int(np.floor((y - self.y_mm[0]) / d + 0.5))
+        if not (0 <= i < len(self.y_mm) and 0 <= j < len(self.x_mm)):
+            return float("nan")
+        return float(self.t_c[i, j])
+
+
+@dataclass
+class LayerTemperature:
+    """The hottest solved copper of one layer (KiPI's ``layer_temps`` row: the temperature
+    read at the copper's mesh nodes), with the pad nearest to it, on any layer."""
+    layer_name: str
+    t_max_c: float
+    rise_c: float                  # above the ambient
+    x_mm: float
+    y_mm: float
+    group: str                     # the TreeResult.groups key of that copper
+    passed: Optional[bool] = None  # against the user's max_temp_c / max_rise_c; None without
+    pad_ref: str = ""              # the nearest pad: its part, its number, and the distance
+    pad_number: str = ""           # from the point to its copper (0: on the pad)
+    pad_distance_mm: Optional[float] = None
+
+
+@dataclass
+class BoardTemperature:
+    """The board temperature of an electro-thermal power-tree solve: one map per copper
+    layer, the hottest solved copper per layer (what is judged), the grid peak (shown only),
+    how the solve settled, where the heat came from, and the load drops at the ambient
+    (iteration 1) against the final ones."""
+    maps: List[TemperatureMap]
+    copper: List[LayerTemperature]
+    ambient_c: float
+    airflow_m_s: float
+    h_w_m2k: float                 # convection per face (KiPI: 10 + 3.8·v W/m²K)
+    grid_mm: float                 # the cell size used
+    grid_nx: int
+    grid_ny: int
+    grid_cells: int                # cells inside the board
+    iterations: int
+    settled: Optional[bool]        # KiPI's rule on the last change; None after one iteration
+    history: List[Dict[str, float]]    # per iteration: iteration, heat_w, t_max_c, dt_max_c
+    heat_w: float
+    heat_by_kind_w: Dict[str, float]
+    peak_c: float                  # the hottest grid cell, any layer
+    peak_x_mm: float
+    peak_y_mm: float
+    peak_layer: str
+    peak_pad_ref: str = ""
+    peak_pad_number: str = ""
+    peak_pad_distance_mm: Optional[float] = None
+    loads: List[Dict[str, Any]] = field(default_factory=list)   # name, group, drop_ambient_v, drop_v
+    load_heat: bool = False
+    regulator_heat: str = "output_pads"
+    assumptions: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+
+    @property
+    def peak_rise_c(self) -> float:
+        return self.peak_c - self.ambient_c
+
+    def map(self, layer_name: str) -> Optional[TemperatureMap]:
+        return next((m for m in self.maps if m.layer_name == layer_name), None)
+
+
 # ---------------------------------------------------------------------- power tree
 
 DISCONNECTED = "DISCONNECTED"                     # no copper path to its source: not solved
@@ -230,6 +325,11 @@ class TreeResult:
     vrms: List[VrmReport] = field(default_factory=list)
     loads: List[LoadReport] = field(default_factory=list)
     links: List[Dict[str, Any]] = field(default_factory=list)   # name, nets, resistance, current
+    # The board temperature, when the tree was solved electro-thermally; else None.
+    thermal: Optional[BoardTemperature] = None
+    # The project's board-temperature limits (max_temp_c / max_rise_c, only those set; None
+    # when none is): judged on ``thermal``, or listed as not judged when it was not solved.
+    thermal_limits: Optional[Dict[str, float]] = None
     # net -> project Limits, for every solved net the project has a rail for (a group's
     # key is its driving net; see coppernicus.power_tree.net_limits)
     limits: Dict[str, Any] = field(default_factory=dict)
