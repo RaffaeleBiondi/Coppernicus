@@ -536,10 +536,11 @@ class RailPanel(QWidget):
         self.copper_summary.setToolTip("What-if copper thickness by layer, for every solve. "
                                        "The board file is never changed.")
         self.copper_edit = QPushButton("Edit…")
-        copper = QHBoxLayout()
-        copper.setContentsMargins(0, 0, 0, 0)
-        copper.addWidget(self.copper_summary, 1)
-        copper.addWidget(self.copper_edit)
+        copper = QWidget()      # a widget, not a layout: a layout field kept one line and clipped
+        row = QHBoxLayout(copper)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.copper_summary, 1)
+        row.addWidget(self.copper_edit)
         sform = QFormLayout(settings)
         sform.addRow("Largest mesh edge", self.max_edge)
         sform.addRow("Via plating (µm)", self.plating)
