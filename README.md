@@ -338,7 +338,8 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | What-if copper thickness per layer (`copper_thickness_mm`, optional, at most 1 mm per layer) | ✅ (project file, MCP, and the app: Solve settings → Copper thickness → Edit…; empty = board file) |
 | The window fits a 1440 px screen (map bar on two rows) | ✅ |
 | Board temperature (electro-thermal, with the power tree): temperature per layer, the copper heating the drop; `thermal:` in the project or `solve --thermal`; a verdict only against `max_temp_c` / `max_rise_c`. Example: `examples/demo/demo-thermal` | ✅ CLI (app tab next) |
-| AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
+| AC PDN impedance \|Z\|(f) per probe: `coppernicus ac PROJECT` (CSV + PNG); a verdict only against your target (or KiPI's formula from your tolerance, step and slew). Example: `examples/pdn` | ✅ CLI (app tab next) |
+| DC-DC ripple and noise, tolerance budget | ⏳ (KiPI's engine has them) |
 | Packaged app: macOS `.dmg`, Windows `.zip`; Triangle fetched once on first start, checked against `uv.lock` ([install](docs/install.md)) | ✅ macOS built and tried; Windows built by CI, not yet tried; unsigned |
 
 Tested on macOS. The test suite runs in CI on Ubuntu, macOS and Windows, all required; the desktop app itself has not been tried on Windows yet. The engine also reads ODB++
