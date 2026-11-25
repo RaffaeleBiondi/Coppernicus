@@ -2209,6 +2209,8 @@ def run_ac(window, check: Checks, args, out: Path):
           and "PASS" in panel.figure.axes[0].get_title(), panel.figure.axes[0].get_title())
 
     panel.set_bandwidth_text("")
+    check("ac: an edit flags the shown result: setup changed since this solve",
+          panel.stale and "Setup changed since this solve" in panel.header.text(), panel.header.text())
     panel.use_quick_preset()
     check("ac: the quick preset, pressed, sets 10 copper solves per decade in the visible field",
           window.project.ac.field_points_per_decade == 10 and spin.value() == 10 and window.dirty,

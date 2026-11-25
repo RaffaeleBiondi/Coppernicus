@@ -513,7 +513,6 @@ CHART_SURFACE = "#fcfcfb"
 class AcPanel(QWidget):
     """The Impedance results tab (see the module docstring)."""
     estimated = Signal(str)          # the estimate, shown before the solve starts
-    idle = Signal()                  # a solve ended (done, failed, cancelled or not started)
 
     def __init__(self, window):
         super().__init__(window)
@@ -1436,7 +1435,6 @@ class AcPanel(QWidget):
         self.cancel_button.setEnabled(False)
         self.progress.setRange(0, 1000)
         self.progress.setValue(0)
-        self.idle.emit()
 
     def cancel(self):
         """Ask the running phase to stop (KiPI checks between frequencies). Solve stays off
