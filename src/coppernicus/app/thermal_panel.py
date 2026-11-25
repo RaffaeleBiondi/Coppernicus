@@ -161,6 +161,34 @@ def is_limit(key: str) -> bool:
     return key in THERMAL_LIMITS
 
 
+class _WheelWhenFocused:
+    """A form field that takes the mouse wheel only once focused (a click or Tab), so turning
+    the wheel to scroll the form never changes a value under the pointer: any change of an
+    option drops the solved power tree. Unfocused, the wheel goes on to the scroll area."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class _Spin(_WheelWhenFocused, DecimalSpinBox):
+    pass
+
+
+class _IntSpin(_WheelWhenFocused, QSpinBox):
+    pass
+
+
+class _Combo(_WheelWhenFocused, QComboBox):
+    pass
+
+
 class _LimitValidator(DecimalValidator):
     """A limit field: a number, or empty for not checked (a plain number validator calls an
     empty field unfinished, so clearing it would never be written back)."""
@@ -190,20 +218,19 @@ class ThermalPanel(QWidget):
         self.enabled.setToolTip("Solve power tree (Ctrl+T) also solves the board temperature: the copper "
                                 "heated by its own losses, solved again at that temperature (KiPI's "
                                 "co-simulation). Solve (F5) of one rail is not heated.")
-        self.ambient = DecimalSpinBox(decimals=2, minimum=-100.0, maximum=1000.0, singleStep=1.0,
-                                      suffix=" °C")
+        self.ambient = _Spin(decimals=2, minimum=-100.0, maximum=1000.0, singleStep=1.0, suffix=" °C")
         self.ambient.setToolTip("The air and the board without current")
-        self.airflow = DecimalSpinBox(decimals=2, minimum=0.0, maximum=1000.0, singleStep=0.5, suffix=" m/s")
+        self.airflow = _Spin(decimals=2, minimum=0.0, maximum=1000.0, singleStep=0.5, suffix=" m/s")
         self.airflow.setToolTip("Air speed over both faces: convection h = 10 + 3.8·v W/m²K per face (KiPI)")
-        self.iterations = QSpinBox(minimum=1, maximum=10000)
+        self.iterations = _IntSpin(minimum=1, maximum=10000)
         self.iterations.setToolTip("Electro-thermal passes. Settled when the last one changed no cell by "
                                    "more than 5 % of the peak rise.")
-        self.grid = DecimalSpinBox(decimals=3, minimum=0.0, maximum=1000.0, singleStep=0.05)
+        self.grid = _Spin(decimals=3, minimum=0.0, maximum=1000.0, singleStep=0.05)
         self.grid.setSpecialValueText("automatic")
         self.grid.setToolTip("Square cell of the heat grid; 0 = automatic (about 250 cells across the board)")
         self.load_heat = QCheckBox("Heat from the loads")
         self.load_heat.setToolTip("Also each load's own power (V·I), at its pins")
-        self.regulator_heat = QComboBox()
+        self.regulator_heat = _Combo()
         for key, label in REGULATOR_HEAT_LABELS:
             self.regulator_heat.addItem(label, key)
         self.regulator_heat.setToolTip("Where a regulator's conversion loss (input − output power) goes: "

@@ -179,13 +179,39 @@ def test_the_form_writes_the_options_and_emits_only_on_a_change():
     ''')
 
 
+def test_the_wheel_over_the_form_changes_no_field_that_is_not_focused():
+    """The form scrolls: a wheel turn over a field on the way must not change it (any change
+    of an option drops the solved power tree)."""
+    run_in_window('''
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtGui import QWheelEvent
+        from coppernicus.project import ThermalOptions
+        panel = window.thermal_panel
+        options = ThermalOptions()
+        panel.set_options(options)
+        heard = []
+        panel.options_changed.connect(lambda: heard.append("options"))
+        window.show()
+        app.processEvents()
+        for field in (panel.ambient, panel.iterations, panel.grid, panel.regulator_heat):
+            assert not field.hasFocus() and field.focusPolicy() == Qt.StrongFocus, field
+            middle = QPointF(field.width() / 2, field.height() / 2)
+            wheel = QWheelEvent(middle, QPointF(field.mapToGlobal(middle.toPoint())), QPoint(),
+                                QPoint(0, -120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+            QtWidgets.QApplication.sendEvent(field, wheel)
+            app.processEvents()
+        assert options == ThermalOptions() and heard == [], (options, heard)
+    ''')
+
+
 def test_the_tree_verdict_counts_the_board_temperature():
     run_in_window('''
         from coppernicus.results import TreeResult
+        from coppernicus.temperature import NOT_SOLVED
         window.tree = TreeResult(thermal_limits={"max_rise_c": 15.0})
         text = window._tree_verdict()
         assert "not judged" in text and "board temperature (max_rise_c)" in text, text
-        assert "thermal disabled" in text, text
+        assert NOT_SOLVED in text, text
     ''')
 
 

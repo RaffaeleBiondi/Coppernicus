@@ -1287,9 +1287,9 @@ def run_thermal(window, check: Checks, args, out: Path):
     check("... and shows the Temperature tab", window.results_tabs.currentWidget() is panel)
     check("... F.Cu and B.Cu rows, both FAIL against the 15 °C rise",
           [r[0] for r in rows] == ["F.Cu", "B.Cu"] and all(r[-1] == "FAIL" for r in rows), str(rows))
-    check("... the tab's verdict and the Power tree header say limit(s) exceeded",
-          "limit(s) exceeded" in panel.summary.text()
-          and "limit(s) exceeded" in window.tree_panel.summary.text(),
+    check("... the tab's verdict and the Power tree header count both layers: 2 limit(s) exceeded",
+          "2 limit(s) exceeded" in panel.summary.text()
+          and "2 limit(s) exceeded" in window.tree_panel.summary.text(),
           f"{panel.summary.text()[:160]} | {window.tree_panel.summary.text()[-80:]}")
     details = panel.details.text()
     check("... the history, the grid peak and its nearest pad", "41.33 → 42.26 → 42.31 °C" in details
