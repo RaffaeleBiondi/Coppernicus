@@ -1483,6 +1483,43 @@ def run_hover(window, check: Checks, args, out: Path):
     rise = clicked.split("rise = ")[1].split(" mV")[0] if "rise = " in clicked else "?"
     check("hover: on the GND group it reads the double-click's rise", tree is not None
           and f"rise = {rise} mV above 0 V (ground rise)" in hovered, f"{hovered!r} | {clicked}")
+
+    # A ground under a negative rail sinks below 0 V: the map, the readout and the double-click
+    # give its depth below 0 V, as a ground shift.
+    board = SyntheticBoard("strip_gnd", two_layer_stackup())
+    for ref, x in (("J1", 0.0), ("U1", 40.0)):
+        board.square_pad(ref, "1", "VCC", x, 0.0, 1.5)
+        board.square_pad(ref, "2", "GND", x, 5.0, 1.5)
+    board.track("VCC", F, 0.5, (0.0, 0.0), (40.0, 0.0))
+    board.track("GND", F, 0.5, (0.0, 5.0), (40.0, 5.0))
+    save_snapshot(board.snapshot(), out / "strip_gnd.kipi.json.gz")
+    path = Project(board="strip_gnd.kipi.json.gz", rails=[
+        Rail("VCC", sources=[Source("J1", -3.3, ["1"], ground_pins=["2"], ground_net="GND")],
+             loads=[Load("U1", 1.0, ["1"], ground_pins=["2"], ground_net="GND")]),
+        Rail("GND")]).save(out / "strip_gnd.coppernicus.yml")
+    window.dirty = False
+    window.open_project(path)
+    window.nets.select("VCC")
+    QApplication.processEvents()
+    tree = solve_tree_and_wait(window, args.timeout)
+    window.group_box.setCurrentIndex(window.group_box.findData("GND"))
+    window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+    QApplication.processEvents()
+    if args.window:
+        window.view.reset_view()
+        QApplication.processEvents()
+        hovered = hover_vs_double_click(window, view_point(window, 39.0, 5.0))[0]
+    else:
+        view.probe_at(39.0, 5.0)
+        hovered = view.hover_at(39.0, 5.0)
+    clicked = window.statusBar().currentMessage()
+    shift = clicked.split("shift = ")[1].split(" mV")[0] if "shift = " in clicked else "?"
+    bar = view.colorbar
+    check("hover: on a ground below 0 V the map, the readout and the double-click read its depth as a "
+          "ground shift", tree is not None and bar._title.startswith("mV below 0 V (ground shift)")
+          and bar._hi > 30.0 and shift != "?" and float(shift) > 30.0
+          and f"shift = {shift} mV below 0 V (ground shift)" in hovered,
+          f"bar {bar._title.splitlines()[0]!r} to {bar._hi:.4g} | {hovered!r} | {clicked}")
     window.dirty = False
 
 
