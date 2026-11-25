@@ -63,6 +63,8 @@ PIN_LIST_LIMIT = 64
 COPPER_STEPS_MM = (0.0175, 0.035, 0.070, 0.105)
 COPPER_STEPS_OZ = ("0.5 oz", "1 oz", "2 oz", "3 oz")
 
+BOARD_TEMPERATURE_REASON = ("solved with the power tree only (solve --tree, the MCP solve_tree, "
+                            "Ctrl+T in the app), not rail by rail")
 FIELD_HINT = ("fix the field in KiCad (on the symbol, then update the PCB); or give the rail in the "
               "project file with override_board_fields: true; or turn the fields off with "
               "use_board_fields: false (CLI: --no-board-fields)")
@@ -558,21 +560,28 @@ class Session:
                 on_rail(live.rec.id, summary)
             out_rails.append(summary)
             verdicts.append(summary["verdict"])
+        # The board temperature is a power-tree solve: its limits judge nothing rail by rail,
+        # so each is a not-judged item, never a silent pass (CLI and CI exit 3).
+        from coppernicus.temperature import thermal_limits
+        board_temp = [{"rail": None, "item": "board temperature", "limit": k,
+                       "reason": BOARD_TEMPERATURE_REASON}
+                      for k in (thermal_limits(getattr(project, "thermal", None)) or {})]
         # Skipped rails (no loads) are left out of the verdict.
-        unjudged_rails = any(r.get("not_judged") for r in out_rails)
+        unjudged_rails = any(r.get("not_judged") for r in out_rails) or bool(board_temp)
         overall = ("error" if "error" in verdicts else "fail" if "fail" in verdicts else
                    "not_judged" if unjudged_rails else
                    "pass" if verdicts and all(v == "pass" for v in verdicts) else
                    "pass_partially_judged" if "pass" in verdicts else "not_judged")
         unjudged = [{"rail": r["net"], **u} for r in out_rails for u in r.get("not_judged", [])]
+        unjudged += board_temp
         note = ("fail: a limit you set is exceeded on some rail; not_judged: a limit set could "
                 "not judge some items (listed in not_judged), or no limits are set; pass: every "
                 "rail has limits and none is exceeded; pass_partially_judged: the rails with "
                 "limits pass, others have none. A rail skipped for having nothing to draw is "
                 "left out, but its limits are listed as not judged.")
         if unjudged:
-            note += " Not judged: " + "; ".join(f"{u['rail']}: {u['item']} ({u['limit']}): "
-                                                f"{u['reason']}" for u in unjudged)
+            note += " Not judged: " + "; ".join(f"{u['rail'] + ': ' if u['rail'] else ''}{u['item']} "
+                                                f"({u['limit']}): {u['reason']}" for u in unjudged)
         return C.jsonable({
             "project": path.resolve(), "board": board_info, "rails": out_rails, "verdict": overall,
             "verdict_note": note, "not_judged": unjudged, "board_fields_warnings": merged.warnings,

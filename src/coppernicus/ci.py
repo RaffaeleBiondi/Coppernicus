@@ -320,6 +320,11 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
                     details.append(f"- {tag}{_cell(p['title'])}{_cell(where)} at "
                                    f"({_num(p.get('x_mm'), '.2f')}, {_num(p.get('y_mm'), '.2f')}) mm")
             assumptions += [a for a in rail.get("assumptions", []) if a not in assumptions]
+        board = [u for u in e["doc"].get("not_judged", []) if not u.get("rail")]
+        if board:                             # of the board, not of a rail: its temperature
+            details += ["", f"**{project}**: not judged", ""]
+            details += [f"- NOT JUDGED {_cell(u['item'])} ({_cell(u['limit'])}): {_cell(u['reason'])}"
+                        for u in board]
     lines += ["", "Verdicts are judged only against the limits written in the project files. Peak current "
               "densities at sharp corners depend on the mesh; the problems give spot means instead."]
     if field_warnings:

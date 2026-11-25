@@ -132,6 +132,9 @@ uv run --project path/to/Coppernicus python -m coppernicus.ci summary --out resu
   to a few minutes on large multi-rail ones.
 - **Pinning.** `@main` follows this repository's latest commit. To keep a check reproducible,
   pin a commit SHA, or a release tag once there are releases.
+- **Board temperature.** A project with `thermal.max_temp_c` or `max_rise_c` set needs the
+  power tree to judge them: the rail-by-rail check lists each as NOT JUDGED ("solved with the
+  power tree only") and exits 3, never a silent pass.
 - **Privacy.** The board is processed on the runner of your repository's workflow. The results
   stay in that run's artifacts. Nothing is sent anywhere else.
 - **Self-test.** This repository runs the action on the synthetic demo at every push

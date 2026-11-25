@@ -280,6 +280,9 @@ def _cmd_solve(args) -> int:
                       f"{rail['skipped']['hint']}.")
                 for u in rail.get("not_judged", []):
                     print(f"  NOT JUDGED {u['item']} ({u['limit']}): {u['reason']}")
+        for u in doc.get("not_judged", []):
+            if not u.get("rail"):                  # of the board, not of a rail (its temperature)
+                print(f"NOT JUDGED {u['item']} ({u['limit']}): {u['reason']}")
         print(f"Summary: {summary_path}")
         if "report_file" in doc:
             print(f"Report: {doc['report_file']}")
