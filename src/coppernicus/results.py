@@ -341,3 +341,91 @@ class TreeResult:
     def group_of(self, net: str) -> Optional[str]:
         """The key of the group ``net`` was solved in, or None."""
         return next((k for k, r in self.groups.items() if net in r.nets), None)
+
+
+# ---------------------------------------------------------------------- AC impedance (Task 9)
+
+@dataclass
+class ProbeImpedance:
+    """The PDN impedance at one probe after an AC solve, its target where one applies and
+    its verdict (only against a target the user gave, or computed from numbers they gave)."""
+    name: str
+    ref: str
+    pins: Optional[List[str]]      # None: every pin of the part on ``net``
+    net: str
+    ground_net: str
+    z_ohm: np.ndarray              # complex Ω at ImpedanceResult.freq_hz
+    target_ohm: Optional[float] = None         # flat target (entered, or computed)
+    target_hz: Optional[float] = None          # ... up to here (None: the whole sweep)
+    target_points: List[Tuple[float, float]] = field(default_factory=list)   # a mask (Hz, Ω)
+    # The target at each frequency, NaN where none applies (below the bandwidth, above
+    # target_hz); None without a target.
+    target_curve_ohm: Optional[np.ndarray] = None
+    target_note: str = ""                      # where the target comes from
+    judged_from_hz: Optional[float] = None     # the bandwidth above which it is judged
+    # KiPI's judged_from note when no frequency is left between the bandwidth and the end of
+    # the target: KiPI would then judge the open-loop rise; Coppernicus does not judge.
+    fallback_note: str = ""
+    worst_z_ohm: Optional[float] = None        # |Z| at the worst point
+    worst_hz: Optional[float] = None
+    worst_ratio: Optional[float] = None        # |Z| / target there (None without a target)
+    passed: Optional[bool] = None              # None: no target, or not judged
+    not_judged: str = ""                       # why a target was not judged
+    step_a: Optional[float] = None
+    slew_a_per_us: Optional[float] = None
+
+    @property
+    def mag_ohm(self) -> np.ndarray:
+        return np.abs(self.z_ohm)
+
+    @property
+    def phase_deg(self) -> np.ndarray:
+        return np.degrees(np.angle(self.z_ohm))
+
+    @property
+    def has_target(self) -> bool:
+        return bool(self.target_points or self.target_ohm)
+
+    @property
+    def limit(self) -> str:
+        """The key of the target judged: "target_points" (a mask) or "target_ohm"."""
+        return "target_points" if self.target_points else "target_ohm"
+
+
+@dataclass
+class ImpedanceResult:
+    """One rail's open-loop PDN impedance |Z|(f) at its probes (KiPI ``kipi/ac``)."""
+    rail: str                      # the net its source drives
+    rail_nets: List[str]           # every net solved as the rail (joined by links)
+    ground: str                    # the ground's nets, " + " between them
+    source: str                    # the source left out of the AC model
+    # The source's control loop bandwidth as the user gave it (ac.bandwidth_hz); None when
+    # not given: then ``assumed_bandwidth_hz`` only marks the band below it, not judged (|Z|
+    # does not depend on it: KiPI's AC model has no regulator impedance).
+    bandwidth_hz: Optional[float]
+    freq_hz: np.ndarray
+    field_freq_hz: np.ndarray      # where the copper was solved (interpolated between)
+    probes: List[ProbeImpedance] = field(default_factory=list)
+    plane_capacitance_f: float = 0.0
+    caps: List[str] = field(default_factory=list)           # capacitors in the model
+    missing_caps: List[str] = field(default_factory=list)   # rail-to-ground, no model
+    links: List[str] = field(default_factory=list)          # links in the model
+    cap_derated_f: Dict[str, float] = field(default_factory=dict)   # ref -> derated farads
+    load_line_ohm: float = 0.0     # not exposed yet: no load line
+    stats: Dict[str, Any] = field(default_factory=dict)
+    warnings: List[str] = field(default_factory=list)
+    assumptions: List[str] = field(default_factory=list)
+    assumed_bandwidth_hz: Optional[float] = None   # a placeholder when none is given
+    dielectric_assumed: str = ""   # why the dielectric εr is assumed; "" when the board gives it
+
+    @property
+    def bandwidth_assumed(self) -> bool:
+        return self.bandwidth_hz is None
+
+    @property
+    def open_loop_hz(self) -> Optional[float]:
+        """The frequency below which the curve is open loop: the bandwidth, given or assumed."""
+        return self.bandwidth_hz if self.bandwidth_hz is not None else self.assumed_bandwidth_hz
+
+    def probe(self, name: str) -> Optional[ProbeImpedance]:
+        return next((p for p in self.probes if p.name == name), None)
