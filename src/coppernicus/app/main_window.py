@@ -339,6 +339,7 @@ class MainWindow(QMainWindow):
             tb.addAction(act)
             if text.startswith(("Open", "Save")):
                 file_actions.append(act)
+        self.ac_panel.add_solve_action(tb)            # "Solve impedance" (Ctrl+I), the Impedance tab's
         # Menus: the toolbar's file actions (the same actions, so one shortcut each), and the
         # KiCad footprint fields.
         self.file_menu = self.menuBar().addMenu("&File")

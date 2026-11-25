@@ -2247,7 +2247,10 @@ def run_ac(window, check: Checks, args, out: Path):
             rows = list(csv.DictReader(fh))
         check("ac: CSV and PNG exported by the core's writers, the assumed bandwidth flagged",
               png_path.is_file() and png_path.stat().st_size > 0 and len(rows) == len(res.freq_hz)
-              and rows[0]["bandwidth_assumed"] == "true", f"{csv_path.name} {png_path.name}")
+              and rows[0]["bandwidth_assumed"] == "true" and rows[0]["bandwidth_hz"] == ""
+              and float(rows[0]["assumed_bandwidth_hz"]) == res.assumed_bandwidth_hz,
+              f"{csv_path.name} {png_path.name} {rows[0]['bandwidth_hz']!r} "
+              f"{rows[0]['assumed_bandwidth_hz']!r}")
         panel.grab().save(str(out / "ac_result.png"))
         print(f"  Impedance tab with a result: {out / 'ac_result.png'}", flush=True)
 
