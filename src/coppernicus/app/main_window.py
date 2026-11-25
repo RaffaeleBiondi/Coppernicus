@@ -155,6 +155,7 @@ class MainWindow(QMainWindow):
         # user's own project, the only thing saved.
         self.board_fields: Optional[BF.BoardFields] = None
         self._fields_read_error: Optional[str] = None
+        self._tie_pairs: List[Tuple[str, str]] = []     # the board's net ties, for the merge
         self.fields_error: Optional[str] = None      # set: solves refuse, with this text
         self.merged = BF.Merged(self.project)
         self.last_remerge_s = 0.0
@@ -458,13 +459,15 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ KiCad footprint fields
     def _read_board_fields(self, board: Board):
         """Read the board's KiCad footprint fields (``.kicad_pcb`` only: another format has
-        none). An unreadable file is kept as the error the solves refuse with."""
+        none), and its net ties. An unreadable file is kept as the error the solves refuse with."""
         t0 = time.perf_counter()
         self.board_fields, self._fields_read_error = None, None
         try:
             self.board_fields = read_board_fields(board.path) if board.path is not None else None
         except EngineError as e:
             self._fields_read_error = f"{e} ({FIELD_HINT})"       # as the CLI prints it
+        # The nets the board's net ties join: the merge follows them, as the CLI's does.
+        self._tie_pairs = [(t.net_a, t.net_b) for t in board.net_ties()]
         self.last_fields_read_s = time.perf_counter() - t0
 
     def _remerge(self):
@@ -479,7 +482,7 @@ class MainWindow(QMainWindow):
             self.fields_error = self._fields_read_error
         elif self.board_fields is not None:
             try:
-                merged = BF.apply(self.project, lambda: self.board_fields)
+                merged = BF.apply(self.project, lambda: self.board_fields, ties=self._tie_pairs)
             except BF.FieldError as e:          # as `coppernicus solve` prints it
                 where = f"{self.project.path.name}: " if self.project.path else ""
                 self.fields_error = f"{where}{e} ({FIELD_HINT})"

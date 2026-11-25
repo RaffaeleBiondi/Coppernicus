@@ -252,6 +252,35 @@ def test_f5_and_ctrl_t_on_a_kicad_rail_give_the_cli_numbers_limits_and_notes(tmp
     ''', tmp_path, project=str(project), rail=cli, tree=tree)
 
 
+def test_loads_on_a_net_tied_to_a_kicad_rail_are_solved_in_it_as_the_cli_does(tmp_path, capsys):
+    """U1 has PI_LOAD on VCC_B, which the net tie NT1 joins to VCC (J1's PI_SOURCE): the
+    merge follows the board's net ties, as `coppernicus solve` merges them."""
+    from kicad_fixture import write_board
+    parts = [("J1", [("1", 0.0, 0.0, "VCC")], {"PI_RAIL": "VCC", "PI_SOURCE": "1V"}),
+             ("NT1", [("1", 19.5, 0.0, "VCC"), ("2", 20.5, 0.0, "VCC_B")], {"Value": "NetTie_2"}),
+             ("U1", [("1", 40.0, 0.0, "VCC_B")], {"PI_RAIL": "VCC_B", "PI_LOAD": "1A"})]
+    write_board(tmp_path / "tie.kicad_pcb", parts,
+                [("VCC", (0.0, 0.0), (19.5, 0.0), 0.5), ("VCC_B", (20.5, 0.0), (40.0, 0.0), 0.5)])
+    project = Project(board="tie.kicad_pcb").save(tmp_path / "tie.coppernicus.yml")
+    code, doc = cli_rails(project, tmp_path, capsys)
+    [cli] = doc["rails"]
+    assert code == 0 and cli["net"] == "VCC" and [d["name"] for d in cli["loads"]] == ["U1"]
+    run_in_window('''
+        cli = VALUES["rail"]
+        open_net(VALUES["project"])
+        assert window.fields_error is None, window.fields_error
+        assert window.merged.origins["VCC"].source == "fields", window.merged.origins
+        assert rp.loads.rows() == [("", "U1", None, 1.0)], rp.loads.rows()
+        res = solve()
+        assert res is not None, DIALOGS
+        assert [t.name for t in res.loads] == ["U1"], res.loads
+        drop_mv = res.drop(res.loads[0]) * 1e3                  # the JSON keeps 7 significant digits
+        assert math.isclose(drop_mv, cli["loads"][0]["drop_mv"], rel_tol=1e-6), (drop_mv, cli["loads"])
+        tie_note = next(a for a in cli["assumptions"] if "joined to it by a net tie" in a)
+        assert tie_note in res.assumptions, res.assumptions
+    ''', tmp_path, project=str(project), rail=cli)
+
+
 def test_an_ignored_project_rail_warns_and_the_kicad_values_are_shown_and_solved(tmp_path):
     run_in_window('''
         own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 3.0)])
