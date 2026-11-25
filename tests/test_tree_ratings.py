@@ -152,6 +152,22 @@ def test_a_rating_alone_judges_the_tree_and_without_one_nothing_is_judged_or_lis
     assert not any(p["kind"] == "regulator" for g in plain["groups"] for p in g["problems"])
 
 
+def test_a_rating_brings_one_assumption_line_stating_the_rule_as_judged():
+    from coppernicus.power_tree import apply_limits, tree_summary
+    tree, project = solved_chain({"+3V3": 2.0})
+    apply_limits(tree, project)                                     # judged again: still once
+    lines = [a for a in tree_summary(tree)["assumptions"] if "current_limit_a" in a]
+    assert lines == [
+        "Regulator ratings (a source's rated output current, current_limit_a: KiCad field PI_IMAX "
+        "or the project file): a regulator fails when |I out| is above its rating (within 1e-9, "
+        "relative, of it counts as at the rating: the solve's round-off); not judged while its "
+        "group, a group it feeds or the power-tree iteration has not converged, nor on a rail the "
+        "tree does not solve; a regulator out of regulation is still judged on its current, as "
+        "KiPI does."], lines
+    plain = tree_summary(solved_chain()[0])
+    assert not any("current_limit_a" in a for a in plain["assumptions"])
+
+
 def test_a_regulator_delivering_exactly_its_rating_passes_despite_round_off():
     """U2 feeds a 2 A load: the solve gives 2.0000000000001 A. Rated exactly 2 A it passes
     (|I out| <= rating, as KiPI's check; within 1e-9 of it counts as at it)."""

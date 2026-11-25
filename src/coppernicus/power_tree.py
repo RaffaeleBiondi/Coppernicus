@@ -209,6 +209,11 @@ def apply_limits(tree, project: Project) -> None:
         if s.current_limit_a is not None and not _solved_as_rail(tree, rail.net)]
     judge_loads(tree)
     judge_ratings(tree)                  # the ratings came with the solve (convert_tree)
+    rated = bool(tree.unsolved_ratings) or any(v.current_limit_a is not None for v in tree.vrms)
+    if rated and RATING_RULE not in tree.assumptions:
+        tree.assumptions.append(RATING_RULE)
+    elif not rated and RATING_RULE in tree.assumptions:
+        tree.assumptions.remove(RATING_RULE)
     apply_thermal_limits(tree, getattr(project, "thermal", None))   # the board temperature's
 
 
@@ -265,6 +270,13 @@ RATING_KEY = "current_limit_a"           # the rating's key in not-judged entrie
 #: (2.0000000000001 A out of a 2 A load) must not fail a part rated for what it delivers.
 RATING_ROUND_OFF = 1e-9
 RATING_FROM_EITHER = "KiCad field PI_IMAX or the project file"     # where, when it is not known
+#: The assumption line of a tree with a rating (:func:`apply_limits`): the rule as judged.
+RATING_RULE = ("Regulator ratings (a source's rated output current, current_limit_a: KiCad field "
+               "PI_IMAX or the project file): a regulator fails when |I out| is above its rating "
+               "(within 1e-9, relative, of it counts as at the rating: the solve's round-off); not "
+               "judged while its group, a group it feeds or the power-tree iteration has not "
+               "converged, nor on a rail the tree does not solve; a regulator out of regulation is "
+               "still judged on its current, as KiPI does.")
 
 
 def judge_ratings(tree) -> None:
