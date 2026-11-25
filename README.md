@@ -328,7 +328,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | AI agents can set up and edit project files (`write_project`, `read_project`) | ✅ explicit path, no overwrite without `overwrite: true`, checked before saving |
 | KiCad field proposals for a project (`propose_fields`, `coppernicus fields --propose`) | ✅ text to paste into KiCad (library symbol vs schematic instance); KiCad files are never written |
 | Compare two revisions of a board (`compare_revisions`) | ✅ per-load and per-layer deltas, via currents, where the drop changed, a Δ map |
-| One-step copper weight what-if for agents (`copper_step`) | ✅ 0.5 / 1 / 2 / 3 oz, one step from the design |
+| One-step copper weight what-if for agents (`copper_step`; `solve_rail` settings follow the same rule) | ✅ 0.5 / 1 / 2 / 3 oz, one step from the design; bigger changes are made in KiCad |
 | Power-tree verdicts: a group passes only when everything its limits apply to was judged. Items that cannot be judged (disconnected, behind a regulator out of regulation, not converged, 0 V nominal, a limit on a net the tree does not solve) give "not judged" and are named | ✅ |
 | Regulator inputs judged as loads on the rail feeding them (across input and ground pins); limits per net, a net without its own limit takes its group's main rail's; copper judged against the strictest limit in the group, and a fail names whose limit it used | ✅ |
 | What-if copper thickness per layer (`copper_thickness_mm`, optional, at most 1 mm per layer) | ✅ (project file, MCP, and the app: Solve settings → Copper thickness → Edit…; empty = board file) |
