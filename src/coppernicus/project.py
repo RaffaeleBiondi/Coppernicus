@@ -214,6 +214,68 @@ class Settings:
         self.copper_thickness_mm = check_copper_thickness(self.copper_thickness_mm)
 
 
+# Where a regulator's conversion loss (input − output power) heats the board: "output_pads",
+# KiPI's own placement (its output pins); "part_pads", spread evenly over every copper pad of
+# its part, all nets.
+REGULATOR_HEAT = ("output_pads", "part_pads")
+
+
+@dataclass
+class ThermalOptions:
+    """The board temperature: an electro-thermal power-tree solve (KiPI's co-simulation),
+    which heats the copper with its own losses and solves it again at that temperature.
+    Defaults are KiPI's (``kipi/dc/thermal/model.py`` ThermalSettings). The limits are the
+    user's and are judged by Coppernicus (:mod:`coppernicus.temperature`); ``None`` = not
+    checked. Saved as a ``thermal:`` block holding only the keys not at their default."""
+    enabled: bool = False          # Ctrl+T, solve --tree and solve_tree also solve the temperature
+    ambient_c: float = 25.0
+    iterations: int = 3            # electro-thermal passes, at least 1
+    airflow_m_s: float = 0.0
+    grid_mm: float = 0.0           # square cell size; 0 = automatic (KiPI: ~250 cells across)
+    load_heat: bool = False        # also the loads' own power, at their pins (KiPI: load_power)
+    max_temp_c: Optional[float] = None
+    max_rise_c: Optional[float] = None      # above ambient_c
+    regulator_heat: str = "output_pads"     # see REGULATOR_HEAT
+
+
+def _thermal_in(data: Any) -> ThermalOptions:
+    """The ``thermal:`` block, checked: unknown keys, non-finite numbers, ``iterations`` not a
+    whole number ≥ 1, a negative airflow or grid, and an unknown ``regulator_heat`` raise."""
+    if data is None:
+        return ThermalOptions()
+    if not isinstance(data, dict):
+        raise ValueError(f"thermal must be a mapping of option names to values, not {data!r}")
+    known = {f.name for f in dataclasses.fields(ThermalOptions)}
+    unknown = [str(k) for k in data if k not in known]
+    if unknown:
+        raise ValueError(f"thermal: unknown option {', '.join(unknown)} (known: {', '.join(sorted(known))})")
+    values: Dict[str, Any] = {k: _flag(data, k, False) for k in ("enabled", "load_heat") if k in data}
+    for k in ("ambient_c", "airflow_m_s", "grid_mm", "max_temp_c", "max_rise_c"):
+        if k in data and not (k.startswith("max_") and data[k] is None):
+            if isinstance(data[k], bool):
+                raise ValueError(f"thermal: {k} must be a number, not {data[k]!r}")
+            values[k] = _number(data[k], f"thermal: {k}")
+            if k in ("airflow_m_s", "grid_mm") and values[k] < 0:
+                raise ValueError(f"thermal: {k} cannot be negative (grid_mm 0 = automatic)")
+    if "iterations" in data:
+        n = data["iterations"]
+        if isinstance(n, bool) or not isinstance(n, (int, float)) or not float(n).is_integer() or n < 1:
+            raise ValueError(f"thermal: iterations must be a whole number, at least 1, not {n!r}")
+        values["iterations"] = int(n)
+    if "regulator_heat" in data:
+        if data["regulator_heat"] not in REGULATOR_HEAT:
+            raise ValueError(f"thermal: regulator_heat must be one of {', '.join(REGULATOR_HEAT)}, "
+                             f"not {data['regulator_heat']!r}")
+        values["regulator_heat"] = data["regulator_heat"]
+    return ThermalOptions(**values)
+
+
+def _thermal_out(options: ThermalOptions) -> Dict[str, Any]:
+    """The options not at their default, in field order (empty at the defaults)."""
+    default = ThermalOptions()
+    return {k: v for k, v in vars(options).items() if v != getattr(default, k)}
+
+
 # The owner's bound: a thicker value is surely µm or oz written as mm.
 MAX_COPPER_MM = 1.0
 
@@ -248,7 +310,9 @@ class Project:
     board: str = ""
     rails: List[Rail] = field(default_factory=list)
     settings: Settings = field(default_factory=Settings)
-    path: Optional[Path] = None               # where it was loaded from / saved to; not saved
+    # The board temperature (electro-thermal power tree); saved only when not at the defaults.
+    thermal: ThermalOptions = field(default_factory=ThermalOptions)
+    path: Optional[Path] = None              # where it was loaded from / saved to; not saved
     # Nets the user marked as rails by hand, where the name/zone heuristic missed them.
     # Saved only when not empty, so files written before this field stay identical.
     marked_rails: List[str] = field(default_factory=list)
@@ -313,6 +377,7 @@ class Project:
                 rd["override_board_fields"] = True
             rails.append(rd)
         out: Dict[str, Any] = {"board": self.board, "settings": _settings_out(self.settings), "rails": rails}
+        out.update({"thermal": t} if (t := _thermal_out(self.thermal)) else {})
         if self.links:
             out["links"] = [{"name": k.name, "ref": k.ref, "a": _pin_ref_out("", k.pins_a, k.net_a),
                              "b": _pin_ref_out("", k.pins_b, k.net_b),
@@ -331,6 +396,7 @@ class Project:
             raise ProjectError("the project file must be a mapping")
         try:
             settings = Settings(**(data.get("settings") or {}))
+            thermal = _thermal_in(data.get("thermal"))
             rails = []
             for rd in data.get("rails") or []:
                 rails.append(Rail(
@@ -353,7 +419,7 @@ class Project:
             raise ProjectError(f"invalid project file: {e}") from e
         return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path,
                    marked_rails=[str(n) for n in marked], links=links, engine_options=dict(options),
-                   use_board_fields=use_fields)
+                   use_board_fields=use_fields, thermal=thermal)
 
     @classmethod
     def load(cls, path) -> "Project":
