@@ -201,12 +201,14 @@ def test_a_rating_brings_one_assumption_line_stating_the_rule_as_judged():
 
 
 def test_a_regulator_delivering_exactly_its_rating_passes_despite_round_off():
-    """U2 feeds a 2 A load: the solve gives 2.0000000000001 A. Rated exactly 2 A it passes
-    (|I out| <= rating, as KiPI's check; within 1e-9 of it counts as at it)."""
-    from coppernicus.power_tree import tree_summary
-    tree, _ = solved_chain({"+1V8": 2.0})
+    """U2 feeds a 2 A load; the solve's round-off can put it a hair above (KiPI v1.0.1 gave
+    2.0000000000001097 A). Rated exactly 2 A it passes (|I out| <= rating, as KiPI's check;
+    within 1e-9 of it counts as at it)."""
+    from coppernicus.power_tree import apply_limits, tree_summary
+    tree, project = solved_chain({"+1V8": 2.0})
     u2 = next(v for v in tree.vrms if v.name == "U2")
-    assert u2.i_out_a != 2.0 and abs(u2.i_out_a - 2.0) < 1e-9, u2.i_out_a      # round-off
+    u2.i_out_a = 2.0 * (1 + 5e-11)                                  # round-off above the rating
+    apply_limits(tree, project)
     doc = tree_summary(tree)
     assert doc["verdict"] == "pass", doc["verdict_note"]
     assert {v["name"]: v for v in doc["vrms"]}["U2"]["exceeds_current_limit"] is False
