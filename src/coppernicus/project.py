@@ -20,6 +20,10 @@ while at its default, so files written before it load and save unchanged):
 
 A pin reference is saved as a mapping ``{ref, net, pins}``; ``ref`` is omitted when it is the
 terminal's own part. See ``docs/engine-mapping.md`` for how the engine reads these fields.
+
+The AC impedance solve (Task 9) adds ``probes`` (where |Z|(f) is looked into, with an optional
+target), ``capacitors`` (RLC models of the parts) and ``ac`` (the sweep, each source's control
+loop bandwidth, each link's series inductance), each omitted while empty or at its default.
 """
 
 from __future__ import annotations
@@ -315,6 +319,261 @@ def _float_or_none(value) -> Optional[float]:
         return None
 
 
+# ---------------------------------------------------------------------- AC (Task 9)
+
+@dataclass
+class Probe:
+    """Where the PDN impedance |Z|(f) is looked into (AC solve): the supply pins ``pins`` of
+    part ``ref`` on ``net``, against its ground pins (``ground_*``; an empty ``ground_ref``
+    is ``ref``). A target is optional: ``target_ohm`` flat up to ``target_hz`` (the whole
+    sweep if unset), or a mask ``target_points`` (``(Hz, Ω)`` corners joined on the log-log
+    plot, applying only between its first and last points: nothing is judged outside them),
+    or, with ``target_ohm`` empty, one computed from ``ac_tolerance_v``, ``step_a`` and
+    ``slew_a_per_us`` (KiPI: Z = V_ac/I_step up to 1/(π·t_rise), t_rise = I_step/slew).
+    Without a target the probe is ranked, never judged."""
+    name: str
+    ref: str
+    net: str
+    pins: PinSpec = None
+    ground_ref: str = ""
+    ground_pins: PinSpec = None
+    ground_net: str = ""
+    target_ohm: Optional[float] = None
+    target_hz: Optional[float] = None
+    target_points: List[Tuple[float, float]] = field(default_factory=list)
+    ac_tolerance_v: Optional[float] = None
+    step_a: Optional[float] = None
+    slew_a_per_us: Optional[float] = None
+
+
+@dataclass
+class CapModel:
+    """A capacitor model (ESR + jω·ESL + 1/(jω·C)) shared by the parts ``refs``. All three
+    values are needed (> 0) before an AC solve uses it; 0 = not entered, there is no default.
+    With ``rated_v`` the capacitance is derated for DC bias (``kept_at_rated_pct`` kept at
+    the rated voltage; empty: KiPI's typical class II value)."""
+    name: str
+    capacitance_f: float = 0.0
+    esl_h: float = 0.0
+    esr_ohm: float = 0.0
+    refs: List[str] = field(default_factory=list)
+    rated_v: Optional[float] = None
+    kept_at_rated_pct: Optional[float] = None
+    dielectric: str = ""
+
+
+@dataclass
+class AcOptions:
+    """The AC sweep (``ac:`` in the project file). Defaults are KiPI's ``ACSettings``
+    (kipi/ac/model.py:237-257). ``bandwidth_hz`` maps a source (its name, or its ref) to its
+    control loop bandwidth; ``link_esl_h`` maps a link (its ref, or its name) to its series
+    inductance, without which a link is a plain resistance in AC."""
+    f_start_hz: float = 1e3
+    f_stop_hz: float = 300e6
+    points_per_decade: int = 250
+    field_points_per_decade: int = 20     # copper solves per decade; 0 = every sweep point
+    max_edge_mm: float = 1.0              # the AC mesh's own (settings.max_edge_mm is DC's)
+    loss_tangent: float = 0.02
+    default_er: float = 4.3               # where the stackup gives no εr
+    bandwidth_hz: Dict[str, float] = field(default_factory=dict)
+    link_esl_h: Dict[str, float] = field(default_factory=dict)
+
+
+_AC_INTS = ("points_per_decade", "field_points_per_decade")
+PROBE_KEYS = ("name", "ref", "net", "pins", "ground", "target_ohm", "target_hz", "target_points",
+              "ac_tolerance_v", "step_a", "slew_a_per_us")
+CAP_KEYS = ("name", "capacitance_f", "esl_h", "esr_ohm", "refs", "rated_v", "kept_at_rated_pct",
+            "dielectric")
+
+
+def _known_keys(d: Dict[str, Any], keys: Sequence[str], what: str, name: str) -> None:
+    unknown = [str(k) for k in d if k not in keys]
+    if unknown:
+        raise ValueError(f"unknown {what} key {', '.join(unknown)} in {what} {name} (the keys: "
+                         f"{', '.join(keys)})")
+
+
+def _probe_out(p: Probe) -> Dict[str, Any]:
+    d: Dict[str, Any] = {"name": p.name, "ref": p.ref, "net": p.net, "pins": _pins_out(p.pins)}
+    if p.ground_net:
+        d["ground"] = _pin_ref_out(p.ground_ref, p.ground_pins, p.ground_net)
+    for key in ("target_ohm", "target_hz"):
+        if getattr(p, key) is not None:
+            d[key] = getattr(p, key)
+    if p.target_points:
+        d["target_points"] = [[f, z] for f, z in p.target_points]
+    for key in ("ac_tolerance_v", "step_a", "slew_a_per_us"):
+        if getattr(p, key) is not None:
+            d[key] = getattr(p, key)
+    return d
+
+
+def _cap_out(m: CapModel) -> Dict[str, Any]:
+    d: Dict[str, Any] = {"name": m.name}
+    for key in ("capacitance_f", "esl_h", "esr_ohm"):
+        if getattr(m, key):
+            d[key] = getattr(m, key)
+    if m.refs:
+        d["refs"] = list(m.refs)
+    for key in ("rated_v", "kept_at_rated_pct"):
+        if getattr(m, key) is not None:
+            d[key] = getattr(m, key)
+    if m.dielectric:
+        d["dielectric"] = m.dielectric
+    return d
+
+
+def _ac_out(a: AcOptions) -> Dict[str, Any]:
+    """The ``ac:`` block: only the keys away from their default (empty when all are)."""
+    default = AcOptions()
+    out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in vars(a).items()
+           if v != getattr(default, k)}
+    return out
+
+
+def _positive(value: Any, what: str, allow_none: bool = True) -> Optional[float]:
+    """A finite number above zero (None when empty and allowed)."""
+    if value is None and allow_none:
+        return None
+    x = _number(value, what) if not isinstance(value, bool) else math.nan
+    if not x > 0:
+        raise ValueError(f"{what} must be a number above zero, not {value!r}")
+    return x
+
+
+def _probe_in(d: Any) -> Probe:
+    if not isinstance(d, dict):
+        raise ValueError(f"each probe must be a mapping, not {d!r}")
+    name = str(d.get("name") or "").strip()
+    if not name:
+        raise ValueError("each probe needs a name")
+    owner = f"probe {name}"
+    _known_keys(d, PROBE_KEYS, "probe", name)
+    ref, net = str(d.get("ref") or "").strip(), str(d.get("net") or "").strip()
+    if not ref or not net:
+        raise ValueError(f"{owner} needs its part (ref) and the net of its supply pins (net)")
+    values = {k: _positive(d.get(k), f"{owner}: {k}")
+              for k in ("target_ohm", "target_hz", "ac_tolerance_v", "step_a", "slew_a_per_us")}
+    raw = d.get("target_points") or []
+    if not isinstance(raw, list):
+        raise ValueError(f"{owner}: target_points must be a list of [Hz, ohm] pairs")
+    points = []
+    for pt in raw:
+        if not (isinstance(pt, (list, tuple)) and len(pt) == 2):
+            raise ValueError(f"{owner}: target_points must be [Hz, ohm] pairs, not {pt!r}")
+        points.append((_positive(pt[0], f"{owner}: target_points frequency", False),
+                       _positive(pt[1], f"{owner}: target_points impedance", False)))
+    if points and values["target_ohm"] is not None:
+        raise ValueError(f"{owner}: give target_ohm or target_points (a mask), not both")
+    if points and values["target_hz"] is not None:
+        raise ValueError(f"{owner}: target_points (a mask) takes no target_hz: the mask ends at "
+                         "its last point")
+    if values["target_hz"] is not None and values["target_ohm"] is None:
+        raise ValueError(f"{owner}: target_hz without target_ohm: give the target impedance it "
+                         "applies up to")
+    freqs = [f for f, _ in points]
+    if len(set(freqs)) != len(freqs):
+        raise ValueError(f"{owner}: two target_points are at the same frequency")
+    return Probe(name=name, ref=ref, net=net, pins=parse_pins(d.get("pins")),
+                 target_points=points, **_pin_ref_in(d, "ground", owner), **values)
+
+
+def _cap_in(d: Any) -> CapModel:
+    if not isinstance(d, dict):
+        raise ValueError(f"each capacitor model must be a mapping, not {d!r}")
+    name = str(d.get("name") or "").strip()
+    if not name:
+        raise ValueError("each capacitor model needs a name")
+    owner = f"capacitor model {name}"
+    _known_keys(d, CAP_KEYS, "capacitor model", name)
+    values = {}
+    for key in ("capacitance_f", "esl_h", "esr_ohm"):
+        x = _number(d.get(key, 0.0), f"{owner}: {key}")
+        if x < 0:
+            raise ValueError(f"{owner}: {key} cannot be negative")
+        values[key] = x
+    refs = d.get("refs") or []
+    if not isinstance(refs, list):
+        raise ValueError(f"{owner}: refs must be a list of part references")
+    kept = d.get("kept_at_rated_pct")
+    if kept is not None:
+        kept = _number(kept, f"{owner}: kept_at_rated_pct")
+        if not 0 < kept <= 100:
+            raise ValueError(f"{owner}: kept_at_rated_pct is the % of the capacitance kept at "
+                             f"the rated voltage, above 0 and at most 100, not {kept:g}")
+    return CapModel(name=name, refs=[str(r).strip() for r in refs if str(r).strip()],
+                    rated_v=_positive(d.get("rated_v"), f"{owner}: rated_v"),
+                    kept_at_rated_pct=kept, dielectric=str(d.get("dielectric") or ""), **values)
+
+
+def _ac_options_in(d: Any) -> AcOptions:
+    if not isinstance(d, dict):
+        raise ValueError("ac must be a mapping of AC options")
+    default = AcOptions()
+    unknown = sorted(set(d) - set(vars(default)))
+    if unknown:
+        raise ValueError(f"unknown ac option {', '.join(map(str, unknown))} (the options: "
+                         f"{', '.join(vars(default))})")
+    out: Dict[str, Any] = {}
+    for key in ("f_start_hz", "f_stop_hz", "max_edge_mm"):
+        if key in d:
+            out[key] = _positive(d[key], f"ac {key}", False)
+    for key in _AC_INTS:
+        if key in d:
+            v = d[key]
+            if (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                    or v != int(v)):
+                raise ValueError(f"ac {key} must be a whole number, not {v!r}")
+            if v < (1 if key == "points_per_decade" else 0):
+                raise ValueError(f"ac {key} must be at least "
+                                 f"{1 if key == 'points_per_decade' else 0}, not {v!r}")
+            out[key] = int(v)
+    if "loss_tangent" in d:
+        out["loss_tangent"] = _number(d["loss_tangent"], "ac loss_tangent")
+        if out["loss_tangent"] < 0:
+            raise ValueError("ac loss_tangent cannot be negative")
+    if "default_er" in d:
+        out["default_er"] = _number(d["default_er"], "ac default_er")
+        if out["default_er"] < 1:
+            raise ValueError("ac default_er is a relative permittivity: at least 1")
+    a = AcOptions(**out)
+    if not a.f_stop_hz > a.f_start_hz:
+        raise ValueError(f"ac f_stop_hz ({a.f_stop_hz:g}) must be above f_start_hz ({a.f_start_hz:g})")
+    for key, check in (("bandwidth_hz", "above zero"), ("link_esl_h", "not negative")):
+        values = d.get(key) or {}
+        if not isinstance(values, dict):
+            raise ValueError(f"ac {key} must map names to numbers, e.g. {{U1: 1.0e+5}}")
+        parsed = {}
+        for name, v in values.items():
+            x = _number(v, f"ac {key}[{name}]") if not isinstance(v, bool) else math.nan
+            if not (x > 0 if check == "above zero" else x >= 0):
+                raise ValueError(f"ac {key}[{name}] must be a number {check}, not {v!r}")
+            parsed[str(name)] = x
+        setattr(a, key, parsed)
+    return a
+
+
+def _ac_in(data: Dict[str, Any]) -> Dict[str, Any]:
+    """``probes``, ``capacitors`` and ``ac`` of a project file, checked."""
+    probes = data.get("probes") or []
+    caps = data.get("capacitors") or []
+    if not isinstance(probes, list) or not isinstance(caps, list):
+        raise ValueError("probes and capacitors must be lists")
+    probes = [_probe_in(p) for p in probes]
+    caps = [_cap_in(c) for c in caps]
+    for what, names in (("probe", [p.name for p in probes]), ("capacitor model", [c.name for c in caps])):
+        twice = sorted({n for n in names if names.count(n) > 1})
+        if twice:
+            raise ValueError(f"{what} names must be unique: {', '.join(twice)}")
+    seen: Dict[str, str] = {}
+    for c in caps:
+        for ref in c.refs:
+            if ref in seen:
+                raise ValueError(f"{ref} is in two capacitor models ({seen[ref]}, {c.name})")
+            seen[ref] = c.name
+    return {"probes": probes, "capacitors": caps, "ac": _ac_options_in(data.get("ac") or {})}
+
+
 @dataclass
 class Project:
     board: str = ""
@@ -330,6 +589,10 @@ class Project:
     # Engine-specific options, passed through to the engine and checked there (KiPI:
     # ``excluded_nets``). Saved only when not empty.
     engine_options: Dict[str, Any] = field(default_factory=dict)
+    # AC impedance (Task 9): probes, capacitor models, the sweep. Each saved only when set.
+    probes: List[Probe] = field(default_factory=list)
+    capacitors: List[CapModel] = field(default_factory=list)
+    ac: AcOptions = field(default_factory=AcOptions)
     # Take rails from the board's KiCad footprint fields (PI_RAIL, PI_SOURCE, ...; see
     # coppernicus.board_fields) when it has any. On by default; saved only when off.
     use_board_fields: bool = True
@@ -394,6 +657,12 @@ class Project:
                              "resistance_ohm": k.resistance_ohm} for k in self.links]
         if self.engine_options:
             out["engine_options"] = dict(self.engine_options)
+        if self.probes:
+            out["probes"] = [_probe_out(p) for p in self.probes]
+        if self.capacitors:
+            out["capacitors"] = [_cap_out(c) for c in self.capacitors]
+        if _ac_out(self.ac):
+            out["ac"] = _ac_out(self.ac)
         if self.marked_rails:
             out["marked_rails"] = list(self.marked_rails)
         if not self.use_board_fields:
@@ -424,12 +693,13 @@ class Project:
             options = data.get("engine_options") or {}
             if not isinstance(options, dict):
                 raise ValueError("engine_options must be a mapping of option names to values")
+            ac = _ac_in(data)
             use_fields = _flag(data, "use_board_fields", True)
         except (KeyError, TypeError, ValueError) as e:
             raise ProjectError(f"invalid project file: {e}") from e
         return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path,
                    marked_rails=[str(n) for n in marked], links=links, engine_options=dict(options),
-                   use_board_fields=use_fields, thermal=thermal)
+                   use_board_fields=use_fields, thermal=thermal, **ac)
 
     @classmethod
     def load(cls, path) -> "Project":
