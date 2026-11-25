@@ -323,10 +323,10 @@ def _assumptions(board: Board, options: ThermalOptions, th: ThermalResult, tree:
                "junction temperature); transient heating.")
     out.append("Board temperature is judged only against max_temp_c / max_rise_c: the hottest "
                "solved copper of each layer, its rise over the ambient. A layer over a limit fails "
-               "even when the solve has not settled (the last iteration still underestimates while "
-               "the temperature rises); otherwise nothing is judged when the solve did not settle "
-               "or ran one iteration. The grid peak is shown, not judged: it can lie on laminate or "
-               "on copper of a net that is not solved.")
+               "even when the solve has not settled: the fail stands on the last iteration's "
+               "temperatures, and the fail says whether they had settled; otherwise nothing is "
+               "judged when the solve did not settle or ran one iteration. The grid peak is shown, "
+               "not judged: it can lie on laminate or on copper of a net that is not solved.")
     return out
 
 

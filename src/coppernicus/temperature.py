@@ -4,8 +4,8 @@ JSON summary, its text and its PNG maps.
 
 What is judged (coordinator's rulings): the hottest **solved** copper of each layer (KiPI's
 ``layer_temps`` rows), against ``max_temp_c`` and ``max_rise_c`` (over the ambient), only
-the user's. A row over a limit fails even when the solve has not settled (the last iteration
-still underestimates while the temperature rises), and the fail says so. Otherwise the
+the user's. A row over a limit fails even when the solve has not settled: the fail stands on
+the last iteration's temperatures, and says that they had not settled. Otherwise the
 limits are not judged when the solve did not settle, ran one iteration, or a group the rows
 come from did not converge. The grid peak is shown, never judged. Limits set while the tree
 was solved without the temperature are listed as not judged.

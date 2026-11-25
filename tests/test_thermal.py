@@ -291,6 +291,10 @@ def test_assumptions(strip, demo_tree):
     assert any(a.startswith("copper_temp_c (40 °C) is not used") for a in tree.assumptions)
     assert not any(a.startswith("Copper at") for a in tree.assumptions)
     assert not any(a.startswith("Regulator heat") for a in thermal)      # a plain source only
+    # A fail stands on the last iteration's temperatures; no claim that they only rise (on the
+    # power chain they fall: the LDO's loss drops as its input sags).
+    a9 = next(a for a in thermal if a.startswith("Board temperature is judged only"))
+    assert "the fail stands on the last iteration's temperatures" in a9 and "underestimat" not in a9
 
 
 def test_cancel_raises_cancelled(strip):
