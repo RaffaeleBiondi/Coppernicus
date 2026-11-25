@@ -1333,9 +1333,9 @@ The tree is cheap; AC (Task 9's fit, 2466.6·n^1.1706 B for one factorization) a
 `transient()` runs only in the tolerance command's AC solves (`transient=True`): 17 ms on the
 example (96 566 samples per array, four arrays kept); KiPI caps it at 2^21 samples, about 67 MB
 per probe for the four arrays. A run on this machine
-(M-series): `coppernicus tolerance examples/tolerance/tolerance.coppernicus.yml` takes 2.7 s
+(M-series): `coppernicus tolerance examples/tolerance/tolerance.coppernicus.yml` takes 2.2 s
 wall (tree 0.08 s; AC 5 708 triangles, 111 field frequencies; noise 14 059 unknowns, 34 field
-solves), 0.72 GB peak RSS.
+solves), 0.70 GB peak RSS.
 
 ### Validation
 
