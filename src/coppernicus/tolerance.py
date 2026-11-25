@@ -329,6 +329,9 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
             text = (f"{PART_NAMES[kind]} is not a finite number ({part.below_v:g} / {part.above_v:g} V "
                     f"from {part.source})")
             part = None
+        if part is not None and row.nominal_v is not None and row.nominal_v < 0:
+            side = "below = more negative"
+            part.detail = f"{part.detail} ({side})" if part.detail else side
         row.parts[kind] = part
         if part is None:
             row.hints[kind] = text
@@ -435,7 +438,12 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
     used = list(dict.fromkeys(a for r in out.rows for a in r.ripple_from))
     carried = list(tree.assumptions) + [f"{a}: {x}" for a in used for x in by_noise[a].assumptions
                                         if x not in tree.assumptions]
-    out.assumptions = list(dict.fromkeys(assumptions(project, tree) + carried))
+    negative = [r.load for r in out.rows if r.verdict and r.nominal_v is not None and r.nominal_v < 0]
+    sides = ([f"Negative rail ({', '.join(negative)}): a _pct pair follows the magnitude of nominal "
+              "(KiPI's pct_to_volts: −5 % lies toward 0 V, above it), while a _mv pair and the entered "
+              "ripple_mv and transient_mv follow volts (below = more negative), as every part does."]
+             if negative else [])
+    out.assumptions = list(dict.fromkeys(assumptions(project, tree) + sides + carried))
     nominal = {r.name: r.nominal_v for r in out.rows}
     behind = []
     for r in out.rows:

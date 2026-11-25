@@ -617,6 +617,12 @@ def test_a_negative_rail_swaps_kipis_estimate_and_judges_in_volts():
     total = row.checks["total"]
     assert (total.allowed_below_v, total.allowed_above_v) == pytest.approx((0.054, 0.090))
     assert total.below_v == pytest.approx(0.0 + 0.036 + 0.005 + 0.020)
+    # M8: the sides of a negative rail are said, once in the assumptions and in each part.
+    r = _compose(project, tree=tree, impedance=[_impedance()])
+    line = [a for a in r.assumptions if a.startswith("Negative rail")]
+    assert len(line) == 1 and "pct_to_volts" in line[0] and "below = more negative" in line[0]
+    assert all("below = more negative" in row.parts[k].detail for k in ("dc", "accuracy", "transient"))
+    assert not [a for a in _compose(_comp_project(**COMPLETE)).assumptions if a.startswith("Negative rail")]
 
 
 def test_a_percent_tolerance_on_a_0_v_rail_is_not_judged():
@@ -902,3 +908,16 @@ def test_the_result_carries_the_assumptions_and_warnings_behind_its_numbers():
     assert not [x for x in r.assumptions + r.warnings if "A2" in x]       # A2 lists no probe: unused
     assert ("AC VOUT, behind KiPI's transient estimate at P1 (shown, never judged): 1 capacitor between "
             "VOUT and GND has no model: C9") in r.warnings
+
+
+def test_one_load_passing_and_another_not_judged_is_not_judged_overall():
+    """M9: the overall verdict is fail > not judged > pass over every load."""
+    import dataclasses
+    project = _comp_project(**COMPLETE)
+    rail = project.rails[0]
+    rail.loads.append(Load("U3", 1.0, ["1"], tol_pct=5, ripple_mv=5))     # no transient: not judged
+    tree = _comp_tree()
+    tree.loads.append(dataclasses.replace(tree.loads[0], name="U3"))
+    r = _compose(project, tree=tree, pairs={"U2": "P1", "U3": None})
+    assert [row.verdict for row in r.rows] == ["pass", "not_judged"]
+    assert r.verdict == "not_judged" and [e["item"] for e in r.not_judged] == ["U3"]
