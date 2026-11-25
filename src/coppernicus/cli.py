@@ -651,17 +651,23 @@ def _cmd_tolerance(args) -> int:
     except (board_fields.FieldError, EngineError) as e:
         return fail("invalid_board_field", str(e), FIELD_HINT)
     project = merged.project
-    warnings = list(merged.warnings)
+    warnings, dropped = list(merged.warnings), []
     for net in merged.from_fields:        # the fields' rail replaces the project's terminals
         own = loaded.rail(net)
-        keys = (LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS, SOURCE_ACCURACY_KEYS)
-        refs = [t.ref for ts, k in ((own.loads, keys[0]), (own.sources, keys[1])) if own is not None
-                for t in ts if any(getattr(t, x) is not None for x in k)]
+        if own is None:
+            continue
+        keys = ((own.loads, LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS), (own.sources, SOURCE_ACCURACY_KEYS))
+        refs = [t.ref for ts, k in keys for t in ts if any(getattr(t, x) is not None for x in k)]
         if refs:
+            why = (f"rail {net} comes from the board's KiCad footprint fields, which hold no tolerance "
+                   "yet: set override_board_fields: true on the rail to use the project's")
             warnings.append(f"Rail {net} comes from the board's KiCad footprint fields: the tolerances, "
                             f"accuracy and entered parts of {', '.join(refs)} in the project file are not "
                             "used (no KiCad field holds them yet); set override_board_fields: true on the "
                             "rail to use the project's")
+            # A tolerance the user set that cannot be judged: not judged (exit 3), never a pass.
+            dropped += [{"item": ld.label, "net": net, "limit": key, "reason": why}
+                        for ld in own.loads for key in LOAD_TOLERANCE_KEYS if getattr(ld, key) is not None]
     stream = sys.stderr if quiet else sys.stdout
     progress = (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None
     estimates = []
@@ -734,7 +740,7 @@ def _cmd_tolerance(args) -> int:
         except EngineError as e:          # its ripple is missing: not judged, never a pass
             warnings.append(f"Noise solve of {a.name} failed: {e}")
             noise_notes[a.name] = "its noise solve failed"
-    result = compose(project, tree, impedance, noise, pairs, ac_notes, noise_notes, warnings)
+    result = compose(project, tree, impedance, noise, pairs, ac_notes, noise_notes, warnings, dropped)
     result.estimates = estimates
     peak = peak_rss_bytes()
     result.stats = {"seconds": time.perf_counter() - t0, "tree_seconds": tree.stats.get("seconds"),

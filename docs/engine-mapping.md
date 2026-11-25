@@ -1152,7 +1152,8 @@ mappings still ignore unknown keys as before (only the blocks refuse them), so a
 `tol_pc` leaves the load without that tolerance. No KiCad field holds these yet (PI_ACC /
 PI_TOL later, the owner's call): a rail taken from the board's KiCad footprint fields replaces
 the project's terminals, so `coppernicus tolerance` warns which loads and sources lose their
-tolerances there (set `override_board_fields: true` on the rail to use them).
+tolerances there, and each tolerance the user set on such a load is a not-judged entry (exit
+3, never a silent pass; set `override_board_fields: true` on the rail to use them).
 
 Limits: KiPI's `deviation_limits` (evaluate.py:28-36) through `range_volts` (model.py:276):
 a % of a negative rail is of its magnitude (`pct_to_volts`, model.py:254-259, swaps the ends:
@@ -1326,7 +1327,7 @@ here, not reported upstream):
 
 Also:
 - No KiCad field holds a tolerance or an accuracy yet; a rail from the board's fields loses the
-  project's (a warning names them).
+  project's (a warning names them; each lost tolerance is not judged).
 - Loads and sources still ignore unknown keys (a typo leaves the tolerance unset).
 - KiPI's estimate is shown even when its AC result hangs on something assumed (capacitors
   without a model, an assumed εr); it is never judged.

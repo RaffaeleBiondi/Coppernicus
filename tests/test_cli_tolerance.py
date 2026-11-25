@@ -120,10 +120,14 @@ def test_a_rail_from_kicad_fields_warns_that_the_project_tolerances_are_not_used
     path = Project(board="s.kicad_pcb", rails=[Rail("VCC", sources=[Source("J1", 3.3, accuracy_pct=1)],
                                                     loads=[Load("U1", 1.0, tol_pct=5)])]
                    ).save(tmp_path / "s.coppernicus.yml")
-    assert main(["tolerance", str(path), "--json", "--out", str(tmp_path / "o")]) == EXIT_OK
+    # The fields' U1 has no tolerance: the one the user set is not judged, never a silent pass.
+    assert main(["tolerance", str(path), "--json", "--out", str(tmp_path / "o")]) == EXIT_NOT_JUDGED
     doc = json.loads(capsys.readouterr().out)
     assert any("KiCad footprint fields" in w and "U1" in w and "J1" in w for w in doc["warnings"])
-    assert doc["loads"][0]["verdict"] == ""                 # the fields' U1 has no tolerance
+    assert doc["loads"][0]["verdict"] == "" and doc["verdict"] == "not_judged"
+    (e,) = doc["not_judged"]
+    assert (e["item"], e["net"], e["limit"]) == ("U1", "VCC", "tol_pct")
+    assert "override_board_fields" in e["reason"]
     assert main(["tolerance", str(path), "--json", "--no-board-fields", "--out", str(tmp_path / "o")]
                 ) == EXIT_NOT_JUDGED
     doc = json.loads(capsys.readouterr().out)
@@ -165,3 +169,26 @@ def test_the_example_passes_and_its_tight_copy_fails(tmp_path, capsys):
     assert (e["item"], e["limit"]) == ("U2", "tol_pct")
     assert e["reason"] == "total 82.94 mV below nominal, over the 54 mV allowed and 58.57 mV above " \
                           "nominal, over the 54 mV allowed"
+
+
+def test_a_rail_only_in_the_kicad_fields_solves(tmp_path, capsys):
+    """A project file that names only the board: every rail from the fields, none of its own."""
+    from coppernicus.engine.synthetic import write_strip_kicad_pcb
+    write_strip_kicad_pcb(tmp_path / "s.kicad_pcb", {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V"},
+                                                     "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}})
+    path = Project(board="s.kicad_pcb").save(tmp_path / "s.coppernicus.yml")
+    assert main(["tolerance", str(path), "--json", "--out", str(tmp_path / "o")]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["verdict"] == "not_judged" and doc["not_judged"] == [] and len(doc["loads"]) == 1
+
+
+def test_a_project_with_the_board_temperature_prints_its_estimate_first(tmp_path, capsys):
+    """examples/demo/demo-thermal: the tree is solved electro-thermally, its cost printed first."""
+    demo = EXAMPLE.parent / "demo" / "demo-thermal.coppernicus.yml"
+    assert main(["tolerance", str(demo), "--out", str(tmp_path / "o")]) == EXIT_OK
+    text = capsys.readouterr().out
+    assert text.startswith("Board temperature:") and "nominal 3.3 V from Supply" in text
+    doc = json.loads((tmp_path / "o" / "demo-thermal.coppernicus_tolerance_summary.json").read_text(
+        encoding="utf-8"))
+    assert doc["estimates"][0]["solve"] == "board temperature"
+    assert doc["loads"][0]["parts"]["dc"]["source"] == "power tree (electro-thermal)"

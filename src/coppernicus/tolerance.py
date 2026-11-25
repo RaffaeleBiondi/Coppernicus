@@ -359,12 +359,14 @@ def assumptions(project: Project, tree: TreeResult) -> List[str]:
 def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceResult] = (),
             noise: Sequence[NoiseResult] = (), pairs: Optional[Dict[str, Optional[str]]] = None,
             ac_notes: Optional[Dict[str, str]] = None, noise_notes: Optional[Dict[str, str]] = None,
-            warnings: Sequence[str] = ()) -> ToleranceResult:
+            warnings: Sequence[str] = (), not_judged: Sequence[Dict[str, Any]] = ()) -> ToleranceResult:
     """Every load's stack-up from the power ``tree``, the AC results (``impedance``: KiPI's
     transient estimate at each probe, shown), the ``noise`` results (the ripple at each probe)
     and what the project enters. ``pairs``: engine load name -> its probe
     (:func:`coppernicus.engine.tolerance.load_probes`); ``ac_notes``: probe -> why its rail was
-    not solved in AC; ``noise_notes``: aggressor -> why it was not solved."""
+    not solved in AC; ``noise_notes``: aggressor -> why it was not solved; ``not_judged``: more
+    not-judged entries ``{item, net, limit, reason}`` (a tolerance set on a load the solve does
+    not hold: a rail from KiCad fields)."""
     pairs, ac_notes, noise_notes = pairs or {}, ac_notes or {}, noise_notes or {}
     names = terminal_names(project)
     sources = {name: project.rail(net).sources[i] for (what, net, i), name in names.items()
@@ -386,6 +388,7 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
             elif c.limit and c.passed is None:
                 out.not_judged.append({"item": row.load, "net": row.net, "limit": c.limit,
                                        "reason": c.reason})
+    out.not_judged += [dict(e) for e in not_judged]
     out.verdict = ("fail" if out.failed else "not_judged" if out.not_judged else
                    "pass" if any(r.verdict == "pass" for r in out.rows) else "not_judged")
     out.verdict_note = _note(out.verdict, out.failed, out.not_judged)

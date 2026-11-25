@@ -738,3 +738,27 @@ def test_tolerance_fields_change_no_number_of_the_tree_or_the_ac_solve():
     rb = solve_ac_rail(Board(ac_decap_board()), marked, "+3V3")
     assert np.array_equal(ra.probes[0].z_ohm, rb.probes[0].z_ohm)
     assert ra.warnings == rb.warnings and ra.assumptions == rb.assumptions
+
+
+def test_each_load_takes_the_source_driving_its_group_in_a_real_tree():
+    """The power chain: U4 on +3V3 from the switcher U1, U3 on +1V8 from the remote-sensed LDO
+    U2 (TreeResult.vrms by group), each its own nominal and accuracy."""
+    import dataclasses
+
+    from coppernicus.engine import Board
+    from coppernicus.engine.synthetic import power_chain_board, power_chain_project
+    from coppernicus.engine.tree import solve_project_tree
+    from coppernicus.tolerance import compose
+    project = power_chain_project()
+    for r in project.rails:
+        r.sources = [dataclasses.replace(s, accuracy_mv=10 * (i + 1)) for i, s in enumerate(r.sources)]
+        r.loads = [dataclasses.replace(ld, tol_pct=5) for ld in r.loads]
+    project.rails[1].sources[0] = dataclasses.replace(project.rails[1].sources[0], accuracy_mv=20)
+    tree = solve_project_tree(Board(power_chain_board()), project)
+    r = compose(project, tree, pairs={"U4": None, "U3": None})
+    u4, u3 = r.row("U4"), r.row("U3")
+    assert (u4.source, u4.nominal_v, u3.source, u3.nominal_v) == ("U1", 3.3, "U2", 1.8)
+    assert u4.parts["accuracy"].below_v == pytest.approx(0.020)
+    assert u3.parts["accuracy"].source == "accuracy_mv of U2"
+    rep = next(ld for ld in tree.loads if ld.name == "U3")
+    assert u3.parts["dc"].below_v == pytest.approx(max(1.8 - rep.v_low_v, 0.0), abs=1e-12)
