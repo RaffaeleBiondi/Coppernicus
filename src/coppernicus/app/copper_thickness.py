@@ -112,6 +112,7 @@ class CopperThicknessDialog(QDialog):
         except ProjectError as e:
             self.error.setText(str(e))
             self.error.show()
+            self.adjustSize()                 # make room for the error: no row squashed
             return
         super().accept()
 

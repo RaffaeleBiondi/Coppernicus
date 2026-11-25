@@ -685,6 +685,17 @@ def run_copper_thickness(window, check: Checks, args, out: Path):
     check("copper: 35 (µm written as mm) keeps the dialog open with the error",
           dialog.result() == 0 and dialog.error.isVisibleTo(dialog) and "B.Cu" in dialog.error.text()
           and window.project.settings.copper_thickness_mm == {"B.Cu": 0.07}, dialog.error.text())
+    def shown_then_35(dialog):
+        dialog.show()                                  # laid out at its size before the error
+        QApplication.processEvents()
+        type_b("35")(dialog)
+        QApplication.processEvents()
+        sizes.append((dialog.height(), dialog.sizeHint().height()))
+        dialog.reject()
+    sizes = []
+    edit_copper(window, shown_then_35)
+    check("... and the dialog grows to show the error without squashing its rows",
+          sizes and sizes[0][0] >= sizes[0][1], str(sizes))
     edit_copper(window, type_b("0.035"))
     check("copper: a value equal to the board file's keeps its key",
           window.project.settings.copper_thickness_mm == {"B.Cu": 0.035},
