@@ -228,7 +228,8 @@ def test_maps_rows_and_peak(demo, demo_tree):
         assert m.at(-5.0, -5.0) != m.at(-5.0, -5.0)           # off the grid: NaN
         x, y, t = m.hottest()
         assert m.at(x, y) == t == m.peak_c
-    assert temp.peak_c == max(m.peak_c for m in temp.maps)
+    assert temp.peak_c == max(m.peak_c for m in temp.maps) == temp.map(temp.peak_layer).peak_c
+    assert temp.peak_layer == "F.Cu" and temp.map("F.Cu").peak_c > temp.map("B.Cu").peak_c   # as the rows
     assert temp.grid_cells == int(np.count_nonzero(~np.isnan(temp.maps[0].t_c)))
     assert all(r.t_max_c <= temp.peak_c + 1e-9 for r in temp.copper)
     # The numbers of the gate (§9): settled after 3 iterations, both layers over 15 °C of rise.
@@ -448,3 +449,48 @@ def test_regulator_heat_on_its_output_pads_or_all_its_pads(ldo):
     assert "output pins" in line["output_pads"] and "overestimated" in line["output_pads"]
     assert "every copper pad" in line["part_pads"] and "over- or under-estimated" in line["part_pads"]
     assert "upper-bound" not in line["part_pads"]
+
+
+# ---------------------------------------------------------------------- stackup and load heat
+
+def _board_with(stackup) -> Board:
+    b = SyntheticBoard("strip", stackup)
+    b.square_pad("J1", "1", Strip.NET, Strip.X0, Strip.Y, Strip.PAD)
+    b.square_pad("U1", "1", Strip.NET, Strip.X1, Strip.Y, Strip.PAD)
+    b.track(Strip.NET, F, Strip.W, (Strip.X0, Strip.Y), (Strip.X1, Strip.Y))
+    return Board(b.snapshot())
+
+
+def test_an_unrecognized_laminate_is_named_and_kipis_thermal_tab_advice_is_not_shown():
+    """KiPI's prepreg patterns need a word boundary (materials.py:47-48): a prefixed prepreg
+    name falls back to FR4 core, and the assumptions say so."""
+    stackup = two_layer_stackup()
+    stackup.dielectrics[0].material = "PP2116"
+    said = []
+    tree = solve_project_tree(_board_with(stackup), strip_project(iterations=1), progress=said.append)
+    line = "Laminate PP2116 (1.5 mm) not recognized: taken as FR4 core, 0.8 / 0.3 W/m·K."
+    assert line in tree.thermal.assumptions
+    assert any("not recognized" in m for m in said) and not any("Thermal tab" in m for m in said)
+
+
+def test_a_solder_mask_is_named_and_holds_heat_in(strip):
+    coated = solve_project_tree(_board_with(two_layer_stackup(mask_mm=0.025)), strip_project(iterations=1))
+    bare = solve_project_tree(strip, strip_project(iterations=1))
+    line = next(a for a in coated.thermal.assumptions if a.startswith("Coatings on the outer faces"))
+    assert "top solder mask 25 µm (0.25 W/m·K)" in line and "bottom solder mask 25 µm" in line
+    assert not any(a.startswith("Coatings") for a in bare.thermal.assumptions)
+    assert coated.thermal.peak_c > bare.thermal.peak_c
+
+
+def test_load_heat_puts_each_loads_power_at_its_pins(strip, ldo):
+    tree = solve_project_tree(strip, strip_project(iterations=1, load_heat=True))
+    load = tree.loads[0]
+    assert tree.thermal.heat_by_kind_w["loads"] == pytest.approx(load.current_a * load.v_supply_v, rel=1e-9)
+    assert tree.thermal.load_heat is True
+    assert any("and each load's power at its pins" in a for a in tree.thermal.assumptions)
+    off = solve_project_tree(strip, strip_project(iterations=1))
+    assert "loads" not in off.thermal.heat_by_kind_w
+    assert any("the loads' own power is not counted (load_heat: false)" in a for a in off.thermal.assumptions)
+    loads = [solve_project_tree(ldo, demo_ldo_project(iterations=1, load_heat=True, regulator_heat=mode))
+             .thermal.heat_by_kind_w["loads"] for mode in ("output_pads", "part_pads")]
+    assert loads[0] == pytest.approx(loads[1], rel=1e-12) and loads[0] > 0

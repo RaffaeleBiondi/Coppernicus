@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
 from kipi.core.model.board import (
+    MASK,
     BoardSnapshot,
+    Coating,
     CopperLayer,
     DielectricLayer,
     Footprint,
@@ -31,10 +33,14 @@ F, B = 3, 34                    # KiCad layer ids of F.Cu and B.Cu
 OZ1 = 0.035                     # 1 oz copper
 
 
-def two_layer_stackup(t_cu: float = OZ1, core: float = 1.5, er: float = 4.5) -> Stackup:
+def two_layer_stackup(t_cu: float = OZ1, core: float = 1.5, er: float = 4.5,
+                      mask_mm: float = 0.0) -> Stackup:
+    """F.Cu and B.Cu on an FR4 core; ``mask_mm`` > 0 adds a solder mask that thick on both
+    faces (outside the board: it moves no z)."""
     total = 2 * t_cu + core
     copper = [CopperLayer(F, "F.Cu", 0, t_cu, total - t_cu), CopperLayer(B, "B.Cu", 1, t_cu, 0.0)]
-    return Stackup(copper, [DielectricLayer(core, "FR4", er, F, B)], total)
+    coatings = [Coating(MASK, side, mask_mm) for side in ("top", "bottom")] if mask_mm > 0 else []
+    return Stackup(copper, [DielectricLayer(core, "FR4", er, F, B)], total, coatings=coatings)
 
 
 def _polys(geom) -> List[Poly]:
