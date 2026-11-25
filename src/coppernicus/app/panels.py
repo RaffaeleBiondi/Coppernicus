@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from coppernicus.app.copper_thickness import CopperThicknessDialog, thickness_summary
 from coppernicus.app.fields_view import FieldsBanner
 from coppernicus.engine import Board, NetTie, PartPins
-from coppernicus.problems import FAIL, Problem
+from coppernicus.problems import ATTENTION, FAIL, Problem
 from coppernicus.project import (
     SOURCE_KINDS,
     Limits,
@@ -51,6 +51,10 @@ from coppernicus.project import (
     parse_pins,
     pins_text,
 )
+
+# Attention rows (a spot above Coppernicus's current-density default) and their count in the
+# Problems header: a dark amber, 4.9:1 on white.
+ATTENTION_COLOR = "#9a6700"
 
 # ---------------------------------------------------------------------- numbers
 
@@ -968,13 +972,14 @@ class ProblemsPanel(QWidget):
         self.tree.clear()
         self._problems = list(problems)
         for i, p in enumerate(problems):
-            item = QTreeWidgetItem(["FAIL" if p.severity == FAIL else "", p.title, p.layer or "",
-                                    f"{p.x:.2f}, {p.y:.2f}", p.detail])
+            tag = {FAIL: "FAIL", ATTENTION: "ATTENTION"}.get(p.severity, "")
+            item = QTreeWidgetItem([tag, p.title, p.layer or "", f"{p.x:.2f}, {p.y:.2f}", p.detail])
             item.setData(0, Qt.UserRole, i)
             item.setToolTip(1, p.detail)
-            if p.severity == FAIL:
+            if tag:         # a fail red; an attention item (the current-density default) amber
+                color = QColor("#c0392b" if p.severity == FAIL else ATTENTION_COLOR)
                 for col in range(5):
-                    item.setForeground(col, QBrush(QColor("#c0392b")))
+                    item.setForeground(col, QBrush(color))
                 f = item.font(0)
                 f.setBold(True)
                 item.setFont(0, f)

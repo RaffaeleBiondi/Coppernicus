@@ -26,6 +26,7 @@ from kipi.dc.solver.via_barrel import ViaRule, default_via_rules
 
 from coppernicus.engine.board import Board, EngineError, NetTie
 from coppernicus.power_tree import EstimateError, estimate_note, estimated_draws
+from coppernicus.problems import density_default_note
 from coppernicus.project import SOURCE_PIN_REFS, Project, Rail, Settings, pins_text
 from coppernicus.results import LayerField, RailResult, TerminalResult, ViaCurrent
 
@@ -90,6 +91,13 @@ def thickness_note(thickness: Dict[str, float], file_mm: Dict[str, float]) -> Li
             "rebuilt around the new thickness, so via barrels get longer when the stack thickens "
             "(shorter when it thins): even a net with no copper on those layers changes slightly "
             "through its vias."]
+
+
+def density_note(board: Board) -> List[str]:
+    """The current-density default's assumption line, with every copper layer's value at its
+    thickness as solved (``board``: the what-if copy when there is one)."""
+    outer = board.outer_layer_ids()
+    return [density_default_note([(lay.name, lay.thickness_mm, lay.id in outer) for lay in board.layers()])]
 
 
 def tree_only_fields(rail: Rail) -> List[str]:
@@ -203,7 +211,7 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
         t_c = float(settings.copper_temp_c)
         problem.temperature = lambda xy: np.full(len(np.atleast_2d(xy)), t_c)
     assumptions += tree_only_fields(rail) + estimate_note(draws) + sign_note(rail, sign)
-    assumptions += thickness_note(thickness, board.file_thickness_mm)
+    assumptions += thickness_note(thickness, board.file_thickness_mm) + density_note(board)
     if project is not None and project.thermal.enabled:      # coordinator's ruling (T8)
         assumptions.append("Copper not heated by its own losses here: the board temperature is "
                            "solved with the power tree only (Ctrl+T / solve --tree).")
@@ -230,6 +238,8 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
 def mesh_fields(board: Board, result) -> Tuple[List[LayerField], List[ViaCurrent]]:
     """The solved copper of one KiPI net result, per layer, and its via currents."""
     mesh, sol, fields = result.mesh, result.solution, result.fields
+    copper = {lay.id: lay for lay in board.layers()}         # as solved: a what-if board's
+    outer = board.outer_layer_ids()
     layers = []
     for lid in mesh.layers:
         mask = mesh.tri_layer == lid
@@ -237,11 +247,14 @@ def mesh_fields(board: Board, result) -> Tuple[List[LayerField], List[ViaCurrent
             continue
         tris = mesh.tris[mask]
         used, local = np.unique(tris, return_inverse=True)
+        lay = copper.get(int(lid))
         layers.append(LayerField(
             layer_id=int(lid), name=board.layer_name(lid), points=mesh.points[used],
             tris=local.reshape(tris.shape).astype(np.int64), voltage=sol.node_v[used],
             current_density=fields.j_density[mask], tri_power=fields.tri_power[mask],
-            tri_area=fields.tri_area[mask]))
+            tri_area=fields.tri_area[mask],
+            thickness_mm=float(lay.thickness_mm) if lay is not None else None,
+            outer=int(lid) in outer if lay is not None else None))
     vias = [ViaCurrent(v.owner_id, v.kind, tuple(v.position), v.drill_mm, float(v.current),
                        float(v.power)) for v in fields.vias]
     return layers, vias

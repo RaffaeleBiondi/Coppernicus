@@ -665,6 +665,8 @@ class Session:
         return C.jsonable({
             "project": path.resolve(), "board": board_info, "rails": out_rails, "verdict": overall,
             "verdict_note": note, "not_judged": unjudged, "board_fields_warnings": merged.warnings,
+            # spots above the current-density default, over the rails: never part of the verdict
+            "attention": sum(r.get("attention", 0) for r in out_rails),
             "assumptions": [], "warnings": entry.warnings(),
         })
 

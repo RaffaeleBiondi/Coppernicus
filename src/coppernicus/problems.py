@@ -1,8 +1,13 @@
 """Where and why a rail fails: a ranked list of problems, each with a place on the board.
 
-No limits are invented here. Every load, current-crowding spot and via is *ranked*; a
-problem is a ``fail`` only when the user set the matching limit in the rail's
-:class:`~coppernicus.project.Limits` and the result exceeds it.
+Every load, current-crowding spot and via is *ranked*; a problem is a ``fail`` only when the
+user set the matching limit in the rail's :class:`~coppernicus.project.Limits` and the
+result exceeds it. Verdicts are only against the user's limits.
+
+One documented default (docs/technical.md#current-density-default): without a
+``max_current_density``, a current-crowding spot whose mean |J| is above
+:func:`density_default` for its layer is an ``attention`` item. It is shown between the fails
+and the ranked items and never changes a verdict.
 
 Current crowding is reported per *spot*: connected triangles in the top share of current
 density on a layer, summarised by their area-weighted mean |J|. A point maximum is not
@@ -22,15 +27,52 @@ from scipy.sparse.csgraph import connected_components
 from coppernicus.project import Limits
 from coppernicus.results import DISCONNECTED, NOT_CONVERGED, LayerField, RailResult, TreeResult
 
-FAIL, INFO = "fail", "info"
+FAIL, ATTENTION, INFO = "fail", "attention", "info"
+SEVERITY_RANK = {FAIL: 0, ATTENTION: 1, INFO: 2}     # the order problems are listed in
 HOTSPOT_TOP_SHARE = 0.01      # without a limit: the top 1 % of a layer's copper area by |J|
 HOTSPOT_GROW = 0.8            # ... grown through neighbours above 80 % of that threshold
 VIA_NOISE_SHARE = 1e-6        # vias below this share of the rail current carry nothing (round-off)
 
+# The current-density default (docs/technical.md#current-density-default): A/mm² at 1 oz
+# (35 µm), outer and inner layers apart so they can diverge; scaled ×√(35 µm / t).
+DENSITY_DEFAULT_EXTERNAL_A_MM2 = 60.0
+DENSITY_DEFAULT_INTERNAL_A_MM2 = 60.0
+DENSITY_DEFAULT_REF_MM = 0.035
+DENSITY_DEFAULT_SOURCE = "docs/technical.md#current-density-default"
+
+
+def density_default(thickness_mm: float, outer: bool) -> float:
+    """Coppernicus's current-density default for copper ``thickness_mm`` thick, A/mm²: the
+    constant for outer or inner layers at 1 oz, × √(35 µm / t) (TI SLUA366: the current ×√2
+    when the thickness doubles)."""
+    return _base(outer) * float(np.sqrt(DENSITY_DEFAULT_REF_MM / thickness_mm))
+
+
+def _base(outer: bool) -> float:
+    """The default at 1 oz: the outer or the inner layers' constant."""
+    return DENSITY_DEFAULT_EXTERNAL_A_MM2 if outer else DENSITY_DEFAULT_INTERNAL_A_MM2
+
+
+def _um(mm: float) -> str:
+    return f"{mm * 1e3:.3g} µm"
+
+
+def density_default_note(layers) -> str:
+    """The assumption line of every rail and power-tree result: the default, its scaling and
+    each layer's value. ``layers``: (name, thickness_mm, outer) in stack order."""
+    ext, inn = DENSITY_DEFAULT_EXTERNAL_A_MM2, DENSITY_DEFAULT_INTERNAL_A_MM2
+    base = (f"{ext:g} A/mm²" if ext == inn else
+            f"{ext:g} A/mm² on outer layers and {inn:g} A/mm² on inner layers")
+    each = ", ".join(f"{name} {density_default(t, outer):.3g}" for name, t, outer in layers)
+    return (f"Current-density default (Coppernicus, attention only, not a verdict): {base} at "
+            f"1 oz, scaled ×√({_um(DENSITY_DEFAULT_REF_MM)} / t): {each} A/mm²; set "
+            "max_current_density to judge it (it then replaces this default). Sources: "
+            f"{DENSITY_DEFAULT_SOURCE}.")
+
 
 @dataclass
 class Problem:
-    severity: str                 # FAIL or INFO
+    severity: str                 # FAIL, ATTENTION (the current-density default) or INFO
     kind: str                     # "load", "hotspot", "via"; in a tree also "rise", "return", "regulator"
     title: str
     detail: str
@@ -46,12 +88,13 @@ class Problem:
 def find_problems(result: RailResult, limits: Optional[Limits] = None,
                   top: int = 5) -> List[Problem]:
     """Every load, then at most ``top`` current-crowding spots and ``top`` vias (more when
-    they exceed a limit). Fails first."""
+    they exceed a limit), and every spot above the current-density default (attention). Fails
+    first, then attention items, then the ranked ones."""
     limits = limits or Limits()
     rise = _rise(result, limits) if not result.v_ref else []    # a ground-rise limit: 0 V nets only
     out = rise + _loads(result, limits) + _hotspots(result, limits, top) + _vias(result, limits, top)
     order = {"rise": 0, "load": 0, "hotspot": 1, "via": 2}
-    return sorted(out, key=lambda p: (p.severity != FAIL, order[p.kind], -p.value))
+    return sorted(out, key=lambda p: (SEVERITY_RANK[p.severity], order[p.kind], -p.value))
 
 
 def _loads(result: RailResult, limits: Limits) -> List[Problem]:
@@ -112,8 +155,12 @@ def _against(title: str, fail: bool, value: Optional[float], unit: str, source: 
     return f"{title} (limit {value:g} {unit} {source})" if fail and source else title
 
 
-def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "") -> List[Problem]:
-    found = []
+def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "",
+              default: bool = True) -> List[Problem]:
+    """Current-crowding spots: against the user's ``max_current_density`` when set (fails),
+    else the top ones ranked, plus every spot above the current-density default (attention,
+    measured as a limit is: mean |J| over the spot; unless ``default`` is False)."""
+    found, attention = [], []
     for layer in result.layers:
         if layer.current_density.size == 0 or not np.any(layer.current_density > 0):
             continue
@@ -123,6 +170,8 @@ def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "") ->
         else:
             threshold, grow = _top_share_threshold(layer, HOTSPOT_TOP_SHARE), HOTSPOT_GROW
             why = f"top {HOTSPOT_TOP_SHARE:.0%} of this layer's copper by current density"
+            if default and layer.thickness_mm:
+                attention += _default_spots(layer)
         cents = layer.centroids()
         for idx, mean_j, max_j, area in _spots(layer, threshold, grow):
             w = layer.tri_area[idx]
@@ -136,8 +185,35 @@ def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "") ->
                 mean_j, float(x), float(y), layer.name,
                 data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area}))
     found.sort(key=lambda p: -p.value)
+    attention.sort(key=lambda p: -p.value)
     fails = [p for p in found if p.severity == FAIL]
-    return fails + [p for p in found if p.severity != FAIL][:max(0, top - len(fails))]
+    return fails + attention + [p for p in found if p.severity != FAIL][:max(0, top - len(fails))]
+
+
+def _default_spots(layer: LayerField) -> List[Problem]:
+    """The spots of ``layer`` whose mean |J| is above the current-density default for its
+    thickness, found and measured as against a ``max_current_density``: attention items."""
+    t, outer = float(layer.thickness_mm), layer.outer is not False
+    limit = density_default(t, outer)
+    cents = layer.centroids()
+    out = []
+    for idx, mean_j, max_j, area in _spots(layer, limit, 1.0):
+        if mean_j <= limit:
+            continue
+        w = layer.tri_area[idx]
+        x, y = (cents[idx] * w[:, None]).sum(axis=0) / w.sum()
+        out.append(Problem(
+            ATTENTION, "hotspot",
+            f"Current crowding on {layer.name}: {mean_j:.1f} A/mm² mean over {area:.3g} mm², above "
+            f"the {limit:.3g} A/mm² default for {_um(t)} copper",
+            f"Peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners). Attention only, not a "
+            f"verdict: Coppernicus's current-density default, {_base(outer):g} A/mm² at 1 oz scaled "
+            f"×√({_um(DENSITY_DEFAULT_REF_MM)} / t) to {limit:.3g} A/mm² at {_um(t)} "
+            f"({DENSITY_DEFAULT_SOURCE}); set max_current_density to judge it.",
+            mean_j, float(x), float(y), layer.name,
+            data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area,
+                  "default_j_a_mm2": limit, "thickness_mm": t}))
+    return out
 
 
 def _vias(result: RailResult, limits: Limits, top: int, source: str = "") -> List[Problem]:
@@ -222,11 +298,13 @@ def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = 
     Limits per net (:data:`coppernicus.power_tree.LIMITS_RULE`): each pin by its net's,
     the copper by the strictest of the group's. ``limits``, if given, stands for the limits
     set on the group's driving net (its key) in this call. A group whose iteration did not
-    converge is not judged."""
+    converge is not judged. Without a ``max_current_density`` on any of its nets, its spots
+    above the current-density default are attention items (a non-converged group's too)."""
     from coppernicus.power_tree import group_limits, net_limits
     if limits is not None:
         tree = replace(tree, limits={**tree.limits, group: limits})
     res = tree.groups[group]
+    default = group_limits(tree, group)[0].max_current_density is None   # the user's replaces it
     if res.converged:
         glim, gorigin = group_limits(tree, group)
 
@@ -249,10 +327,11 @@ def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = 
         first = _tree_loads(tree, group, res, per_net) + _tree_inputs(tree, group, res, per_net)
         if not res.v_ref:                                   # a rail driven at 0 V
             first += _rise(res, glim, source("max_ground_rise_mv"))
-    out = (first + _ratings(tree, group, res) + _hotspots(res, glim, top, source("max_current_density"))
+    out = (first + _ratings(tree, group, res)
+           + _hotspots(res, glim, top, source("max_current_density"), default)
            + _vias(res, glim, top, source("max_via_current")))
     order = {"rise": 0, "load": 0, "return": 0, "regulator": 0, "hotspot": 1, "via": 2}
-    return sorted(out, key=lambda p: (p.severity != FAIL, order[p.kind], -p.value))
+    return sorted(out, key=lambda p: (SEVERITY_RANK[p.severity], order[p.kind], -p.value))
 
 
 def _limit_text(value: Optional[float], unit: str, origin: str, own: str) -> str:

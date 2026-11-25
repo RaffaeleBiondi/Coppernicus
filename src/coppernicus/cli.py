@@ -779,7 +779,7 @@ def _cmd_tolerance(args) -> int:
 
 
 def _print_rail(res, problems):
-    from coppernicus.problems import FAIL, max_drop_text
+    from coppernicus.problems import ATTENTION, FAIL, max_drop_text
     others = [n for n in res.nets if n != res.net]
     nets = f" (with {', '.join(others)} via net ties)" if others else ""
     print(f"\nRail {res.net}{nets}: solved in {res.stats['seconds']:.1f} s, "
@@ -797,9 +797,10 @@ def _print_rail(res, problems):
     split = ", ".join(f"{k} {v / total:.0%}" for k, v in sorted(shares.items(), key=lambda kv: -kv[1])
                       if v / total >= 0.01)
     print(f"  {max_drop_text(res)} · copper loss {res.power_loss * 1e3:.3g} mW ({split})")
-    print("  problems (fails first, then ranked):")
+    print("  problems (fails first, then attention items, then ranked):")
     for p in problems:
-        tag = "FAIL" if p.severity == FAIL else "    "
+        # ATTENTION: above Coppernicus's current-density default, never a verdict
+        tag = {FAIL: "FAIL", ATTENTION: "ATTENTION"}.get(p.severity, "    ")
         where = f" [{p.layer}]" if p.layer else ""
         print(f"    {tag} {p.title}{where} @ ({p.x:.2f}, {p.y:.2f}) mm")
     for a in res.assumptions:

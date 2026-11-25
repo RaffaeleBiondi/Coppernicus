@@ -39,7 +39,15 @@ from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.noise_panel import NoisePanel
-from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel, TreePanel
+from coppernicus.app.panels import (
+    ATTENTION_COLOR,
+    ComparePanel,
+    LossChart,
+    NetPanel,
+    ProblemsPanel,
+    RailPanel,
+    TreePanel,
+)
 from coppernicus.app.picking import add_picked_pin, pick_nets
 from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel, record_solve
 from coppernicus.app.worker import CANCELLED, ReportWorker, SolveWorker, TreeWorker
@@ -57,7 +65,7 @@ from coppernicus.power_tree import (
     tree_verdicts,
     unsolved_limits,
 )
-from coppernicus.problems import FAIL, find_problems, max_drop_text
+from coppernicus.problems import ATTENTION, FAIL, find_problems, max_drop_text
 from coppernicus.project import Limits, Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
 from coppernicus.service.convert import not_judged_items
@@ -127,11 +135,21 @@ def verdict_html(verdict: str, fails: int, not_judged, has_limits: bool) -> str:
     return "no limits set: nothing is judged"
 
 
+def attention_html(problems) -> str:
+    """The count of attention items (spots above Coppernicus's current-density default), apart
+    from the verdict: " · 2 attention (…)", or "" when there are none."""
+    n = sum(p.severity == ATTENTION for p in problems)
+    if not n:
+        return ""
+    return (f" · <span style='color:{ATTENTION_COLOR}'><b>{n} attention</b> (current density above "
+            "Coppernicus's default, not a verdict)</span>")
+
+
 def tree_header_html(key: str, res: RailResult, gv) -> str:
     """The Problems header of group ``key`` of a power tree (``gv``: its GroupVerdict)."""
     verdict = verdict_html(gv.verdict, gv.failed, gv.not_judged, has_limits(gv))
     return (f"<b>{key}</b> ({res.kind} of the power tree: {' + '.join(res.nets)}): {max_drop_text(res)} "
-            f"· copper loss {res.power_loss * 1e3:.3g} mW · {verdict}")
+            f"· copper loss {res.power_loss * 1e3:.3g} mW · {verdict}{attention_html(gv.problems)}")
 
 
 def rail_header_html(res: RailResult, limits: Limits, problems) -> str:
@@ -152,7 +170,7 @@ def rail_header_html(res: RailResult, limits: Limits, problems) -> str:
     verdict = verdict_html("fail" if fails else "not_judged" if missing or not set_any else "pass",
                            fails, missing, set_any)
     return (f"<b>{res.net}</b>: {worst_txt}{max_drop_text(res)} · copper loss "
-            f"{res.power_loss * 1e3:.3g} mW ({split}) · {verdict}")
+            f"{res.power_loss * 1e3:.3g} mW ({split}) · {verdict}{attention_html(problems)}")
 
 
 def saved_rail(rail: Rail) -> bool:

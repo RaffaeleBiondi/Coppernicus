@@ -126,6 +126,14 @@ class Board:
     def layer_name(self, layer_id: int) -> str:
         return self._snap.stackup.layer(layer_id).name
 
+    def outer_layer_ids(self) -> set:
+        """The ids of the outer copper layers: the top and the bottom of the stack."""
+        copper = self._snap.stackup.copper
+        if not copper:
+            return set()
+        index = [c.index for c in copper]
+        return {c.id for c in copper if c.index in (min(index), max(index))}
+
     def nets(self) -> List[str]:
         return sorted(self._snap.net_names(), key=str.casefold)
 

@@ -24,7 +24,14 @@ from kipi.dc.solver.setup import REF_TEMP_C
 
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import ground_nets, ground_rails, terminal_names, to_pisetup
-from coppernicus.engine.solve import Cancelled, _Progress, engine_settings, mesh_fields, thickness_note
+from coppernicus.engine.solve import (
+    Cancelled,
+    _Progress,
+    density_note,
+    engine_settings,
+    mesh_fields,
+    thickness_note,
+)
 from coppernicus.power_tree import LIMITS_RULE, apply_limits
 from coppernicus.project import Project, Source, pin_ref, pins_text
 from coppernicus.results import (
@@ -226,7 +233,7 @@ def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
     key_of = group_keys(project, kt)
 
     assumptions = _assumptions(project, setup, rho_note)
-    assumptions += thickness_note(thickness, board.file_thickness_mm)
+    assumptions += thickness_note(thickness, board.file_thickness_mm) + density_note(board)
     excluded = set(setup.excluded_nets or [])
     notes = [f"Rail {r.net} is solved as a ground in the power tree (from the ground pins); its "
              f"own sources and loads are used only when {r.net} is solved alone."

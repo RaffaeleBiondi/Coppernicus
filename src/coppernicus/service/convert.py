@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
-from coppernicus.problems import FAIL, Problem, inapplicable_limits
+from coppernicus.problems import ATTENTION, FAIL, Problem, inapplicable_limits
 from coppernicus.problems import LIMIT_KEYS as PROBLEM_LIMIT_KEYS
 from coppernicus.project import Limits, ProjectError, Settings, check_copper_thickness, parse_pins, pins_text
 from coppernicus.results import RailResult
@@ -250,7 +250,8 @@ def verdict(problems: List[Problem], limits: Limits, result: Optional[RailResult
             ) -> Dict[str, Any]:
     """``fail`` when an item exceeds a limit the user set; else ``not_judged`` when a set
     limit applies to something it could not judge (``not_judged`` lists each, with the
-    reason; needs ``result``) or when no limit is set; else ``pass``."""
+    reason; needs ``result``) or when no limit is set; else ``pass``. ``attention`` counts the
+    spots above the current-density default: never part of the verdict."""
     checked = limits_to_dict(limits)
     failed = [p for p in problems if p.severity == FAIL]
     unjudged = not_judged_items(result, limits) if result is not None else []
@@ -266,7 +267,7 @@ def verdict(problems: List[Problem], limits: Limits, result: Optional[RailResult
     if unjudged:
         note += ". Not judged: " + not_judged_text(unjudged)
     return {"verdict": v, "limits": checked, "failed": len(failed), "verdict_note": note,
-            "not_judged": unjudged}
+            "not_judged": unjudged, "attention": sum(p.severity == ATTENTION for p in problems)}
 
 
 def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems: List[Problem],
@@ -341,7 +342,9 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         "problems_note": f"Every load, then the top {top} current-crowding spots and the top {top} "
                          "vias by current (more when they exceed a limit you set). Vias carrying "
                          "under a millionth of the rail current are left out: that is solver "
-                         "round-off, not a judgement.",
+                         "round-off, not a judgement. Severity \"attention\": a spot above "
+                         "Coppernicus's current-density default (without a max_current_density), "
+                         "all of them listed; never a verdict.",
         "settings": settings_to_dict(settings, thickness),
         "energy_balance_rel_error": res.energy_balance_error,
         "stats": {"triangles": int(res.stats.get("triangles", 0)),

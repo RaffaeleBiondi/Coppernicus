@@ -24,6 +24,12 @@ class LayerField:
     current_density: np.ndarray    # (M,) A/mm^2, uniform through the copper thickness
     tri_power: np.ndarray          # (M,) W dissipated in each triangle
     tri_area: np.ndarray           # (M,) mm^2
+    # The copper thickness as solved (the board's stackup, or the copper_thickness_mm what-if)
+    # and whether the layer is an outer one (top or bottom copper): the current-density
+    # default (coppernicus.problems.density_default) needs both. None: not known (a layer
+    # built by hand), so no default applies.
+    thickness_mm: Optional[float] = None
+    outer: Optional[bool] = None
 
     @property
     def power(self) -> float:

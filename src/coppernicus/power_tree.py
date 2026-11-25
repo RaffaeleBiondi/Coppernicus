@@ -533,7 +533,7 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
     """A power-tree result (``coppernicus.results.TreeResult``) as a JSON-ready dict: units
     in every key, the assumptions and warnings, the verdict (only against the user's limits,
     per group) and the VRM, load, link and group tables."""
-    from coppernicus.problems import limits_dict
+    from coppernicus.problems import ATTENTION, limits_dict
     from coppernicus.temperature import thermal_summary, thermal_verdict
 
     overall, verdicts = tree_verdicts(tree, top)
@@ -555,6 +555,8 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
             "j_point_max_a_mm2": res.j_max,
             "via_current_max_a": max((v.current for v in res.vias), default=0.0),
             "verdict": gv.verdict, "limits": gv.limits, "failed": gv.failed,
+            # spots above the current-density default: attention, never part of the verdict
+            "attention": sum(p.severity == ATTENTION for p in gv.problems),
             "limits_by_net": {n: d for n, d in by_net.items() if d},
             "not_judged": list(gv.not_judged),
             "problems": [{"severity": p.severity, "kind": p.kind, "title": p.title,
@@ -566,6 +568,7 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         "verdict": overall, "verdict_note": verdict_note(tree, verdicts), "failed": failed + tv.failed,
         "not_judged": [x for v in verdicts.values() for x in v.not_judged] + unsolved_limits(tree)
         + tv.not_judged,
+        "attention": sum(g["attention"] for g in groups),
         "vrms": [{"name": v.name, "kind": v.kind, "group": v.group, "v_set_v": v.v_set_v,
                   "v_out_v": v.v_out_v, "i_out_a": v.i_out_a,
                   **({"i_max_a": v.current_limit_a} if rated else {}), "v_in_v": _num(v.v_in_v),
@@ -645,6 +648,27 @@ def _group_worst(gr: Dict[str, Any]) -> str:
     return f"max {what} {abs(mv) if rise else mv:.3f} mV{pct} {where}"
 
 
+ATTENTION_HEAD = "Attention (Coppernicus's current-density default, not a verdict)"
+
+
+def attention_text(groups: Sequence[Dict[str, Any]]) -> List[str]:
+    """The groups' spots above the current-density default, as lines for the tree's text
+    (none when there are none): "Attention (…): +1V8: 1, GND: 3; the strongest 78.6 A/mm² on
+    F.Cu (+1V8), default 60 A/mm²"."""
+    counts = [(g["group"], g.get("attention", 0)) for g in groups if g.get("attention")]
+    if not counts:
+        return []
+    spots = [(p, g["group"]) for g in groups for p in g.get("problems", [])
+             if p.get("severity") == "attention"]
+    strongest = ""
+    if spots:
+        p, key = max(spots, key=lambda s: s[0].get("mean_j_a_mm2") or 0.0)
+        strongest = (f"; the strongest {p['mean_j_a_mm2']:.1f} A/mm² on {p.get('layer')} ({key}), "
+                     f"default {p['default_j_a_mm2']:.3g} A/mm²")
+    return [f"{ATTENTION_HEAD}: " + ", ".join(f"{k}: {n}" for k, n in counts) + strongest
+            + "; the problems list each one."]
+
+
 def tree_text(doc: Dict[str, Any]) -> List[str]:
     """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
     # I max: a source's rated output current (PI_IMAX; judged: _rating_text); only when some VRM
@@ -686,6 +710,7 @@ def tree_text(doc: Dict[str, Any]) -> List[str]:
     if doc.get("thermal"):                              # the board temperature (Task 8)
         from coppernicus.temperature import temperature_text
         lines += temperature_text(doc["thermal"], skip=doc["assumptions"])
+    lines += attention_text(doc["groups"])
     lines.append(f"Verdict: {doc['verdict']}. {doc['verdict_note']}")
     lines += [f"  assumption: {a}" for a in doc["assumptions"]]
     lines += [f"  warning: {w}" for w in doc["warnings"]]

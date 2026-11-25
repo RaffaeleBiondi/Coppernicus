@@ -37,7 +37,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 
 from coppernicus import __version__
-from coppernicus.problems import Problem, find_problems
+from coppernicus.problems import ATTENTION, Problem, find_problems
 from coppernicus.project import Limits, Project
 from coppernicus.results import LayerField, RailResult
 
@@ -352,11 +352,14 @@ class ReportBuilder:
             x = d.get("drop_mv")
             return x if x is not None and math.isfinite(x) else -math.inf
         worst_load = max(loads, key=size, default=None)
-        hot = [p for p in problems if p.kind == "hotspot"]
+        # The strongest ranked (or failed) spot: an attention spot, measured over the copper
+        # above the default instead, does not take its place.
+        hot = [p for p in problems if p.kind == "hotspot" and p.severity != ATTENTION]
         top_hot = max(hot, key=lambda p: p.value, default=None)
         top_via = max(result.vias, key=lambda v: v.current, default=None)
         busiest = max(result.layers, key=lambda lf: lf.power, default=None)
         judged = dict(judged) if judged is not None else verdict(problems, limits, result)
+        judged["attention"] = sum(p.severity == ATTENTION for p in problems)
         judged["verdict_text"] = verdict_text(judged)
         shift = -1 if result.is_shift() else 1      # the drop as the app shows it (shown_drop_at)
         worst_mv = shift * result.max_drop * 1e3
@@ -776,7 +779,15 @@ def kind_label(p: Problem) -> str:
 
 def verdict_text(judged: Mapping[str, Any]) -> str:
     """The verdict in words, for the page: the limits that were set, a failure, and every
-    item a set limit could not judge (both when a rail fails and has such items)."""
+    item a set limit could not judge (both when a rail fails and has such items); then the
+    count of attention items, which is no part of the verdict."""
+    n = judged.get("attention") or 0
+    note = (f" {n} attention item{'' if n == 1 else 's'}: current crowding above Coppernicus's "
+            "current-density default, not a verdict." if n else "")
+    return _verdict_words(judged) + note
+
+
+def _verdict_words(judged: Mapping[str, Any]) -> str:
     lim = judged.get("limits") or {}
     words = {"max_drop_pct": "load drop ≤ {:.3g} % of the source voltage",
              "max_current_density_a_mm2": "current-crowding mean |J| ≤ {:.4g} A/mm²",

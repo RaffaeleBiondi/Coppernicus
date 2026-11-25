@@ -142,7 +142,7 @@ async function draw() {
     for (const [x, y] of t.pads) { ctx.beginPath(); ctx.arc(X(x), Y(y), 5, 0, 2 * Math.PI); ctx.fill(); ctx.stroke(); }
     if (t.pads.length) label(t.name, t.pads[0][0], t.pads[0][1], "#d73027"); }
   if (S.show.hotspots) for (const p of R().problems) if (p.kind === "hotspot" && p.layer === L().name) {
-    ctx.strokeStyle = p.severity === "fail" ? "#ff1744" : "#ff9800"; ctx.lineWidth = 2.5;
+    ctx.strokeStyle = p.severity === "fail" ? "#ff1744" : p.severity === "attention" ? "#ffc400" : "#ff9800"; ctx.lineWidth = 2.5;
     const x = X(p.x_mm), y = Y(p.y_mm);
     ctx.beginPath(); ctx.moveTo(x - 6, y - 6); ctx.lineTo(x + 6, y + 6); ctx.moveTo(x + 6, y - 6); ctx.lineTo(x - 6, y + 6); ctx.stroke(); }
   if (S.mark) { ctx.strokeStyle = "#2f6fb2"; ctx.lineWidth = 2.5; ctx.beginPath();
@@ -205,6 +205,13 @@ function badge(verdict) {
   if (verdict === "pass") return el("span", { class: "badge pass" }, "PASS");
   return el("span", { class: "badge nj" }, "not judged");
 }
+// A problem's badge: FAIL (over a limit you set), ATTENTION (above Coppernicus's
+// current-density default: never a verdict) or none (ranked).
+function severityBadge(p) {
+  if (p.severity === "fail") return el("span", { class: "badge fail" }, "FAIL");
+  if (p.severity === "attention") return el("span", { class: "badge attention", title: "Above Coppernicus's current-density default: not a verdict" }, "ATTENTION");
+  return "";
+}
 function table(id, head, rows, onclick) {
   const t = $(id); t.textContent = "";
   t.append(el("thead", {}, el("tr", {}, ...head.map(([h, cls]) => el("th", cls ? { class: cls } : {}, h)))));
@@ -231,7 +238,7 @@ function panels() {
     `${w.hotspot.layer} at ${xy(w.hotspot.x_mm, w.hotspot.y_mm)}, over ${sig(w.hotspot.area_mm2, 3)} mm²; peak ${sig(w.hotspot.peak_j_a_mm2, 4)} A/mm² is mesh-dependent at sharp corners`));
   if (w.via) cards.append(card("Most loaded via", `${sig(w.via.current_a, 4)} A`, `at ${xy(w.via.x_mm, w.via.y_mm)}, drill ${sig(w.via.drill_mm, 3)} mm`));
   table("problems", [["", ""], ["Kind", ""], ["Problem", ""], ["Layer", ""], ["Where", ""]],
-    rail.problems.map((p) => [[p.severity === "fail" ? el("span", { class: "badge fail" }, "FAIL") : "", ""], [p.kind_label || p.kind, ""],
+    rail.problems.map((p) => [[severityBadge(p), ""], [p.kind_label || p.kind, ""],
       [el("span", {}, p.title, el("br"), el("span", { class: "muted small" }, p.detail)), ""], [p.layer || "–", ""], [xy(p.x_mm, p.y_mm), ""]]),
     (n) => { const p = rail.problems[n];
       if (p.layer) { const li = rail.layers.findIndex((l) => l.name === p.layer); if (li >= 0) setLayer(li, false); }

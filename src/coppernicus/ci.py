@@ -370,8 +370,10 @@ def tree_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
     lines = ["", f"### Power tree: `{_cell(project)}`", ""]
     if "error" in doc:
         return lines + [f"**Error:** {_cell(doc['error'].get('message', ''))}"]
-    lines += [f"Verdict: **{_cell(doc.get('verdict'))}**. {_cell(doc.get('verdict_note', ''))}", "",
-              "| VRM | Kind | Group | V set (V) | V out (V) | I out (A) | I max (A) | V in (V) "
+    from coppernicus.power_tree import attention_text
+    lines += [f"Verdict: **{_cell(doc.get('verdict'))}**. {_cell(doc.get('verdict_note', ''))}", ""]
+    lines += [x for a in attention_text(doc.get("groups", [])) for x in (_cell(a), "")]
+    lines += ["| VRM | Kind | Group | V set (V) | V out (V) | I out (A) | I max (A) | V in (V) "
               "| I in (A) | Loss (mW) | |",
               "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|"]
     for v in doc.get("vrms", []):
@@ -477,6 +479,7 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
     assumptions: List[str] = []
     details: List[str] = []
     field_warnings: List[str] = []           # from the KiCad footprint fields: shown in full
+    attention = 0                            # spots above the current-density default
     for e in entries:
         project = f"`{_cell(e['project'])}`"
         if "error" not in e:
@@ -515,16 +518,17 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
                          f"{_cell(worst_copper)} | "
                          f"{_num(rail.get('max_drop_pct'), '.3g')} | {loss_mw} | {_verdict_cell(rail)} |")
             problems = rail.get("problems", [])
-            shown = [p for p in problems if p.get("severity") == "fail"]
+            attention += sum(p.get("severity") == "attention" for p in problems)
+            shown = [p for p in problems if p.get("severity") in ("fail", "attention")]
             room = max(0, problems_per_rail - len(shown))
-            shown += [p for p in problems if p.get("severity") != "fail"][:room]
+            shown += [p for p in problems if p.get("severity") not in ("fail", "attention")][:room]
             unjudged = rail.get("not_judged") or []
             if shown or unjudged:
                 details += ["", f"**{_cell(rail['net'])}** ({_cell(e['project'])}): top problems", ""]
                 details += [f"- NOT JUDGED {_cell(u['item'])} ({_cell(u['limit'])}): {_cell(u['reason'])}"
                             for u in unjudged]
                 for p in shown:
-                    tag = "**FAIL** " if p.get("severity") == "fail" else ""
+                    tag = {"fail": "**FAIL** ", "attention": "**ATTENTION** "}.get(p.get("severity"), "")
                     layer = p.get("layer")
                     where = f" on {layer}" if layer and layer not in p["title"] else ""
                     details.append(f"- {tag}{_cell(p['title'])}{_cell(where)} at "
@@ -537,6 +541,11 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
                         for u in board]
     lines += ["", "Verdicts are judged only against the limits written in the project files. Peak current "
               "densities at sharp corners depend on the mesh; the problems give spot means instead."]
+    if attention:
+        lines += ["", f"{attention} attention item{'' if attention == 1 else 's'}: current crowding above "
+                  "Coppernicus's current-density default (scaled with each layer's copper thickness: "
+                  "see the assumptions), not a verdict: the exit code does not change. Set "
+                  "max_current_density in the project file to judge it."]
     if field_warnings:
         lines += ["", "**Warnings (KiCad footprint fields):**", ""]
         lines += [f"- {_cell(w)}" for w in field_warnings]
