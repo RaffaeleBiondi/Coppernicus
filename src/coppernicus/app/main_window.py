@@ -747,8 +747,11 @@ class MainWindow(QMainWindow):
         own = self.project.rail(net)
         if own is not None and (own.sources or own.loads):
             choice = fields_view.USE_MINE
-            if origin.warnings:                     # it differs from the KiCad rail: ask
-                choice = fields_view.ask_override(self, net, list(origin.warnings))
+            # Its sources or loads differ from the KiCad rail's: ask. (A max_drop_pct that
+            # differs from PI_LIMIT_DROP warns too, but the KiCad limit stays in force.)
+            differences = [w for w in origin.warnings if w.startswith(f"project file rail {net} ignored")]
+            if differences:
+                choice = fields_view.ask_override(self, net, differences)
                 if choice is None:
                     return False
         else:

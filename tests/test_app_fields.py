@@ -563,14 +563,19 @@ def test_override_over_an_ignored_project_rail_asks_which_to_keep_and_not_when_i
             assert window.merged.origins["VCC"].source == "overridden", choice
             assert window.merged.warnings == [], (choice, window.merged.warnings)
 
-        # An identical project rail: nothing to ask.
-        open_net(strip(TMP / "b", rails=[Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0, ["1"])])]))
+        # An identical project rail: nothing to ask; nor when only its max_drop_pct differs from
+        # PI_LIMIT_DROP (a warning too, but the KiCad limit stays in force under the override).
         def never(*_a):
             raise AssertionError("asked")
         fields_view.ask_override = never
-        rp.banner.button.click()
-        assert window.project.rail("VCC").override_board_fields
-        assert window.merged.origins["VCC"].source == "overridden"
+        same = [Source("J1", 1.0)], [Load("U1", 1.0, ["1"])]
+        for name, limits in (("b", Limits()), ("c", Limits(max_drop_pct=5.0))):
+            open_net(strip(TMP / name, rails=[Rail("VCC", *same, limits=limits)]))
+            assert len(window.merged.origins["VCC"].warnings) == (name == "c"), window.merged.origins["VCC"]
+            rp.banner.button.click()
+            assert window.project.rail("VCC").override_board_fields, name
+            assert window.project.rail("VCC").limits == limits, (name, window.project.rail("VCC"))
+            assert window.merged.origins["VCC"].source == "overridden", name
     ''', tmp_path)
 
 
