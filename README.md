@@ -311,7 +311,8 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | AI-agent interface: MCP server (with `solve_tree` for the whole power tree) and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
 | Offline interactive HTML report (`solve --html`, MCP `report` tool); `solve --tree --html` for the whole power tree | ✅ (tested in Chromium and Chrome; Safari and Firefox not yet) |
 | GitHub Action for KiCad repositories (`uses: RaffaeleBiondi/Coppernicus@main`), job summary, artifacts; `fail-on-not-judged` (default on) fails on a limit that could not judge; opt-in `tree` adds the power tree's tables to the job summary | ✅ |
-| Sources, loads, converters and links defined in KiCad footprint fields (`PI_RAIL`, `PI_SOURCE`, `PI_LOAD`, `PI_KIND`, `PI_INPUT`, `PI_GND`, `PI_LINK`…) | ✅ read by default from `.kicad_pcb` in the CLI, MCP and Action; KiCad wins over a project rail unless `override_board_fields: true`; the app comes next ([fields](docs/agents.md#kicad-footprint-fields)) |
+| Sources, loads, converters and links defined in KiCad footprint fields (`PI_RAIL`, `PI_SOURCE`, `PI_LOAD`, `PI_KIND`, `PI_INPUT`, `PI_GND`, `PI_LINK`…) | ✅ read by default from `.kicad_pcb` in the CLI, MCP and Action; KiCad wins over a project rail unless `override_board_fields: true` ([fields](docs/agents.md#kicad-footprint-fields)) |
+| The app reads the KiCad fields: rails from KiCad are listed [KiCad] and read-only, with Override in project for a what-if; Project → Use KiCad footprint fields turns them off; File → Reload board (Ctrl+Shift+R). Example: `examples/fields` | ✅ |
 | Before/after comparison: "Pin as baseline", Compare tab (per-load, total and per-layer deltas, settings that changed), "Δ drop vs baseline" map | ✅ |
 | Copper loss by layer as a chart (baseline beside current) | ✅ |
 | Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
