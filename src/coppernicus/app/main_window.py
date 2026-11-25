@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -59,6 +60,7 @@ from coppernicus.service.convert import not_judged_items
 from coppernicus.service.session import FIELD_HINT
 
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
+USER_RESULTS = ("Documents", "Coppernicus", "results")     # under the home folder
 REMOVE_MESHER = "Remove downloaded mesher (Triangle)…"
 
 
@@ -67,6 +69,28 @@ def remove_mesher_shown() -> bool:
     downloaded Triangle into a per-user folder itself (coppernicus.bootstrap_triangle).
     Elsewhere triangle comes from the Python environment and is not the app's to delete."""
     return bootstrap_triangle.frozen()
+
+
+def _writable_folder(folder: Path) -> bool:
+    """``folder`` exists (created if missing) and can be written."""
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return os.access(folder, os.W_OK)
+
+
+def report_folder(project_dir: Path, home: Optional[Path] = None) -> Tuple[Path, str]:
+    """Where a project's report goes by default, and a note when it is not the usual place
+    ("" otherwise): results/ next to the project (the CLI's folder), created if missing; when
+    that cannot be created or written (a project opened from a read-only disk image), the
+    per-user ~/Documents/Coppernicus/results, created on demand."""
+    folder = Path(project_dir) / "results"
+    if _writable_folder(folder):
+        return folder, ""
+    user = (Path.home() if home is None else Path(home)).joinpath(*USER_RESULTS)
+    _writable_folder(user)                     # if even this fails, the Save dialog says so
+    return user, f"{folder} cannot be written, so reports go to {user}"
 
 
 def initial_size(avail_w: Optional[int], avail_h: Optional[int]) -> Tuple[int, int]:
@@ -144,6 +168,7 @@ class MainWindow(QMainWindow):
         self.results: Dict[str, RailResult] = {}
         self.worker: Optional[SolveWorker] = None
         self.report_worker: Optional[ReportWorker] = None
+        self._report_fallback: Optional[Tuple[Path, str]] = None    # (folder, note): see report_folder
         self.dirty = False
         self.last_render_s = 0.0
         self._candidates: Dict[Tuple, List[str]] = {}      # pickable pad ids per set of nets
@@ -649,18 +674,23 @@ class MainWindow(QMainWindow):
                 if stem.endswith(suffix):
                     stem = stem[: -len(suffix)]
                     break
-            folder = project.parent / "results"
-            folder.mkdir(exist_ok=True)
+            folder, note = report_folder(project.parent)
+            self._report_fallback = (folder, note) if note else None
         else:
             stem, folder = (self.board.name.split(".")[0] or "coppernicus"), Path.home()
+            self._report_fallback = None
         return folder / f"{stem}_report.html"
 
     def _report_written(self, path):
         path = Path(path)
         size_mb = path.stat().st_size / 1e6
-        self.statusBar().showMessage(f"Report written: {path.name} ({size_mb:.2f} MB) in {path.parent}")
+        fallback = self._report_fallback
+        note = fallback[1] if fallback and path.parent.resolve() == fallback[0].resolve() else ""
+        status = f"Report written: {path.name} ({size_mb:.2f} MB) in {path.parent}"
+        self.statusBar().showMessage(f"{status} ({note})" if note else status)
         answer = QMessageBox.question(self, "Report written",
-                                      f"{path}\n{size_mb:.2f} MB. Open it in the browser?",
+                                      f"{path}\n{size_mb:.2f} MB." + (f"\n{note}." if note else "")
+                                      + " Open it in the browser?",
                                       QMessageBox.Open | QMessageBox.Close)
         if answer == QMessageBox.Open:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
