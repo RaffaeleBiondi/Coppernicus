@@ -103,6 +103,7 @@ from kicad_fixture import write_strip_board
 from coppernicus.app import fields_view
 from coppernicus.app.main_window import MainWindow
 from coppernicus.project import Limits, Load, Project, Rail, Source
+from coppernicus.service.convert import SIG_DIGITS
 
 app = QApplication.instance() or QApplication([])
 window = MainWindow()
@@ -161,7 +162,18 @@ def net_item(net):
 
 
 def close(a, b):
+    """The same number to round-off: for what was entered (a current from a field)."""
     return math.isclose(a, b, rel_tol=1e-12)
+
+
+def as_printed(app_value, cli_value):
+    """The window's number agrees with the CLI document's to the digits the document prints:
+    the CLI rounds every float of its JSON to SIG_DIGITS significant digits (service.convert),
+    so the two are within half a unit of the last of those digits (37.928 mV: 37.92800 ± 5e-6)."""
+    if cli_value == 0:                       # only an exact 0 is written as 0
+        return app_value == 0
+    unit = 10.0 ** (math.floor(math.log10(abs(cli_value))) + 1 - SIG_DIGITS)
+    return abs(app_value - cli_value) <= 0.5 * unit * (1 + 1e-9)
 '''
 
 EPILOGUE = '''
@@ -234,9 +246,9 @@ def test_f5_and_ctrl_t_on_a_kicad_rail_give_the_cli_numbers_limits_and_notes(tmp
         assert res is not None, DIALOGS
         assert [t.name for t in res.loads] == [d["name"] for d in cli["loads"]]
         for t, d in zip(res.loads, cli["loads"]):
-            assert close(t.current, d["current_a"]), (t.current, d)
-            assert close(res.drop(t) * 1e3, d["drop_mv"]), (res.drop(t), d)
-        assert close(res.max_drop * 1e3, cli["max_drop_mv"]), (res.max_drop, cli["max_drop_mv"])
+            assert as_printed(t.current, d["current_a"]), (t.current, d)
+            assert as_printed(res.drop(t) * 1e3, d["drop_mv"]), (res.drop(t), d)
+        assert as_printed(res.max_drop * 1e3, cli["max_drop_mv"]), (res.max_drop, cli["max_drop_mv"])
         note = next(a for a in cli["assumptions"] if a.startswith("Rail VCC from KiCad footprint fields"))
         assert note in res.assumptions, res.assumptions
         header = window.problems.summary.text()
@@ -274,8 +286,8 @@ def test_loads_on_a_net_tied_to_a_kicad_rail_are_solved_in_it_as_the_cli_does(tm
         res = solve()
         assert res is not None, DIALOGS
         assert [t.name for t in res.loads] == ["U1"], res.loads
-        drop_mv = res.drop(res.loads[0]) * 1e3                  # the JSON keeps 7 significant digits
-        assert math.isclose(drop_mv, cli["loads"][0]["drop_mv"], rel_tol=1e-6), (drop_mv, cli["loads"])
+        drop_mv = res.drop(res.loads[0]) * 1e3
+        assert as_printed(drop_mv, cli["loads"][0]["drop_mv"]), (drop_mv, cli["loads"])
         tie_note = next(a for a in cli["assumptions"] if "joined to it by a net tie" in a)
         assert tie_note in res.assumptions, res.assumptions
     ''', tmp_path, project=str(project), rail=cli)

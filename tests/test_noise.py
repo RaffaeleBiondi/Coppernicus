@@ -823,11 +823,16 @@ def test_an_assumed_dielectric_is_a_stand_in():
 
 def test_the_assumption_lines(entered):
     lines = entered.assumptions
+    # The hot loop's L (2.07 nH here) and so its ringing (200.5 MHz) follow the mesh of the traced
+    # loop, which moves them by up to 6e-3 when its input moves by 1 to 3 ulp: they are written
+    # from the result, as the line writes them (test_hot_loop_and_waveforms checks their physics).
+    h = entered.hot_loops[0]
     for lead in ("Coupled noise (KiPI): the converter's waveforms are exact Fourier series of "
                  "piecewise-linear periods, 1592 harmonics of 1 MHz to 1592 MHz (ten times",
                  "Operating point: Topology: buck (from the voltages); Vin 12 V",
-                 "Phase 1: hot loop 2.07 nH (traced through the copper), switch node 303.9 pF (Coss "
-                 "300 pF entered + copper 3.87 pF); rings at 200.5 MHz, ζ 0.05 (at least min_ring_zeta",
+                 f"Phase 1: hot loop {h.loop_l_h * 1e9:.3g} nH (traced through the copper), switch node "
+                 f"303.9 pF (Coss 300 pF entered + copper 3.87 pF); rings at {h.f_ring_hz / 1e6:.4g} MHz, "
+                 "ζ 0.05 (at least min_ring_zeta",
                  "Phase 1: hard edge with Qrr 5 nC (entered); soft edge damped at least soft_edge_zeta "
                  "0.5; dead time 20 ns (noise.dead_time_ns, KiPI's 20 unless set); on-resistance 10 mΩ "
                  "for damping (KiPI's 10 mΩ); package loop 0 nH.",

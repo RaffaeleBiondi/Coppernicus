@@ -113,6 +113,15 @@ from coppernicus.temperature import (  # noqa: E402
 
 TCR = 0.00393          # KiPI's α (kipi/dc/solver/setup.py), as tests/test_engine.py retypes ρ
 
+# The demo board's figures were recorded on macOS; they are compared to MESH_REL, relative. U1's
+# drop at the ambient is 39.1564 mV on macOS arm64 and 39.1599 mV on Linux and Windows x86-64
+# (+9e-5), and those two agree to 13 digits: not the solve's round-off but, presumably, another
+# mesh. Triangle's quality mesh follows the last bits of the geometry it is given: moving every
+# vertex by 1 ulp changes its node count, and moving them by 1 to 3 ulp moves the drops by up to
+# 2e-4 and the rises over the ambient by up to 6.5e-4 (B.Cu). MESH_REL is that, rounded up. The
+# strip's figures do not move (1e-12): they keep their tight tolerances.
+MESH_REL = 1e-3
+
 
 def strip_project(**thermal):
     return Project(rails=[Rail(Strip.NET, sources=[Source("J1", 3.3)], loads=[Load("U1", 1.0)])],
@@ -245,14 +254,17 @@ def test_maps_rows_and_peak(demo, demo_tree):
     assert temp.peak_layer == "F.Cu" and temp.map("F.Cu").peak_c > temp.map("B.Cu").peak_c   # as the rows
     assert temp.grid_cells == int(np.count_nonzero(~np.isnan(temp.maps[0].t_c)))
     assert all(r.t_max_c <= temp.peak_c + 1e-9 for r in temp.copper)
-    # The numbers of the gate (§9): settled after 3 iterations, both layers over 15 °C of rise.
-    assert temp.peak_c == pytest.approx(42.31, abs=0.01) and temp.settled is True
+    # The numbers of the gate (§9): settled after 3 iterations, both layers over 15 °C of rise
+    # (42.31, 42.29 and 41.77 °C at the 25 °C ambient). Rises, not temperatures, to MESH_REL:
+    # the ambient is an input, the rise is what is solved.
+    assert temp.ambient_c == 25.0 and temp.settled is True
+    assert temp.peak_rise_c == pytest.approx(17.309, rel=MESH_REL)
     rows = {r.layer_name: r for r in temp.copper}
-    assert rows["F.Cu"].t_max_c == pytest.approx(42.29, abs=0.01)
-    assert rows["B.Cu"].t_max_c == pytest.approx(41.77, abs=0.01)
+    assert rows["F.Cu"].rise_c == pytest.approx(17.289, rel=MESH_REL)
+    assert rows["B.Cu"].rise_c == pytest.approx(16.773, rel=MESH_REL)
     u1 = next(ld for ld in temp.loads if ld["name"] == "U1")
-    assert u1["drop_ambient_v"] * 1e3 == pytest.approx(39.156, abs=1e-3)
-    assert u1["drop_v"] * 1e3 == pytest.approx(41.354, abs=1e-3)
+    assert u1["drop_ambient_v"] * 1e3 == pytest.approx(39.156, rel=MESH_REL)
+    assert u1["drop_v"] * 1e3 == pytest.approx(41.354, rel=MESH_REL)
 
 
 def test_the_board_outside_the_outline_is_nan():
@@ -395,9 +407,13 @@ def test_the_summary_has_units_and_no_nan(demo_tree):
     t = doc["thermal"]
     assert doc["verdict"] == "fail" and t["verdict"] == "fail" and doc["failed"] >= t["failed"] == 2
     assert "board temperature: max_rise_c = 15" in doc["verdict_note"]
-    # The failing rows are named in the top-level note too, not only in the thermal block.
-    named = ("Board temperature over a limit: F.Cu 42.29 °C (rise 17.29 °C, nearest pad J1.1) over "
-             "max_rise_c 15; B.Cu 41.77 °C (rise 16.77 °C, nearest pad R1.2) over max_rise_c 15")
+    # The failing rows are named in the top-level note too, not only in the thermal block, each
+    # with its own figures to two decimals. The figures themselves are checked (to MESH_REL) in
+    # test_maps_rows_and_peak: typed in here, B.Cu's printed as 41.77 °C on macOS, 41.78 on Linux.
+    rows = {r["layer"]: r for r in t["layers"]}
+    named = "Board temperature over a limit: " + "; ".join(
+        f"{layer} {rows[layer]['t_max_c']:.2f} °C (rise {rows[layer]['rise_c']:.2f} °C, nearest pad {pad}) "
+        "over max_rise_c 15" for layer, pad in (("F.Cu", "J1.1"), ("B.Cu", "R1.2")))
     assert named in doc["verdict_note"]
     for key in ("verdict", "verdict_note", "not_judged", "limits", "ambient_c", "airflow_m_s", "h_w_m2k",
                 "grid_mm", "grid_cells", "iterations", "settled", "history", "heat_w", "heat_by_kind_w",
@@ -411,7 +427,9 @@ def test_the_summary_has_units_and_no_nan(demo_tree):
     assert set(t["loads"][0]) == {"name", "group", "drop_ambient_mv", "drop_mv", "change_pct"}
     assert list(doc).index("thermal") == list(doc).index("assumptions") - 1
     text = "\n".join(temperature_text(t, skip=doc["assumptions"]))
-    for words in ("Board temperature", "F.Cu", "B.Cu", "J1.1", "FAIL", "39.156 → 41.354 mV"):
+    u1 = next(ld for ld in t["loads"] if ld["name"] == "U1")
+    drops = f"{u1['drop_ambient_mv']:.3f} → {u1['drop_mv']:.3f} mV"          # "39.156 → 41.354 mV" here
+    for words in ("Board temperature", "F.Cu", "B.Cu", "J1.1", "FAIL", drops):
         assert words in text, words
 
 
