@@ -55,10 +55,28 @@ from coppernicus.project import (
 # ---------------------------------------------------------------------- numbers
 
 
-class DecimalSpinBox(QDoubleSpinBox):
+class WheelWhenFocused:
+    """A form field that takes the mouse wheel only once focused (a click or Tab): turning the
+    wheel to scroll the Rail setup never changes a value under the pointer (and drops the
+    results). Unfocused, the wheel goes on to the scroll area; and a wheel turn does not focus
+    it first, as Qt's default WheelFocus policy would."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class DecimalSpinBox(WheelWhenFocused, QDoubleSpinBox):
     """A spin box that reads a typed comma as the decimal sign. Numbers are shown with a dot
     (the app uses the C locale), where a comma would otherwise be taken as a thousands
-    separator and dropped, turning 3,3 into 33."""
+    separator and dropped, turning 3,3 into 33. It takes the wheel only when focused
+    (:class:`WheelWhenFocused`)."""
 
     def validate(self, text, pos):
         return super().validate(text.replace(",", "."), pos)
