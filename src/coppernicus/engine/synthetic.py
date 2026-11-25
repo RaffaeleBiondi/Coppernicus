@@ -480,3 +480,67 @@ def save_snapshot(snapshot: BoardSnapshot, path) -> None:
     """Write a board snapshot (``*.json.gz``) that :meth:`Board.open` reads back."""
     from kipi.core.model.snapshot_io import save
     save(snapshot, str(path))
+
+
+# ---------------------------------------------------------------------- noise board (Task 10)
+# Copied from KiPI's coupled-noise validation board (examples/validation/make_boards.py:454-525),
+# dimensions and part values unchanged, so its accuracy tests hold here too.
+
+class CoupledNoise:
+    """A 12 V to 1.8 V buck (U1, power stage) on F.Cu over a GND plane on In1.Cu, with three
+    0.2 mm victims, each between two ICs with a ground pin:
+
+    * SIG_SW beside the switch node's pour (capacitive coupling, with a like inductive part
+      through its ends beside the output capacitor's via),
+    * SIG_LOOP beside the hot loop's VIN track (inductive coupling dominates),
+    * SIG_BURIED on In2.Cu under SIG_LOOP, behind the plane (shielded: far less noise).
+
+    U1's output pin is L1.2 (the inductor's VOUT pad), its input U1.1 and its ground U1.2."""
+    FSW, RISE = 1e6, 2e-9
+    VIN, VOUT, LOAD = 12.0, 1.8, 5.0
+    L, COSS = 1e-6, 300e-12
+    ETA = 0.9                        # KiPI's Vrm default (dc/pi/model.py:93), which its setup keeps
+    GAP = 0.2                        # victim to aggressor copper
+    SW_POUR = 4.0
+    C1 = (10e-6, 0.4e-9, 0.003)      # C, ESL, ESR of the input capacitor
+    C2 = (47e-6, 0.6e-9, 0.002)      # ... and of the output capacitor
+    VICTIMS = (("SIG_SW", "U3", "U4"), ("SIG_LOOP", "U5", "U6"), ("SIG_BURIED", "U7", "U8"))
+
+
+def coupled_noise_board() -> BoardSnapshot:
+    g = CoupledNoise
+    b = SyntheticBoard("coupled_noise", four_layer_stackup())
+
+    def sq(x, y, s):
+        return box(x - s / 2, y - s / 2, x + s / 2, y + s / 2)
+
+    def part(ref, value, pins, size=1.0):
+        for num, net, (x, y) in pins:
+            b.pad(ref, num, net, sq(x, y, size), value=value)
+            if net == "GND":
+                b.via("GND", x, y + size / 2, 0.3, 0.6, layers=(F, IN1))
+
+    part("J1", "CONN", [("1", "VIN", (2, 10)), ("2", "GND", (2, 14))])
+    part("C1", "10uF", [("1", "VIN", (6, 10)), ("2", "GND", (6, 14))])
+    part("U1", "Power stage", [("1", "VIN", (10, 10)), ("2", "GND", (10, 14)), ("3", "SW", (12, 12))])
+    part("L1", "1uH", [("1", "SW", (16, 12)), ("2", "VOUT", (20, 12))])
+    part("C2", "47uF", [("1", "VOUT", (24, 12)), ("2", "GND", (24, 15))])
+    part("U2", "Load", [("1", "VOUT", (28, 12)), ("2", "GND", (28, 15))])
+    for net, a, c in (("VIN", (2, 10), (10, 10)), ("GND", (2, 14), (10, 14)),
+                      ("SW", (12, 12), (16, 12)), ("VOUT", (20, 12), (28, 12)),
+                      ("GND", (24, 15), (28, 15))):
+        b.track(net, F, 1.0, a, c)
+    b.zone("SW", F, sq(13.0, 12.0, g.SW_POUR))
+    b.zone("GND", IN1, box(0, 0, 32, 20))
+    y_sw = 12.0 + g.SW_POUR / 2 + g.GAP + 0.1
+    y_loop = 10.0 - 0.5 - g.GAP - 0.1
+    for net, layer, y, x0, x1, refs, dy in (
+            ("SIG_SW", F, y_sw, 11.5, 24.0, ("U3", "U4"), 0.6),
+            ("SIG_LOOP", F, y_loop, 3.0, 9.5, ("U5", "U6"), -0.6),
+            ("SIG_BURIED", IN2, y_loop, 3.0, 9.5, ("U7", "U8"), -1.2)):
+        for ref, x in zip(refs, (x0, x1)):
+            b.pad(ref, "1", net, sq(x, y, 0.3), layers=(layer,), value="IC")
+            b.pad(ref, "2", "GND", sq(x, y + dy, 0.3), layers=(layer,), value="IC")
+            b.via("GND", x, y + dy, 0.2, 0.3, layers=(F, IN1, IN2) if layer == IN2 else (F, IN1))
+        b.track(net, layer, 0.2, (x0, y), (x1, y))
+    return b.snapshot()
