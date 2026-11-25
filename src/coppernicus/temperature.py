@@ -64,6 +64,9 @@ class ThermalVerdict:
     not_judged: List[Dict[str, str]] = field(default_factory=list)
     note: str = ""
     problems: List[Dict[str, Any]] = field(default_factory=list)
+    # Each failing row in words, for the power tree's one-line note: "F.Cu 42.29 °C (rise
+    # 17.29 °C, nearest pad J1.1) over max_rise_c 15"; and "not settled: …" when it was not.
+    failed_rows: List[str] = field(default_factory=list)
 
 
 def _limits_text(limits: Mapping[str, float]) -> str:
@@ -74,6 +77,15 @@ def _pad_text(ref: str, number: str, distance: Optional[float]) -> str:
     if not ref or distance is None:
         return "no pad on the board"
     return f"nearest pad {ref}.{number} ({distance:.2f} mm)"
+
+
+def _over(row, ambient_c: float, limits: Mapping[str, float]) -> str:
+    """A failing row and the limits it exceeds, in words."""
+    over = [f"{k} {v:g}" for k, v in limits.items()
+            if (row.t_max_c if k == "max_temp_c" else row.t_max_c - ambient_c) > v]
+    pad = f", nearest pad {row.pad_ref}.{row.pad_number}" if row.pad_ref else ""
+    return (f"{row.layer_name} {row.t_max_c:.2f} °C (rise {row.rise_c:.2f} °C{pad}) over "
+            + " and ".join(over))
 
 
 def _not_settled(temp) -> str:
@@ -116,8 +128,9 @@ def judge(temp, limits, groups: Optional[Mapping[str, Any]] = None) -> ThermalVe
         rows = ", ".join(f"{r.layer_name} {r.t_max_c:.2f} °C (rise {r.rise_c:.2f} °C, "
                          f"{_pad_text(r.pad_ref, r.pad_number, r.pad_distance_mm)})" for r in failed)
         note = f"Board temperature against {text}: {rows} over the limit"
+        named = [_over(r, temp.ambient_c, limits) for r in failed] + ([unsettled] if unsettled else [])
         return ThermalVerdict("fail", len(failed), dict(limits), [],
-                              note + (f"; {unsettled}." if unsettled else "."), problems)
+                              note + (f"; {unsettled}." if unsettled else "."), problems, named)
     reasons = []
     if not temp.copper:
         reasons.append("no solved copper to judge")

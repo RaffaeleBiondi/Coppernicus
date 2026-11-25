@@ -338,6 +338,7 @@ def test_an_unsettled_solve_fails_over_a_limit_and_is_not_judged_under_it(demo_t
     temp.settled = False
     v = judge(temp, {"max_rise_c": 15.0}, tree.groups)
     assert v.verdict == "fail" and "not settled: last change" in v.note
+    assert v.failed_rows[-1].startswith("not settled: last change")      # in the tree's note too
     assert "not settled" in v.problems[0]["title"]
     v = judge(temp, {"max_temp_c": 100.0}, tree.groups)
     assert v.verdict == "not_judged" and v.not_judged == [
@@ -378,6 +379,10 @@ def test_the_summary_has_units_and_no_nan(demo_tree):
     t = doc["thermal"]
     assert doc["verdict"] == "fail" and t["verdict"] == "fail" and doc["failed"] >= t["failed"] == 2
     assert "board temperature: max_rise_c = 15" in doc["verdict_note"]
+    # The failing rows are named in the top-level note too, not only in the thermal block.
+    named = ("Board temperature over a limit: F.Cu 42.29 °C (rise 17.29 °C, nearest pad J1.1) over "
+             "max_rise_c 15; B.Cu 41.77 °C (rise 16.77 °C, nearest pad R1.2) over max_rise_c 15")
+    assert named in doc["verdict_note"]
     for key in ("verdict", "verdict_note", "not_judged", "limits", "ambient_c", "airflow_m_s", "h_w_m2k",
                 "grid_mm", "grid_cells", "iterations", "settled", "history", "heat_w", "heat_by_kind_w",
                 "peak_c", "peak_rise_c", "peak_x_mm", "peak_y_mm", "peak_layer", "peak_nearest_pad",

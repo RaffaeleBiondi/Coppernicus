@@ -341,6 +341,8 @@ def verdict_note(tree, groups: Dict[str, GroupVerdict]) -> str:
               + [f"{ITEM}: {k} = {v:g}" for k, v in tv.limits.items()])
     note = ("Judged only against the limits you set: " + ", ".join(judged)
             if judged else "No limit you set applies to what it is set on")
+    if tv.failed_rows:                  # the board temperature's fails, named (the groups' are problems)
+        note += f". Board temperature over a limit: {'; '.join(tv.failed_rows)}"
     if missing:
         note += ". Not judged: " + not_judged_text(missing)
     return note
