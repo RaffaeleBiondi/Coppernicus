@@ -23,7 +23,9 @@ import copy
 import dataclasses
 import json
 import re
+import textwrap
 import traceback
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -211,9 +213,55 @@ def with_probe_cell(p: Probe, key: str, text: str) -> Probe:
     setattr(q, key, value)
     if key == "target_ohm" and value is None:
         q.target_hz = None                 # the file takes no target_hz without target_ohm
+    if key == "ground_net" and not value:
+        q.ground_ref, q.ground_pins = "", None     # the file keeps ground pins only with their net
+    if key in ("ground_ref", "ground_pins") and value and not q.ground_net:
+        raise ValueError(f"{_header(PROBE_COLUMNS, key)}: set the ground net first (Ground net): "
+                         "without it the ground pins are not saved")
     # A draft is checked for its values: its missing name, part or net stand in.
     check_ac([dataclasses.replace(q, name=q.name or "draft", ref=q.ref or "?", net=q.net or "?")], [])
     return q
+
+
+def edit_note(old: Probe, new: Probe, key: str) -> str:
+    """What else an edit of column ``key`` changed (clearing the target clears its "Up to",
+    clearing the ground net its part and pins), for the status line; "" when nothing."""
+    other = [h for h, k in PROBE_COLUMNS if k != key and getattr(old, k) != getattr(new, k)]
+    return (f"{' and '.join(other)} cleared with {_header(PROBE_COLUMNS, key)}: the project file "
+            "keeps them only with it") if other else ""
+
+
+def _named_probe(p: Probe) -> Probe:
+    return dataclasses.replace(p, ref=p.ref or "?", net=p.net or "?")
+
+
+def probe_row_conflict(rows: Sequence[Probe], r: int, q: Probe) -> Optional[str]:
+    """The project file's reason when row ``r``, edited to ``q``, conflicts with another row
+    (a name in use, drafts included); None. Such an edit is refused: written, it would drop a
+    saved probe at the next save."""
+    if not q.name:
+        return None
+    for i, x in enumerate(rows):
+        if i != r and x.name:
+            try:
+                check_ac([_named_probe(x), _named_probe(q)], [])
+            except ProjectError as e:
+                return str(e)
+    return None
+
+
+def cap_row_conflict(rows: Sequence[CapModel], r: int, q: CapModel) -> Optional[str]:
+    """As :func:`probe_row_conflict` for capacitor models: a name in use, or a part another
+    model has."""
+    if not q.name:
+        return None
+    for i, x in enumerate(rows):
+        if i != r and x.name:
+            try:
+                check_ac([], [x, q])
+            except ProjectError as e:
+                return str(e)
+    return None
 
 
 def usable_probes(rows: Sequence[Probe]) -> Tuple[List[Probe], Dict[int, str]]:
@@ -438,6 +486,31 @@ def _settings() -> QSettings:
     return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
 
 
+def export_name(project_path, board_name: str, rail: str) -> str:
+    """The CSV's file name as ``coppernicus ac`` writes it: the project file's stem (its
+    ``.coppernicus`` too), else the board's, then the rail (the PNG: same name, .png)."""
+    from coppernicus.maps import safe_file_name, safe_name
+    stem = Path(project_path).stem if project_path else ((board_name or "").split(".")[0] or "coppernicus")
+    return f"{safe_file_name(stem)}_{safe_name(rail)}_impedance.csv"
+
+
+LEGEND_FONT = 6.5
+
+
+def draw_result(fig, r) -> None:
+    """The result drawn by :func:`coppernicus.impedance.draw_impedance` (its labels and title,
+    never reworded), the title and the legend's labels wrapped so a narrow column cuts off
+    neither."""
+    fig.clear()
+    ax = fig.add_subplot()
+    draw_impedance(ax, r)
+    ax.title.set_wrap(True)
+    handles, labels = ax.get_legend_handles_labels()
+    if labels:
+        width = max(16, int(fig.get_figwidth() * 72 * 0.45 / (0.55 * LEGEND_FONT)))   # ≤ ~half the width
+        ax.legend(handles, [textwrap.fill(t, width) for t in labels], fontsize=LEGEND_FONT, loc="best")
+
+
 # ---------------------------------------------------------------------- worker
 
 class AcWorker(QThread):
@@ -514,6 +587,7 @@ class AcPanel(QWidget):
         self.results: Dict[str, Tuple[Any, Dict[str, Any]]] = {}   # rail -> (result, project it solved)
         self.worker: Optional[AcWorker] = None
         self._busy = False
+        self._cancel_requested = False             # Cancel pressed: no phase starts after it
         self._generation = 0
         self._loading = False
         self._probe_rows: List[Probe] = []
@@ -786,7 +860,7 @@ class AcPanel(QWidget):
     def _fill_links(self):
         self.links.blockSignals(True)
         self.links.setRowCount(0)
-        for r, k in enumerate(self.project.links):
+        for r, k in enumerate(self.merged_project.links):         # the KiCad fields' links too
             self.links.insertRow(r)
             for c, text in enumerate((f"{k.name} ({k.ref})" if k.name != k.ref else k.ref,
                                       f"{k.net_a} ↔ {k.net_b}", si_text(link_esl_of(self.project.ac, k)))):
@@ -829,16 +903,22 @@ class AcPanel(QWidget):
         r, c = item.row(), item.column()
         if self._loading or r >= len(self._probe_rows):
             return
-        key = PROBE_COLUMNS[c][1]
+        key, old = PROBE_COLUMNS[c][1], self._probe_rows[r]
         try:
-            q = with_probe_cell(self._probe_rows[r], key, item.text())
+            q = with_probe_cell(old, key, item.text())
+            why = probe_row_conflict(self._probe_rows, r, q)
+            if why:
+                raise ValueError(why)
         except ValueError as e:
             self._mark_cell(self.probes, item, str(e))
             self._say(f"Not applied: {e}")
             return
         self._probe_rows[r] = q
-        self._set_cell(self.probes, r, c, probe_cell(q, key))
+        self._refill_row(self.probes, PROBE_COLUMNS, r, q, probe_cell)
         self._write_probes()
+        note = edit_note(old, q, key)
+        if note:
+            self._say(note)
 
     def _write_probes(self):
         probes, problems = usable_probes(self._probe_rows)
@@ -873,6 +953,9 @@ class AcPanel(QWidget):
         key = CAP_COLUMNS[c][1]
         try:
             q = with_cap_cell(self._cap_rows[r], key, item.text())
+            why = cap_row_conflict(self._cap_rows, r, q)
+            if why:
+                raise ValueError(why)
         except ValueError as e:
             self._mark_cell(self.caps, item, str(e))
             self._say(f"Not applied: {e}")
@@ -1050,9 +1133,10 @@ class AcPanel(QWidget):
 
     def _link_item_changed(self, item: QTableWidgetItem):
         r = item.row()
-        if self._loading or item.column() != 2 or r >= len(self.project.links):
+        links = self.merged_project.links
+        if self._loading or item.column() != 2 or r >= len(links):
             return
-        k = self.project.links[r]
+        k = links[r]
         try:
             henry = parse_si(item.text())
             new = copy.deepcopy(self.project.ac)
@@ -1127,10 +1211,7 @@ class AcPanel(QWidget):
             self._show_empty()
             return
         r = entry[0]
-        self.figure.clear()
-        ax = self.figure.add_subplot()
-        draw_impedance(ax, r)
-        ax.title.set_wrap(True)                    # the core's title, wrapped in a narrow column
+        draw_result(self.figure, r)
         self.canvas.draw_idle()
         rows = result_rows(r)
         self.table.setRowCount(len(rows))
@@ -1170,18 +1251,11 @@ class AcPanel(QWidget):
 
     # ------------------------------------------------------------------ export
     def _export_start(self, rail: str) -> Path:
-        from coppernicus.maps import safe_file_name, safe_name
-        if self.project.path:
-            stem = Path(self.project.path).name
-            for suffix in (".coppernicus.yml", ".yml", ".yaml"):
-                if stem.endswith(suffix):
-                    stem = stem[: -len(suffix)]
-                    break
-            folder = Path(self.project.path).parent / "results"
-        else:
-            board = self._win.board
-            stem, folder = (board.name.split(".")[0] if board else "coppernicus"), Path.home()
-        return folder / f"{safe_file_name(stem)}_{safe_name(rail)}_impedance.csv"
+        """Where Export suggests the CSV: results/ by the project file (the home folder for an
+        unsaved project), named as ``coppernicus ac`` names it."""
+        path, board = self.project.path, self._win.board
+        folder = Path(path).parent / "results" if path else Path.home()
+        return folder / export_name(path, board.name if board else "", rail)
 
     def export_files(self, csv_path) -> Tuple[Path, Path]:
         """The shown result as the CLI writes it: the CSV and, beside it, the PNG."""
@@ -1268,6 +1342,11 @@ class AcPanel(QWidget):
         if not 0 <= r < len(self._probe_rows):
             return self._report("Select the probe row to pick into")
         p = copy.deepcopy(self._probe_rows[r])
+        if not p.name:                       # a picked probe is named after its part, never twice
+            names, name, k = {x.name for x in self._probe_rows}, hit.ref, 2
+            while name in names:
+                name, k = f"{hit.ref}_{k}", k + 1
+            p.name = name
         msg = add_probe_pin(p, kind, hit.ref, hit.pin, hit.net)
         if p != self._probe_rows[r]:
             self._probe_rows[r] = p
@@ -1293,6 +1372,10 @@ class AcPanel(QWidget):
         return self._report(msg)
 
     # ------------------------------------------------------------------ cells
+    def _refill_row(self, table, columns, r, obj, cell):
+        for c, (_h, key) in enumerate(columns):
+            self._set_cell(table, r, c, cell(obj, key))
+
     def _set_cell(self, table, r, c, text):
         table.blockSignals(True)
         item = table.item(r, c)
@@ -1349,7 +1432,7 @@ class AcPanel(QWidget):
         if win._refuse_fields("Cannot solve the impedance"):    # a KiCad field cannot be used
             return
         self.stop_pick()
-        self._busy = True
+        self._busy, self._cancel_requested = True, False
         self.solve_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
@@ -1407,6 +1490,12 @@ class AcPanel(QWidget):
     def _sized(self, payload):
         if not self._current():
             return
+        # The sizing thread is done: its end must not end the solve (a box's own event loop
+        # can deliver it before the solve starts).
+        self.worker, generation = None, self._generation
+        if self._cancel_requested:
+            self._cancel_done()
+            return
         from coppernicus.engine.ac import cost_estimate, free_memory_bytes, ram_estimate, total_memory_bytes
         size = payload
         cost = cost_estimate(size.triangles, size.ports, size.field_frequencies, self._last_solve())
@@ -1422,10 +1511,18 @@ class AcPanel(QWidget):
                 "AC mesh (Sweep → AC mesh largest edge) lowers it.",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             yes = answer == QMessageBox.Yes
+        if generation != self._generation:          # another board was opened while asking
+            return
+        if self._cancel_requested:
+            self._cancel_done()
+            return
         if not may_start(ram, yes):
             self._report(f"Not solved: {size.rail} could exceed this machine's memory (see the estimate)")
             self._busy_off()
             return
+        self._busy = True
+        self.solve_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
         self._start(AcWorker(self._win.board, self._solving[2], size.rail, "solve", parent=self))
 
@@ -1451,16 +1548,30 @@ class AcPanel(QWidget):
     def _failed(self, message: str):
         if not self._current():
             return
+        self._clear_estimating()
         self._report("The impedance could not be solved")
         QMessageBox.warning(self, "Cannot solve the impedance", message)
 
     def _cancelled(self):
         if self._current():
+            self._clear_estimating()
             self._report("Impedance solve cancelled")
+
+    def _cancel_done(self):
+        """A Cancel pressed before the solve phase started: nothing more starts."""
+        self._clear_estimating()
+        self._report("Impedance solve cancelled")
+        self._busy_off()
+
+    def _clear_estimating(self):
+        if not self.last_estimate:                 # still "Estimating…": no estimate came
+            self.estimate.setText("")
 
     def _worker_finished(self, worker: AcWorker):
         if worker is self.worker:
+            self.worker = None
             self._busy_off()
+        worker.deleteLater()
 
     def _busy_off(self):
         self._busy = False
@@ -1472,10 +1583,13 @@ class AcPanel(QWidget):
     def cancel(self):
         """Ask the running phase to stop (KiPI checks between frequencies). Solve stays off
         until its thread has ended."""
+        if not self._busy:
+            return
+        self._cancel_requested = True              # kept for a phase not started yet
         if self.worker is not None and self.worker.isRunning():
             self.worker.cancel()
-            self.cancel_button.setEnabled(False)
-            self._report("Cancelling the impedance solve…")
+        self.cancel_button.setEnabled(False)
+        self._report("Cancelling the impedance solve…")
 
     # ------------------------------------------------------------------ board and window
     def board_changed(self):
@@ -1495,13 +1609,19 @@ class AcPanel(QWidget):
         self.load_project()
 
     def close_workers(self):
-        """The window is closing: a running solve is cancelled, and nothing of it is shown."""
+        """The window is closing: a running solve is cancelled, nothing of it is shown, and the
+        window waits for its thread to end (KiPI checks for a cancel between frequencies)."""
         w = self.worker
         if w is not None and w.isRunning():
-            for signal in (w.message, w.fraction, w.sized, w.succeeded, w.failed, w.cancelled, w.finished):
-                try:
-                    signal.disconnect()
-                except (RuntimeError, TypeError):
-                    pass
+            with warnings.catch_warnings():               # a signal with no slot left to drop
+                warnings.simplefilter("ignore", RuntimeWarning)
+                for signal in (w.message, w.fraction, w.sized, w.succeeded, w.failed, w.cancelled,
+                               w.finished):
+                    try:
+                        signal.disconnect()
+                    except (RuntimeError, TypeError):
+                        pass
             w.cancel()
-            w.wait(5000)
+            self._win.statusBar().showMessage("Finishing the impedance solve before closing…")
+            self._win.statusBar().repaint()
+            w.wait()

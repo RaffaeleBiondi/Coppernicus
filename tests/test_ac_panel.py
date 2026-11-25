@@ -4,7 +4,6 @@ only a window shows (the tab, the close and pick routes). No AC solve runs here:
 are in tests/test_ac.py and tools/gui_check.py (run_ac)."""
 
 import dataclasses
-import math
 import os
 import subprocess
 import sys
@@ -40,6 +39,8 @@ def test_check_ac_runs_the_project_files_checks():
         check_ac([], [CapModel("a", refs=["C1"]), CapModel("b", refs=["C1"])])
     with pytest.raises(ProjectError, match="f_stop_hz"):
         check_ac([], [], AcOptions(f_start_hz=1e6, f_stop_hz=1e5))
+    with pytest.raises(ProjectError, match="ground net is its supply net"):
+        check_ac([Probe("U1", "U1", "+3V3", ground_net="+3V3")], [])
 
 
 # ---------------------------------------------------------------------- numbers in the cells
@@ -271,7 +272,6 @@ def test_result_rows_give_each_probes_worst_point_ratio_and_verdict():
     assert result_rows(r)[0][8] == "pass"
     r.probes[0].worst_ratio = None
     assert result_rows(r)[0][6] == "-"
-    assert math.isnan(float("nan"))
 
 
 # ---------------------------------------------------------------------- the window (child process)
@@ -366,8 +366,8 @@ def test_picking_fills_a_probe_and_toggles_a_models_part():
         window.view.pad_picked.emit(26.2, 25.0)               # U1 pad 2 on GND
         p = panel._probe_rows[1]
         assert (p.ref, p.net, p.pins, p.ground_net, p.ground_pins) == ("U1", "+3V3", ["1"], "GND", ["2"]), p
-        assert p.name == "U1" and "unique" in panel.status.text()      # a second U1: not written
-        panel.probes.item(1, 0).setText("U1b")
+        assert p.name == "U1_2" and [q.name for q in window.project.probes] == ["U1", "U1_2"]
+        panel.probes.item(1, 0).setText("U1b")                # a picked probe never takes a name in use
         assert [q.name for q in window.project.probes] == ["U1", "U1b"]
         panel.start_pick("parts")
         panel.caps.setCurrentCell(0, 0)
@@ -410,7 +410,7 @@ def test_a_solve_that_could_exceed_the_memory_starts_only_on_yes():
         panel.estimated.connect(heard.append)
         panel._solving = ("+3V3", {{}}, window.merged)
         fake.sized.emit(AcSize("+3V3", 1000, 500, 2, 111, 278, 0.1))
-        assert asked and panel.worker is fake and not panel.busy, (asked, panel.worker)
+        assert asked and panel.worker is None and not panel.busy, (asked, panel.worker)   # no solve
         assert heard and "could exceed" in heard[0] and "1,000 triangles" in heard[0]
         assert "Not solved" in panel.status.text() + window.statusBar().currentMessage()
     ''')
@@ -517,4 +517,247 @@ def test_an_ac_edit_reaches_the_next_solve_through_the_merged_project(tmp_path):
         window.fields_error = "a field cannot be used"
         panel.solve()
         assert len(started) == n and boxes == ["Cannot solve the impedance"], boxes
+    ''')
+
+
+
+# ---------------------------------------------------------------------- review fixes (pure)
+
+def test_a_cell_edit_that_conflicts_with_another_row_is_refused_with_the_files_reason():
+    """Renaming a probe to a name in use, or giving a model a part another model has, would
+    drop a saved probe or model at the next save: such an edit is refused instead."""
+    from coppernicus.app.ac_panel import cap_row_conflict, probe_row_conflict, with_cap_cell, with_probe_cell
+    probes = [Probe("U1", "U1", "+3V3"), Probe("U2", "U2", "+3V3"), Probe("", "", "")]
+    assert probe_row_conflict(probes, 1, with_probe_cell(probes[1], "name", "U3")) is None
+    why = probe_row_conflict(probes, 1, with_probe_cell(probes[1], "name", "U1"))
+    assert why and "unique" in why and "U1" in why
+    assert "unique" in probe_row_conflict(probes, 2, with_probe_cell(probes[2], "name", "U2"))  # a draft too
+    models = [CapModel("a", refs=["C1"]), CapModel("b", refs=["C2"]), CapModel("")]
+    why = cap_row_conflict(models, 1, with_cap_cell(models[1], "refs", "C2, C1"))
+    assert why and "C1" in why and "two capacitor models" in why
+    assert "unique" in cap_row_conflict(models, 1, with_cap_cell(models[1], "name", "a"))
+    assert cap_row_conflict(models, 1, with_cap_cell(models[1], "refs", "C2, C3")) is None
+
+
+def test_ground_pins_need_a_ground_net_and_clearing_it_or_the_target_says_what_went_with_it():
+    from coppernicus.app.ac_panel import edit_note, with_probe_cell
+    bare = Probe("U1", "U1", "+3V3", ["1"])
+    for key, text in (("ground_ref", "J1"), ("ground_pins", "2")):
+        with pytest.raises(ValueError, match="ground net first"):
+            with_probe_cell(bare, key, text)
+    assert with_probe_cell(bare, "ground_pins", "all").ground_pins is None     # nothing typed
+    grounded = Probe("U1", "U1", "+3V3", ["1"], "J1", ["2"], "GND", target_ohm=0.05, target_hz=1e7)
+    q = with_probe_cell(grounded, "ground_net", "")
+    assert (q.ground_ref, q.ground_pins, q.ground_net) == ("", None, "")
+    assert "Ground part" in edit_note(grounded, q, "ground_net") and "Ground pins" in edit_note(
+        grounded, q, "ground_net")
+    q = with_probe_cell(grounded, "target_ohm", "")
+    assert "Up to" in edit_note(grounded, q, "target_ohm")
+    assert edit_note(grounded, with_probe_cell(grounded, "step_a", "1"), "step_a") == ""
+    with pytest.raises(ValueError, match="supply net"):
+        with_probe_cell(grounded, "ground_net", "+3V3")
+
+
+def test_the_export_name_is_the_clis():
+    """cli.py: <project file stem, .coppernicus included>_<rail>_impedance.csv."""
+    from coppernicus.app.ac_panel import export_name
+    name = export_name("/x/pdn.coppernicus.yml", "pdn.kipi.json.gz", "+3V3")
+    assert name == "pdn.coppernicus_P3V3_impedance.csv"
+    assert export_name(None, "board.kicad_pcb", "-5V") == "board_N5V_impedance.csv"
+
+
+def test_the_legend_stays_inside_a_narrow_plot():
+    """The core's long band label, drawn in a narrow column, is wrapped, not cut off."""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
+
+    from coppernicus.app.ac_panel import draw_result
+    r = _result(bandwidth=None)
+    r.assumed_bandwidth_hz = 5e4
+    fig = Figure(figsize=(3.2, 2.6), dpi=100, layout="constrained")
+    canvas = FigureCanvasAgg(fig)
+    draw_result(fig, r)
+    canvas.draw()
+    box, page = fig.axes[0].get_legend().get_window_extent(), fig.bbox
+    assert box.x0 >= page.x0 - 1 and box.x1 <= page.x1 + 1 and box.y0 >= page.y0 - 1, (box, page)
+
+
+# ---------------------------------------------------------------------- review fixes (window)
+
+STUB_WORKER = '''
+import time
+from PySide6.QtWidgets import QMessageBox
+import shiboken6
+import coppernicus.app.ac_panel as ac_panel
+import coppernicus.engine.ac as engine_ac
+from coppernicus.engine.ac import AcSize, RamEstimate
+
+
+class StubWorker(QtCore.QThread):
+    """AcWorker's signals and phases without KiPI: sizing reports a small mesh at once (or
+    fails); solving runs until it is cancelled."""
+    message = QtCore.Signal(str)
+    fraction = QtCore.Signal(object)
+    sized = QtCore.Signal(object)
+    succeeded = QtCore.Signal(object)
+    failed = QtCore.Signal(str)
+    cancelled = QtCore.Signal()
+    fail_sizing = False
+
+    def __init__(self, board, merged, rail, phase, parent=None):
+        super().__init__(parent)
+        self.merged, self.rail, self.phase, self.generation, self._cancel = merged, rail, phase, 0, False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        if self.phase == "size":
+            if StubWorker.fail_sizing:
+                self.failed.emit("the mesher failed")
+            else:
+                self.sized.emit(AcSize(self.rail, 1000, 500, 2, 111, 278, 0.1))
+            return
+        while not self._cancel:
+            time.sleep(0.01)
+        self.cancelled.emit()
+
+
+ac_panel.AcWorker = StubWorker
+
+
+def pump(done, seconds=10.0):
+    t0 = time.monotonic()
+    while not done() and time.monotonic() - t0 < seconds:
+        app.processEvents()
+        time.sleep(0.01)
+'''
+
+
+def test_solve_anyway_answered_yes_solves_busy_with_cancel_and_one_solve_at_a_time():
+    """The RAM question's own event loop delivers the sizing thread's end before Yes comes
+    back: the solve that follows must still be busy, cancellable, and the only one."""
+    run_in_window(STUB_WORKER + textwrap.dedent(f'''
+        def nested_yes(*_a, **_k):
+            loop = QtCore.QEventLoop()
+            QtCore.QTimer.singleShot(300, loop.quit)
+            loop.exec()
+            return QMessageBox.Yes
+
+        QMessageBox.warning = staticmethod(nested_yes)
+        engine_ac.ram_estimate = lambda *a, **k: RamEstimate(9e12, 8e9, True, "up to 9000 GB (forced)")
+        window.open_project({PDN!r})
+        app.processEvents()
+        panel = window.ac_panel
+        panel.solve()
+        pump(lambda: panel.worker is not None and panel.worker.phase == "solve")
+        solving = panel.worker
+        assert solving is not None and solving.phase == "solve", solving
+        pump(lambda: False, 0.3)                              # the sizing thread's end, delivered
+        assert panel.busy and panel.cancel_button.isEnabled() and not panel.solve_button.isEnabled()
+        panel.solve()
+        assert panel.worker is solving and "already running" in panel.status.text()
+        panel.cancel()
+        pump(lambda: not panel.busy)
+        assert not panel.busy and panel.solve_button.isEnabled() and panel.worker is None
+        assert "cancelled" in panel.status.text(), panel.status.text()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+        assert not shiboken6.isValid(solving)                 # finished workers are deleted
+    '''))
+
+
+def test_a_cancel_between_sizing_and_its_slot_is_kept_and_a_failed_sizing_clears_the_estimate():
+    run_in_window(STUB_WORKER + textwrap.dedent(f'''
+        boxes = []
+        QMessageBox.warning = staticmethod(lambda *a, **k: boxes.append(a[1]) or QMessageBox.Ok)
+        window.open_project({PDN!r})
+        app.processEvents()
+        panel = window.ac_panel
+        panel.solve()
+        panel.worker.wait()                                   # sized is queued, not yet delivered
+        panel.cancel()
+        pump(lambda: not panel.busy)
+        assert panel.worker is None and not panel.busy, panel.worker
+        assert "cancelled" in panel.status.text() and panel.estimate.text() == "", panel.estimate.text()
+        StubWorker.fail_sizing = True
+        panel.solve()
+        pump(lambda: not panel.busy)
+        assert boxes == ["Cannot solve the impedance"] and panel.estimate.text() == "", panel.estimate.text()
+    '''))
+
+
+def test_closing_waits_for_an_impedance_solve_that_ignores_cancel_for_a_while():
+    """No 'QThread: Destroyed while thread is still running': the window waits for the end,
+    saying so in the status bar."""
+    run_in_window('''
+        import time
+
+        class Slow(QtCore.QThread):
+            message = QtCore.Signal(str)
+            fraction = QtCore.Signal(object)
+            sized = QtCore.Signal(object)
+            succeeded = QtCore.Signal(object)
+            failed = QtCore.Signal(str)
+            cancelled = QtCore.Signal()
+
+            def cancel(self):
+                pass                                           # ignored: KiPI between frequencies
+
+            def run(self):
+                time.sleep(5.5)
+
+        heard = []
+        window.statusBar().messageChanged.connect(heard.append)
+        worker = window.ac_panel.worker = Slow()
+        worker.start()
+        window.close()
+        assert not worker.isRunning(), "the window closed while the solve still ran"
+        assert any("Finishing the impedance solve" in m for m in heard), heard
+    ''')
+
+
+def test_an_edit_that_conflicts_with_another_row_is_refused_and_both_rows_stay_saved():
+    run_in_window(f'''
+        window.open_project({PDN!r})
+        app.processEvents()
+        panel = window.ac_panel
+        panel.add_probe()
+        for col, text in ((0, "U2"), (1, "U1"), (2, "+3V3")):
+            panel.probes.item(1, col).setText(text)
+        assert [p.name for p in window.project.probes] == ["U1", "U2"]
+        panel.probes.item(1, 0).setText("U1")                 # the name of the first probe
+        assert [p.name for p in window.project.probes] == ["U1", "U2"], window.project.probes
+        assert "Not applied" in panel.status.text() and "unique" in panel.status.text()
+        panel.add_model()
+        panel.caps.item(1, 0).setText("b")
+        panel.caps.item(1, 4).setText("C1")                   # C1 is in model 10u
+        caps = window.project.capacitors
+        assert [(m.name, m.refs) for m in caps] == [("10u", ["C1"]), ("b", [])], caps
+        assert "Not applied" in panel.status.text() and "C1" in panel.status.text()
+    ''')
+
+
+def test_links_from_kicad_fields_are_listed_and_take_a_series_inductance(tmp_path):
+    tests = os.path.dirname(os.path.abspath(__file__))
+    run_in_window(f'''
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, {tests!r})
+        from kicad_fixture import write_board
+        from coppernicus.project import Project
+        folder = Path({str(tmp_path)!r})
+        parts = [("J1", [("1", 0.0, 0.0, "VCC")], {{"PI_RAIL": "VCC", "PI_SOURCE": "1V"}}),
+                 ("U1", [("1", 18.0, 0.0, "VCC")], {{"PI_RAIL": "VCC", "PI_LOAD": "1A"}}),
+                 ("FB1", [("1", 19.5, 0.0, "VCC"), ("2", 20.5, 0.0, "VCC_F")], {{"PI_LINK": "50mOhm"}})]
+        write_board(folder / "link.kicad_pcb", parts,
+                    [("VCC", (0.0, 0.0), (19.5, 0.0), 0.5), ("VCC_F", (20.5, 0.0), (40.0, 0.0), 0.5)])
+        path = Project(board="link.kicad_pcb").save(folder / "link.coppernicus.yml")
+        window.open_project(path)
+        app.processEvents()
+        panel = window.ac_panel
+        assert window.project.links == [] and [k.ref for k in window.merged.project.links] == ["FB1"]
+        assert panel.links.rowCount() == 1 and "FB1" in panel.links.item(0, 0).text()
+        panel.links.item(0, 2).setText("1u")
+        assert window.project.ac.link_esl_h == {{"FB1": 1e-6}}, window.project.ac.link_esl_h
+        assert window.merged.project.ac.link_esl_h == {{"FB1": 1e-6}} and window.dirty
     ''')
