@@ -379,6 +379,7 @@ def _finish(board: Board, project: Project, setup, thickness: Dict[str, float], 
             f"Board temperature may not have settled: the last iteration still changed it by "
             f"{last['dt_max']:.2f} °C, more than {SETTLE_SHARE * 100:g} % of the "
             f"{last['t_max'] - ambient:.3g} °C peak rise; run more iterations.")
+        out.warnings.append(temp.warnings[-1])        # the tree's too, as KiPI warns (cosim.py:276-279)
     out.thermal = temp
     apply_thermal_limits(out, options)
     return out

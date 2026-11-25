@@ -505,3 +505,13 @@ def test_load_heat_puts_each_loads_power_at_its_pins(strip, ldo):
     loads = [solve_project_tree(ldo, demo_ldo_project(iterations=1, load_heat=True, regulator_heat=mode))
              .thermal.heat_by_kind_w["loads"] for mode in ("output_pads", "part_pads")]
     assert loads[0] == pytest.approx(loads[1], rel=1e-12) and loads[0] > 0
+
+
+def test_an_unsettled_solve_warns_in_the_tree_too(demo):
+    """Two iterations on demo-thermal change the copper by 0.92 °C in the last one, more than
+    5 % of its 17 °C rise: the warning is the board temperature's and the tree's, as KiPI puts
+    it in the tree's warnings."""
+    tree = solve_project_tree(demo, demo_thermal_project(iterations=2))
+    assert tree.thermal.settled is False
+    warning = next(w for w in tree.thermal.warnings if w.startswith("Board temperature may not have settled"))
+    assert warning in tree.warnings and warning in tree_summary(tree)["warnings"]
