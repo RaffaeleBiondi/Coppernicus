@@ -268,3 +268,28 @@ def test_the_serial_mesher_reaches_the_measuring_process(tmp_path):
     rep = run["cases"][0]["steps"][0]["repeats"][0]
     assert rep["mesher"]["kipi_serial"] == "1"
     assert rep["mesher"]["workers_for_8_tasks"] == 0             # KiPI meshes every layer in-process
+
+
+# ---------------------------------------------------------------------------------- the probes
+
+def test_nested_stages_are_exclusive_and_a_stage_name_can_depend_on_its_parent():
+    probes = _bench("bench_probes")
+    rec = probes.Recorder()
+    clock = iter(range(100))
+    real = probes.time.perf_counter
+    probes.time.perf_counter = lambda: float(next(clock))
+    try:
+        inner = rec.wrap(lambda: None, lambda parent: "thermal_factor" if parent == "thermal_model" else None)
+        with rec.span("thermal_model"):          # t 0 .. 3
+            inner()                              # t 1 .. 2: inside thermal_model
+        inner()                                  # outside: not timed
+        with rec.span("factor"):                 # t 4 .. 5
+            pass
+    finally:
+        probes.time.perf_counter = real
+    snap = rec.snapshot(wall_s=10.0)
+    st = snap["stages"]
+    assert st["thermal_model"]["seconds"] == 2.0 and st["thermal_model"]["inclusive_s"] == 3.0
+    assert st["thermal_factor"]["seconds"] == 1.0 and st["thermal_factor"]["calls"] == 1
+    assert st["factor"]["seconds"] == 1.0
+    assert snap["unattributed_s"] == 10.0 - 4.0

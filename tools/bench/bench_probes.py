@@ -69,7 +69,7 @@ class Recorder:
     @contextmanager
     def span(self, stage: str):
         stack = self._stack()
-        frame = [0.0]                      # time of the stages inside this one
+        frame = [0.0, stage]               # time of the stages inside this one, its name
         stack.append(frame)
         t0 = time.perf_counter()
         try:
@@ -112,15 +112,23 @@ class Recorder:
             else:
                 self.counts.setdefault(key, set()).add(value)
 
-    def wrap(self, fn: Callable, stage: Optional[str], after: Optional[Callable] = None) -> Callable:
+    def parent(self) -> Optional[str]:
+        """The stage running now in this thread, if any."""
+        stack = self._stack()
+        return stack[-1][1] if stack else None
+
+    def wrap(self, fn: Callable, stage, after: Optional[Callable] = None) -> Callable:
+        """``fn`` timed as ``stage``: a name, None (not timed, only ``after``), or a function
+        of the enclosing stage's name giving the name (None: not timed there)."""
         rec = self
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            if stage is None:
+            name = stage(rec.parent()) if callable(stage) else stage
+            if name is None:
                 out = fn(*args, **kwargs)
             else:
-                with rec.span(stage):
+                with rec.span(name):
                     out = fn(*args, **kwargs)
             if after is not None:
                 try:
@@ -215,13 +223,20 @@ def _after_complex_factor(rec: Recorder, args, kwargs, factor) -> None:
         rec.observe("ac_factor_method", str(name).split()[0], "set")
 
 
+def _thermal_factor(parent: Optional[str]) -> Optional[str]:
+    """KiPI's heat model factorizes its matrix itself (kipi/dc/thermal/model.py:282); elsewhere
+    a direct factorization is inside ``factor`` (SpdSolver) already."""
+    return "thermal_factor" if parent == "thermal_model" else None
+
+
 # (module, function, stage, hook): functions, rebound wherever they are bound by name.
-FUNCTIONS: List[Tuple[str, str, Optional[str], Optional[Callable]]] = [
+FUNCTIONS: List[Tuple[str, str, Any, Optional[Callable]]] = [
     ("kipi.core.mesh.mesher", "mesh_many", "mesh", _after_mesh_many),
     ("kipi.core.mesh.mesher", "mesh_nets", "mesh_combine", _after_mesh_nets),
     ("kipi.core.mesh.parallel", "mesh_layers", "mesh_pool_start", _after_pool),
     ("kipi.dc.solver.fem", "assemble", "assemble", _after_assemble),
     ("kipi.dc.solver.post", "compute_fields", "post", None),
+    ("kipi.core.solver.direct", "factorize", _thermal_factor, None),
     ("kipi.ac.solver.sweep", "build_ports", "ac_ports", None),
     ("kipi.ac.solver.field", "field_solves", "ac_field_solves", None),
     ("kipi.ac.solver.field", "threads", None, _after_field_threads),
