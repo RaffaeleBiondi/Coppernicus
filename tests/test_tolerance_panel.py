@@ -181,6 +181,26 @@ def test_a_kicad_fields_rail_is_held_by_a_mirror_that_raises_no_warning():
     assert not _merge(fresh).warnings
 
 
+def test_a_copy_of_the_fields_parts_flags_no_result_whatever_the_order_of_the_rails():
+    """The merge lists the project's rails first, then the fields-only ones by net: a copy
+    holding a tolerance on VCC moves it ahead of AAA. Nothing solved changed, so neither the
+    Impedance nor the Ripple & noise key may change."""
+    from coppernicus.app.ac_panel import _project_key as ac_key
+    from coppernicus.app.noise_panel import project_key as noise_key
+    from coppernicus.app.tolerance_panel import set_value
+    fields = {**FIELDS, "J2": {"PI_RAIL": "AAA", "PI_SOURCE": "5V"},
+              "U3": {"PI_RAIL": "AAA", "PI_LOAD": "2A"}}
+    pads = {**PADS, "J2": {"1": "AAA"}, "U3": {"1": "AAA"}}
+    own = Project()
+    merged = BF.merge(own, fields, pads)
+    assert [r.net for r in merged.project.rails] == ["AAA", "VCC"]
+    keys = ac_key(merged.project), noise_key(merged.project)
+    set_value(own, merged, "load", "VCC", 0, "tol_pct", "5")
+    again = BF.merge(own, fields, pads)
+    assert [r.net for r in again.project.rails] == ["VCC", "AAA"] and not again.warnings
+    assert (ac_key(again.project), noise_key(again.project)) == keys
+
+
 def test_a_fields_rail_edit_goes_to_the_project_part_of_its_ref_or_is_read_only_without_one():
     from coppernicus.app.tolerance_panel import edit_rows, set_value
     # The project's own VCC differs from the fields (U1 at 2 A, an extra U9): ignored, warned.

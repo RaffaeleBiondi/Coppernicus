@@ -62,10 +62,14 @@ ATTENTION_COLOR = "#9a6700"
 
 def without_tolerances(d: Dict) -> Dict:
     """A project's ``to_dict()`` without what no solve reads (Task 11): the loads' tolerances
-    and entered parts, the sources' DC accuracy and the ``tolerance:`` options. For the keys
-    that tell when a held result no longer matches the project: typing a tolerance never makes
-    a result stale. Changes ``d`` and returns it."""
+    and entered parts, the sources' DC accuracy and the ``tolerance:`` options; its rails in
+    net order (the merge lists the project's rails before the fields-only ones, so a copy of
+    the KiCad fields' parts holding a tolerance moves its rail). For the keys that tell when a
+    held result no longer matches the project: typing a tolerance never makes a result stale.
+    Changes ``d`` and returns it."""
     d.pop("tolerance", None)
+    if "rails" in d:
+        d["rails"] = sorted(d["rails"], key=lambda r: str(r.get("net", "")))
     for rail in d.get("rails", []):
         for key, names in (("sources", SOURCE_ACCURACY_KEYS),
                            ("loads", LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS)):
