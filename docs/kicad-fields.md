@@ -48,6 +48,14 @@ Every field is optional; a part without `PI_*` fields is not touched.
 | `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its switching frequency (`Hz`, `kHz`, `MHz`): kept, not used yet. |
 | `PI_SOURCE_REF` | `L1`, `BT1,BT5` | source | The part(s) whose pads hold the rail, when not this part: an external-inductor buck's inductor, or several cell holders in parallel, which make **one** terminal, every pad at the source voltage. `PI_PINS` then takes `REF.PAD` entries (`BT1.1,BT5.1`), or a pad for every listed part. |
 | `PI_GND_REF` | `BT4` | source, load | The part whose pads are the ground pins on `PI_GND`, when not this part (one part). |
+| `PI_TOL` | `5%`, `-3%,+5%`, `50mV` | load | Its supply tolerance, the whole band, for the [tolerance stack-up](#tolerances-and-accuracy): `%` of nominal or `mV` from it. |
+| `PI_DC_TOL`, `PI_AC_TOL` | `2%`, `-20mV,+30mV` | load | The band's DC share and AC share, the same way. |
+| `PI_ACC` | `1%`, `-1.5%,+2%` | source | Its DC accuracy (a regulator's reference, a supply's set point), the same way. |
+| `PI_C` | `10uF`, `100n` | capacitor | Its capacitance; without it, the footprint Value's. See [capacitor models](#capacitor-models). |
+| `PI_ESR` | `5mOhm`, `5m` | capacitor | Its ESR (`Ohm`, `mOhm`, `Ω`, `mΩ`, or `m` alone). |
+| `PI_ESL` | `0.5nH`, `0.5n` | capacitor | Its ESL (`nH`, `pH`, `uH`, or the prefix alone). |
+| `PI_VRATED` | `16V` | capacitor | Its rated voltage: the capacitance is derated for DC bias. Required with a class II dielectric. |
+| `PI_DIELECTRIC` | `X7R` | capacitor | `C0G` (or `NP0`), `X5R`, `X6S`, `X7R`, `X7S`, `X7T`, `X8R`, `Y5V`, `Z5U`, or `TANT`, `POLY`, `ALU` (not ceramic). |
 
 - **Several rails on one part** take one value per rail, by position, separated by `;`, in
   every per-rail field. An empty value skips that rail. A dual-output regulator:
@@ -85,6 +93,86 @@ Three shapes need the newer fields:
 Each worked example, field by field, is in
 [Agents → How to annotate a KiCad library](agents.md#how-to-annotate-a-kicad-library).
 
+### Capacitor models
+
+A capacitor's datasheet values belong on its **library symbol**: written once in the shared
+library, every board that places the part has them. A part named `C<number>` with these
+fields has a model (ESR + jω·ESL + 1/(jω·C)), used by the [PDN impedance](ac-impedance.md) and
+the [ripple and coupled noise](noise.md), as a project file's `capacitors:` model is.
+
+| Field | Units | Example | Required |
+|---|---|---|---|
+| `PI_ESR` | `Ohm`, `mOhm`, `Ω`, `mΩ`; or `m` alone | `5mOhm`, `5m` | yes |
+| `PI_ESL` | `H`, `uH`, `nH`, `pH`; or `u`, `n`, `p` alone | `0.5nH`, `0.5n` | yes |
+| `PI_DIELECTRIC` | one of the names below, any case | `X7R` | yes |
+| `PI_C` | `F`, `mF`, `uF`, `nF`, `pF`; or `u`, `n`, `p` alone | `10uF`, `100n` | no: else the footprint Value |
+| `PI_VRATED` | `V` | `16V` | with a class II dielectric |
+
+The dielectrics:
+
+- **Class I:** `C0G` (`NP0` is the same; `COG` and `NPO`, with the letter O, are read as it).
+  Its capacitance does not move with DC bias, so it needs no `PI_VRATED`.
+- **Class II ceramics:** `X5R`, `X6S`, `X7R`, `X7S`, `X7T`, `X8R`, `Y5V`, `Z5U`. They lose
+  capacitance under DC bias, so `PI_VRATED` is **required**: the capacitance is derated at the
+  rail's voltage with KiPI's typical curve (C/(1 + k·(V/V_rated)^1.5), 40 % kept at the rated
+  voltage, as for a project model without `kept_at_rated_pct`).
+- **Not ceramic:** `TANT` (tantalum), `POLY` (polymer: tantalum or aluminium), `ALU`
+  (aluminium electrolytic). No DC-bias loss: never derated; `PI_VRATED` is kept but not used.
+
+**Never a default.** A capacitor counts as modelled only with `PI_ESR`, `PI_ESL`,
+`PI_DIELECTRIC` and a readable capacitance, and with a class II dielectric also `PI_VRATED`.
+The capacitance is `PI_C`, else the footprint Value as KiPI reads it, but only when the Value
+gives its unit: `10u`, `4n7`, `100nF 16V` are read; `0.1` alone (read as µF only by
+convention) or `C_0402` are not. With anything missing the part has **no model**, as a part with
+no fields: the AC impedance leaves it out and does not judge its probes, the noise counts it as
+a stand-in and does not judge its victims. The reason names the part and what it lacks:
+
+```text
+C45: PI_ESR missing
+C12: X7R without PI_VRATED: capacitance not derated for DC bias
+C3: no capacitance: no PI_C, and the footprint Value "0.1" has no unit (set PI_C, e.g. 100nF, or write the unit in the Value)
+```
+
+A value that cannot be read (`5` without a unit, `0mOhm`, an unknown dielectric) stops the run,
+as every other field does. Fields on a part not named `C<number>` are not used, with a warning:
+KiPI models only those.
+
+**A worked example.** A 10 µF 0805 X7R capacitor, rated 16 V, 5 mΩ ESR and 0.5 nH ESL from its
+datasheet. On its library symbol `C_10u_0805_X7R_16V` (whose Value is `10u`):
+
+| Where | Fields |
+|---|---|
+| Library symbol | `PI_ESR=5mOhm`, `PI_ESL=0.5nH`, `PI_DIELECTRIC=X7R`, `PI_VRATED=16V` |
+| Placed C21, C22, C23 | nothing |
+
+Every placed copy has the model: 10 µF from the Value, the rest from the fields. On a 3.3 V
+rail KiPI's typical curve derates it to 8.77 µF. Leave out `PI_VRATED` and the three parts have no model: the
+probes on their rail are not judged, and each reason says `C21: X7R without PI_VRATED:
+capacitance not derated for DC bias`. A Value written `10` would give no capacitance either:
+add `PI_C=10uF`, or write `10u`.
+
+### Tolerances and accuracy
+
+A load's supply tolerance and a regulator's accuracy are datasheet values too, for the
+[tolerance stack-up](tolerance.md). `PI_TOL`, `PI_DC_TOL` and `PI_AC_TOL` (a load's) give its
+`tol_*`, `dc_tol_*` and `ac_tol_*`; `PI_ACC` (a source's) gives its `accuracy_*`:
+
+- `5%` or `±5%`: ± 5 % of nominal; `50mV`: ± 50 mV from nominal;
+- `-3%,+5%`: 3 % below and 5 % above, as datasheets write it (below ≤ 0 ≤ above, one unit for
+  both; a comma separates them, so decimals take a dot: `-2.5%,+1%`).
+
+They are part data like `PI_KIND`: one value applies to every rail where the part is a load
+(a source, for `PI_ACC`), or give one per rail with `;` (`PI_TOL=5%;3%`). Without `PI_RAIL`
+they still reach the part's load (or source) on a project-file rail, by part: a chip's
+library symbol `PI_TOL=3%` applies wherever the project file lists it. An external-inductor
+buck's `PI_ACC` sits on the IC, the part whose fields describe the source. A load without
+`PI_TOL` has no tolerance (nothing to judge); a source without `PI_ACC` leaves its accuracy
+missing (not judged).
+
+A chip's tolerance goes on its library symbol. A **fixed-output** regulator's accuracy goes on
+its library symbol, with `PI_VOUT`; an **adjustable** one's depends on the board's divider and
+reference, so it goes on the placed symbol, with `PI_SOURCE`.
+
 A net with a `PI_SOURCE` and a `PI_LOAD` is a rail. So is a net whose source feeds a
 regulator's input or a link: it draws their current. Loads behind a ferrite (`PI_LINK`) or on
 a net joined by a net tie belong to the driven net's group. The details, with every edge case,
@@ -96,14 +184,16 @@ Some fields say what a part **is**, the same on every board; the others say **wh
 on this one. The KiCad 9 manual describes the two places:
 
 - **The library symbol** (Symbol Editor): `PI_KIND`, `PI_EFF`, `PI_IQ`, `PI_VOUT`, `PI_IMAX`,
-  `PI_FSW`. A symbol placed in the
+  `PI_FSW`; a chip's `PI_TOL`, `PI_DC_TOL`, `PI_AC_TOL`; a fixed-output regulator's `PI_ACC`; a
+  capacitor's `PI_C`, `PI_ESR`, `PI_ESL`, `PI_VRATED`, `PI_DIELECTRIC`. A symbol placed in the
   schematic takes a copy of the library symbol. Later changes to the library are not applied
   to symbols already placed; **Tools → Update Symbols from Library…** brings them in, with a
   choice of which fields to update.
 - **The symbol in the schematic** (its properties, on that one placement): `PI_RAIL`,
   `PI_SOURCE`, `PI_SOURCE_REF`, `PI_LOAD`, `PI_PINS`, `PI_LIMIT_DROP`, `PI_INPUT`,
-  `PI_INPUT_PINS`, `PI_GND`, `PI_GND_PINS`, `PI_GND_REF`, `PI_LINK`, `PI_LINK_PINS`. Editing a
-  placed symbol changes only that instance, not the library.
+  `PI_INPUT_PINS`, `PI_GND`, `PI_GND_PINS`, `PI_GND_REF`, `PI_LINK`, `PI_LINK_PINS`; an
+  adjustable regulator's `PI_ACC`. Editing a placed symbol changes only that instance, not the
+  library (a field set on both is the placed symbol's).
 
 Then run **Tools → Update PCB from Schematic…** (F8). In the manual's words, "all symbol
 fields will be added to the symbol's corresponding footprint when the PCB is updated from the
@@ -144,6 +234,17 @@ file gives what fields cannot carry and lets you try something else.
   part), and limits other than the drop.
 - **Links:** a `PI_LINK` part replaces a project link on the same part, with a warning when
   they differ.
+- **Tolerances and accuracy:** a part's `PI_TOL`, `PI_DC_TOL`, `PI_AC_TOL` or `PI_ACC` wins
+  over the project's value for the same part (its `tol_*`, `dc_tol_*`, `ac_tol_*` or
+  `accuracy_*`, in % or mV), with a warning when they differ, on the fields' rails and on the
+  project's. A project rail with `override_board_fields: true` keeps the project's. What the
+  fields do not give (`ripple_mv`, `transient_mv`, or a tolerance the part has no field for) is
+  carried over from the project file by part, and the assumptions say so.
+- **Capacitor models:** a capacitor whose fields give a complete model takes it: a project
+  `capacitors:` model that names it is ignored for that part, with a warning listing the
+  differences (none when they agree). `override_board_fields: true` on that **model** keeps the
+  project's. Partial fields leave the project's model in use, with a warning naming what the
+  fields lack.
 - **Turning the fields off:** `use_board_fields: false` in the project file,
   `--no-board-fields` on `coppernicus solve`, or **Project → Use KiCad footprint fields** in the
   app.
@@ -161,7 +262,10 @@ values are the fields'. Hover a value to see the field it came from.
 ## Listing and proposing fields
 
 `coppernicus fields BOARD` lists a board's `PI_*` fields and the rails they make, as above
-(`--json` for scripts). A rail is listed complete exactly when a solve of the fields alone
+(`--json` for scripts), each capacitor's model or what it lacks
+(`Capacitor C21: 10 µF, ESR 5 mΩ, ESL 500 pH, X7R, rated 16 V`, or
+`Capacitor C45: no model: C45: PI_ESR missing`), and the parts whose tolerance fields have no
+`PI_RAIL`. A rail is listed complete exactly when a solve of the fields alone
 would take it, links and the board's net ties included: loads behind a ferrite, or a battery
 that only feeds links towards a regulator's input, are complete, and the note says what
 completes them ("Complete without a source of its own: link FB1 joins it to +3V3, driven by
@@ -191,9 +295,18 @@ U4
 not expressed (rail +1V8 U2): remote sense (sense, ground_sense): keep it in the project file; fields cannot carry it; it is not proposed
 ```
 
+A load's tolerances become `PI_TOL`, `PI_DC_TOL`, `PI_AC_TOL` on its library symbol; a
+source's accuracy becomes `PI_ACC` beside its `PI_SOURCE` on the instance (move both, as
+`PI_VOUT` and `PI_ACC`, to the library symbol of a fixed-output part). Each part of a
+`capacitors:` model gets its library fields, `PI_C` always (the proposal does not know the
+footprint Value; drop it where the Value gives the capacitance with its unit). A model the
+fields would leave without one (an ESR, ESL or capacitance not entered, no dielectric, a class
+II one without `rated_v`) is not proposed.
+
 The proposal is checked by reading it back: it gives the project's rails again. What fields
 cannot carry is listed as *not expressed*: remote sense, terminal names, the limits other than
-the drop, `follow_net_ties: false`. A rail that would need input or ground pins on another
+the drop, `follow_net_ties: false`, `ripple_mv` and `transient_mv`, a capacitor model's
+`kept_at_rated_pct`. A rail that would need input or ground pins on another
 part, or a link that does not use all of its part's pads, is not proposed at all, since a
 wrong field would stop every run. A rail's `max_drop_pct` becomes `PI_LIMIT_DROP` on its first
 source.

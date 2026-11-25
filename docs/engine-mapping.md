@@ -642,7 +642,29 @@ Unknown keys in a probe or a capacitor model are refused, as in `ac:`.
 | `rated_v` | same | V | none | Turns on KiPI's DC-bias derating at the source's set voltage (no DC result is passed): C/(1 + k(V/V_rated)^1.5) (model.py:96-102). Not for C0G. |
 | `kept_at_rated_pct` | same | % | none → KiPI's 40 | 0 < x ≤ 100. The assumption says when KiPI's typical value is used. |
 | `dielectric` | same | — | `""` | "C0G" (no bias), and the typical temperature curve when `copper_temp_c` ≠ 20 °C. |
+| `override_board_fields` | — | — | `false` | Keep this model for its refs even where their KiCad fields give a complete model (below). Saved only when on. |
 | — | `aging_pct_per_decade`, `mfg_tolerance_pct`, `spice` | — | off | Not kept; `read_cap_file` (a KiPI model file, cap_file.py) warns when it drops one. |
+
+**From KiCad library fields** (`board_fields.field_caps`, merged by `board_fields.merge`). A part
+`C<n>` with `PI_ESR`, `PI_ESL`, `PI_DIELECTRIC` and a capacitance, and with a class II dielectric
+`PI_VRATED`, becomes one `CapModel` named "C21 (KiCad)" with `refs: [C21]`:
+
+| Field | `CapModel` | Notes |
+|---|---|---|
+| `PI_C`, else the footprint Value | `capacitance_f` | The Value through KiPI's `parse_capacitance` (parts.py:52-69), read in `engine.kicad_fields` (`BoardFields.values`, `.farads`) only when the text gives its unit: KiPI reads a bare `0.1` as µF, a guessed unit, so it gives no capacitance here. |
+| `PI_ESR`, `PI_ESL` | `esr_ohm`, `esl_h` | > 0 (`FieldError` otherwise: KiPI refuses 0). |
+| `PI_DIELECTRIC` | `dielectric` | Normalised: `NP0`, `COG`, `NPO` → "C0G" (KiPI spares only that exact name from the derating, model.py:86, and keys its curves by it); class II `X5R`, `X6S`, `X7R`, `X7S`, `X7T`, `X8R`, `Y5V`, `Z5U`; `TANT`, `POLY`, `ALU` (no KiPI curve). |
+| `PI_VRATED` | `rated_v` | Not passed for `TANT`, `POLY`, `ALU` (no DC-bias loss; KiPI would derate any rated model but C0G). |
+| — | `kept_at_rated_pct` | None: KiPI's 40, stated by the DC-bias assumption line as for a project model. No field. |
+
+Partial fields give no model (never a default): the merged project's `capacitor_gaps` (not
+saved) maps the part to what it lacks, `ImpedanceResult.cap_gaps` carries those of the rail's
+`missing_caps`, and the probe's not-judged reason, the AC "Capacitors:" assumption and the
+noise stand-in "capacitors on the converter's rails without a model" append "(their KiCad fields
+give no model: C45: PI_ESR missing)". Precedence: a complete fields model takes the ref from a
+project model (a warning listing the differences, none when they agree), unless that model sets
+`override_board_fields`; partial fields keep the project's model (a warning). Each ref stays in
+one model and model names stay unique, as KiPI requires (checks.py:139-152).
 
 ### AcOptions → `ACSettings` and the rail's VRM (new: `ac:`; keys omitted at their default)
 
@@ -1145,11 +1167,11 @@ completeness: a part KiPI counts as a known 0 is **missing** here (§ Known limi
 
 | Coppernicus | KiPI | Unit | Notes |
 |---|---|---|---|
-| `Load.tol_pct` / `tol_mv` | `Load.tol_min`, `tol_max`, `tol_pct` (or `tol_dv`, ÷1000) | % of nominal / mV from it | The whole band. A number `n` is ± n; a signed pair `[below, above]` as datasheets write it (`[-5, 3]`). Below ≤ 0 and above ≥ 0 (Coppernicus's rule, `ProjectError`; KiPI has none). 0 is a value. A `_pct` with its `_mv`: `ProjectError`. |
-| `Load.dc_tol_pct` / `dc_tol_mv` | `dc_tol_*` | same | The DC share (dc/pi/model.py:197-211; KiPI's own model says "nothing reads them yet": only the tolerance stack-up does). |
-| `Load.ac_tol_pct` / `ac_tol_mv` | `ac_tol_*` | same | The AC share. Independent of `Probe.ac_tolerance_v` (T9's impedance target, brief Q9): see below. |
+| `Load.tol_pct` / `tol_mv` | `Load.tol_min`, `tol_max`, `tol_pct` (or `tol_dv`, ÷1000) | % of nominal / mV from it | The whole band. A number `n` is ± n; a signed pair `[below, above]` as datasheets write it (`[-5, 3]`). Below ≤ 0 and above ≥ 0 (Coppernicus's rule, `ProjectError`; KiPI has none). 0 is a value. A `_pct` with its `_mv`: `ProjectError`. KiCad field `PI_TOL` (`5%`, `-3%,+5%`, `50mV`; `FieldError` for the same faults). |
+| `Load.dc_tol_pct` / `dc_tol_mv` | `dc_tol_*` | same | The DC share (dc/pi/model.py:197-211; KiPI's own model says "nothing reads them yet": only the tolerance stack-up does). KiCad field `PI_DC_TOL`. |
+| `Load.ac_tol_pct` / `ac_tol_mv` | `ac_tol_*` | same | The AC share. Independent of `Probe.ac_tolerance_v` (T9's impedance target, brief Q9): see below. KiCad field `PI_AC_TOL`. |
 | `Load.ripple_mv`, `Load.transient_mv` | — (a `Contribution` accepted in KiPI's table) | mV from nominal, below / above | Entered parts (a datasheet or measured figure), same format and sign rule, in volts' direction (below = more negative). |
-| `Source.accuracy_pct` / `accuracy_mv` | `Vrm.acc_min`, `acc_max`, `acc_pct` (or `acc_dv`) | % / mV | Any source kind. Read through KiPI's own `Vrm.accuracy_sides()` (model.py:171-177). |
+| `Source.accuracy_pct` / `accuracy_mv` | `Vrm.acc_min`, `acc_max`, `acc_pct` (or `acc_dv`) | % / mV | Any source kind. Read through KiPI's own `Vrm.accuracy_sides()` (model.py:171-177). KiCad field `PI_ACC`. |
 | `tolerance: {ripple_sum, bw_limit_20mhz}` | `stack(…, bw)`; KiPI's ripple is always RSS | — | `ripple_sum: linear` (default) or `rss` (brief Q3); `bw_limit_20mhz: false` (default, brief Q4). Unknown keys: `ProjectError`. Omitted at the defaults. |
 
 Validation runs in `__post_init__`, so a `Load` or `Source` made by the app is checked as one
@@ -1163,12 +1185,22 @@ tolerance key: `acuracy_pct`) is a warning, "Load U2 on VOUT: unknown key 'tol_p
 file, ignored: did you mean 'tol_pct'?", in the result and the summary, and a not-judged entry
 `{item, net, limit: the misspelt key, reason}`: a typo never ends in a silent pass.
 
-**KiCad-fields rails** (ruling a). No KiCad field holds these yet (PI_ACC / PI_TOL later, the
-owner's call). A rail taken from the board's footprint fields replaces the project's terminals;
-`board_fields._from_fields` carries back by ref, as it does remote sense, the loads' `tol_*`,
-`dc_tol_*`, `ac_tol_*`, `ripple_mv`, `transient_mv` and the sources' `accuracy_*`, each with the
-note "Rail VCC: tol_pct, transient_mv of U1 from the project file (no KiCad field holds them
-yet)." A part the fields' rail lacks loses them: `coppernicus tolerance` warns, each tolerance
+**KiCad fields** (ruling a; the owner's fields decision). `PI_TOL`, `PI_DC_TOL`, `PI_AC_TOL`
+(a load's) and `PI_ACC` (a source's) give these keys (`board_fields.tolerance`: one value ± that,
+or `below,above`, in % or mV). On a rail taken from the board's footprint fields they are read
+per rail position (one value for every rail where the part is a load or a source, or one per
+rail). That rail replaces the project's terminals; `board_fields._from_fields` carries back by
+ref, as it does remote sense, what the part's fields do not give: the loads' `tol_*`,
+`dc_tol_*`, `ac_tol_*` of a family without its field, `ripple_mv`, `transient_mv` (no field) and
+the sources' `accuracy_*`, each with the note "Rail VCC: ripple_mv, transient_mv of U1 from the
+project file (the part's KiCad fields do not give them)." Where the field gives a family, it
+wins, with a warning when the project's value differs ("KiCad field PI_TOL "5%" on U1 gives
+tol_pct ±5 % for U1 on VCC; the project file's tol_mv ±40 mV is not used (set
+override_board_fields: true on the rail to use the project's)"). On a project-file rail (one the
+fields do not define, or leave incomplete) the same fields reach its terminals by part
+(`_library_tolerances`; a source's on `_source_part`, an external-inductor buck's IC), with the
+same warning; a rail with `override_board_fields` keeps the project's. A part the fields' rail
+lacks loses the project's values: `coppernicus tolerance` warns, each tolerance
 the user set on such a load is a not-judged entry (exit 3, never a silent pass), and an accuracy
 entered for a source it lacks is said lost ("J5's accuracy_pct in the project file was lost:
 rail VCC comes from the board's KiCad footprint fields, whose source is J1 …"), not "enter it".
