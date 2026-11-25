@@ -24,6 +24,10 @@ terminal's own part. See ``docs/engine-mapping.md`` for how the engine reads the
 The AC impedance solve (Task 9) adds ``probes`` (where |Z|(f) is looked into, with an optional
 target), ``capacitors`` (RLC models of the parts) and ``ac`` (the sweep, each source's control
 loop bandwidth, each link's series inductance), each omitted while empty or at its default.
+
+The DC-DC noise solve (Task 10) adds ``aggressors`` (switchers: switching frequency, edges,
+phases, ripple probes), ``victims`` (signal nets, their driver, receiver, type and noise
+margin) and ``noise`` (the solve's options), each omitted while empty or at its default.
 """
 
 from __future__ import annotations
@@ -600,6 +604,374 @@ def check_ac(probes: Sequence[Probe], capacitors: Sequence[CapModel],
                                "pins go on the ground")
 
 
+# ---------------------------------------------------------------------- noise (Task 10)
+
+# KiPI's choices (kipi/noise/model.py:22-25, :153-174); a test checks they match.
+NOISE_TOPOLOGIES = ("auto", "buck", "boost")
+INDUCTOR_AXES = ("vertical", "along", "across")
+VICTIM_PRESETS = ("cmos", "open_drain", "series", "parallel", "lvds", "analog", "hiz")
+CUSTOM_PRESET = "custom"
+# A victim's terminations: written only for a "custom" victim (a named preset has its own).
+TERMINATION_KEYS = ("driver_ohm", "receiver_ohm", "receiver_pf", "termination_ohm", "driver_low_ohm")
+CUSTOM_REQUIRED = ("driver_ohm", "receiver_ohm", "receiver_pf")
+
+
+@dataclass
+class Phase:
+    """One phase of a switching regulator (an aggressor): its power inductor, the switch
+    node, the switching device's pins on the rail its hot loop is fed from (``high_side``:
+    VIN for a buck, the output for a boost) and on its power ground (``low_side``), and the
+    hot-loop capacitors. The device data are optional: empty, KiPI's stand-ins are used and
+    the victims are not judged (Coss, Qrr; ``qrr_nc`` 0 is entered: a Schottky or GaN low
+    side). Filled from the board only by an explicit action, never at solve."""
+    inductor: str = ""
+    inductance_h: float = 0.0                 # > 0 to solve; 0 = not entered
+    dcr_ohm: float = 0.0
+    switch_net: str = ""
+    high_side_ref: str = ""
+    high_side_pins: PinSpec = None
+    high_side_net: str = ""
+    low_side_ref: str = ""
+    low_side_pins: PinSpec = None
+    low_side_net: str = ""
+    input_caps: List[str] = field(default_factory=list)
+    output_caps: List[str] = field(default_factory=list)
+    coss_f: Optional[float] = None
+    qrr_nc: Optional[float] = None            # nC (``_c`` is °C in this file)
+    rds_on_hs_ohm: Optional[float] = None
+    rds_on_ls_ohm: Optional[float] = None
+    package_l_h: float = 0.0
+    inductor_axis: str = "vertical"
+    inductor_shielded: bool = True
+
+
+@dataclass
+class Aggressor:
+    """A switching regulator as a noise source: the switcher source ``vrm`` (its engine
+    name, as the source combo lists them), its switching frequency and edges (required to
+    solve: the spectrum hangs on them), its phases, and the probes to show its ripple at.
+    ``vin_v``, ``duty`` and ``load_a`` empty: from the source feeding its input, the
+    voltages and losses, and the loads on its output."""
+    name: str
+    vrm: str = ""
+    topology: str = "auto"
+    fsw_hz: Optional[float] = None
+    rise_s: Optional[float] = None
+    fall_s: Optional[float] = None
+    vin_v: Optional[float] = None
+    duty: Optional[float] = None
+    load_a: Optional[float] = None
+    ripple_probes: List[str] = field(default_factory=list)
+    phases: List[Phase] = field(default_factory=list)
+    min_ring_zeta: float = 0.05               # KiPI's floors (kipi/noise/model.py:87, :91)
+    soft_edge_zeta: float = 0.5
+
+
+@dataclass
+class Victim:
+    """A signal net the aggressors' noise couples onto, between its driver and receiver
+    (pins of a part on ``net``; empty: KiPI guesses them, and it is not judged). ``preset``
+    is one of VICTIM_PRESETS or "custom", whose terminations are then given here. Its noise
+    margin is ``noise_margin_v``, else the preset's own (lvds, analog), else the logic levels
+    of ``logic_v``; with none of them it is ranked, never judged."""
+    net: str
+    name: str = ""                            # "" = the net's name
+    preset: str = ""
+    driver_ref: str = ""
+    driver_pins: PinSpec = None
+    receiver_ref: str = ""
+    receiver_pins: PinSpec = None
+    driver_ohm: Optional[float] = None
+    receiver_ohm: Optional[float] = None
+    receiver_pf: Optional[float] = None
+    termination_ohm: Optional[float] = None
+    driver_low_ohm: Optional[float] = None
+    logic_v: Optional[float] = None
+    noise_margin_v: Optional[float] = None
+
+    @property
+    def label(self) -> str:
+        return self.name or self.net
+
+
+@dataclass
+class NoiseOptions:
+    """The noise solve (``noise:`` in the project file). Defaults are KiPI's
+    ``NoiseSettings`` (kipi/noise/model.py:244-264); keys at their default are omitted."""
+    f_max_hz: Optional[float] = None          # None: from the edges and the ringing, ≤ 3 GHz
+    max_harmonics: int = 4000
+    dead_time_ns: float = 20.0
+    segment_mm: float = 0.5
+    window_mm: float = 3.0
+    board_model: bool = True
+    field_per_decade: int = 10
+
+
+AGGRESSOR_KEYS = ("name", "vrm", "topology", "fsw_hz", "rise_s", "fall_s", "vin_v", "duty", "load_a",
+                  "ripple_probes", "phases", "min_ring_zeta", "soft_edge_zeta")
+PHASE_KEYS = ("inductor", "inductance_h", "dcr_ohm", "switch_net", "high_side", "low_side",
+              "input_caps", "output_caps", "coss_f", "qrr_nc", "rds_on_hs_ohm", "rds_on_ls_ohm",
+              "package_l_h", "inductor_axis", "inductor_shielded")
+VICTIM_KEYS = ("net", "name", "preset", "driver", "receiver", *TERMINATION_KEYS, "logic_v",
+               "noise_margin_v")
+
+
+def _nested_keys(d: Dict[str, Any], keys: Sequence[str], what: str, owner: str) -> None:
+    unknown = [str(k) for k in d if k not in keys]
+    if unknown:
+        raise ValueError(f"{owner}: unknown {what} key {', '.join(unknown)} (the keys: "
+                         f"{', '.join(keys)})")
+
+
+def _at_least(value: Any, what: str, low: float = 0.0) -> float:
+    """A finite number, at least ``low``."""
+    x = _number(value, what) if not isinstance(value, bool) else math.nan
+    if not x >= low:
+        raise ValueError(f"{what} must be a number of at least {low:g}, not {value!r}")
+    return x
+
+
+def _names(value: Any, what: str) -> List[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{what} must be a list of names, not {value!r}")
+    return [str(x).strip() for x in value if str(x).strip()]
+
+
+def _part_pins(d: Dict[str, Any], what: str, owner: str, with_net: bool) -> Dict[str, Any]:
+    """``{ref, pins}`` (and ``net`` with ``with_net``) of a phase's or victim's pin
+    reference, as ``{what}_ref``/``_pins``/``_net`` fields; the part is required."""
+    value = d.get(what)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{owner}: {what} must be a mapping {{ref, pins}}, not {value!r}")
+    keys = ("ref", "net", "pins") if with_net else ("ref", "pins")
+    _nested_keys(value, keys, what, owner)
+    ref = str(value.get("ref") or "").strip()
+    if not ref:
+        raise ValueError(f"{owner}: {what} needs its part (ref)")
+    out = {f"{what}_ref": ref, f"{what}_pins": parse_pins(value.get("pins"))}
+    if with_net:
+        net = str(value.get("net") or "").strip()
+        if not net:
+            raise ValueError(f"{owner}: {what} needs its net")
+        out[f"{what}_net"] = net
+    return out
+
+
+def _phase_in(d: Any, owner: str) -> Phase:
+    if not isinstance(d, dict):
+        raise ValueError(f"{owner}: each phase must be a mapping, not {d!r}")
+    _nested_keys(d, PHASE_KEYS, "phase", owner)
+    out: Dict[str, Any] = {}
+    for key in ("inductor", "switch_net"):
+        out[key] = str(d.get(key) or "").strip()
+    for key in ("inductance_h", "dcr_ohm", "package_l_h"):
+        if d.get(key) is not None:
+            out[key] = _at_least(d[key], f"{owner}: {key}")
+    for key in ("coss_f",):
+        out[key] = _positive(d.get(key), f"{owner}: {key}")
+    for key in ("qrr_nc", "rds_on_hs_ohm", "rds_on_ls_ohm"):
+        out[key] = None if d.get(key) is None else _at_least(d[key], f"{owner}: {key}")
+    axis = d.get("inductor_axis", "vertical")
+    if axis not in INDUCTOR_AXES:
+        raise ValueError(f"{owner}: inductor_axis must be one of {', '.join(INDUCTOR_AXES)}, "
+                         f"not {axis!r}")
+    shielded = d.get("inductor_shielded", True)
+    if not isinstance(shielded, bool):
+        raise ValueError(f"{owner}: inductor_shielded must be true or false, not {shielded!r}")
+    return Phase(**out, input_caps=_names(d.get("input_caps"), f"{owner}: input_caps"),
+                 output_caps=_names(d.get("output_caps"), f"{owner}: output_caps"),
+                 inductor_axis=axis, inductor_shielded=shielded,
+                 **_part_pins(d, "high_side", owner, True), **_part_pins(d, "low_side", owner, True))
+
+
+def _aggressor_in(d: Any) -> Aggressor:
+    if not isinstance(d, dict):
+        raise ValueError(f"each aggressor must be a mapping, not {d!r}")
+    name = str(d.get("name") or "").strip()
+    if not name:
+        raise ValueError("each aggressor needs a name")
+    owner = f"aggressor {name}"
+    _known_keys(d, AGGRESSOR_KEYS, "aggressor", name)
+    topology = d.get("topology", "auto")
+    if topology not in NOISE_TOPOLOGIES:
+        raise ValueError(f"{owner}: topology must be one of {', '.join(NOISE_TOPOLOGIES)}, "
+                         f"not {topology!r}")
+    values: Dict[str, Any] = {k: _positive(d.get(k), f"{owner}: {k}")
+                              for k in ("fsw_hz", "rise_s", "fall_s", "vin_v")}
+    duty = d.get("duty")
+    if duty is not None:
+        duty = _number(duty, f"{owner}: duty") if not isinstance(duty, bool) else math.nan
+        if not 0 < duty < 1:
+            raise ValueError(f"{owner}: duty is a fraction between 0 and 1 (both excluded), "
+                             f"not {d.get('duty')!r}")
+    load = None if d.get("load_a") is None else _at_least(d["load_a"], f"{owner}: load_a")
+    for key in ("min_ring_zeta", "soft_edge_zeta"):
+        if key in d:
+            values[key] = _positive(d[key], f"{owner}: {key}", False)
+    phases = d.get("phases") or []
+    if not isinstance(phases, list):
+        raise ValueError(f"{owner}: phases must be a list")
+    return Aggressor(name=name, vrm=str(d.get("vrm") or "").strip(), topology=topology,
+                     duty=duty, load_a=load,
+                     ripple_probes=_names(d.get("ripple_probes"), f"{owner}: ripple_probes"),
+                     phases=[_phase_in(ph, f"{owner}, phase {i}") for i, ph in enumerate(phases, 1)],
+                     **values)
+
+
+def _victim_in(d: Any) -> Victim:
+    if not isinstance(d, dict):
+        raise ValueError(f"each victim must be a mapping, not {d!r}")
+    net = str(d.get("net") or "").strip()
+    if not net:
+        raise ValueError("each victim needs its net")
+    name = str(d.get("name") or "").strip()
+    owner = f"victim {name or net}"
+    _known_keys(d, VICTIM_KEYS, "victim", name or net)
+    preset = str(d.get("preset") or "").strip()
+    if preset not in (*VICTIM_PRESETS, CUSTOM_PRESET):
+        raise ValueError(f"{owner}: preset (the line's type) must be one of "
+                         f"{', '.join(VICTIM_PRESETS)} or {CUSTOM_PRESET}, not {preset or 'missing'}")
+    given = [k for k in TERMINATION_KEYS if d.get(k) is not None]
+    if given and preset != CUSTOM_PRESET:
+        raise ValueError(f"{owner}: {', '.join(given)} given with preset {preset}, which has its "
+                         f"own terminations: set preset {CUSTOM_PRESET} to enter them")
+    missing = [k for k in CUSTOM_REQUIRED if d.get(k) is None]
+    if preset == CUSTOM_PRESET and missing:
+        raise ValueError(f"{owner}: a {CUSTOM_PRESET} victim needs {', '.join(missing)}")
+    values: Dict[str, Any] = {}
+    for key in ("driver_ohm", "receiver_ohm", "termination_ohm", "driver_low_ohm", "logic_v",
+                "noise_margin_v"):
+        values[key] = _positive(d.get(key), f"{owner}: {key}")
+    if d.get("receiver_pf") is not None:
+        values["receiver_pf"] = _at_least(d["receiver_pf"], f"{owner}: receiver_pf")
+    return Victim(net=net, name="" if name == net else name, preset=preset, **values,
+                  **_part_pins(d, "driver", owner, False), **_part_pins(d, "receiver", owner, False))
+
+
+def _noise_options_in(d: Any) -> NoiseOptions:
+    if not isinstance(d, dict):
+        raise ValueError("noise must be a mapping of noise options")
+    default = NoiseOptions()
+    unknown = sorted(str(k) for k in set(d) - set(vars(default)))
+    if unknown:
+        raise ValueError(f"unknown noise option {', '.join(unknown)} (the options: "
+                         f"{', '.join(vars(default))})")
+    out: Dict[str, Any] = {}
+    if "f_max_hz" in d:
+        out["f_max_hz"] = _positive(d["f_max_hz"], "noise f_max_hz")
+    for key in ("segment_mm", "window_mm"):
+        if key in d:
+            out[key] = _positive(d[key], f"noise {key}", False)
+    if "dead_time_ns" in d:
+        out["dead_time_ns"] = _at_least(d["dead_time_ns"], "noise dead_time_ns")
+    for key in ("max_harmonics", "field_per_decade"):
+        if key in d:
+            v = d[key]
+            if (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                    or v != int(v) or v < 1):
+                raise ValueError(f"noise {key} must be a whole number, at least 1, not {v!r}")
+            out[key] = int(v)
+    if "board_model" in d:
+        out["board_model"] = _flag(d, "board_model", True)
+    return NoiseOptions(**out)
+
+
+def _noise_in(data: Dict[str, Any]) -> Dict[str, Any]:
+    """``aggressors``, ``victims`` and ``noise`` of a project file, checked."""
+    aggressors = data.get("aggressors") or []
+    victims = data.get("victims") or []
+    if not isinstance(aggressors, list) or not isinstance(victims, list):
+        raise ValueError("aggressors and victims must be lists")
+    aggressors = [_aggressor_in(a) for a in aggressors]
+    victims = [_victim_in(v) for v in victims]
+    for what, names in (("aggressor", [a.name for a in aggressors]),
+                        ("victim", [v.label for v in victims])):
+        twice = sorted({n for n in names if names.count(n) > 1})
+        if twice:
+            raise ValueError(f"{what} names must be unique: {', '.join(twice)} (a victim's name "
+                             "is its net unless one is given)" if what == "victim" else
+                             f"{what} names must be unique: {', '.join(twice)}")
+    return {"aggressors": aggressors, "victims": victims,
+            "noise": _noise_options_in(data.get("noise") or {})}
+
+
+def _phase_out(ph: Phase) -> Dict[str, Any]:
+    d: Dict[str, Any] = {}
+    for key in ("inductor", "inductance_h", "dcr_ohm", "switch_net"):
+        if getattr(ph, key):
+            d[key] = getattr(ph, key)
+    for what in ("high_side", "low_side"):
+        if getattr(ph, f"{what}_net"):
+            d[what] = _pin_ref_out(getattr(ph, f"{what}_ref"), getattr(ph, f"{what}_pins"),
+                                   getattr(ph, f"{what}_net"))
+    for key in ("input_caps", "output_caps"):
+        if getattr(ph, key):
+            d[key] = list(getattr(ph, key))
+    for key in ("coss_f", "qrr_nc", "rds_on_hs_ohm", "rds_on_ls_ohm"):   # 0 is entered
+        if getattr(ph, key) is not None:
+            d[key] = getattr(ph, key)
+    if ph.package_l_h:
+        d["package_l_h"] = ph.package_l_h
+    if ph.inductor_axis != "vertical":
+        d["inductor_axis"] = ph.inductor_axis
+    if not ph.inductor_shielded:
+        d["inductor_shielded"] = False
+    return d
+
+
+def _aggressor_out(a: Aggressor) -> Dict[str, Any]:
+    d: Dict[str, Any] = {"name": a.name}
+    if a.vrm:
+        d["vrm"] = a.vrm
+    if a.topology != "auto":
+        d["topology"] = a.topology
+    for key in ("fsw_hz", "rise_s", "fall_s", "vin_v", "duty", "load_a"):
+        if getattr(a, key) is not None:
+            d[key] = getattr(a, key)
+    if a.ripple_probes:
+        d["ripple_probes"] = list(a.ripple_probes)
+    if a.phases:
+        d["phases"] = [_phase_out(ph) for ph in a.phases]
+    default = Aggressor("")
+    for key in ("min_ring_zeta", "soft_edge_zeta"):
+        if getattr(a, key) != getattr(default, key):
+            d[key] = getattr(a, key)
+    return d
+
+
+def _victim_out(v: Victim) -> Dict[str, Any]:
+    d: Dict[str, Any] = {"net": v.net}
+    if v.name and v.name != v.net:
+        d["name"] = v.name
+    d["preset"] = v.preset
+    for what in ("driver", "receiver"):
+        if getattr(v, f"{what}_ref"):
+            d[what] = {"ref": getattr(v, f"{what}_ref"), "pins": _pins_out(getattr(v, f"{what}_pins"))}
+    for key in (*TERMINATION_KEYS, "logic_v", "noise_margin_v"):
+        if getattr(v, key) is not None:
+            d[key] = getattr(v, key)
+    return d
+
+
+def _noise_out(project: "Project") -> Dict[str, Any]:
+    """The ``aggressors``, ``victims`` and ``noise`` blocks, each omitted while empty (noise
+    keys at their default are omitted)."""
+    out: Dict[str, Any] = {}
+    if project.aggressors:
+        out["aggressors"] = [_aggressor_out(a) for a in project.aggressors]
+    if project.victims:
+        out["victims"] = [_victim_out(v) for v in project.victims]
+    default = NoiseOptions()
+    options = {k: v for k, v in vars(project.noise).items() if v != getattr(default, k)}
+    if options:
+        out["noise"] = options
+    return out
+
+
 @dataclass
 class Project:
     board: str = ""
@@ -622,6 +994,11 @@ class Project:
     # Take rails from the board's KiCad footprint fields (PI_RAIL, PI_SOURCE, ...; see
     # coppernicus.board_fields) when it has any. On by default; saved only when off.
     use_board_fields: bool = True
+    # DC-DC noise and ripple (Task 10): switchers as aggressors, signal nets as victims, the
+    # solve's options. Each saved only when set.
+    aggressors: List[Aggressor] = field(default_factory=list)
+    victims: List[Victim] = field(default_factory=list)
+    noise: NoiseOptions = field(default_factory=NoiseOptions)
 
     # ------------------------------------------------------------------ queries
     def board_path(self) -> Path:
@@ -699,6 +1076,7 @@ class Project:
             out["marked_rails"] = list(self.marked_rails)
         if not self.use_board_fields:
             out["use_board_fields"] = False
+        out.update(_noise_out(self))
         return out
 
     @classmethod
@@ -727,11 +1105,12 @@ class Project:
                 raise ValueError("engine_options must be a mapping of option names to values")
             ac = _ac_in(data)
             use_fields = _flag(data, "use_board_fields", True)
+            noise = _noise_in(data)
         except (KeyError, TypeError, ValueError) as e:
             raise ProjectError(f"invalid project file: {e}") from e
         return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path,
                    marked_rails=[str(n) for n in marked], links=links, engine_options=dict(options),
-                   use_board_fields=use_fields, thermal=thermal, **ac)
+                   use_board_fields=use_fields, thermal=thermal, **ac, **noise)
 
     @classmethod
     def load(cls, path) -> "Project":
