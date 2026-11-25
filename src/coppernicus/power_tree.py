@@ -201,6 +201,12 @@ def apply_limits(tree, project: Project) -> None:
     for rail in project.rails:
         if tree.group_of(rail.net) is not None or any(v is not None for v in vars(rail.limits).values()):
             tree.limits[rail.net] = copy.copy(rail.limits)
+    # A rating where no VRM row judges it: the rail excluded (KiPI makes its regulator a load
+    # on its input) or solved as a ground (its sources are left out of the setup).
+    tree.unsolved_ratings = [
+        unjudged(s.label, rail.net, RATING_KEY, "not solved in the power tree")
+        for rail in project.rails for s in rail.sources
+        if s.current_limit_a is not None and not _solved_as_rail(tree, rail.net)]
     judge_loads(tree)
     judge_ratings(tree)                  # the ratings came with the solve (convert_tree)
     apply_thermal_limits(tree, getattr(project, "thermal", None))   # the board temperature's
@@ -220,11 +226,18 @@ def not_judged_text(items: Sequence[Dict[str, str]]) -> str:
 
 def unsolved_limits(tree) -> List[Dict[str, str]]:
     """Each limit set on a net the power tree did not solve (excluded, or not set up), as a
-    not-judged entry."""
+    not-judged entry; then each rated source on a rail it did not solve as a rail
+    (``tree.unsolved_ratings``, see :func:`apply_limits`)."""
     from coppernicus.problems import LIMIT_KEYS
-    return [unjudged(net, net, key, "not solved in the power tree")
-            for net, lim in tree.limits.items() if tree.group_of(net) is None
-            for key, attr in LIMIT_KEYS.items() if getattr(lim, attr) is not None]
+    limits = [unjudged(net, net, key, "not solved in the power tree")
+              for net, lim in tree.limits.items() if tree.group_of(net) is None
+              for key, attr in LIMIT_KEYS.items() if getattr(lim, attr) is not None]
+    return limits + list(tree.unsolved_ratings)
+
+
+def _solved_as_rail(tree, net: str) -> bool:
+    key = tree.group_of(net)
+    return key is not None and tree.groups[key].kind != "ground"
 
 
 def judge_loads(tree) -> None:

@@ -210,6 +210,38 @@ def test_a_rating_is_not_judged_while_a_rail_it_feeds_has_not_converged():
     assert doc["failed"] == 0, doc["failed"]
 
 
+def test_a_rating_on_a_rail_the_tree_does_not_solve_is_not_judged_not_dropped(tmp_path, capsys):
+    """U2 (rated 1 A, delivers 2 A) on +1V8 left out with excluded_nets: KiPI turns it into a
+    load on its input, so no VRM row judges it. Not judged, as a drop limit there is (exit 3).
+    Likewise a rated source on a rail solved as a ground."""
+    import json
+
+    from coppernicus.cli import EXIT_NOT_JUDGED, main
+    from coppernicus.engine import Board
+    from coppernicus.engine.synthetic import power_chain_board, power_chain_project
+    from coppernicus.engine.tree import solve_project_tree
+    from coppernicus.power_tree import tree_summary
+    from coppernicus.project import Rail, Source
+    entry = {"item": "U2", "net": "+1V8", "limit": "current_limit_a",
+             "reason": "not solved in the power tree"}
+    project = chain_project(tmp_path / "chain", {"+1V8": 1.0})
+    p = Project.load(project)
+    p.engine_options = {"excluded_nets": ["+1V8"]}
+    p.save(project)
+    assert main(["solve", str(project), "--tree", "--json", "--out", str(tmp_path / "o")]) == EXIT_NOT_JUDGED
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["verdict"] == "not_judged" and entry in doc["not_judged"], doc["not_judged"]
+    note = doc["verdict_note"]
+    assert "U2 on +1V8 (current_limit_a): not solved in the power tree" in note, note
+
+    chain = power_chain_project()                       # a rated source on a rail used as a ground
+    chain.rails.append(Rail("GND", sources=[Source("J1", 0.0, ["2"], current_limit_a=1.0)]))
+    doc = tree_summary(solve_project_tree(Board(power_chain_board()), chain))
+    assert {"item": "J1", "net": "GND", "limit": "current_limit_a",
+            "reason": "not solved in the power tree"} in doc["not_judged"], doc["not_judged"]
+    assert doc["verdict"] == "not_judged", doc["verdict"]
+
+
 def test_the_rating_origin_follows_where_the_merged_rail_came_from():
     """KiCad fields define the rail: the part carrying PI_IMAX; the project file's rail (its
     own, overriding the fields, or the fields incomplete there): the project file."""

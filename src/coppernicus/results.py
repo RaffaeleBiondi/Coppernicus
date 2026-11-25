@@ -341,6 +341,9 @@ class TreeResult:
     # net -> project Limits, for every solved net the project has a rail for (a group's
     # key is its driving net; see coppernicus.power_tree.net_limits)
     limits: Dict[str, Any] = field(default_factory=dict)
+    # A rated source (Source.current_limit_a) on a rail the tree does not solve as a rail
+    # (excluded, or solved as a ground): not-judged entries (coppernicus.power_tree.apply_limits).
+    unsolved_ratings: List[Dict[str, str]] = field(default_factory=list)
     assumptions: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     stats: Dict[str, float] = field(default_factory=dict)
