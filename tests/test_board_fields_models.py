@@ -356,6 +356,14 @@ def test_ci_runs_the_tolerance_stack_up_for_a_tolerance_held_only_in_kicad_field
     project.save(tmp_path / "s.coppernicus.yml")
     index = ci.solve_all(["s.coppernicus.yml"], Path("ci2"), html=False, tolerance=True)
     assert "tolerance" not in index["projects"][0]
+    # A library PI_TOL on a part that is a load on no rail sets no load's tolerance: no run.
+    write_strip_kicad_pcb(tmp_path / "s.kicad_pcb", {
+        "J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V"}, "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"},
+        "U9": {"PI_TOL": "5%"}}, extra_parts=[("U9", 20.0, 3.0, "VCC")])
+    project.use_board_fields = True
+    project.save(tmp_path / "s.coppernicus.yml")
+    index = ci.solve_all(["s.coppernicus.yml"], Path("ci3"), html=False, tolerance=True)
+    assert "tolerance" not in index["projects"][0] and index["exit_code"] == EXIT_OK
 
 
 # ------------------------------------------------------------------ listing and reading
@@ -375,6 +383,19 @@ def test_the_listing_gives_each_capacitors_model_or_what_it_lacks():
     [vcc] = out["rails"]
     assert vcc["loads"][0]["fields"]["PI_TOL"] == "-3%,+5%"
     assert "capacitors" not in listing(STRIP) and "part_tolerances" not in listing(STRIP)
+
+
+@pytest.mark.parametrize("text, farads", [
+    ("10u", 10e-6), ("4n7", 4.7e-9), ("100nF 16V", 100e-9), ("10 µF", 10e-6), ("1F", 1.0),
+    ("10uF/16V", 10e-6), ("0.1", None), ("100", None), ("C_0402", None), ("100 pcs", None),
+    ("10 film", None), ("0.1 misc", None), ("", None),
+])
+def test_a_footprint_value_gives_a_capacitance_only_with_its_unit(text, farads):
+    """KiPI reads a bare number as µF; here that unit is never guessed, nor a word after it
+    taken for one."""
+    from coppernicus.engine.kicad_fields import value_farads
+    got = value_farads(text)
+    assert got == (None if farads is None else pytest.approx(farads, rel=1e-12))
 
 
 def test_the_reader_keeps_each_annotated_parts_value_and_the_cli_lists_the_models(tmp_path, capsys):

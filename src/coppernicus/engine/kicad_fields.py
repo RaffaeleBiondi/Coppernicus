@@ -20,9 +20,10 @@ from coppernicus.board_fields import PREFIX, BoardFields
 from coppernicus.engine.board import EngineError
 
 # A capacitance written with its unit: a prefix or F right after the number ("10u", "4n7",
-# "100 nF"). KiPI reads a bare number as µF (kipi/core/model/parts.py); that unit is a guess,
-# never used behind a verdict.
-_WITH_UNIT = re.compile(r"^\s*\d*\.?\d*\s*[pnuµμmFf]")
+# "100 nF"), ending where KiPI's own pattern ends a value (kipi/core/model/parts.py _CAP_RE), so
+# a word after a bare number ("100 pcs") is no unit. KiPI reads a bare number as µF; that unit
+# is a guess, never used behind a verdict.
+_WITH_UNIT = re.compile(r"^\s*\d*\.?\d*\s*(?:[pnuµμm]\d*\s*[Ff]?|[Ff])(?=$|[\s,;/_(])")
 
 
 def value_farads(text: str) -> Optional[float]:

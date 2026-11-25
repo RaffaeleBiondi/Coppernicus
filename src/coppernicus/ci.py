@@ -334,7 +334,7 @@ def _has_tolerances(project: Path) -> bool:
     try:
         import yaml
 
-        from coppernicus.board_fields import LOAD_FIELDS
+        from coppernicus import board_fields
         from coppernicus.engine.kicad_fields import read_board_fields
         from coppernicus.project import Project
         from coppernicus.tolerance import misspelt_keys
@@ -343,8 +343,16 @@ def _has_tolerances(project: Path) -> bool:
             return True
         if misspelt_keys(yaml.safe_load(project.read_text(encoding="utf-8")))[1]:
             return True
-        fields = read_board_fields(loaded.board_path()).fields if loaded.use_board_fields else {}
-        return any((f.get(n) or "").strip() for f in fields.values() for n in LOAD_FIELDS)
+        found = read_board_fields(loaded.board_path()) if loaded.use_board_fields else None
+        if found is None or not any((f.get(n) or "").strip() for f in found.fields.values()
+                                    for n in board_fields.LOAD_FIELDS):
+            return False
+        try:                             # a load's, not a part on no rail (a library symbol's)
+            merged = board_fields.merge(loaded, found.fields, found.pad_nets, (), found.values,
+                                        found.farads)
+        except board_fields.FieldError:  # without the board's net ties: let the run decide
+            return True
+        return any(ld.has_tolerance() for r in merged.project.rails for ld in r.loads)
     except Exception:                    # the rail-by-rail run reports a bad project
         return False
 
