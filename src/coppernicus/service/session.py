@@ -692,7 +692,11 @@ class Session:
         ``project_path`` when it exists, else from an empty project for ``board_path``.
         Rails are added or replaced whole by net, links by name; ``settings`` keys are set
         (None removes one). An existing file is replaced only with ``overwrite``. The result is
-        checked by the project loader before the file is replaced; the board is only read."""
+        checked by the project loader before the file is replaced; the board is only read.
+
+        A ``copper_thickness_mm`` given here is an agent's what-if, as in :meth:`solve_rail`:
+        each layer it names takes a standard weight at most one step from the design (the
+        project's own value for that layer when it has one, else the board file's)."""
         from coppernicus.project import board_reference
         from coppernicus.service import projects as P
         path = Path(str(project_path)).expanduser()
@@ -704,10 +708,12 @@ class Session:
                                "pass overwrite: true to replace it (its comments are not kept), or "
                                "choose another path")
         start = Path(str(from_project)).expanduser() if from_project else (path if path.exists() else None)
+        planned: Dict[str, float] = {}               # the copper thickness the project had
         if start is not None:
             mapping = _read_mapping(start)
             try:
-                board = Project.from_dict(mapping, start).board_path()
+                before = Project.from_dict(mapping, start)
+                board, planned = before.board_path(), dict(before.settings.copper_thickness_mm)
             except ProjectError as e:
                 raise ServiceError(E.INVALID_PROJECT, f"{start.name}: {e}",
                                    "fix the project file; its format is in the README") from None
@@ -729,10 +735,14 @@ class Session:
         mapping = P.edit(mapping, rails=rails, remove_rails=remove_rails, links=links,
                          remove_links=remove_links, settings=settings, use_board_fields=use_board_fields)
         try:
-            Project.from_dict(mapping, path)
+            edited_project = Project.from_dict(mapping, path)
         except ProjectError as e:
             raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
                                "nothing was written; fix the values and try again") from None
+        given = settings.get("copper_thickness_mm") if isinstance(settings, Mapping) else None
+        if isinstance(given, Mapping) and given:
+            entry = self._entry(self.open_board(board)["board_id"])
+            self._check_copper_what_if(entry.board, edited_project.settings, given, planned)
         _replace_checked(path, mapping)
         project = Project.load(path)
         edited = [r.get("net") for r in rails or [] if isinstance(r, Mapping)

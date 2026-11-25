@@ -115,6 +115,36 @@ def test_remove_rails_links_settings_and_the_fields_switch(session, board, tmp_p
     assert e.value.code == "invalid_input"
 
 
+def test_an_agents_copper_thickness_is_one_standard_step_from_the_design(session, board, tmp_path):
+    """The owner's rule for agents holds in write_project too: each layer named gets a
+    standard weight at most one step from the design (the board file's thickness, or the
+    project's own value when it has one). A value the project already holds stays as it is
+    unless changed; the user's own edits (the app, by hand, the CLI) stay free."""
+    path = tmp_path / "p.coppernicus.yml"
+    session.write_project(path, board_path=board, settings={"copper_thickness_mm": {"F.Cu": 0.07}})
+    assert Project.load(path).settings.copper_thickness_mm == {"F.Cu": 0.07}      # 1 oz -> 2 oz
+    before = text(path)
+    for mm in (0.0175, 0.05):        # two steps from the project's own 2 oz (its design); not a weight
+        with pytest.raises(ServiceError) as e:
+            session.write_project(path, settings={"copper_thickness_mm": {"F.Cu": mm}}, overwrite=True)
+        assert e.value.code == "invalid_input" and "one standard step" in e.value.message
+        assert "copper_step" in e.value.hint and "KiCad" in e.value.hint
+        assert text(path) == before                                       # nothing written
+    # The user's free value (written by hand) is the design for that layer: it is kept as it is,
+    # and steps count from it, or none when it is not a standard weight.
+    mapping = yaml.safe_load(before)
+    mapping["settings"]["copper_thickness_mm"] = {"F.Cu": 0.05, "B.Cu": 0.07}
+    path.write_text(yaml.safe_dump(mapping), encoding="utf-8")
+    session.write_project(path, settings={"copper_thickness_mm": {"F.Cu": 0.05, "B.Cu": 0.105}},
+                          overwrite=True)                                 # B.Cu 2 oz -> 3 oz
+    assert Project.load(path).settings.copper_thickness_mm == {"F.Cu": 0.05, "B.Cu": 0.105}
+    with pytest.raises(ServiceError):
+        session.write_project(path, settings={"copper_thickness_mm": {"F.Cu": 0.07, "B.Cu": 0.105}},
+                              overwrite=True)
+    session.write_project(path, settings={"copper_thickness_mm": None}, overwrite=True)   # board file
+    assert Project.load(path).settings.copper_thickness_mm == {}
+
+
 def test_saving_elsewhere_rebases_the_board_path(session, board, tmp_path):
     first = tmp_path / "a" / "p.coppernicus.yml"
     first.parent.mkdir()
