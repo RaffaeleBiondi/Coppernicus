@@ -770,3 +770,274 @@ by KiPI … from ac_tolerance_v, step_a, slew_a_per_us").
 | `ac_plane` (19 596 triangles, 121 field frequencies, 6.9 s) | C_plane = ε₀·4.5·(100² − 1.2²)/0.2, rel 1e-3; Z at 1 kHz, 100 kHz, 1 MHz = 1/(jωC(1 − j·tanδ)), rel 5e-3; largest peak in [0.5, 1.2]·f10, f10 = c/(2·100·√4.5), rel 1.5e-2 | C 1.99191 nF (hand 1.99191 nF); peak 707.95 MHz vs 706.62 MHz (+0.19 %) |
 | `ac_decap` (20 587 triangles, 4.4 s) | C_plane with 2 cut-outs, rel 1e-3; Z at 1 and 10 kHz; mounted L flat within 3 %, ESL < L < ESL + 2 nH; min\|Z\| at 1/(2π√(LC)), rel 3e-2; ESR ≤ min\|Z\| ≤ 1.15·ESR | C 0.49747 nF (hand 0.49747 nF); min\|Z\| 22.01 mΩ at 1.479 MHz, 1.10 × ESR |
 | `ac_ferrite` (17 706 triangles, 3.6 s) | \|Z\| ÷ lumped model within 1 % away from f0 up to 100 MHz, 0.9–1 above; one peak in [f0/3, 3f0] at f0 rel 1.5e-2, height rel 0.05 | peak 23.862 MHz vs f0 23.848 MHz (+0.06 %) |
+
+---
+
+## Task 10: DC-DC ripple and coupled noise → `kipi/noise` (`kipi/noise/solver.py`, `kipi/noise/model.py`)
+
+Code: `coppernicus.engine.noise` (`noise_setup`, `solve_aggressor`, `seed_phases`, `guess_ends`,
+`mesh_estimate`, `noise_cost_estimate`, `noise_ram_estimate`, `kipi_noise_choices`),
+`coppernicus.coupled_noise` (verdicts, summary, text, CSV, PNG; no engine), `results.HotLoop`,
+`RippleResult`, `VictimResult`, `FieldMap`, `NearField`, `NoiseResult`, `coppernicus noise` in
+`cli.py`, `engine.synthetic.coupled_noise_board()` / `coupled_noise_project()`, `examples/noise`.
+
+KiPI's entry point is `solve_noise(snap, setup, aggressor, progress, dc_result)`
+(solver.py:223-326); `aggressor` names a `setup.aggressors` entry. Method (solver.py:1-8,
+waveforms.py:1-22, extract/common.py:1-25, victims.py:1-7): the converter's two rails and its
+ground are meshed and each phase's hot loop traced through the copper (L; the switch node's
+C = Coss + copper; f_ring; ζ at least `min_ring_zeta`); the waveforms are exact Fourier series of
+piecewise-linear periods, harmonics to max(10/(π·t_min), 3·f_ring) ≤ 3 GHz (waveforms.py:90-101);
+AC mode's 2.5D field model of the copper (`field_per_decade` field solves between fsw and the
+last harmonic, interpolated), terminated by the capacitors, splits each phase's pulsed and
+inductor currents and gives the ripple at phase 1's device pins and at probes and the ground
+difference under each victim's ends; the near field 5 mm up and a radiated estimate at 3 m
+follow; each victim is cut into 2D cross-sections (`segment_mm`, `window_mm`), coupled
+capacitively (switch nodes), inductively (capacitor and inductor loops) and through the shared
+ground (the copper's resistance only), each mechanism solved alone and added as phasors, held
+high and held low. **`dc_result` is always `None`** (brief Q10): KiPI's own tree result carries
+capacitor DC volts and diode-link currents that Coppernicus's `TreeResult` does not; the
+capacitors are derated at the rails' nominal voltages.
+
+### Setup: per-object mappers, not `ac_setup` per rail (brief Q7)
+
+T9's `ac_setup(board, project, rail)` maps one rail; an aggressor spans two (its input and its
+output) and names its own probes. `noise_setup` therefore builds KiPI's setup from
+`to_pisetup(board, project)` plus T9's per-object mappers: `_kipi_probe` for the probes the
+aggressor names (`ripple_probes`; an unknown name raises `EngineError`, where KiPI only warns),
+and one `_kipi_caps` call over KiPI's own net sets of both rails (`rail_nets` of the VRM, the
+`net_groups` of its input net, `ground_nets`; extract/common.py:138-143), so only models with a
+part between those rails and the ground are passed. The `ac:` sweep keys (mesh, `default_er`,
+`loss_tangent`), each link's series inductance and the copper temperature are copied as T9's
+`_context` does. `ac_setup` per rail would refuse an input rail with no source of its own in
+the project (an aggressor with `vin_v` entered needs none) and resolve probes by rail; a test
+covers that case. T9's files are unchanged.
+
+### Aggressor → `kipi.noise.model.Aggressor` (new: `aggressors:`)
+
+| Coppernicus | KiPI | Unit | Default | Notes |
+|---|---|---|---|---|
+| `name` | `name` | — | required | Unique. |
+| `vrm` | `vrm` | — | `""` | A source by its engine name (`terminal_names`: the label, or "label (net)" when shared). Not a source of the project: `EngineError` listing the switchers. Not an `"smps"`: KiPI's message, as `EngineError`. |
+| `topology` | same | — | `"auto"` | auto / buck / boost; else `ProjectError` (KiPI silently takes auto, model.py:316). |
+| `fsw_hz` | same | Hz | **required**, else the regulator's `Source.fsw_hz` | Coordinator's change to Q1: without its own value the aggressor takes its regulator's (KiCad field `PI_FSW`, or `fsw_hz` in the project file), with the assumption line "Switching frequency {f} from the source {s} (KiCad field PI_FSW \| the project file): the aggressor gives no fsw_hz of its own, which would win."; with neither, `EngineError` naming it. KiPI's 500 kHz (model.py:74) is never used. |
+| `rise_s`, `fall_s` | same | s | **required** | 0-100 % edges; missing at solve: `EngineError` naming them (KiPI's 2 ns never used). Edges as long as a period: KiPI's check, as `EngineError`. |
+| `vin_v`, `duty`, `load_a` | same | V, —, A | `None` | `None`: the voltage of the source feeding the input rail (checks.py:62-72), from the voltages and the entered losses (:114-125), the output rail's loads (:75-81). `duty` in (0, 1). |
+| `ripple_probes` | same | — | `[]` | T9 probe names. A probe off the aggressor's rails: KiPI's warning, no ripple there. |
+| `phases` | same | — | `[]` | Required to solve (`EngineError` "add its phases (Fill from board)"). Filled only by an explicit action calling `seed_phases` (KiPI's `seed_phases`, checks.py:199-254); a solve never calls it (a test checks). |
+| `min_ring_zeta`, `soft_edge_zeta` | same | — | 0.05, 0.5 | KiPI's floors (model.py:87, :91), stated in the assumptions. |
+
+The file may hold a draft (no `fsw_hz`, edges or phases): it loads and is refused at solve.
+
+### Phase → `AggressorPhase`
+
+| Coppernicus | KiPI | Unit | Default | Notes |
+|---|---|---|---|---|
+| `inductor`, `inductance_h`, `dcr_ohm` | same | —, H, Ω | `""`, 0, 0 | Inductance > 0 to solve (KiPI's check). |
+| `switch_net` | same | — | `""` | Empty on every phase: no capacitive coupling (a stand-in, below). |
+| `high_side`, `low_side` `{ref, net, pins}` | `PinRef` | — | none | `ref` required (the regulator's part may be the inductor); pins resolved as in Task 6, a missing pin names the phase. |
+| `input_caps`, `output_caps` | same | refs | `[]` | Off the board: KiPI's error, as `EngineError`. |
+| `coss_f` | same | F | `None` → KiPI's 200 pF | Stand-in when empty (parasitics.py:670-674). |
+| `qrr_nc` | `qrr_c` (× 1e-9) | **nC** | `None` → KiPI's 5 nC | `_c` means °C in Coppernicus. 0 is entered (a Schottky or GaN low side) and kept on save (`is not None`). |
+| `rds_on_hs_ohm`, `rds_on_ls_ohm`, `package_l_h` | same | Ω, Ω, H | `None` → 10 mΩ (damping only), 0 | Entered Rds also raise a buck's duty (checks.py:114-120). An assumption line, not a stand-in. |
+| `inductor_axis`, `inductor_shielded` | same | — | `"vertical"`, `true` | Unknown axis: `ProjectError` (KiPI silently vertical, model.py:303-304). |
+
+### Victim → `kipi.noise.model.Victim` (new: `victims:`)
+
+| Coppernicus | KiPI | Unit | Default | Notes |
+|---|---|---|---|---|
+| `net`, `name` | same | — | required, `""` = the net | Unique names. A net off the board: `EngineError`. |
+| `preset` | same | — | **required in the file** | One of cmos, open_drain, series, parallel, lvds, analog, hiz, or `custom`. A named preset is applied with `apply_preset` (KiPI's `Victim(preset=…)` alone keeps the cmos terminations; a test checks open_drain's 4.7 kΩ / 20 Ω). |
+| `driver`, `receiver` `{ref, pins}` | `PinRef` on the victim's net | — | none | Empty: KiPI guesses them (the net's two pads farthest apart, victims.py:29-45): a stand-in. |
+| `driver_ohm`, `receiver_ohm`, `receiver_pf`, `termination_ohm`, `driver_low_ohm` | same | Ω, Ω, pF, Ω, Ω | the preset's | Written only for `custom`, which needs the first three; with a named preset: `ProjectError`. |
+| `logic_v` | same | V | `None` | `None`: KiPI gets its 3.3 V only to build the held-high and held-low states; neither the noise nor a margin from `noise_margin_v` or a preset depends on it. |
+| `noise_margin_v` | same | V | `None` | > 0. |
+
+### NoiseOptions (`noise:`) → `NoiseSettings` (keys omitted at KiPI's default)
+
+`f_max_hz` (`None` = automatic), `max_harmonics` 4000, `dead_time_ns` 20, `segment_mm` 0.5,
+`window_mm` 3.0, `board_model` true, `field_per_decade` 10 (model.py:244-264; a test checks
+they match). Not mapped: KiPI's GUI and report state, `victims` (always "all"), the net scan
+(`scan*`, brief Q5) and the picking and highlight of segments and loops (Q6).
+
+`project.py` cannot import KiPI, so it copies the preset names, topologies, inductor axes and
+these defaults; `engine.noise.kipi_noise_choices()` reads KiPI's and a test compares them.
+
+### Results (`results.py`, at the end; no KiPI object kept)
+
+- `HotLoop`: `phase`, `loop_l_h`, `package_l_h`, `c_sw_f`, `coss_f`, `coss_entered`, `qrr_nc`,
+  `qrr_entered`, `c_copper_f`, `r_loop_ohm`, `f_ring_hz` (None: no ringing), `zeta`, `zeta_loop`,
+  `traced`, `image_plane`.
+- `RippleResult` per ripple probe, then `output` and `input` at phase 1's device pins (buck: VIN
+  between the high-side and low-side pins, VOUT at the inductor's output pad; boost the other
+  way; extract/common.py:298-301), or of the capacitor bank without the board model: `name`,
+  `where`, `net`, `ground_net`, `ref`, `pins`; **KiPI tolerance's four values exactly**
+  (`kipi/tolerance/gather.py` `ripple_peaks`: below and above the mean, full band and through a
+  single pole at 20 MHz), `below_v`, `above_v`, `below_bw_v`, `above_bw_v` (a test compares them
+  with `ripple_peaks` of the same solve); `pp_v`, `pp_bw_v`, `rms_v`; `t_s`, `v`, `v_bw` (one
+  period). Task 11 pairs a load by `ref`, `pins`, `net`.
+- `VictimResult`: `name`, `net`, `driver`, `receiver` (KiPI's labels), `ends_entered`, `preset`,
+  `margin_v` (None: no margin set), `margin_from`, `limit`, `peak_v`, `peak_by_v` {capacitive,
+  inductive, common}, `dominant`, `ratio`, `states` (name, level, threshold, driver Ω,
+  excursion, margin; threshold and margin None without a margin), `length_mm`, `coupled_mm`,
+  `cm_f`, `m_h`, `splits`, `receiver_v` (one period, driven high), `stand_ins`, `passed`,
+  `not_judged`, `warnings`.
+- `NoiseResult`: the operating point (`topology`, `vin_v`, `vout_v`, `iout_a`, `iin_a`, `duty`,
+  `efficiency`, `phases`, `operating_notes`), `fsw_hz`, `rise_s`, `fall_s`, `f_max_hz`,
+  `harmonics`, `harmonics_capped`, `inductor_ripple_a`, `hot_loops`, `t_s`, `switch_node_v`,
+  `inductor_a`, `edges` (per phase), `ripple`, `victims`, `board` {used, note, unknowns,
+  field_solves, ports, caps_modelled, caps_missing}, `emi` (`NearField`: the H and E `FieldMap`s,
+  each point's strongest harmonic, rows from y0; hotspots; the radiated estimate nearest the
+  CISPR 32 B limit), `stand_ins`, `partial`, `verdict`, `verdict_note`, `failed`, `not_judged`,
+  `assumptions`, `warnings`, `stats` {seconds, harmonics, triangles, nodes, unknowns, ports,
+  field_solves, field_seconds (read from KiPI's progress lines), memory_peak_mb,
+  memory_peak_raised}.
+- `solve_aggressor(…, partial=)` hands over KiPI's partial results converted
+  (`partial=True`, no verdict): the waveforms first (solver.py:283). Its `progress`, `fraction`,
+  `partial` and `cancelled` run in the solving thread. `NoiseError`, `ACError`, `SolveError`
+  and `MeshError` become `EngineError`; KiPI's `Canceled` becomes `Cancelled`.
+
+### Verdicts (brief Q2-Q4; only the user's margins)
+
+**Margin, in order:** `noise_margin_v`; else the named preset's own (lvds 0.1 V, analog 0.01 V;
+model.py:163, :165); else the JESD8 levels of an entered `logic_v` on KiPI's table
+(model.py:96-103); else none: ranked, no verdict, no entry. The value is KiPI's own
+`Victim.margin()`, the smaller of the held-high and held-low state margins (0.8 V for 3.3 V
+logic), never `logic_margin()` (0.4 V there). KiPI's 35/65 % rule off its table is never used:
+an off-table `logic_v` alone sets no margin and leaves the warning "Victim {v}: logic_v {lv} V is
+not in KiPI's JESD8 table: enter noise_margin_v" (no not-judged entry: nothing was set that
+could be judged; the gate's §5 at face value).
+
+**Not judged, whatever the peak** (the reason ends "…; peak {p} mV = {r} % of the margin"),
+while any KiPI stand-in is in play:
+- for every victim of the aggressor (`NoiseResult.stand_ins`): "Coss not entered on phase {i}:
+  KiPI's 200 pF sets the ringing"; "Qrr not entered on phase {i}: KiPI's 5 nC sets the hard edge
+  (enter 0 for a Schottky or GaN low side)"; "capacitors on the converter's rails without a
+  model: {refs}" (KiPI's `rail_caps` with the board model, else the phases' capacitors); "εr
+  assumed: {why}" (T9's rule); "capacitive coupling left out: no switch net on any phase";
+  "harmonics stop at {f} MHz (noise.max_harmonics {k})"; "shared-ground coupling left out: board
+  model off (noise.board_model)" or "… board model left out ({KiPI's reason})";
+- per victim: "driver and receiver not both entered: KiPI guessed {d} and {r}"; "inductive
+  coupling left out: no capacitor loops (set the switching device's pins and the capacitors)";
+  "nothing coupled: {net} has no tracks"; "driver or receiver pins not on the board";
+  "shared-ground coupling left out: its driver or receiver has no pad on {gnd}"; "held {high |
+  low} it sits at {level} V, beyond its {threshold} V threshold: no margin left".
+
+Stand-ins are taken from structured data (`coss_default`, `qrr_default`, `rail_caps`,
+`harmonic_count`, an empty `board_note`, T9's `_dielectric`), never from warning text, except
+KiPI's own "No capacitor loops" flag on a victim. Rds_on, the ζ floors, the dead time, the
+package loop and the inductor's axis and shield stay assumption lines.
+
+**Otherwise** `fail` if `peak_v > margin_v` (KiPI's rule, result.py:76-82: the largest receiver
+|v| over a period, held high or low), else `pass`. Entry: `{"item": victim, "net", "limit":
+"noise_margin_v (V)" | "preset {p} margin (V)" | "logic_v JESD8 margin (V)", "reason"}` (plus
+`"aggressor"` at the top level). An aggressor fails if a victim fails; else it is `not_judged`
+if a victim with a margin was not judged; `pass` if one was judged; `not_judged` with no margin
+at all (no entry: "No noise margins set: nothing is judged; the victims are ranked"). The CLI
+combines its aggressors the same way and exits as `solve` (`_exit_for`): 0, 1 a margin exceeded,
+3 a margin not judged, 2 an error. **Never judged** (Q4): the ripple (Task 11 stacks it per
+load) and the radiated estimate (CISPR 32 B for scale).
+
+### Assumption lines
+
+In order: the coupled-noise method with the harmonics and their reach; the operating point
+(KiPI's notes) and the source's efficiency; where `fsw_hz` came from when it is the
+regulator's; per phase the hot loop (L, traced or straight, switch-node C with Coss entered or
+KiPI's, copper C, ringing and ζ against `min_ring_zeta` and the loop's own) and the edges (Qrr
+entered or KiPI's, `soft_edge_zeta`, dead time, on-resistance entered or KiPI's 10 mΩ, package
+loop); the capacitors (modelled, and those without a model at their board value with KiPI's
+5 mΩ, 0.5 nH, 10 µF fallback); the board model (rails, ground, unknowns, field solves) or why it
+is off; DC bias when a modelled part has a rating; KiPI's dielectric summary with its 3.5
+solder-mask εr; the victims' cross-sections and mechanisms; per victim its type, terminations
+and ends (entered or guessed), and its margin and source or "no noise margin set: ranked, not
+judged"; per inductor its shield and axis; the near field and radiated estimate (an indicator,
+never judged); the via plating and what-if thickness, as in DC; the copper temperature when
+≠ 20 °C; per ripple where it is measured, the 20 MHz single pole and "never judged here".
+
+### Outputs
+
+- `coupled_noise.write_csv` → `<project>_<aggressor>_noise.csv`, one period: `t_s`, per phase
+  `phase<i>_switch_node_v`, `phase<i>_inductor_a`, per ripple `ripple_<name>_v` and
+  `ripple_<name>_20mhz_v` (about the mean), per victim `victim_<name>_v`.
+- `write_png` → `<project>_<aggressor>_noise.png` (`draw_waveforms`: two periods of the switch
+  node, the inductor current, the ripple at the probes, else at the output pins, 20 MHz solid
+  and full band thin, each victim's receiver voltage with its margin); `write_field_png` →
+  `…_noise_h_field.png` and `…_noise_e_field.png` (`draw_field_map`: log scale over the board
+  outline, KiCad frame with y down, the hotspots numbered; a test checks the map's maximum lies
+  at KiPI's strongest hotspot).
+- `<project>_noise_summary.json` (`allow_nan=False`; units in every key): `kind: "noise"`,
+  `verdict`, `verdict_note`, `failed`, `not_judged`, `warnings`, `aggressors[]`, `summary_file`.
+  Per aggressor: the operating point and switching keys above, `hot_loops[]`, `ripple[]` (`name`,
+  `where`, `net`, `ground_net`, `ref`, `pins`, `pp_mv`, `pp_20mhz_mv`, `below_mv`, `above_mv`,
+  `below_20mhz_mv`, `above_20mhz_mv`, `rms_mv`), `victims[]` (`name`, `net`, `driver`,
+  `receiver`, `ends_entered`, `preset`, `margin_mv`, `margin_from`, `limit`, `peak_mv`,
+  `peak_by_mv`, `dominant`, `ratio`, `states[]` {name, level_v, threshold_v, driver_ohm,
+  excursion_mv, margin_mv}, `length_mm`, `coupled_mm`, `cm_f`, `m_h`, `splits`, `stand_ins`,
+  `passed`, `not_judged`, `warnings`), `board{}`, `emi{}` (no maps: `height_mm`, `distance_m`,
+  `hotspots`, `radiated_dbuv_m`, `radiated_hz`, `cispr32_b_dbuv_m`, `radiated_source`, `notes`),
+  `stand_ins`, `verdict`, `verdict_note`, `failed`, `not_judged`, `csv_file`, `png_files`,
+  `assumptions`, `warnings`, `stats`. Infinite or NaN values (an infinite ratio, a radiated
+  estimate below the band) are null.
+- `coppernicus noise PROJECT [--aggressor NAME ...] [--out DIR] [--no-board-fields] [--json]
+  [-v]`: every aggressor (or each `--aggressor`, once), the files above into `--out` (default
+  `results/` next to the project). The KiCad footprint fields merge as in `solve --tree` and
+  `ac` (brief Q9); the rails taken from them word where a regulator's `PI_FSW` came from.
+
+### Cost and memory before a solve (brief Q8: warn and confirm, never cancel)
+
+- `mesh_estimate(board, project, name)` checks the setup as the solve does, then builds KiPI's
+  `board_ports` and meshes the rails and ground with `mesh_rail_and_ground` (seconds on a large
+  board; no field solve) and counts triangles, nodes, ports and the field solves, the latter
+  from the edges or `noise.f_max_hz` (the ringing may add a few: KiPI takes 3·f_ring when
+  higher). Without the board model it meshes nothing. A test checks its triangles, ports and
+  field solves equal the solve's.
+- `noise_cost_estimate(size, last)`: T9's `cost_estimate` with the field solves as its
+  frequencies, scaled from an earlier noise solve's `stats`.
+- `noise_ram_estimate(unknowns, total)`: the whole solve's peak, an **upper bound** measured on
+  synthetic boards (gate T10 §9: 0.2 GB + 26 to 36 kB per unknown from 9 691 to 175 084
+  unknowns; 36 kB is used), unknowns ≈ 0.95 × triangles (0.80 to 0.85 on those boards, 0.95 on
+  T9's real rail). T9's fit (one factorization, ~3.4 GB at 175 k unknowns) is not reused: that
+  point measured 5.05 GB for the whole noise solve. A real board's copper may need less (T9's
+  real rail took about 8 kB per unknown). `risk` above the machine's memory.
+- A run on this machine (M-series, other agents running): `coppernicus noise
+  examples/noise/noise.coppernicus.yml` takes 5.2 s wall (3.8 s in the solve: 15 534 triangles,
+  12 101 unknowns, 8 ports, 34 field solves), 680 MB peak RSS. Larger meshes start KiPI's
+  mesher worker processes: scripts that solve need `if __name__ == "__main__":`.
+
+### Validation (KiPI's `tests/accuracy/test_noise_accuracy.py` and `tests/noise`, same tolerances)
+
+`engine.synthetic.coupled_noise_board()` copies KiPI's coupled-noise board
+(examples/validation/make_boards.py:454-525; pads, vias, tracks, zones and stackup equal KiPI's
+checked-in snapshot); `coupled_noise_project()` its setup (J1 12 V on VIN; U1 a switcher, output
+L1.2, input U1.1, ground U1.2, efficiency 0.9 = KiPI's `Vrm` default its setup keeps; U2 5 A;
+models 10u and 47u; aggressor U1 1 MHz, 2 ns, 1 µH, Coss 300 pF; three cmos victims with ends).
+
+| Asserted (KiPI's tolerances) | Measured here | KiPI's own solve |
+|---|---|---|
+| SIG_SW capacitive > 10 × SIG_LOOP capacitive + 1 mV; 0.5 < SIG_SW capacitive / inductive < 2; SIG_LOOP dominant inductive with all three mechanisms | 17.23 mV > 0 + 1 mV; 17.23 / 19.98 = 0.86; inductive | 17.24 / 19.98 mV |
+| SIG_BURIED peak < 0.05 × SIG_LOOP peak | 1.425 < 32.8 mV | 1.425 mV |
+| peaks SIG_LOOP ≥ SIG_SW ≥ SIG_BURIED | 655.4 ≥ 32.66 ≥ 1.425 mV | 655.4 ≥ 32.67 ≥ 1.425 mV |
+| hot loop 0.1-3 nH traced over In1.Cu; plate < C_copper < 1.6 × plate (ε₀·4.5·16 mm²/0.2 mm); C_sw = 300 pF + copper; f_ring = 1/(2π√(LC)); 0 < ζ < 1 | 2.07 nH, 3.87 pF copper, 303.9 pF, 200.5 MHz, ζ 0.05 (the floor; the loop alone 0.0041) | same |
+| duty 1.8/12; inductor mean 5 A; f_max ≥ 10/(π·2 ns); switch node > 12 V | 0.15; 5 A; 1.592 GHz (1592 harmonics) | same |
+| the probe's four values = `ripple_peaks`; 0 < LOAD p-p < 2 × output p-p; input > LOAD | LOAD 7.884 / 10.57 mV, 20 MHz 4.727 / 7.006 mV; output 1.878 V p-p (269 mV at 20 MHz), input 15.34 V (1.873 V) | — |
+
+SIG_SW reads 32.66 mV from the board built in memory and 32.67 mV from the saved example
+snapshot (KiPI's own solve: 32.67 mV): the last digit moves with the snapshot's float round trip
+and with the mesh refined at the probe's pads (SIG_SW's common part 1.692 mV with the probe
+LOAD, 1.697 mV without; KiPI's test_probe_ripple.py:48 allows 2 %). Every tolerance holds.
+
+### Known limitations
+
+- **KiPI's false pass of a line already past its threshold** (owner's call: recorded here, not
+  reported upstream). KiPI's `LogicState.margin_v` is |level − threshold| (model.py:131-133), so
+  a state whose idle level is already beyond its threshold keeps a positive margin, and KiPI
+  only warns (victims.py:155-157): "hiz" on 3.3 V logic sits at 1.65 V held high, under VIH
+  2.0 V, with a 0.35 V margin, and passes any small noise; "parallel" at 2.5 V and 5 V likewise.
+  Coppernicus never judges such a line (a stand-in, above).
+- `dc_result` is `None`: capacitors are derated at the rails' nominal voltages, diode links take
+  KiPI's estimate from the loads beyond them.
+- KiPI's net scan, the picking of ends and phase pins, and the highlight of segments and loops
+  are not offered (brief Q5, Q6): ends are typed, guessed by "Guess ends", phases filled by "Fill
+  from board".
+- The field-solve count before a solve comes from the edges; a ringing above a third of the
+  edges' reach adds a few. The RAM bound comes from synthetic boards.
+- The board model is quasi-static: approximate above about 1 GHz (KiPI's warning says so).
