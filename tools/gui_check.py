@@ -1551,7 +1551,7 @@ def run_fields(window, check: Checks, args, out: Path):
     text = path.read_text(encoding="utf-8")
     check("... saved with override_board_fields", "override_board_fields: true" in text
           and "current: 0.8" in text)
-    fields_view.confirm_use_fields = lambda _w, _net: True
+    fields_view.confirm_use_fields = lambda *_: True
     rp.banner.button.click()                          # Use KiCad fields
     QApplication.processEvents()
     own = window.project.rail("VCC")

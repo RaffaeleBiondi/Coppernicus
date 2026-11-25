@@ -459,7 +459,7 @@ def test_override_copies_the_kicad_rail_into_the_project_and_the_way_back_keeps_
         assert "override_board_fields: true" in saved and "current: 0.5" in saved, saved
 
         asked = []
-        fields_view.confirm_use_fields = lambda _w, net: asked.append(net) or True
+        fields_view.confirm_use_fields = lambda _w, net, *_: asked.append(net) or True
         rp.banner.button.click()                                  # Use KiCad fields
         assert asked == ["VCC"], asked
         assert window.project.rails == [Rail("VCC", limits=Limits(max_via_current=2.0))], window.project.rails
@@ -470,7 +470,7 @@ def test_override_copies_the_kicad_rail_into_the_project_and_the_way_back_keeps_
         # The way back declined changes nothing.
         own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 0.5)], override_board_fields=True)
         open_net(strip(TMP / "b", rails=[own]))
-        fields_view.confirm_use_fields = lambda _w, _net: False
+        fields_view.confirm_use_fields = lambda *_: False
         rp.banner.button.click()
         assert window.project.rails == [own] and not window.dirty, window.project.rails
     ''', tmp_path)
@@ -522,6 +522,23 @@ def test_a_kicad_drop_limit_stays_locked_under_override_and_over_incomplete_fiel
         assert window.fields_error is None and window.merged.origins["VCC"].source == "project"
         locked()
         assert window.project.rail("VCC").limits == Limits(), window.project.rail("VCC")
+    ''', tmp_path)
+
+
+def test_the_way_back_names_the_parts_whose_remote_sense_pins_go_too(tmp_path):
+    run_in_window('''
+        SENSE = "The remote sense pins of J1 are removed too: KiCad fields cannot give them yet."
+        sensed = Source("J1", 1.0, sense_ref="U1", sense_pins=["1"], sense_net="VCC")
+        ANSWERS["question"] = QMessageBox.Yes
+        for source, said in ((sensed, True), (Source("J1", 1.0), False)):
+            own = Rail("VCC", [source], [Load("U1", 1.0, ["1"])], override_board_fields=True)
+            open_net(strip(TMP / str(said), rails=[own]))
+            rp.banner.button.click()                     # Use KiCad fields, confirmed
+            kind, title, text = DIALOGS[-1]
+            assert (kind, title) == ("question", "Use KiCad fields"), DIALOGS[-1]
+            assert (SENSE in text) == said and ("remote sense" in text) == said, text
+            assert window.project.rails == [Rail("VCC")], window.project.rails      # nothing left to save
+            assert window.merged.origins["VCC"].source == "fields"
     ''', tmp_path)
 
 

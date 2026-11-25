@@ -765,9 +765,13 @@ class MainWindow(QMainWindow):
     def use_fields(self, net: str) -> bool:
         """Use KiCad fields (the way back from an override), once confirmed: the project's
         rail of ``net`` keeps its limits and net-tie option and loses its sources and loads,
-        so it is not an ignored rail. False: nothing done."""
+        so it is not an ignored rail (remote sense pins go with them: the confirmation names
+        their parts). False: nothing done."""
         own = self.project.rail(net)
-        if own is None or not own.override_board_fields or not fields_view.confirm_use_fields(self, net):
+        if own is None or not own.override_board_fields:
+            return False
+        sensed = [s.ref for s in own.sources if s.sense_net or s.ground_sense_net]    # as the merge
+        if not fields_view.confirm_use_fields(self, net, sensed):
             return False
         own.override_board_fields = False
         own.sources, own.loads = [], []

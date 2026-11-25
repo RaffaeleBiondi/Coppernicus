@@ -139,11 +139,14 @@ def ask_override(parent, net: str, differences: List[str]) -> Optional[str]:
     return USE_MINE if clicked is mine else START_FROM_KICAD if clicked is kicad else None
 
 
-def confirm_use_fields(parent, net: str) -> bool:
-    """Go back to the KiCad fields on ``net``: its project rail loses its sources and loads."""
+def confirm_use_fields(parent, net: str, sense_parts: List[str] = ()) -> bool:
+    """Go back to the KiCad fields on ``net``: its project rail loses its sources and loads,
+    and with them the remote sense pins of ``sense_parts`` (named only when there are some)."""
+    sense = (f" The remote sense pins of {', '.join(sense_parts)} are removed too: KiCad fields "
+             "cannot give them yet." if sense_parts else "")
     answer = QMessageBox.question(
         parent, "Use KiCad fields",
         f"Use the KiCad footprint fields for {net} again? The project rail's sources and loads "
-        "are removed; its limits and net-tie option are kept.",
+        f"are removed; its limits and net-tie option are kept.{sense}",
         QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
     return answer == QMessageBox.Yes
