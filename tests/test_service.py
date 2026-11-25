@@ -239,11 +239,39 @@ def test_solve_rail_thickness_overrides_the_projects_per_layer(session, boards):
     project_settings = Project().settings
     project_settings.copper_thickness_mm = {"F.Cu": 2 * OZ1, "B.Cu": 0.07}
     b = solve_strip(session, bid, base_settings=project_settings,
-                    settings={"copper_thickness_mm": {"F.Cu": 4 * OZ1}})
-    assert b["settings"]["copper_thickness_mm"] == {"F.Cu": 4 * OZ1, "B.Cu": 0.07}
+                    settings={"copper_thickness_mm": {"F.Cu": 0.105}})    # 3 oz: one step from the 2 oz
+    assert b["settings"]["copper_thickness_mm"] == {"F.Cu": 0.105, "B.Cu": 0.07}
     assert project_settings.copper_thickness_mm == {"F.Cu": 2 * OZ1, "B.Cu": 0.07}   # not edited
     # B.Cu thicker changes the via barrels only; the strip has none, so F.Cu sets the drop.
-    assert b["loads"][0]["drop_mv"] == pytest.approx(a["loads"][0]["drop_mv"] / 4, rel=1e-6)
+    assert b["loads"][0]["drop_mv"] == pytest.approx(a["loads"][0]["drop_mv"] / 3, rel=1e-6)
+
+
+def test_solve_rail_copper_what_ifs_are_one_standard_step(session, boards):
+    """The owner's rule for agents: a copper what-if is a standard weight (0.5, 1, 2, 3 oz) at
+    most one step from the design's thickness on each layer; anything else points to
+    copper_step and to KiCad. (Project files and the CLI keep the free value.)"""
+    bid = session.open_board(boards["strip"])["board_id"]
+    for mm in (0.0175, 0.035, 0.070):                 # the board's 1 oz, one step down, one up
+        solve_strip(session, bid, settings={"copper_thickness_mm": {"F.Cu": mm}})
+    for mm in (0.105, 0.05, 0.2):                     # two steps, not standard, far off
+        with pytest.raises(ServiceError) as e:
+            solve_strip(session, bid, settings={"copper_thickness_mm": {"F.Cu": mm}})
+        assert e.value.code == "invalid_input" and "one standard step" in e.value.message
+        assert "copper_step" in e.value.hint and "KiCad" in e.value.hint
+    project_settings = Project().settings
+    project_settings.copper_thickness_mm = {"F.Cu": 2 * OZ1}            # the project's design
+    solve_strip(session, bid, base_settings=project_settings,
+                settings={"copper_thickness_mm": {"F.Cu": 3 * OZ1}})
+    with pytest.raises(ServiceError):
+        solve_strip(session, bid, base_settings=project_settings,
+                    settings={"copper_thickness_mm": {"F.Cu": 0.0175}})
+    project_settings.copper_thickness_mm = {"F.Cu": 0.05}               # a free value, not a weight
+    solve_strip(session, bid, base_settings=project_settings,
+                settings={"copper_thickness_mm": {"F.Cu": 0.05}})        # the design itself
+    with pytest.raises(ServiceError) as e:
+        solve_strip(session, bid, base_settings=project_settings,
+                    settings={"copper_thickness_mm": {"F.Cu": 0.07}})
+    assert "not a standard weight" in e.value.message
 
 
 def test_solve_rail_refuses_a_thickness_in_microns(session, boards):

@@ -54,6 +54,10 @@ why, and ask for what is missing.
    `settings={"via_plating_um": ...}` or `copper_temp_c`, then `compare_results(a, b)`.
    - `copper_thickness_mm` is an optional what-if, in mm (1 oz = 0.035, not 35). It never
      changes the board file; real changes of copper weight are made in KiCad.
+   - In `solve_rail` it takes only a standard weight one step from the design's thickness on
+     that layer (or the design's own value); anything else is refused. Do not try other
+     values: use `copper_step`, or tell the user the change is made in KiCad. Project files
+     keep the user's free value.
    - The stack is rebuilt around the new thickness, so via barrels get longer when it thickens.
      A net with no copper on that layer can still move slightly. Do not read that shift as a
      copper effect.

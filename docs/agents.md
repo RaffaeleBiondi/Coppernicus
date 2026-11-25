@@ -112,6 +112,14 @@ positive like the drops.
   An unknown layer name is an error (`layer_not_found`) whose message lists the board's copper
   layers.
 
+  **One standard step at most.** In `solve_rail` (the agent's what-if), each layer takes only
+  a standard weight (0.5, 1, 2, 3 oz: 0.0175, 0.035, 0.070, 0.105 mm, within 3 %) at most
+  one step from the design's thickness on that layer, or the design's own value. The design's
+  thickness is the board file's (an in-process caller's `base_settings` give a project's).
+  From a design that is not a standard weight, no step is offered. Anything else is refused
+  (`invalid_input`); the hint points to `copper_step` and to KiCad. A project file and the
+  CLI keep the free value (more than 0, at most 1 mm): that is the user's own what-if.
+
   A project file can hold the same setting under `settings:` (see
   [Project files](#copper-thickness-in-project-files)). The `solve_rail` tool has no project,
   so it uses only the thicknesses you pass. An in-process caller that passes a project's

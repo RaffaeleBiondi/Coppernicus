@@ -317,14 +317,57 @@ class Session:
         ``base_rail`` (in-process callers only) is an existing rail the dicts edit: every
         field they do not set, on the rail and on each matching terminal, is carried over.
         ``base_settings`` (in-process callers only, e.g. a project's) are the settings that
-        ``settings`` edits; its ``copper_thickness_mm`` overrides theirs layer by layer."""
+        ``settings`` edits; its ``copper_thickness_mm`` overrides theirs layer by layer.
+
+        A ``copper_thickness_mm`` given here is an agent's what-if: on each layer, a standard
+        weight at most one step from the design's thickness (:meth:`_check_copper_what_if`);
+        project files and the CLI keep the free value."""
         entry = self._entry(board_id)
         if not isinstance(sources, (list, tuple)) or not isinstance(loads, (list, tuple)):
             raise ServiceError(E.INVALID_INPUT, "sources and loads must be lists of objects")
         rail = C.rail_from_dicts(net, sources, loads, limits, follow_net_ties, base=base_rail)
         solve_settings, _ = C.settings_from_dict(settings, base=base_settings)
+        given = (settings or {}).get("copper_thickness_mm") or {}
+        self._check_copper_what_if(entry.board, solve_settings, given,
+                                   base_settings.copper_thickness_mm if base_settings else {})
         live = self._solve(entry, rail, solve_settings, top, progress, cancelled)
         return C.jsonable(live.rec.summary)
+
+    @staticmethod
+    def _check_copper_what_if(board: Board, settings: Settings, given: Mapping[str, Any],
+                              planned: Mapping[str, float]) -> None:
+        """The owner's rule for an agent's copper what-if: on each layer it names, a standard
+        weight (:data:`COPPER_STEPS_MM`, within 3 %) at most one step from the design's
+        thickness (``planned``, a project's, else the board file's), or the design's own value.
+        A layer the board does not have is left to the solve, which names its layers."""
+        names = {lay.name: lay.thickness_mm for lay in board.layers()}
+        weights = ", ".join(f"{n} {mm:g}" for n, mm in zip(COPPER_STEPS_OZ, COPPER_STEPS_MM))
+        hint = ("for a what-if, copper_step moves one layer one standard weight up or down from a "
+                "result; real changes of copper weight are made in KiCad (the stack-up), then solved "
+                "again")
+
+        def step_of(mm: float) -> Optional[int]:
+            return next((i for i, w in enumerate(COPPER_STEPS_MM) if abs(mm - w) <= 0.03 * w), None)
+        for layer in given:
+            if layer not in names:
+                continue
+            mm = settings.copper_thickness_mm[layer]
+            design = planned.get(layer)
+            design = design if design is not None else board.file_thickness_mm.get(layer, names[layer])
+            if math.isclose(mm, design, rel_tol=1e-9):
+                continue
+            at, to = step_of(design), step_of(mm)
+            if at is None:
+                raise ServiceError(E.INVALID_INPUT, f"copper_thickness_mm[{layer}] = {mm:g} mm: the "
+                                   f"design's {design:g} mm is not a standard weight ({weights} mm), "
+                                   "so no step from it is offered; an agent's copper what-if is one "
+                                   "standard step from the design", hint)
+            if to is None or abs(to - at) > 1:
+                near = ", ".join(f"{COPPER_STEPS_MM[i]:g}" for i in range(max(at - 1, 0),
+                                                                          min(at + 2, len(COPPER_STEPS_MM))))
+                raise ServiceError(E.INVALID_INPUT, f"copper_thickness_mm[{layer}] = {mm:g} mm: an "
+                                   "agent's copper what-if is one standard step from the design's "
+                                   f"{COPPER_STEPS_OZ[at]} ({design:g} mm) at most: {near} mm", hint)
 
     def _validate_rail(self, board: Board, rail: Rail, project: Optional[Project] = None) -> None:
         self._check_net(board, rail.net)

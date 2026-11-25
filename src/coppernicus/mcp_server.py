@@ -38,7 +38,8 @@ Coppernicus: DC power-integrity analysis (IR drop, current density) of KiCad PCB
 Typical flow: open_board(path) -> list_nets -> net_parts(net) to choose the source (the
 regulator output or supply connector, voltage_v) and the loads (ref, current_a) ->
 solve_rail -> get_problems / render_map / probe / cut_current -> change settings
-(copper_thickness_mm, via_plating_um, copper_temp_c) and solve again -> compare_results.
+(via_plating_um, copper_temp_c; copper_thickness_mm one standard weight from the design at
+most) and solve again -> compare_results.
 From a project file: solve_project (rails one by one, with maps) or solve_tree (the whole
 power tree at once, ground return included; tables only). Set up a project for the user with
 write_project (read_project to see one); describe it as KiCad fields with propose_fields (the
@@ -151,8 +152,11 @@ class SettingsSpec(BaseModel):
     copper_temp_c: Optional[float] = Field(None, description="Copper temperature for ρ(T), °C "
                                                              "(default 20).")
     copper_thickness_mm: Optional[dict[str, float]] = Field(
-        None, description="What-if copper thickness by layer name, mm (1 oz = 0.035), e.g. "
-                          "{\"B.Cu\": 0.07}. The board file is not changed.")
+        None, description="What-if copper thickness by layer name, mm, e.g. {\"B.Cu\": 0.07}. "
+                          "Only a standard weight (0.5/1/2/3 oz = 0.0175/0.035/0.070/0.105 mm) "
+                          "at most one step from the design's thickness on that layer; anything "
+                          "else is refused (real changes are made in KiCad). copper_step does "
+                          "the same from a result. The board file is not changed.")
 
 
 def _error_result(err: dict) -> CallToolResult:

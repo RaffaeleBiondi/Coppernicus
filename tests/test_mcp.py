@@ -190,9 +190,13 @@ def test_report_tool_writes_one_offline_page(tmp_path):
         both = await call(client, "report")
         one = await call(client, "report", result_ids=[b["result_id"]], path=str(tmp_path / "b.html"))
         gone = await client.call_tool("report", {"result_ids": ["r9"]})
-        return a, b, both, one, gone
+        far = await client.call_tool("solve_rail", {**args, "settings": {"copper_thickness_mm":
+                                                                         {"B.Cu": 0.105}}})
+        return a, b, both, one, gone, far
 
-    a, b, both, one, gone = run_with_client(tmp_path, scenario)
+    a, b, both, one, gone, far = run_with_client(tmp_path, scenario)
+    err = json.loads(far.content[0].text)["error"]         # 1 oz to 3 oz: two steps, refused
+    assert err["code"] == "invalid_input" and "copper_step" in err["hint"]
     assert [r["result_id"] for r in both["rails"]] == [a["result_id"], b["result_id"]]
     page = Path(both["path"])
     assert page.parent == tmp_path / "maps" and page.suffix == ".html"
