@@ -1,6 +1,6 @@
 ---
 name: analyzing-pdn-with-coppernicus
-description: Use when asked whether a PCB power rail "is OK" or "holds", about IR drop / voltage drop at a chip, current density, current crowding, via current, copper heating, or a what-if on copper thickness, via plating or temperature, for a KiCad (.kicad_pcb), ODB++ or HyperLynx board, and the Coppernicus MCP tools (open_board, solve_rail, render_map, cut_current…) or the `coppernicus` CLI are available.
+description: Use when asked whether a PCB power rail "is OK" or "holds", about IR drop / voltage drop at a chip, current density, current crowding, via current, copper heating, PDN impedance, DC-DC ripple or switching noise coupled into a signal net, or a what-if on copper thickness, via plating or temperature, for a KiCad (.kicad_pcb), ODB++ or HyperLynx board, and the Coppernicus MCP tools (open_board, solve_rail, render_map, cut_current…) or the `coppernicus` CLI are available.
 ---
 
 # Analyzing a PDN with Coppernicus
@@ -81,6 +81,17 @@ why, and ask for what is missing.
      rail's `estimate` comes first, and `solve_too_large` means: tell the user, ask, then
      `confirm_large: true`. Judged only against each probe's own target; below the source's
      control-loop bandwidth nothing is judged. Point the user to the `png_file` of each rail.
+   - Ripple and coupled noise: `solve_noise(project_path)` answers "how much ripple does this
+     switcher put on its rails, and how much noise does it couple into these signal nets?"
+     for the project's `aggressors:` and `victims:`. It is heavy: read each aggressor's
+     `estimate` first; `solve_too_large` means tell the user the estimate and ask, then
+     `confirm_large: true` (never on your own). A victim is judged only against the margin the
+     user set (`noise_margin_v`, a preset's own, or the JESD8 levels of an entered `logic_v`);
+     never invent a margin or pass one the user did not give. A victim with `stand_ins` (KiPI
+     defaults for Coss, Qrr, a capacitor model, guessed ends, a coupling left out) is **not
+     judged**, never a pass: name each reason and what to enter. The ripple and the radiated
+     estimate are never judged: report the numbers only. Point the user to `png_files` (the
+     waveforms, then the H and E field maps), or `coppernicus noise PROJECT --html` for one page.
 9. Before and after a change in KiCad: solve the rail (`result_a`), let the user change and save
    the board, `open_board` again (new `board_id`), solve the same rail with the same sources and
    loads (`result_b`), then `compare_revisions(result_a, result_b)`: per-load drop deltas, via
@@ -142,6 +153,7 @@ The tool has no default thresholds, and neither do you. If the user gave no limi
 | "1 A per 0.3 mm via is a common rule" | It is folklore, not a standard. Report the via current; the limit is the user's or the fab's. |
 | "I'll pass my limit to the tool and label it as mine" | It writes FAIL/PASS into the result and its files. Do not pass limits the user did not give. |
 | "50 A/mm² is a safe screening value" | No such universal value exists. Heating depends on width, layer, board and airflow. |
+| "10 % of VDD is a fine noise margin" | The margin is the receiver's. Ask, or let the user enter the victim's `logic_v` (JESD8 levels) or `noise_margin_v`. |
 
 **Red flags:** a headline "sì, regge" or "OK" with no user limit; a table column "Soglia
 (mia)"; "if you don't give me one, I'll use X %".

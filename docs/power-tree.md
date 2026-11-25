@@ -218,8 +218,9 @@ and the agents' maps, probes and cuts work on; the tree gives the whole board's 
 - [Power tree](power-tree.md): regulators, ground return, groups and verdicts.
 - [Board temperature](thermal.md): the electro-thermal solve of the power tree.
 - [PDN impedance](ac-impedance.md): |Z|(f) at the probes, against your targets.
+- [Ripple and coupled noise](noise.md): a switcher's ripple and the noise in victim nets, against your margins.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
 - [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
-- [HTML report](html-report.md): the offline pages of a solve, the power tree and the impedance.
+- [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance and the noise.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

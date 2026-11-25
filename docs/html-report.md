@@ -19,6 +19,8 @@ so you can send it to someone who does not have Coppernicus, or attach it to a d
 - **Power tree:** `coppernicus solve PROJECT --tree --html` writes one page with every group of
   the tree and the tree's tables ([below](#the-power-tree-report)).
 - **Impedance:** `coppernicus ac PROJECT --html` writes its own page ([below](#the-impedance-page)).
+- **Ripple and noise:** `coppernicus noise PROJECT --html` writes its own page
+  ([below](#the-noise-page)).
 - **CI:** the GitHub Action attaches the report to every run, in the `coppernicus-results`
   artifact (see [CI](ci.md)).
 - **Agents:** the MCP tool `report` writes one page for the results of a session (see
@@ -108,13 +110,29 @@ and the warnings. Like the other pages, everything is inside the file.
   <img src="images/report-ac.png" alt="The impedance page of the pdn example: FAIL, the |Z|(f) plot of +3V3 against GND with the 50 mΩ target and the open-loop band below 100 kHz, and probe U1's worst |Z| of 159.8 mΩ at 100.1 kHz" width="760">
 </p>
 
+## The noise page
+
+`coppernicus noise PROJECT --html [PATH]` writes one page of the
+[ripple and coupled noise](noise.md) (default `<out>/<project>_noise_report.html`): the
+verdict, and for each aggressor its operating point and hot loops, the waveforms plot, the H
+and E field maps above the board, the ripple table (marked never judged), the victims table
+(peak, what dominates, margin, % of the margin, verdict and its reason), the stand-ins, the
+radiated estimate (for scale, never judged), the assumptions and the warnings. Everything is
+inside the file. In CI, the Action's `noise` input writes it with the other results when `html`
+is on.
+
+<p align="center">
+  <img src="images/report-noise.png" alt="The noise page of noise-tight: verdict fail, the ripple table marked never judged, the victims table with SIG_LOOP 655.4 mV against a 500 mV margin, 131 %, FAIL and its reason, the stand-ins (none) and the radiated estimate for scale" width="760">
+</p>
+
 ## Documentation
 
 - [Power tree](power-tree.md): regulators, ground return, groups and verdicts.
 - [Board temperature](thermal.md): the electro-thermal solve of the power tree.
 - [PDN impedance](ac-impedance.md): |Z|(f) at the probes, against your targets.
+- [Ripple and coupled noise](noise.md): a switcher's ripple and the noise in victim nets, against your margins.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
 - [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
-- [HTML report](html-report.md): the offline pages of a solve, the power tree and the impedance.
+- [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance and the noise.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

@@ -1044,9 +1044,14 @@ never judged); the via plating and what-if thickness, as in DC; the copper tempe
   `assumptions`, `warnings`, `stats`. Infinite or NaN values (an infinite ratio, a radiated
   estimate below the band) are null.
 - `coppernicus noise PROJECT [--aggressor NAME ...] [--out DIR] [--no-board-fields] [--json]
-  [-v]`: every aggressor (or each `--aggressor`, once), the files above into `--out` (default
-  `results/` next to the project). The KiCad footprint fields merge as in `solve --tree` and
-  `ac` (brief Q9); the rails taken from them word where a regulator's `PI_FSW` came from.
+  [--html [PATH]] [-v]`: every aggressor (or each `--aggressor`, once), the files above into
+  `--out` (default `results/` next to the project). The KiCad footprint fields merge as in
+  `solve --tree` and `ac` (brief Q9); the rails taken from them word where a regulator's
+  `PI_FSW` came from. Before each aggressor it prints "Noise of <aggressor>: <estimate>" (on
+  stderr with `--json`; `service.session.noise_estimate`, below) and each aggressor's entry
+  carries it as `estimate`; `--html` writes `report.write_noise_report`'s offline page. The
+  MCP `solve_noise` (`Session.solve_noise`) returns the same document, refused over this
+  machine's memory unless confirmed; CI runs it with the Action's `noise` input.
 
 ### Cost and memory before a solve (brief Q8: warn and confirm, never cancel)
 
