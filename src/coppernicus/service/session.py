@@ -63,6 +63,39 @@ PIN_LIST_LIMIT = 64
 COPPER_STEPS_MM = (0.0175, 0.035, 0.070, 0.105)
 COPPER_STEPS_OZ = ("0.5 oz", "1 oz", "2 oz", "3 oz")
 
+def thermal_estimate(board: Board, options) -> Dict[str, Any]:
+    """What an electro-thermal solve of ``board`` with thermal ``options`` will cost, before
+    it starts, from the engine's own estimate (:func:`coppernicus.engine.thermal.thermal_size`,
+    :func:`~coppernicus.engine.thermal.thermal_ram_estimate`, the app's figures): KiPI's grid,
+    its unknowns, the memory of the thermal model against this machine's, and the text."""
+    from coppernicus.engine import ac
+    from coppernicus.engine.thermal import thermal_cost_text, thermal_ram_estimate, thermal_size
+    size = thermal_size(board, options)
+    ram = thermal_ram_estimate(size.unknowns, size.layers, ac.total_memory_bytes())
+    return {"grid_nx": size.nx, "grid_ny": size.ny, "cell_mm": size.cell_mm, "cells": size.cells,
+            "layers": size.layers, "unknowns": size.unknowns, "memory_bytes": ram.bytes,
+            "machine_memory_bytes": ram.total_bytes, "exceeds_memory": ram.risk,
+            "text": f"{thermal_cost_text(size)}. {ram.text}"}
+
+
+def thermal_with(options, overrides: Optional[Mapping[str, Any]]):
+    """Thermal ``options`` with ``overrides`` (keys of :class:`ThermalOptions`) for one solve,
+    checked as when loaded; the project file is not changed."""
+    from coppernicus.project import ThermalOptions
+    if not overrides:
+        return options
+    keys = {f.name for f in dataclasses.fields(ThermalOptions)}
+    unknown = sorted(set(overrides) - keys)
+    if unknown:
+        raise ServiceError(E.INVALID_INPUT, f"thermal_options: unknown key(s) {', '.join(unknown)}",
+                           f"the keys are {', '.join(sorted(keys))}")
+    try:
+        return dataclasses.replace(options, **dict(overrides))
+    except (ProjectError, TypeError, ValueError) as e:
+        raise ServiceError(E.INVALID_INPUT, f"thermal_options: {e}",
+                           "give the values as the project file's thermal: block takes them") from None
+
+
 BOARD_TEMPERATURE_REASON = ("solved with the power tree only (solve --tree, the MCP solve_tree, "
                             "Ctrl+T in the app), not rail by rail")
 FIELD_HINT = ("fix the field in KiCad (on the symbol, then update the PCB); or give the rail in the "
@@ -841,23 +874,41 @@ class Session:
         return out
 
     def solve_tree(self, project_path, top: int = 5, progress: Progress = None,
-                   cancelled: Cancel = None, use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
+                   cancelled: Cancel = None, use_board_fields: Optional[bool] = None,
+                   thermal: Optional[bool] = None, thermal_options: Optional[Mapping[str, Any]] = None,
+                   confirm_large: bool = False) -> Dict[str, Any]:
         """Solve the project's whole power tree at once: every rail and ground group, with
         the regulators' input currents and the ground return computed exactly. Returns
         :func:`coppernicus.power_tree.tree_summary` unchanged (the document of
         ``coppernicus solve --tree --json``, without its ``summary_file``), judged against
-        the project's limits only. The groups are not kept as results: no maps or probes."""
+        the project's limits only. The groups are not kept as results: no maps or probes.
+
+        The board temperature (electro-thermal): ``thermal`` True solves it, False not, None
+        as the project's ``thermal.enabled``; ``thermal_options`` override the project's
+        ``thermal:`` keys for this solve. Before it, its cost is estimated
+        (:func:`thermal_estimate`, in the document as ``thermal_estimate``); when that exceeds
+        this machine's memory the solve is refused (``solve_too_large``) unless
+        ``confirm_large``: never a silent multi-GB solve."""
         from coppernicus.engine.tree import solve_project_tree
         from coppernicus.power_tree import tree_summary
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
         project = merged.project
+        if thermal_options:
+            project = dataclasses.replace(project, thermal=thermal_with(project.thermal, thermal_options))
+        heat = bool(project.thermal.enabled) if thermal is None else bool(thermal)
+        estimate = thermal_estimate(entry.board, project.thermal) if heat else None
+        if estimate is not None and estimate["exceeds_memory"] and not confirm_large:
+            raise ServiceError(E.SOLVE_TOO_LARGE, f"{path.name}: board temperature: {estimate['text']}",
+                               "pass confirm_large: true to solve it anyway, or a coarser grid "
+                               f"(thermal_options.grid_mm; now {estimate['cell_mm']:.3g} mm cells), or "
+                               "thermal: false for the power tree without the temperature")
         with self._solve_lock:
             if progress is not None:
                 progress(f"solving the power tree of {path.name}")
             try:
                 tree = solve_project_tree(entry.board, project, progress=progress,
-                                          cancelled=cancelled or (lambda: False))
+                                          cancelled=cancelled or (lambda: False), thermal=heat)
             except Cancelled:
                 raise ServiceError(E.CANCELLED, f"{path.name}: solve cancelled") from None
             except EngineError as e:
@@ -867,6 +918,8 @@ class Session:
                                    "then solve again") from None
         merged.annotate(tree)
         doc = C.vrm_ratings(tree_summary(tree, top=max(1, int(top))), project)
+        if estimate is not None:
+            doc["thermal_estimate"] = estimate
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
         return json.loads(json.dumps(doc, allow_nan=False))
 

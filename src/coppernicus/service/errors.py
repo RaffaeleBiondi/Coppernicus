@@ -42,5 +42,6 @@ RESULT_EVICTED = "result_evicted"
 CUT_MISSES_COPPER = "cut_misses_copper"
 INVALID_BOARD_FIELD = "invalid_board_field"
 SOLVE_FAILED = "solve_failed"
+SOLVE_TOO_LARGE = "solve_too_large"      # its estimate exceeds this machine's memory; confirm to run
 CANCELLED = "cancelled"
 INTERNAL_ERROR = "internal_error"

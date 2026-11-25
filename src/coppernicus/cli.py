@@ -335,6 +335,14 @@ def _cmd_solve_tree(args) -> int:
         return fail("invalid_board_field", str(e), FIELD_HINT)
     project = merged.project
     stream = sys.stderr if quiet else sys.stdout
+    estimate = None
+    if args.thermal or project.thermal.enabled:   # warn before a heavy electro-thermal solve
+        from coppernicus.service.session import thermal_estimate
+        estimate = thermal_estimate(board, project.thermal)
+        print(f"Board temperature: {estimate['text']}", file=stream, flush=True)
+        if estimate["exceeds_memory"]:
+            print("warning: the board temperature's model could exceed this machine's memory; "
+                  "a coarser grid (thermal: grid_mm) lowers it", file=sys.stderr, flush=True)
     try:
         tree = solve_project_tree(board, project, progress=(
             (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None),
@@ -345,6 +353,8 @@ def _cmd_solve_tree(args) -> int:
     merged.annotate(tree)
     from coppernicus.service.convert import vrm_ratings
     doc = vrm_ratings(tree_summary(tree, top=args.top), project)    # + each VRM's I_max (shown)
+    if estimate is not None:
+        doc["thermal_estimate"] = estimate
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / f"{safe_name(Path(args.project).stem)}_tree_summary.json"

@@ -76,6 +76,20 @@ class LoadSpec(BaseModel):
     name: str = Field("", description="Optional label (default: the reference).")
 
 
+class ThermalSpec(BaseModel):
+    """Overrides of the project's ``thermal:`` block for one solve_tree (not saved)."""
+    model_config = ConfigDict(extra="forbid")
+    ambient_c: Optional[float] = Field(None, description="Ambient temperature, °C (default 25).")
+    iterations: Optional[int] = Field(None, ge=1, description="Electro-thermal passes (default 3).")
+    airflow_m_s: Optional[float] = Field(None, ge=0, description="Air speed over the board, m/s.")
+    grid_mm: Optional[float] = Field(None, ge=0, description="Thermal cell size, mm; 0 = automatic. "
+                                     "Coarser cells lower the cost.")
+    load_heat: Optional[bool] = Field(None, description="Also the loads' own power as heat.")
+    regulator_heat: Optional[Literal["output_pads", "part_pads"]] = None
+    max_temp_c: Optional[float] = Field(None, description="Limit on the hottest solved copper, °C.")
+    max_rise_c: Optional[float] = Field(None, description="Limit on its rise above the ambient, °C.")
+
+
 class LimitsSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_drop_pct: Optional[float] = Field(None, gt=0, description="Largest allowed load drop, % "
@@ -363,6 +377,17 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                        description="false: ignore the board's KiCad footprint fields (PI_RAIL, "
                                    "PI_SOURCE, PI_LOAD, ...); default: the project file's "
                                    "use_board_fields, which is on.")] = None,
+                   thermal: Annotated[Optional[bool], Field(
+                       description="true: also solve the board temperature (electro-thermal, "
+                                   "heavier); false: the plain tree; default: the project's "
+                                   "thermal.enabled.")] = None,
+                   thermal_options: Annotated[Optional[ThermalSpec], Field(
+                       description="Overrides of the project's thermal: block for this solve "
+                                   "(not saved).")] = None,
+                   confirm_large: Annotated[bool, Field(
+                       description="Solve even when the estimate exceeds this machine's memory "
+                                   "(otherwise refused with the estimate: solve_too_large). Ask "
+                                   "the user first.")] = False,
                       ) -> dict[str, Any]:
         """Solve a project's whole power tree at once: every rail and ground group together,
         with the regulators' input currents and the ground return computed exactly (when a
@@ -371,11 +396,17 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         "return" on a ground), the verdict per group
         against the project's own limits, assumptions and warnings: the same document as
         `coppernicus solve --tree --json`. No result ids: render_map and probe do not apply
-        to tree groups (solve_project per rail for maps)."""
+        to tree groups (solve_project per rail for maps). With the board temperature, the
+        document has `thermal` (verdict, peak, per-layer rows, history, load drops at the
+        ambient and electro-thermal) and `thermal_estimate` (grid, unknowns, memory against
+        this machine's), given before the solve starts."""
         bridge = _Bridge(ctx)
         return _call("solve_tree", session.solve_tree, project_path, top,
                      progress=bridge.progress, cancelled=bridge.cancelled,
-                     use_board_fields=use_board_fields)
+                     use_board_fields=use_board_fields, thermal=thermal,
+                     thermal_options=(thermal_options.model_dump(exclude_none=True)
+                                      if thermal_options is not None else None),
+                     confirm_large=confirm_large)
 
     @mcp.tool(annotations=WRITES_FILE)
     def compare_revisions(result_a: Annotated[str, Field(description="The result before the change.")],

@@ -78,7 +78,7 @@ input.
 | `compare_revisions` | `result_a`, `result_b` | Two revisions of a board (different board files, or the same file edited and saved in KiCad, then opened again), whose meshes differ: per-load drop deltas matched by part, per-layer loss deltas, via currents matched by position and drill, where the drop grew or shrank most (B's drop mapped onto A's mesh, a PNG Δ map per layer), and what could not be matched. See [Comparing revisions](#comparing-revisions). |
 | `copper_step` | `result_id`, `layer`, `step` (`up`/`down`) | What-if: the result re-solved with one copper layer **one** standard weight up or down (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness (the project's `copper_thickness_mm`, else the board file's), with the comparison against that result and the new `result_id`. A project rail keeps its estimated draws. Bigger jumps, a non-standard start (more than 3 % off a standard weight) and a result that is already a what-if (any layer off the design's copper) are refused: real changes are made in KiCad. The assumptions carry the via-barrel note. |
 | `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. The board temperature is a power-tree solve: when the project sets `thermal.max_temp_c` or `max_rise_c`, each is a top-level `not_judged` entry (`rail: null`, `item: "board temperature"`, "solved with the power tree only…"), so the verdict is `not_judged` (CLI and CI exit 3) unless something fails; use `solve_tree` to judge it. |
-| `solve_tree` | `project_path`, `top`?, `use_board_fields`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. |
+| `solve_tree` | `project_path`, `top`?, `use_board_fields`?, `thermal`?, `thermal_options`?, `confirm_large`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. With `thermal` (or the project's `thermal.enabled`) it also solves the board temperature: see [Board temperature](#board-temperature). |
 | `propose_fields` | `project_path` or `result_id` | The KiCad `PI_*` field text that describes a project's rails and links (or one solved rail), part by part, to paste into KiCad. See [Proposing fields](#proposing-fields). |
 | `read_project` | `project_path` | A project file as written (rails, sources, loads, limits, links, settings; unknown keys included), checked by the project loader, with the board it names. |
 | `write_project` | `project_path`, `board_path`?, `rails`?, `remove_rails`?, `links`?, `remove_links`?, `settings`?, `use_board_fields`?, `from_project`?, `overwrite`? | Creates or edits a project file for the user. See [Editing projects](#editing-projects). |
@@ -447,6 +447,34 @@ the rails with `solve_project`, or give the user `coppernicus solve PROJECT --tr
 offline page with every group (maps, problems and the tree's verdict per group) and the tree's
 VRM, load and link tables.
 
+### Board temperature
+
+The power tree can also solve the board's temperature (electro-thermal: the copper is heated
+by its own losses, then solved again at that temperature, KiPI's co-simulation). It is a
+power-tree solve only: `solve_tree` with `thermal: true`, or the project's `thermal:` block with
+`enabled: true` (`coppernicus solve PROJECT --thermal` on the command line).
+
+- `thermal`: true solves it, false not, omitted follows the project's `thermal.enabled`.
+- `thermal_options`: for this solve only (the file is not changed), any of the project's
+  `thermal:` keys: `ambient_c` (default 25), `iterations` (3), `airflow_m_s` (0), `grid_mm`
+  (0 = automatic, about 250 cells across), `load_heat`, `regulator_heat` (`output_pads` or
+  `part_pads`), and the limits `max_temp_c` and `max_rise_c`. Unknown keys are refused.
+- **Cost first.** Before the solve, `thermal_estimate` gives KiPI's grid (`grid_nx`,
+  `grid_ny`, `cell_mm`, `cells`, `layers`, `unknowns`), the memory of its thermal model
+  (`memory_bytes`) against this machine's (`machine_memory_bytes`, `exceeds_memory`) and a
+  `text`, from the same estimate the app shows. When it exceeds this machine's memory, the
+  call is refused with `solve_too_large`, the estimate in the message: ask the user, then
+  call again with `confirm_large: true`, or with a coarser `thermal_options.grid_mm`. The CLI
+  prints the same line before it solves ("Board temperature: …").
+- The document then has `thermal`: its verdict (only against `max_temp_c` / `max_rise_c`),
+  the hottest solved copper per layer with its nearest pad, the grid peak (shown, never
+  judged), the history of the iterations and whether it settled, the heat by kind, and each
+  load's drop at the ambient and electro-thermal. Its keys are listed in
+  [engine-mapping.md](engine-mapping.md#summary-tree_summarytreethermal-present-only-when-the-temperature-was-solved).
+  The board temperature counts as one more group in the overall verdict and the exit code.
+- Rail by rail (`solve_project`, `coppernicus solve`), the temperature is not solved: its
+  limits are listed as not judged (exit 3), never passed.
+
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;
 - `max_current_density_a_mm2`;
@@ -483,8 +511,9 @@ Problem kinds, in `problems` of every summary and of `get_problems`:
   `pin_not_on_net` lists the pins of the part. Codes: `file_not_found`, `board_unreadable`,
   `board_not_open`, `invalid_project`, `invalid_input`, `net_not_found`, `part_not_on_net`,
   `pin_not_on_net`, `missing_source`, `missing_load`, `layer_not_found`, `result_not_found`,
-  `result_evicted`, `cut_misses_copper`, `invalid_board_field`, `solve_failed`, `cancelled`,
-  `internal_error`. An
+  `result_evicted`, `cut_misses_copper`, `invalid_board_field`, `solve_failed`,
+  `solve_too_large` (a solve whose estimate exceeds this machine's memory, refused until
+  confirmed), `cancelled`, `internal_error`. An
   argument of the wrong type is rejected by the tool's input schema before it runs.
 - **Verdicts.** A verdict exists only against limits the user gives:
   - `fail`: an item exceeds a limit you set;

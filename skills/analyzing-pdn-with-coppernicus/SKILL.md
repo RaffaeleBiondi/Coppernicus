@@ -72,6 +72,11 @@ why, and ask for what is missing.
    (supply minus ground, from nominal), the VRMs' `regulation`, and each group's problems.
    It returns no result ids: for maps, use `solve_project`, or point the user to
    `coppernicus solve PROJECT --tree --html` (every group's maps and the VRM and load tables).
+   - Board temperature: `solve_tree(project_path, thermal=true)` (or the project's
+     `thermal.enabled`), with `thermal_options` for this solve. Read `thermal_estimate` first.
+     If the call is refused with `solve_too_large`, tell the user the estimate and ask before
+     calling again with `confirm_large: true` (or a coarser `grid_mm`); never confirm on your
+     own. The temperature is judged only against the user's `max_temp_c` / `max_rise_c`.
 9. Before and after a change in KiCad: solve the rail (`result_a`), let the user change and save
    the board, `open_board` again (new `board_id`), solve the same rail with the same sources and
    loads (`result_b`), then `compare_revisions(result_a, result_b)`: per-load drop deltas, via
@@ -137,8 +142,9 @@ The tool has no default thresholds, and neither do you. If the user gave no limi
 **Red flags:** a headline "sì, regge" or "OK" with no user limit; a table column "Soglia
 (mia)"; "if you don't give me one, I'll use X %".
 
-**Heating questions:** Coppernicus computes no temperature. If asked, you may give an IPC-2221
-estimate, **labelled as an estimate**: I = k·ΔT^0.44·A^0.725, with A in mil² and k = 0.048 for
+**Heating questions:** the board temperature is a power-tree solve (step 8, `thermal`); a rail
+solved alone has none. Without it, you may give an IPC-2221 estimate for a track,
+**labelled as an estimate**: I = k·ΔT^0.44·A^0.725, with A in mil² and k = 0.048 for
 external or 0.024 for internal layers. It is conservative and superseded by IPC-2152. Apply it
 to a measured cross-section (`cut_current`).
 - Never apply it to a via barrel as if it were an isolated track.
