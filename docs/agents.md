@@ -474,6 +474,9 @@ power-tree solve only: `solve_tree` with `thermal: true`, or the project's `ther
   The board temperature counts as one more group in the overall verdict and the exit code.
 - Rail by rail (`solve_project`, `coppernicus solve`), the temperature is not solved: its
   limits are listed as not judged (exit 3), never passed.
+- `coppernicus solve PROJECT --thermal --html` adds a "Board temperature" section to the tree
+  report: the verdict, the grid peak, the per-layer rows, the load drops at the ambient and
+  electro-thermal, the assumptions, and each copper layer's temperature map inside the page.
 
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;

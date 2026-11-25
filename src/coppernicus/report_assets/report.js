@@ -314,6 +314,29 @@ if (M.tree) {                 // solve --tree --html: the tree's own tables, onc
       [l.status || (l.exceeds_drop_limit ? el("span", { class: "badge fail" }, "FAIL") : l.exceeds_drop_limit === false ? "within" : "not judged"), ""]]));
   table("tree-links", [["Link", ""], ["Nets", ""], ["Current (A)", "num"], ["Loss (mW)", "num"]],
     (T.links || []).map((k) => [[k.name, ""], [(k.nets || []).join(" ↔ "), ""], [sig(k.current_a, 4), "num"], [mw(k.power_w), "num"]]));
+  if (T.thermal) {            // Board temperature (solve --thermal): judged only against the user's limits
+    const H = T.thermal, pad = (p) => (p ? `${p.ref}.${p.pad}${p.distance_mm ? ` (${sig(p.distance_mm, 2)} mm away)` : ""}` : "–");
+    const c = (x) => (ok(x) ? sig(x, 4) : "–");
+    $("thermal").hidden = false;
+    $("thermal-verdict").append(badge(H.verdict), " ", H.verdict_note || "");
+    const settled = H.settled === true ? "settled" : H.settled === false ? "not settled" : "one iteration: settling not checked";
+    $("thermal-peak").textContent = `Grid peak ${c(H.peak_c)} °C (rise ${c(H.peak_rise_c)} °C) on ${H.peak_layer} at ` +
+      `${xy(H.peak_x_mm, H.peak_y_mm)}, nearest pad ${pad(H.peak_nearest_pad)}: shown, never judged. Ambient ` +
+      `${c(H.ambient_c)} °C, airflow ${c(H.airflow_m_s)} m/s, ${H.iterations} iteration${H.iterations === 1 ? "" : "s"} (${settled}); ` +
+      `heat ${c(H.heat_w)} W; grid ${H.grid_nx} × ${H.grid_ny} cells of ${c(H.grid_mm)} mm.`;
+    table("thermal-layers", [["Layer", ""], ["Hottest copper (°C)", "num"], ["Rise (°C)", "num"], ["Where", ""], ["Nearest pad", ""],
+      ["Group", ""], ["Verdict", ""]],
+      (H.layers || []).map((r) => [[r.layer, ""], [c(r.t_max_c), "num"], [c(r.rise_c), "num"], [xy(r.x_mm, r.y_mm), ""],
+        [pad(r.nearest_pad), ""], [r.group || "–", ""],
+        [r.exceeds_limit ? el("span", { class: "badge fail" }, "FAIL") : r.exceeds_limit === false ? "within" : "not judged", ""]]));
+    table("thermal-loads", [["Load", ""], ["Group", ""], ["At the ambient (mV)", "num"], ["Electro-thermal (mV)", "num"], ["Change (%)", "num"]],
+      (H.loads || []).map((l) => [[l.name, ""], [l.group, ""], [c(l.drop_ambient_mv), "num"], [c(l.drop_mv), "num"], [c(l.change_pct), "num"]]));
+    const maps = $("thermal-maps");
+    for (const m of H.maps || []) maps.append(el("figure", {}, el("img", { src: m.png, alt: `Board temperature on ${m.layer}` }),
+      el("figcaption", {}, `Board temperature on ${m.layer} (°C; every layer on one scale)`)));
+    const ul = $("thermal-assumptions");
+    for (const a of H.assumptions || []) ul.append(el("li", {}, a));
+  }
 }
 // report.html#group=+3V3 opens that rail or group (by net or label); the first otherwise.
 function railFromHash() {

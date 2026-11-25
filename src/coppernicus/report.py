@@ -527,6 +527,9 @@ def write_tree_report(tree, doc: Mapping[str, Any], path, *, outline: Sequence[n
                                 label=f"{key} ({res.kind} group)", judged=judged,
                                 tree_loads=tree_group_loads(tree, key)))
     meta = {k: doc.get(k) for k in ("verdict", "verdict_note", "not_judged", "vrms", "loads", "links")}
+    if getattr(tree, "thermal", None) is not None and doc.get("thermal"):
+        # The board temperature: its summary, and each copper layer's map inside the page.
+        meta["thermal"] = {**doc["thermal"], "maps": thermal_map_images(tree.thermal, outline)}
     builder, text = build_report(items, title=title or f"Coppernicus power tree: {project or board_name}",
                                  board_name=board_name, outline=outline, project=project,
                                  settings=settings, budget_mb=budget_mb, tree=meta)
@@ -550,6 +553,22 @@ def tree_group_loads(tree, key: str) -> List[Dict[str, Any]]:
               "exceeds": None if v.input_passed is None else not v.input_passed,
               "status": v.input_status} for v in tree.vrms if v.input_net and v.input_group == key]
     return rows
+
+
+def thermal_map_images(temp, outline: Sequence[np.ndarray] = (), dpi: int = 110) -> List[Dict[str, str]]:
+    """The board temperature's map of each copper layer (:func:`coppernicus.temperature.write_png`,
+    every layer on one scale from the ambient to the peak) as a PNG data URI, for the page."""
+    import tempfile
+
+    from coppernicus.temperature import write_png
+    out = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for m in temp.maps:
+            png = Path(tmp) / "layer.png"
+            write_png(temp, m.layer_name, png, outline, dpi=dpi)
+            out.append({"layer": m.layer_name,
+                        "png": "data:image/png;base64," + base64.b64encode(png.read_bytes()).decode("ascii")})
+    return out
 
 
 def kind_label(p: Problem) -> str:

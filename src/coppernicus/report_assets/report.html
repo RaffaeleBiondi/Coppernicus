@@ -54,6 +54,15 @@
   <h3>VRMs (sources and regulators)</h3><div class="tablewrap"><table id="tree-vrms"></table></div>
   <h3>Loads (the voltage across their supply and ground pins)</h3><div class="tablewrap"><table id="tree-loads"></table></div>
   <h3>Links</h3><div class="tablewrap"><table id="tree-links"></table></div>
+  <section id="thermal" hidden aria-label="Board temperature">
+    <h3>Board temperature</h3>
+    <p id="thermal-verdict"></p>
+    <p id="thermal-peak" class="muted small"></p>
+    <div class="tablewrap"><table id="thermal-layers"></table></div>
+    <h4>Load drops at the ambient and electro-thermal</h4><div class="tablewrap"><table id="thermal-loads"></table></div>
+    <div id="thermal-maps" class="thermalmaps"></div>
+    <details><summary>Assumptions of the board temperature</summary><ul id="thermal-assumptions" class="small"></ul></details>
+  </section>
 </section>
 <footer id="footer" class="muted small"></footer>
 <script type="application/json" id="meta">__META__</script>

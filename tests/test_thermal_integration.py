@@ -119,3 +119,33 @@ def test_the_cli_prints_the_estimate_before_an_electro_thermal_solve(thermal_dem
     main(["solve", str(thermal_demo), "--thermal", "--json", "--no-maps", "--out", str(tmp_path / "b")])
     captured = capsys.readouterr()
     assert "unknowns" in captured.err and json.loads(captured.out)["thermal_estimate"]["unknowns"] > 0
+
+
+
+def test_the_tree_report_has_a_board_temperature_section_with_its_maps(thermal_demo, tmp_path, capsys):
+    """solve --thermal --html: the page holds the board temperature (the document's thermal
+    block) and one temperature map per copper layer, inside the file (it works offline)."""
+    import base64
+    import json
+    import re
+    from importlib.resources import files
+    page = tmp_path / "tree.html"
+    main(["solve", str(thermal_demo), "--thermal", "--no-maps", "--out", str(tmp_path / "o"),
+          "--html", str(page)])
+    text = page.read_text(encoding="utf-8")
+    meta = json.loads(re.search(r'id="meta">(.*?)</script>', text, re.S).group(1))
+    th = meta["tree"]["thermal"]
+    assert th["verdict"] in ("fail", "pass", "not_judged") and th["layers"] and th["peak_c"] > th["ambient_c"]
+    assert [m["layer"] for m in th["maps"]] == ["F.Cu", "B.Cu"]
+    for m in th["maps"]:
+        assert m["png"].startswith("data:image/png;base64,")
+        assert base64.b64decode(m["png"].split(",", 1)[1])[:8] == b"\x89PNG\r\n\x1a\n"
+    assert 'id="thermal"' in text and "https://" not in text.split("<script")[0]
+    js = files("coppernicus").joinpath("report_assets", "report.js").read_text(encoding="utf-8")
+    assert "T.thermal" in js and "Board temperature" in js
+    plain = tmp_path / "plain.html"
+    main(["solve", str(thermal_demo), "--tree", "--no-maps", "--out", str(tmp_path / "p"),
+          "--html", str(plain)])
+    found = re.search(r'id="meta">(.*?)</script>', plain.read_text(encoding="utf-8"), re.S).group(1)
+    assert "thermal" in json.loads(found)["tree"]                  # the project enables it
+    capsys.readouterr()
