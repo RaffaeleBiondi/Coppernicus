@@ -1593,6 +1593,7 @@ def run_hover_pixels(window, check: Checks, args, out: Path):
     widget = view.plotter.interactor
     outline = np.vstack([np.asarray(r, float) for r in window.board.outline()])
     total, bad, wrong_count, examples, where, misread = 0, Counter(), 0, [], Counter(), 0
+    drawn = []                                         # (layer, arrows asked, arrows drawn)
     for layer, arrows in (("B.Cu", False), ("B.Cu", True), ("F.Cu", True)):
         window.group_box.setCurrentIndex(0)
         window.field_box.setCurrentIndex(window.field_box.findData("drop"))
@@ -1600,6 +1601,7 @@ def run_hover_pixels(window, check: Checks, args, out: Path):
         window.show_arrows.setChecked(arrows)
         view.reset_view()
         QApplication.processEvents()
+        drawn.append((layer, arrows, "arrows" in view.plotter.renderer.actors))
         w, h = widget.width(), widget.height()
         pixels = [("grid", QPoint(x, y)) for x in range(12, w - 12, max(w // 14, 1))
                   for y in range(12, h - 12, max(h // 10, 1))]
@@ -1632,7 +1634,9 @@ def run_hover_pixels(window, check: Checks, args, out: Path):
           "double-click(s) without exactly one readout", flush=True)
     for line in examples:
         print("   ", line, flush=True)
-    check(f"hover vs double-click: each of {total} real double-clicks gave one readout", wrong_count == 0,
+    check("hover vs double-click: the arrows are drawn in the passes with arrows, and only there",
+          all(asked == shown for _layer, asked, shown in drawn), str(drawn))
+    check(f"... each of {total} real double-clicks gave one readout", wrong_count == 0,
           f"{wrong_count} did not")
     check(f"... and it reads what the hover reads, at the point under the pointer, at all {total} pixels",
           total > 0 and n_bad == 0, f"{n_bad} disagreed")
