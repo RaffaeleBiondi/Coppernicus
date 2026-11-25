@@ -172,3 +172,53 @@ def test_on_a_negative_rail_the_worst_pin_is_the_highest():
     _, tree = _pins_tree(voltage=-3.3)
     (u1,) = tree.loads
     assert u1.v_worst_v == u1.v_high_v and -3.3 < u1.v_low_v < u1.v_high_v
+
+
+# ---------------------------------------------------------------------- AC: KiPI's transient
+
+QUICK = dict(f_start_hz=1e5, f_stop_hz=1e8, points_per_decade=20, field_points_per_decade=4,
+             max_edge_mm=2.0)
+
+
+def _decap_solve(bandwidth=1e5, step_a=1.0, slew_a_per_us=1.0):
+    """The ac_decap board with a quick sweep, its probe with a load step."""
+    from coppernicus.engine import Board
+    from coppernicus.engine.ac import solve_ac_rail
+    from coppernicus.engine.synthetic import ac_decap_board, ac_decap_project
+    from coppernicus.project import AcOptions
+    project = ac_decap_project()
+    project.ac = AcOptions(**QUICK, bandwidth_hz={"U1": bandwidth} if bandwidth else {})
+    project.probes[0].step_a, project.probes[0].slew_a_per_us = step_a, slew_a_per_us
+    return project, solve_ac_rail(Board(ac_decap_board()), project, "+3V3")
+
+
+@pytest.fixture(scope="module")
+def stepped():
+    return _decap_solve()
+
+
+def test_a_given_bandwidth_and_a_load_step_give_kipis_transient_estimate(stepped):
+    import numpy as np
+    from kipi.ac.transient import bandwidth_limited, transient
+    _, r = stepped
+    (p,) = r.probes
+    tr = p.transient
+    assert tr is not None and tr.bandwidth_hz == 1e5
+    kipi = transient(r.freq_hz, p.z_ohm, 1e5, 1.0, 1e6, 0.0)
+    bw = bandwidth_limited(kipi, 20e6)
+    assert (tr.undershoot_v, tr.overshoot_v) == (kipi.undershoot_v, kipi.overshoot_v)
+    assert (tr.undershoot_bw_v, tr.overshoot_bw_v) == (bw.undershoot_v, bw.overshoot_v)
+    assert np.array_equal(tr.t_s, kipi.t) and np.array_equal(tr.v, kipi.v)
+    assert np.array_equal(tr.i_a, kipi.i) and np.array_equal(tr.v_bw, bw.v)
+    assert tr.notes == kipi.notes and tr.t_rise_s == pytest.approx(1e-6)
+    assert tr.step_a == 1.0 and tr.slew_a_per_s == 1e6 and tr.undershoot_v > 0
+
+
+@pytest.mark.parametrize("change", [dict(bandwidth=None), dict(step_a=None), dict(slew_a_per_us=None)],
+                         ids=["no bandwidth given", "no step", "no slew"])
+def test_no_estimate_without_a_given_bandwidth_a_step_and_a_slew(change, stepped):
+    import numpy as np
+    _, r = _decap_solve(**change)
+    assert r.probes[0].transient is None
+    # |Z| does not depend on the bandwidth, the step or the slew: bit-identical.
+    assert np.array_equal(r.probes[0].z_ohm, stepped[1].probes[0].z_ohm)

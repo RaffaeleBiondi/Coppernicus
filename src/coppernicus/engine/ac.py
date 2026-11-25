@@ -33,6 +33,7 @@ from kipi.ac.solver.field import MEMORY_SHARE
 from kipi.ac.solver.physics import EPS0_F_PER_MM  # noqa: F401  (re-exported for the tests)
 from kipi.ac.solver.sweep import build_ports, solve_ac
 from kipi.ac.target import judged_from, target_at, target_from_transient
+from kipi.ac.transient import bandwidth_limited, transient
 from kipi.core.eta import factor_work
 from kipi.core.memory import free_memory
 from kipi.core.mesh.mesher import MeshError
@@ -41,6 +42,7 @@ from kipi.core.progress import Canceled
 from kipi.dc.pi.model import DEFAULT_BANDWIDTH_KHZ, PinRef, PISetup
 from kipi.dc.solver import SolveError
 from kipi.dc.solver.setup import REF_TEMP_C
+from kipi.tolerance.gather import BW_LIMIT_HZ
 
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import _numbers, _pads, terminal_names, to_pisetup
@@ -48,7 +50,7 @@ from coppernicus.engine.pisetup import ground_nets as project_ground_nets
 from coppernicus.engine.solve import Cancelled, _Progress, engine_settings, thickness_note
 from coppernicus.impedance import hz_text, judge, ohm_text
 from coppernicus.project import CapModel, Probe, Project, Source
-from coppernicus.results import ImpedanceResult, ProbeImpedance
+from coppernicus.results import ImpedanceResult, ProbeImpedance, TransientResult
 
 # AcOptions fields that are KiPI's ACSettings fields of the same name.
 SWEEP_KEYS = ("f_start_hz", "f_stop_hz", "points_per_decade", "field_points_per_decade",
@@ -378,6 +380,25 @@ def solve_ac_rail(board: Board, project: Project, rail: str,
     return judge(out)
 
 
+def _transient(freqs: np.ndarray, z, bandwidth: Optional[float], p: Probe) -> Optional[TransientResult]:
+    """KiPI's transient estimate at probe ``p`` (``kipi.ac.transient.transient``, with its
+    20 MHz view ``bandwidth_limited``), only with a step, a slew rate and a bandwidth the user
+    gave: never the 50 kHz placeholder written into KiPI's VRM (:func:`_context`), so never
+    KiPI's ``transients(result)``. No load line (``ImpedanceResult.load_line_ohm`` is 0)."""
+    if bandwidth is None or not (p.step_a and p.slew_a_per_us):
+        return None
+    tr = transient(freqs, np.asarray(z, dtype=complex), bandwidth, p.step_a, p.slew_a_per_us * 1e6, 0.0)
+    if tr is None:
+        return None
+    bw = bandwidth_limited(tr, BW_LIMIT_HZ)
+    return TransientResult(
+        bandwidth_hz=float(bandwidth), step_a=float(tr.step_a), slew_a_per_s=p.slew_a_per_us * 1e6,
+        t_rise_s=float(tr.t_rise_s), undershoot_v=tr.undershoot_v, overshoot_v=tr.overshoot_v,
+        undershoot_bw_v=bw.undershoot_v, overshoot_bw_v=bw.overshoot_v, t_s=tr.t, i_a=tr.i, v=tr.v,
+        v_bw=bw.v, notes=list(tr.notes), edge_l_h=tr.edge_l_h, edge_v=float(tr.edge_v),
+        load_line_ohm=float(tr.load_line_ohm))
+
+
 def _dielectric(board: Board, default_er: float) -> Tuple[str, str]:
     """(KiPI's dielectric summary, why εr is assumed or "")."""
     st = board.snapshot.stackup
@@ -411,7 +432,8 @@ def _convert(board: Board, project: Project, c: _Context, res, thickness) -> Imp
             name=p.name, ref=p.ref, pins=p.pins, net=p.net, ground_net=p.ground_net,
             z_ohm=np.asarray(curve.z, dtype=complex), target_ohm=ohm, target_hz=hz,
             target_points=pts, target_curve_ohm=t, target_note=note, judged_from_hz=judged,
-            fallback_note=fallback, step_a=p.step_a, slew_a_per_us=p.slew_a_per_us))
+            fallback_note=fallback, step_a=p.step_a, slew_a_per_us=p.slew_a_per_us,
+            transient=_transient(freqs, curve.z, c.bandwidth_hz, p)))
         if note:
             notes.append(note)
     summary, assumed = _dielectric(board, project.ac.default_er)

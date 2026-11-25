@@ -364,6 +364,30 @@ class TreeResult:
 # ---------------------------------------------------------------------- AC impedance (Task 9)
 
 @dataclass
+class TransientResult:
+    """KiPI's estimated response at a probe to its load step (``kipi/ac/transient.py``): the
+    open-loop |Z| with the source put back as a typical PI loop crossing over at the
+    bandwidth the user gave (zero at w_c/4, double pole at 8·w_c, about 60° of phase margin
+    into a capacitive PDN; not the converter's own). Shown, never judged (Task 11)."""
+    bandwidth_hz: float            # as given (ac.bandwidth_hz); never the 50 kHz placeholder
+    step_a: float
+    slew_a_per_s: float
+    t_rise_s: float
+    undershoot_v: float            # the largest dip below the settled voltage (positive)
+    overshoot_v: float             # the largest rise above it (positive)
+    undershoot_bw_v: float         # the same through a single pole at 20 MHz (a scope's limit)
+    overshoot_bw_v: float
+    t_s: np.ndarray
+    i_a: np.ndarray                # the load current: the step up, then back down
+    v: np.ndarray                  # the rail's deviation from its DC value, V
+    v_bw: np.ndarray               # the same through 20 MHz
+    notes: List[str] = field(default_factory=list)      # KiPI's
+    edge_l_h: Optional[float] = None   # the inductance the edge sees; None: capacitive there
+    edge_v: float = 0.0            # the largest dip while the load ramps up
+    load_line_ohm: float = 0.0
+
+
+@dataclass
 class ProbeImpedance:
     """The PDN impedance at one probe after an AC solve, its target where one applies and
     its verdict (only against a target the user gave, or computed from numbers they gave)."""
@@ -391,6 +415,8 @@ class ProbeImpedance:
     not_judged: str = ""                       # why a target was not judged
     step_a: Optional[float] = None
     slew_a_per_us: Optional[float] = None
+    # KiPI's transient estimate (Task 11): only with a step, a slew rate and a bandwidth given.
+    transient: Optional[TransientResult] = None
 
     @property
     def mag_ohm(self) -> np.ndarray:
