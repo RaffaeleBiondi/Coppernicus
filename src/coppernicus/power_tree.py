@@ -203,8 +203,8 @@ def unjudged(item: str, net: str, limit: str, reason: str) -> Dict[str, str]:
 
 def not_judged_text(items: Sequence[Dict[str, str]]) -> str:
     """The entries as one line: "U3 on +1V8 (max_drop_pct): VRM OUT OF REGULATION; …"."""
-    return "; ".join((u["item"] if u["item"] == u.get("net", u["item"]) else f"{u['item']} on {u['net']}")
-                     + f" ({u['limit']}): {u['reason']}" for u in items)
+    return "; ".join((u["item"] if u["item"] == u.get("net", u["item"]) or not u.get("net")
+                      else f"{u['item']} on {u['net']}") + f" ({u['limit']}): {u['reason']}" for u in items)
 
 
 def unsolved_limits(tree) -> List[Dict[str, str]]:
@@ -298,14 +298,19 @@ def has_limits(gv: GroupVerdict) -> bool:
 def tree_verdicts(tree, top: int = 5) -> Tuple[str, Dict[str, GroupVerdict]]:
     """Every group's verdict and the overall one: ``fail`` if a group fails; otherwise
     ``not_judged`` if a group with limits could not be judged in full; ``pass`` if something
-    was judged; ``not_judged`` when no limit is set."""
+    was judged; ``not_judged`` when no limit is set. The board temperature
+    (:func:`coppernicus.temperature.thermal_verdict`) counts as one more group."""
+    from coppernicus.temperature import thermal_verdict
     groups = {key: group_verdict(tree, key, top) for key in tree.groups}
-    if any(v.verdict == "fail" for v in groups.values()):
+    tv = thermal_verdict(tree)
+    if any(v.verdict == "fail" for v in groups.values()) or tv.verdict == "fail":
         overall = "fail"
-    elif any(has_limits(v) and v.verdict == "not_judged" for v in groups.values()) or unsolved_limits(tree):
+    elif (any(has_limits(v) and v.verdict == "not_judged" for v in groups.values()) or unsolved_limits(tree)
+          or (tv.limits and tv.verdict == "not_judged")):
         overall = "not_judged"
     else:
-        overall = "pass" if any(v.verdict == "pass" for v in groups.values()) else "not_judged"
+        overall = ("pass" if any(v.verdict == "pass" for v in groups.values()) or tv.verdict == "pass"
+                   else "not_judged")
     return overall, groups
 
 
@@ -324,14 +329,18 @@ def own_limits(tree) -> Dict[str, Dict[str, float]]:
 
 
 def verdict_note(tree, groups: Dict[str, GroupVerdict]) -> str:
-    """One line on what was judged against what, and what was not."""
+    """One line on what was judged against what, and what was not (the board temperature's
+    limits too)."""
+    from coppernicus.temperature import ITEM, thermal_verdict
     own = own_limits(tree)
-    missing = [x for v in groups.values() for x in v.not_judged] + unsolved_limits(tree)
-    if not own and not missing:
+    tv = thermal_verdict(tree)
+    missing = [x for v in groups.values() for x in v.not_judged] + unsolved_limits(tree) + tv.not_judged
+    if not own and not tv.limits and not missing:
         return "No limits set: nothing is judged, problems are ranked only."
-    note = ("Judged only against the limits you set: " + ", ".join(
-        f"{net}: {k} = {v:g}" for net, d in own.items() for k, v in d.items())
-        if own else "No limit you set applies to what it is set on")
+    judged = ([f"{net}: {k} = {v:g}" for net, d in own.items() for k, v in d.items()]
+              + [f"{ITEM}: {k} = {v:g}" for k, v in tv.limits.items()])
+    note = ("Judged only against the limits you set: " + ", ".join(judged)
+            if judged else "No limit you set applies to what it is set on")
     if missing:
         note += ". Not judged: " + not_judged_text(missing)
     return note
@@ -359,8 +368,10 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
     in every key, the assumptions and warnings, the verdict (only against the user's limits,
     per group) and the VRM, load, link and group tables."""
     from coppernicus.problems import limits_dict
+    from coppernicus.temperature import thermal_summary, thermal_verdict
 
     overall, verdicts = tree_verdicts(tree, top)
+    tv = thermal_verdict(tree)
     groups, failed = [], 0
     for key, res in tree.groups.items():
         gv = verdicts[key]
@@ -380,10 +391,11 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
             "problems": [{"severity": p.severity, "kind": p.kind, "title": p.title, **p.data}
                          for p in gv.problems],
         })
-    return _clean({
+    doc = {
         "kind": "power_tree",
-        "verdict": overall, "verdict_note": verdict_note(tree, verdicts), "failed": failed,
-        "not_judged": [x for v in verdicts.values() for x in v.not_judged] + unsolved_limits(tree),
+        "verdict": overall, "verdict_note": verdict_note(tree, verdicts), "failed": failed + tv.failed,
+        "not_judged": [x for v in verdicts.values() for x in v.not_judged] + unsolved_limits(tree)
+        + tv.not_judged,
         "vrms": [{"name": v.name, "kind": v.kind, "group": v.group, "v_set_v": v.v_set_v,
                   "v_out_v": v.v_out_v, "i_out_a": v.i_out_a, "v_in_v": _num(v.v_in_v),
                   "i_in_a": _num(v.i_in_a), "p_out_w": v.p_out_w, "p_in_w": _num(v.p_in_w),
@@ -404,8 +416,11 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
                   for ld in tree.loads],
         "links": [dict(k) for k in tree.links],
         "groups": groups,
-        "assumptions": list(tree.assumptions), "warnings": list(tree.warnings),
-    })
+    }
+    if getattr(tree, "thermal", None) is not None:      # the board temperature (Task 8)
+        doc["thermal"] = thermal_summary(tree)
+    doc.update({"assumptions": list(tree.assumptions), "warnings": list(tree.warnings)})
+    return _clean(doc)
 
 
 def _fmt(x: Optional[float], width: int, spec: str, unit: str, scale: float = 1.0) -> str:
@@ -477,6 +492,9 @@ def tree_text(doc: Dict[str, Any]) -> List[str]:
     for k in doc["links"]:
         lines.append(f"  link {k['name']}: {_fmt(k['current_a'], 0, '.4f', ' A').strip()}, "
                      f"{_fmt(k['power_w'], 0, '.3g', ' mW', 1e3).strip()} ({' ↔ '.join(k['nets'])})")
+    if doc.get("thermal"):                              # the board temperature (Task 8)
+        from coppernicus.temperature import temperature_text
+        lines += temperature_text(doc["thermal"], skip=doc["assumptions"])
     lines.append(f"Verdict: {doc['verdict']}. {doc['verdict_note']}")
     lines += [f"  assumption: {a}" for a in doc["assumptions"]]
     lines += [f"  warning: {w}" for w in doc["warnings"]]
