@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from coppernicus import __version__
+from coppernicus import __version__, bootstrap_triangle
 from coppernicus import board_fields as BF
 from coppernicus.app import fields_view
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
@@ -59,6 +59,14 @@ from coppernicus.service.convert import not_judged_items
 from coppernicus.service.session import FIELD_HINT
 
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
+REMOVE_MESHER = "Remove downloaded mesher (Triangle)…"
+
+
+def remove_mesher_shown() -> bool:
+    """Help → Remove downloaded mesher (Triangle)… exists only in the packaged app, which
+    downloaded Triangle into a per-user folder itself (coppernicus.bootstrap_triangle).
+    Elsewhere triangle comes from the Python environment and is not the app's to delete."""
+    return bootstrap_triangle.frozen()
 
 
 def initial_size(avail_w: Optional[int], avail_h: Optional[int]) -> Tuple[int, int]:
@@ -314,6 +322,14 @@ class MainWindow(QMainWindow):
                                           "(use_board_fields in the project file)")
         self.use_fields_action.toggled.connect(self._use_fields_toggled)
         self.project_menu.addAction(self.use_fields_action)
+        if remove_mesher_shown():
+            self.help_menu = self.menuBar().addMenu("&Help")
+            remove = QAction(REMOVE_MESHER, self)
+            remove.setMenuRole(QAction.NoRole)          # macOS: stays in Help
+            remove.setToolTip("Delete the Triangle mesher this app downloaded; it is downloaded "
+                              "again on the next start")
+            remove.triggered.connect(self.remove_mesher)
+            self.help_menu.addAction(remove)
 
     # ------------------------------------------------------------------ files
     def open_path(self, path):
@@ -648,6 +664,32 @@ class MainWindow(QMainWindow):
                                       QMessageBox.Open | QMessageBox.Close)
         if answer == QMessageBox.Open:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def remove_mesher(self):
+        """Help → Remove downloaded mesher (Triangle)… (packaged app): after a confirmation,
+        delete the Triangle mesher the app downloaded; the next start downloads it again."""
+        site = bootstrap_triangle.site_dir()
+        answer = QMessageBox.question(self, "Remove downloaded mesher",
+                                      f"Delete the Triangle mesher downloaded into {site}?\n"
+                                      "Coppernicus downloads it again on its next start.",
+                                      QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            size = bootstrap_triangle.remove(site)
+        except bootstrap_triangle.BootstrapError as e:
+            self.statusBar().showMessage("The downloaded mesher could not be removed")
+            QMessageBox.warning(self, "Cannot remove the mesher", f"{e.message}\n{e.hint}")
+            return
+        if size:
+            text = (f"Removed the downloaded Triangle mesher from {site} ({size / 1e6:.1f} MB). "
+                    "Coppernicus downloads it again on its next start.")
+            self.statusBar().showMessage("Removed the downloaded mesher: Coppernicus downloads it again "
+                                         "on its next start")
+        else:
+            text = f"Nothing to remove: no downloaded Triangle mesher in {site}."
+            self.statusBar().showMessage("Nothing to remove: no downloaded mesher")
+        QMessageBox.information(self, "Remove downloaded mesher", text)
 
     def _report_failed(self, message: str):
         self.statusBar().showMessage("The report could not be written")
