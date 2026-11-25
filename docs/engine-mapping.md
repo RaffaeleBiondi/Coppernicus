@@ -1424,9 +1424,11 @@ here, not reported upstream):
   their peaks can coincide, so the default here is the linear sum.
 
 Also:
-- No KiCad field holds a tolerance or an accuracy yet: a rail from the board's fields carries
-  the project's by ref; a part it lacks loses them (a warning; each lost tolerance not judged).
-  `coppernicus tolerance` and MCP `solve_tolerance` carry them; the app does not yet.
+- KiCad fields `PI_TOL`, `PI_DC_TOL`, `PI_AC_TOL` and `PI_ACC` give a part's tolerances and
+  accuracy (merged in `board_fields.merge`, so every caller gets them); a rail from the board's
+  fields carries the project's by ref where the part's fields give none; a part it lacks loses
+  them (a warning; each lost tolerance not judged). `coppernicus tolerance` and MCP
+  `solve_tolerance` report the lost ones; the app does not yet.
 - Loads and sources still ignore unknown keys when loading; only `coppernicus tolerance` (and
   MCP `solve_tolerance`, CI's `--tolerance`) warns about one that looks like a tolerance (and
   does not judge its load).
