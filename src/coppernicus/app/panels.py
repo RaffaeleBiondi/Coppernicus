@@ -1204,6 +1204,8 @@ class TreePanel(QWidget):
 
     def clear(self, text: str = ""):
         self.summary.setText(text or "<i>No power-tree result</i>")
+        self.vrms.setColumnCount(len(self.VRM_HEADERS))       # no I max column left behind
+        self.vrms.setHorizontalHeaderLabels(self.VRM_HEADERS)
         self._fill(self.vrms, [])
         self._fill(self.loads, [])
         self.links.clear()

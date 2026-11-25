@@ -59,7 +59,7 @@ from coppernicus.power_tree import (
 from coppernicus.problems import FAIL, find_problems, max_drop_text
 from coppernicus.project import Limits, Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
-from coppernicus.service.convert import not_judged_items, vrm_ratings
+from coppernicus.service.convert import not_judged_items
 from coppernicus.service.session import FIELD_HINT
 from coppernicus.temperature import apply_thermal_limits, thermal_verdict
 
@@ -103,14 +103,12 @@ def initial_size(avail_w: Optional[int], avail_h: Optional[int]) -> Tuple[int, i
     return (min(1500, avail_w) if avail_w else 1500, min(920, avail_h) if avail_h else 920)
 
 
-def tree_i_max(tree: TreeResult, project) -> Dict[str, Optional[float]]:
-    """Each VRM's rated output current (I max), by name, as the CLI and the agent interface show
-    it beside I out: :func:`coppernicus.service.convert.vrm_ratings` on the VRM rows, from
-    ``project``'s ``Source.current_limit_a`` (the merged project: KiCad field PI_IMAX, or the
-    project file). Empty when no source has one. Only the rows' names and groups go in, which
-    is all it reads: nothing is ranked again, and its assumption line is not wanted here."""
-    doc = vrm_ratings({"vrms": [{"name": v.name, "group": v.group} for v in tree.vrms]}, project)
-    return {v["name"]: v["i_max_a"] for v in doc["vrms"] if "i_max_a" in v}
+def tree_i_max(tree: TreeResult) -> Dict[str, Optional[float]]:
+    """Each VRM's rated output current (I max) by name: the value the tree judged
+    (``VrmReport.current_limit_a``, from the merged project's ``Source.current_limit_a``: KiCad
+    field PI_IMAX or the project file; None where not given), also for a label used on several
+    rails ("U1 (+3V3)")."""
+    return {v.name: v.current_limit_a for v in tree.vrms}
 
 
 def verdict_html(verdict: str, fails: int, not_judged, has_limits: bool) -> str:
@@ -1234,7 +1232,7 @@ class MainWindow(QMainWindow):
         if tree.thermal is not None:
             record_solve(tree)                           # its time, for the next estimate
         self.tree = tree
-        self.tree_i_max = tree_i_max(tree, (merged or self.merged).project)   # as it was solved
+        self.tree_i_max = tree_i_max(tree)
         self._show_tree()
         self.thermal_panel.set_tree(tree, self._thermal_verdict_html())
         self.group_box.blockSignals(True)

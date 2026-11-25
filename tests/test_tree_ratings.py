@@ -82,6 +82,38 @@ def test_the_power_tree_tab_shows_i_max_next_to_i_out_only_when_a_project_has_ra
     ''')
 
 
+def dual_label_chain(folder: Path) -> Path:
+    """The power chain with both regulators labelled REG (one part, two outputs): the engine
+    names them "REG (+3V3)" and "REG (+1V8)". REG on +3V3 rated 2 A (it delivers 2.502 A)."""
+    project = Project.load(chain_project(folder, {"+3V3": 2.0}))
+    for net in ("+3V3", "+1V8"):
+        project.rail(net).sources[0].name = "REG"
+    return project.save(folder / "power_chain.coppernicus.yml")
+
+
+def test_the_i_max_column_shows_the_judged_rating_of_a_label_on_several_rails_and_then_goes(tmp_path):
+    dual = dual_label_chain(tmp_path / "dual")
+    plain = chain_project(tmp_path / "plain")
+    run_in_window(SOLVE + f'''
+        solve_tree({str(dual)!r})
+        headers, rows = vrm_table()
+        assert "I max (A)" in headers, headers
+        assert rows["REG (+3V3)"]["I max (A)"] == "2" and rows["REG (+1V8)"]["I max (A)"] == "—", rows
+        table = window.tree_panel.vrms
+        red = [table.item(r, 0).text() for r in range(table.rowCount())
+               if table.item(r, 0).foreground().color().name() == "#c0392b"]
+        assert red == ["REG (+3V3)"], red
+
+        window.dirty = False
+        assert window.open_project({str(plain)!r})                  # the tree is dropped
+        headers, rows = vrm_table()
+        assert headers == window.tree_panel.VRM_HEADERS and rows == {{}}, (headers, rows)
+        solve_tree({str(plain)!r})
+        headers, rows = vrm_table()
+        assert "I max (A)" not in headers, headers
+    ''')
+
+
 # ---------------------------------------------------------------------- the judgement
 
 def solved_chain(ratings=None):
