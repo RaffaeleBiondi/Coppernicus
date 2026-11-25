@@ -25,7 +25,7 @@ U2, which makes 1.8 V for U3 with remote sense.
   the regulators, the loads and the links; **Group** shows one rail group or the ground net on
   the board.
 - **Command line:** `coppernicus solve PROJECT --tree` prints the tables;
-  `--html` also writes one offline page with every group (see [HTML report](report.md)).
+  `--html` also writes one offline page with every group (see [HTML report](html-report.md#the-power-tree-report)).
 - **Agents:** the MCP tool `solve_tree(project_path)` returns the same as JSON (see
   [Agents](agents.md#power-tree)).
 - **CI:** the GitHub Action's `tree` input adds the tree's tables to the job summary (see
@@ -110,7 +110,9 @@ Verdict: not_judged. No limits set: nothing is judged, problems are ranked only.
 
 - **VRMs:** each source and regulator, with its set voltage, the voltage it actually holds at
   its output (V out), its output and input currents and its loss. A regulator's input is also
-  judged as a load on the rail that feeds it: *input drop on +3V3_F*.
+  judged as a load on the rail that feeds it: *input drop on +3V3_F*. When a source has a rated
+  output current (`PI_IMAX`, `current_limit_a`), an **I max** column shows it next to I out;
+  it is not judged yet.
 - **Loads:** the voltage **across** each load's supply and ground pins, and its drop from the
   nominal voltage: nominal − (lowest supply pin − highest ground pin). The ground's rise counts
   in the drop, since that is what the part sees. U3 sits at exactly 1.8 V because U2 holds it
@@ -146,10 +148,11 @@ limit judges its size either way.
 There are no built-in limits. Without limits the tree ranks what it finds and says
 *not judged*. With limits, each one judges only what it applies to:
 
-- **Per net.** A load is judged by its supply net's limits, a regulator's input by its input
-  net's, a return pin by its ground net's. A limit not set on a net comes, field by field,
-  from its group's driving net: for a rail group the net its source drives, for a ground
-  group the first ground net the project names.
+- **Per net.** A load is judged by its supply net's limits (the net its pins are on), a
+  regulator's input by its input net's, a return pin by its ground net's. A limit not set on a
+  net comes, field by field, from the rail the load is listed in (when a net tie puts its pins
+  on another net), then from its group's driving net: for a rail group the net its source
+  drives, for a ground group the first ground net the project names.
 - **Copper per group, strictest.** The largest ground rise, current crowding and vias of a
   group are judged against the strictest value set on any of its nets.
 - **Not judged, never passed.** A load or regulator input that is disconnected, did not
@@ -188,6 +191,13 @@ When several apply, the first in the order 2, 1, 3, 0 wins. The full rule, word 
 every tree prints it among its assumptions, is in
 [engine-mapping.md](engine-mapping.md#verdicts-only-against-the-users-limits-second-review-coordinator-approved).
 
+## The board temperature
+
+The tree can also heat the copper with its own losses and solve it again hot: the
+[board temperature](thermal.md) (`--thermal`, or `thermal: enabled: true` in the project). It
+adds a temperature map per copper layer, the hottest copper of each layer, each load's drop hot,
+and a verdict against your `max_temp_c` / `max_rise_c`, which counts as one more group.
+
 ## One rail at a time, or the tree
 
 A rail solved on its own (F5 in the app, `coppernicus solve` without `--tree`) also draws the
@@ -200,8 +210,10 @@ and the agents' maps, probes and cuts work on; the tree gives the whole board's 
 ## Documentation
 
 - [Power tree](power-tree.md): regulators, ground return, groups and verdicts.
+- [Board temperature](thermal.md): the electro-thermal solve of the power tree.
+- [PDN impedance](ac-impedance.md): |Z|(f) at the probes, against your targets.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
 - [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
-- [HTML report](report.md): the offline page of a solve and of the power tree.
+- [HTML report](html-report.md): the offline pages of a solve, the power tree and the impedance.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

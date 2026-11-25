@@ -42,6 +42,12 @@ Every field is optional; a part without `PI_*` fields is not touched.
 | `PI_INPUT` | `VIN` | regulator | The net it draws from (its pads there); required with `ldo` and `smps`. `PI_INPUT_PINS` chooses the pads. |
 | `PI_GND` | `GND` | source, load | The ground net of its ground pins, the return path the [power tree](power-tree.md) solves. `PI_GND_PINS` chooses the pads. |
 | `PI_LINK` | `50mOhm` | a two-net part | A link (ferrite, sense resistor, fuse) of this resistance between the nets of its pads (`Ohm`, `mOhm`, `Ω`). Not with `PI_RAIL`. |
+| `PI_LINK_PINS` | `1,2;5` | a link part with more nets | The link's two sides on a part with more than two nets (a load switch, a MOSFET, a 3-pin fuse): side A's pads `;` side B's, each side on one net. |
+| `PI_VOUT` | `3.3V` | source | A fixed-output part's voltage, on its library symbol: the source voltage when the placed part has no `PI_SOURCE`. If both are given and differ, `PI_SOURCE` wins, with a warning. |
+| `PI_IMAX` | `2A`, `500mA` | source | Its rated output current: shown next to I out in the power tree; not judged yet. |
+| `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its switching frequency (`Hz`, `kHz`, `MHz`): kept, not used yet. |
+| `PI_SOURCE_REF` | `L1`, `BT1,BT5` | source | The part(s) whose pads hold the rail, when not this part: an external-inductor buck's inductor, or several cell holders in parallel, which make **one** terminal, every pad at the source voltage. `PI_PINS` then takes `REF.PAD` entries (`BT1.1,BT5.1`), or a pad for every listed part. |
+| `PI_GND_REF` | `BT4` | source, load | The part whose pads are the ground pins on `PI_GND`, when not this part (one part). |
 
 - **Several rails on one part** take one value per rail, by position, separated by `;`, in
   every per-rail field. An empty value skips that rail. A dual-output regulator:
@@ -58,6 +64,27 @@ Every field is optional; a part without `PI_*` fields is not touched.
 - A regulator draws its input through `PI_INPUT`; a `PI_LOAD` on that same net is refused,
   since it would count the current twice.
 
+**Library fields need no `PI_RAIL`.** `PI_KIND`, `PI_EFF`, `PI_IQ`, `PI_VOUT`, `PI_IMAX` and
+`PI_FSW` describe the part itself, so they can sit on a library symbol before it is placed on
+any rail: a part with only these is part data, used once its placed symbol gets `PI_RAIL`. One
+such value applies to every rail where the part is a source (or give one per rail with `;`). A
+part that is a source on no rail but carries them is refused: that is a regulator placed as a
+load.
+
+Three shapes need the newer fields:
+
+- **An external-inductor buck:** the IC carries `PI_RAIL`, `PI_SOURCE` (or the library's
+  `PI_VOUT`), `PI_INPUT`, `PI_GND` and `PI_KIND`, plus `PI_SOURCE_REF=L1` and `PI_PINS=2`: the
+  rail is held at the inductor's output pad.
+- **A load switch:** `PI_LINK=20mOhm` and `PI_LINK_PINS=1,2;5` (input pads 1 and 2, output pad 5)
+  on a part whose other pads are the enable and the ground.
+- **A battery of cell holders:** the holders BT1 and BT5 in parallel, the negative pole BT4. BT1
+  carries `PI_RAIL=+V_BAT`, `PI_SOURCE=6.4V`, `PI_SOURCE_REF=BT1,BT5`, `PI_GND=-V_BAT` and
+  `PI_GND_REF=BT4`; the other holders carry nothing.
+
+Each worked example, field by field, is in
+[Agents → How to annotate a KiCad library](agents.md#how-to-annotate-a-kicad-library).
+
 A net with a `PI_SOURCE` and a `PI_LOAD` is a rail. So is a net whose source feeds a
 regulator's input or a link: it draws their current. Loads behind a ferrite (`PI_LINK`) or on
 a net joined by a net tie belong to the driven net's group. The details, with every edge case,
@@ -68,14 +95,15 @@ are in [Agents → KiCad footprint fields](agents.md#kicad-footprint-fields).
 Some fields say what a part **is**, the same on every board; the others say **where it sits**
 on this one. The KiCad 9 manual describes the two places:
 
-- **The library symbol** (Symbol Editor): `PI_KIND`, `PI_EFF`, `PI_IQ`. A symbol placed in the
+- **The library symbol** (Symbol Editor): `PI_KIND`, `PI_EFF`, `PI_IQ`, `PI_VOUT`, `PI_IMAX`,
+  `PI_FSW`. A symbol placed in the
   schematic takes a copy of the library symbol. Later changes to the library are not applied
   to symbols already placed; **Tools → Update Symbols from Library…** brings them in, with a
   choice of which fields to update.
 - **The symbol in the schematic** (its properties, on that one placement): `PI_RAIL`,
-  `PI_SOURCE`, `PI_LOAD`, `PI_PINS`, `PI_LIMIT_DROP`, `PI_INPUT`, `PI_INPUT_PINS`, `PI_GND`,
-  `PI_GND_PINS`, `PI_LINK`. Editing a placed symbol changes only that instance, not the
-  library.
+  `PI_SOURCE`, `PI_SOURCE_REF`, `PI_LOAD`, `PI_PINS`, `PI_LIMIT_DROP`, `PI_INPUT`,
+  `PI_INPUT_PINS`, `PI_GND`, `PI_GND_PINS`, `PI_GND_REF`, `PI_LINK`, `PI_LINK_PINS`. Editing a
+  placed symbol changes only that instance, not the library.
 
 Then run **Tools → Update PCB from Schematic…** (F8). In the manual's words, "all symbol
 fields will be added to the symbol's corresponding footprint when the PCB is updated from the
@@ -172,8 +200,10 @@ Agents get the same through the MCP tools `board_fields` and `propose_fields` (s
 ## Documentation
 
 - [Power tree](power-tree.md): regulators, ground return, groups and verdicts.
+- [Board temperature](thermal.md): the electro-thermal solve of the power tree.
+- [PDN impedance](ac-impedance.md): |Z|(f) at the probes, against your targets.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
 - [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
-- [HTML report](report.md): the offline page of a solve and of the power tree.
+- [HTML report](html-report.md): the offline pages of a solve, the power tree and the impedance.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

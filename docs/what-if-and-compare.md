@@ -49,8 +49,9 @@ settings:
 
 **AI agents** are held to one standard step. Through the MCP tools, `solve_rail` and
 `write_project` accept on each layer only a standard weight (0.5, 1, 2 or 3 oz: 0.0175, 0.035,
-0.070 or 0.105 mm) at most one step from the design's thickness; anything else is refused and
-points to KiCad. `copper_step(result_id, layer, "up" | "down")` does the step from a result
+0.070 or 0.105 mm) at most one step from the board file's thickness; anything else is refused
+and points to KiCad. A value already in your project file stays as it is unless the agent
+changes it. `copper_step(result_id, layer, "up" | "down")` does the step from a result
 and returns the comparison:
 
 ```text
@@ -146,8 +147,10 @@ change and the settings.
 ## Documentation
 
 - [Power tree](power-tree.md): regulators, ground return, groups and verdicts.
+- [Board temperature](thermal.md): the electro-thermal solve of the power tree.
+- [PDN impedance](ac-impedance.md): |Z|(f) at the probes, against your targets.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
 - [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
-- [HTML report](report.md): the offline page of a solve and of the power tree.
+- [HTML report](html-report.md): the offline pages of a solve, the power tree and the impedance.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.
