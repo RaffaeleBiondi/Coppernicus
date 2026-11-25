@@ -219,7 +219,8 @@ class LoadReport:
     drop_pct: float
     status: str = ""               # DISCONNECTED, NOT_CONVERGED or OUT_OF_REGULATION
     passed: Optional[bool] = None  # against its net's max_drop_pct; None without a limit
-    net: str = ""                  # its supply net
+    net: str = ""                  # its supply net: the net its supply pins are on
+    rail: str = ""                 # the rail it is listed in: another net when a net tie joins them
 
 
 @dataclass

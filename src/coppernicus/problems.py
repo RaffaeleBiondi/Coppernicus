@@ -208,7 +208,7 @@ def inapplicable_limits(net: str, limits: Optional[Limits], v_ref: float,
     return out
 
 
-NetLimits = Callable[[str], Tuple[Limits, Dict[str, str]]]
+NetLimits = Callable[..., Tuple[Limits, Dict[str, str]]]      # (net, rail=None)
 
 
 def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = None,
@@ -229,12 +229,12 @@ def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = 
     if res.converged:
         glim, gorigin = group_limits(tree, group)
 
-        def per_net(net):
-            return net_limits(tree, net or group, group)
+        def per_net(net, rail=None):
+            return net_limits(tree, net or group, group, rail)
     else:
         glim, gorigin = Limits(), {}
 
-        def per_net(net):
+        def per_net(net, rail=None):
             return Limits(), {}
 
     def source(attr):        # where a copper limit came from, for the titles of its fails
@@ -282,7 +282,7 @@ def _tree_loads(tree: TreeResult, group: str, res: RailResult, per_net: NetLimit
     for ld in (ld for ld in tree.loads if ld.group == group):
         t = terms.get(ld.name)
         x, y = t.positions[0] if t is not None and t.positions else (np.nan, np.nan)
-        lim, org = per_net(ld.net)
+        lim, org = per_net(ld.net, ld.rail)
         limit = _limit_text(lim.max_drop_pct, "%", org.get("max_drop_pct", ""), ld.net or group)
         if ld.status in (DISCONNECTED, NOT_CONVERGED):
             title, value = f"{ld.name}: {ld.status}", float("inf")

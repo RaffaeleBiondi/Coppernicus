@@ -145,7 +145,9 @@ LIMIT_FIELDS = ("max_drop_pct", "max_current_density", "max_via_current", "max_g
 UNJUDGED = (DISCONNECTED, NOT_CONVERGED, OUT_OF_REGULATION)
 
 LIMITS_RULE = (
-    "Limits are looked up per net: a load by its supply net, a regulator's input by its input "
+    "Limits are looked up per net: a load by its supply net (the net its pins are on; a limit "
+    "not set there comes first from the rail it is listed in, when a net tie puts its pins on "
+    "another net), a regulator's input by its input "
     "net (judged as a load on the rail feeding it: nominal − (lowest input pin − highest "
     "ground pin)), a return pin by its ground net. A limit not set on a net comes, field by "
     "field, from its group's driving net (a rail's: the net its source drives; a ground's: the "
@@ -156,14 +158,16 @@ LIMITS_RULE = (
     "judged.")
 
 
-def net_limits(tree, net: str, group: Optional[str] = None) -> Tuple[Limits, Dict[str, str]]:
+def net_limits(tree, net: str, group: Optional[str] = None,
+               rail: Optional[str] = None) -> Tuple[Limits, Dict[str, str]]:
     """The limits that judge what is on ``net``: field by field its own (``tree.limits``),
-    else those of its group's driving net (the group's key). Also returns, per field set,
-    the net the value came from."""
+    else those of ``rail``, the rail a load is listed in (another net when a net tie put its
+    pins beyond it), else those of its group's driving net (the group's key). Also returns,
+    per field set, the net the value came from."""
     key = group or tree.group_of(net) or net
     vals, origin = {}, {}
     for f in LIMIT_FIELDS:
-        for src in dict.fromkeys((net, key)):
+        for src in dict.fromkeys(n for n in (net, rail, key) if n):
             v = getattr(tree.limits.get(src), f, None)
             if v is not None:
                 vals[f], origin[f] = v, src
@@ -222,7 +226,7 @@ def judge_loads(tree) -> None:
     physical voltage to judge (not solved, not converged, or behind a regulator that cannot
     hold its voltage: the engine still holds that output at its set point)."""
     for ld in tree.loads:
-        limit = net_limits(tree, ld.net or ld.group, ld.group)[0].max_drop_pct
+        limit = net_limits(tree, ld.net or ld.group, ld.group, ld.rail)[0].max_drop_pct
         ok = ld.status not in UNJUDGED and math.isfinite(ld.drop_pct)
         ld.passed = None if limit is None or not ok else bool(ld.drop_pct <= limit)
     for v in tree.vrms:
@@ -269,15 +273,16 @@ def group_verdict(tree, key: str, top: int = 5) -> GroupVerdict:
         missing += [unjudged(key, key, k, "its iteration did not converge") for k in checked]
     elif checked:
         if "max_drop_pct" in checked:
-            items = [(ld.name, ld.net or key, ld.passed, ld.status, ld.nominal_v)
+            items = [(ld.name, ld.net or key, ld.rail, ld.passed, ld.status, ld.nominal_v)
                      for ld in tree.loads if ld.group == key]
-            items += [(f"{v.name} (input)", v.input_net, v.input_passed, v.input_status,
+            items += [(f"{v.name} (input)", v.input_net, None, v.input_passed, v.input_status,
                        v.input_nominal_v) for v in tree.vrms if v.input_group == key]
-            applies = [it for it in items if net_limits(tree, it[1], key)[0].max_drop_pct is not None]
-            for name, net, passed, status, nominal in applies:
+            applies = [it for it in items
+                       if net_limits(tree, it[1], key, it[2])[0].max_drop_pct is not None]
+            for name, net, _rail, passed, status, nominal in applies:
                 if passed is None:
                     missing.append(unjudged(name, net, "max_drop_pct", _why_not(status, nominal)))
-            judged += sum(it[2] is not None for it in applies)
+            judged += sum(it[3] is not None for it in applies)
             if not applies:
                 missing.append(unjudged(key, key, "max_drop_pct", "no load or regulator input to judge"))
         if res.kind == "ground" and "max_ground_rise_mv" in checked:
