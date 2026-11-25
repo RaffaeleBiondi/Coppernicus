@@ -2,6 +2,8 @@
 
 import dataclasses
 import json
+import runpy
+from pathlib import Path
 
 import pytest
 
@@ -124,3 +126,40 @@ def test_a_rail_from_kicad_fields_warns_that_the_project_tolerances_are_not_used
                 ) == EXIT_NOT_JUDGED
     doc = json.loads(capsys.readouterr().out)
     assert doc["loads"][0]["verdict"] == "not_judged" and not doc["warnings"]
+
+
+# ---------------------------------------------------------------------- the example
+
+EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "tolerance"
+
+
+def test_make_examples_writes_the_committed_tolerance_example(tmp_path):
+    make = runpy.run_path(str(EXAMPLE.parent / "make_examples.py"))
+    make["write_tolerance_example"](tmp_path, board=False)
+    for name in ("tolerance.coppernicus.yml", "tolerance-tight.coppernicus.yml"):
+        assert (tmp_path / name).read_text(encoding="utf-8") == (EXAMPLE / name).read_text(encoding="utf-8")
+    assert (EXAMPLE / "tolerance.kipi.json.gz").is_file()
+
+
+def test_the_example_passes_and_its_tight_copy_fails(tmp_path, capsys):
+    out = tmp_path / "out"
+    assert main(["tolerance", str(EXAMPLE / "tolerance.coppernicus.yml"), "--out", str(out)]) == EXIT_OK
+    text = capsys.readouterr().out
+    # Each solve's cost first, then the report.
+    assert text.index("Impedance of VOUT:") < text.index("Noise of U1:") < text.index("Load U2 on VOUT")
+    for words in ("Load U2 on VOUT (nominal 1.8 V from U1, probe LOAD): PASS", "DC drop      27.05 / 0 mV",
+                  "DC accuracy  18 / 18 mV  accuracy_pct of U1", "ripple       7.883 / 10.57 mV  noise of U1 "
+                  "at LOAD", "transient    30 / 30 mV  entered (transient_mv); KiPI's estimate with a "
+                  "typical loop at 100 kHz: 25.99 / 25.98 mV", "check total 82.94 / 58.57 mV of 108 / 108 "
+                  "allowed (tol_pct)", "Verdict: pass."):
+        assert words in text, words
+    doc = json.loads((out / "tolerance.coppernicus_tolerance_summary.json").read_text(encoding="utf-8"))
+    assert [e["solve"] for e in doc["estimates"]] == ["AC VOUT", "noise U1"]
+    assert doc["stats"]["ac_rails"] == 1 and doc["stats"]["aggressors"] == 1
+    assert main(["tolerance", str(EXAMPLE / "tolerance-tight.coppernicus.yml"), "--json",
+                 "--out", str(out)]) == EXIT_LIMIT
+    doc = json.loads(capsys.readouterr().out)
+    (e,) = doc["failed"]
+    assert (e["item"], e["limit"]) == ("U2", "tol_pct")
+    assert e["reason"] == "total 82.94 mV below nominal, over the 54 mV allowed and 58.57 mV above " \
+                          "nominal, over the 54 mV allowed"

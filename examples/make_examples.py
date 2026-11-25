@@ -10,6 +10,7 @@ then try them:
     uv run coppernicus gui examples/fields/fields.coppernicus.yml
     uv run coppernicus ac examples/pdn/pdn.coppernicus.yml --out results/pdn
     uv run coppernicus noise examples/noise/noise.coppernicus.yml --out results/noise
+    uv run coppernicus tolerance examples/tolerance/tolerance.coppernicus.yml --out results/tolerance
 
 ``demo``: one rail, three loads, a tight drop budget. ``power_chain``: a whole power tree
 (12 V input, switcher, ferrite, remote-sensed LDO, ground pins), copied from KiPI's
@@ -41,6 +42,13 @@ the 0.8 V JESD8 margin), SIG_SW 33 mV, the shielded SIG_BURIED 1.4 mV, so
 ``noise.coppernicus.yml`` passes and ``noise-tight.coppernicus.yml`` (a 0.5 V noise margin on
 every victim) fails; the ripple at the load's probe LOAD (never judged) is 18 mV p-p, 12 mV
 through 20 MHz.
+
+``tolerance``: the tolerance stack-up (Task 11) of U2 on the noise example's board (its victims
+left out): U1's DC accuracy ±1 %, U2's transient ±30 mV entered (a datasheet figure), the probe
+LOAD with a 1 A step at 1 A/µs and U1's bandwidth 100 kHz for KiPI's transient estimate (26 mV,
+shown, never judged). From one run: DC drop 27.05 mV below, accuracy 18 mV, ripple at LOAD
+7.88 / 10.57 mV, so the total is 82.94 / 58.57 mV; ``tolerance.coppernicus.yml``'s ±6 % (108 mV)
+holds with every part known, and ``tolerance-tight.coppernicus.yml``'s ±3 % (54 mV) fails.
 """
 
 from pathlib import Path
@@ -95,6 +103,30 @@ def demo_thermal_project() -> Project:
     )], thermal=ThermalOptions(enabled=True, max_rise_c=15.0))
 
 
+def tolerance_project(tol_pct: float) -> Project:
+    """The noise example's buck without its victims, for the tolerance stack-up of U2: U1's
+    accuracy ±1 %, U2's tolerances (±``tol_pct``, DC ±3 %, AC ±50 mV) and its transient ±30 mV
+    entered, a 1 A step at 1 A/µs on the probe LOAD and U1's bandwidth 100 kHz."""
+    import dataclasses
+    p = coupled_noise_project("tolerance.kipi.json.gz", qrr_nc=5.0)
+    p.victims = []
+    rail = p.rails[1]
+    rail.sources[0] = dataclasses.replace(rail.sources[0], accuracy_pct=1.0)
+    rail.loads[0] = dataclasses.replace(rail.loads[0], tol_pct=tol_pct, dc_tol_pct=3.0, ac_tol_mv=50.0,
+                                        transient_mv=30.0)
+    p.probes[0].step_a, p.probes[0].slew_a_per_us = 1.0, 1.0
+    p.ac = AcOptions(bandwidth_hz={"U1": 100e3})
+    return p
+
+
+def write_tolerance_example(folder: Path, board: bool = True) -> None:
+    folder.mkdir(parents=True, exist_ok=True)
+    if board:
+        save_snapshot(coupled_noise_board(), folder / "tolerance.kipi.json.gz")
+    for name, tol_pct in (("tolerance", 6.0), ("tolerance-tight", 3.0)):
+        tolerance_project(tol_pct).save(folder / f"{name}.coppernicus.yml")
+
+
 def main(board: bool = True):
     HERE.mkdir(exist_ok=True)
     if board:
@@ -134,6 +166,10 @@ def main(board: bool = True):
             v.noise_margin_v = margin
         p.save(noise / f"{name}.coppernicus.yml")
     print(f"Wrote {noise}")
+
+    # Tolerance stack-up: the noise board's load U2 with every part of its stack-up known.
+    write_tolerance_example(ROOT / "tolerance")
+    print(f"Wrote {ROOT / 'tolerance'}")
 
 
 if __name__ == "__main__":
