@@ -492,9 +492,11 @@ class MainWindow(QMainWindow):
     def _merge_again(self, reshow: bool = False):
         """Merge again after the project changed (or its file name, which the red line
         names), and show what that changes: the red line and the pinned note, the net list's
-        marks, and the shown rail: anew when its origin changed (or ``reshow``), read-only
-        or editable as the new origin says; else its banner only."""
-        before = self._shown_origin()
+        marks, and the shown rail. The rail is shown anew (or with ``reshow``) when its origin
+        changed between the KiCad fields (read-only, a copy of the merged rail) and any other
+        (the project's own rail, edited in place); any other change of origin shows the same
+        rail, so only its banner and drop-limit lock follow, and an edit is never interrupted
+        by the panel being filled again."""
         self._remerge()
         self._show_fields_error()
         if self.board is None:
@@ -502,17 +504,14 @@ class MainWindow(QMainWindow):
         self.nets.mark_configured(self._configured_nets(), self._kicad_nets())
         if not self.net:
             return
-        if reshow or self._shown_origin() != before:
+        origin = self.merged.origins.get(self.net)
+        from_fields = origin is not None and origin.source == "fields"
+        if reshow or from_fields != self._kicad_shown:
             rail = self._show_rail(self.net)
             self.rail_panel.set_net_kind(self._net_at_0v(rail))
         else:
             self._lock_drop(self.net)             # after a pad picked, the panel was filled again
             self._show_banner(self.net)
-
-    def _shown_origin(self) -> Optional[str]:
-        """Where the shown net's rail comes from (an Origin's source), None for no origin."""
-        origin = self.merged.origins.get(self.net) if self.net else None
-        return origin.source if origin is not None else None
 
     def _fields_refusal(self) -> str:
         """What a solve says when a KiCad field cannot be used: the CLI's text, and the

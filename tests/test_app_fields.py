@@ -420,6 +420,17 @@ def test_a_project_rail_over_incomplete_fields_is_editable_and_a_board_without_f
         assert rp.loads.rows() == [("", "U1", None, 1.0)], rp.loads.rows()
         assert net_item("VCC").text() == "VCC"
 
+        # A first limit on a net the fields say nothing about gives it an origin ("project"),
+        # but it stays editable: the panel is not filled again in the middle of the edit.
+        open_net(strip(TMP / "e", extra_parts=[("U2", 20.0, 3.0, "OTHER")]), "OTHER")
+        filled, fill = [], rp.set_rail
+        rp.set_rail = lambda *a: filled.append(a[1].net) or fill(*a)
+        rp.max_via.setText("2")
+        rp.max_via.editingFinished.emit()
+        assert window.merged.origins["OTHER"].source == "project" and not rp.read_only
+        assert filled == [] and window.project.rail("OTHER").limits == Limits(max_via_current=2.0), filled
+        del rp.set_rail
+
         open_net(strip(TMP / "b"))
         write_strip_board(TMP / "plain.kicad_pcb")
         window.dirty = False
