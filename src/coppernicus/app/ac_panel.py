@@ -469,10 +469,11 @@ def result_rows(r) -> List[Tuple[str, ...]]:
 def _project_key(project: Project) -> Dict[str, Any]:
     """What a solve depends on, to tell when a result no longer matches the project: not the
     board's path (a save rewrites it; another board clears the results), the nets marked as
-    rails or the rails' DC limits."""
+    rails, the rails' DC limits, or the aggressors, victims and noise options (no AC solve
+    reads them)."""
     d = project.to_dict()
-    d.pop("marked_rails", None)
-    d.pop("board", None)
+    for key in ("marked_rails", "board", "aggressors", "victims", "noise"):
+        d.pop(key, None)
     for rail in d.get("rails", []):
         rail.pop("limits", None)              # DC limits: no AC solve reads them
     return d

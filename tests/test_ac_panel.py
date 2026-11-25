@@ -467,6 +467,18 @@ def test_a_result_goes_stale_on_a_setup_edit_not_on_a_save_or_a_marked_net():
     assert _project_key(p) != key
 
 
+def test_a_noise_edit_does_not_flag_an_impedance_result():
+    """No AC solve reads the aggressors, victims or noise options."""
+    from coppernicus.app.ac_panel import _project_key
+    from coppernicus.project import Aggressor, Victim
+    p = _project()
+    key = _project_key(p)
+    p.aggressors = [Aggressor("U1", vrm="U1", fsw_hz=1e6)]
+    p.victims = [Victim("SIG", preset="cmos", noise_margin_v=0.3)]
+    p.noise.field_per_decade = 5
+    assert _project_key(p) == key
+
+
 FIELDS_BOARD = os.path.join(os.path.dirname(__file__), "..", "examples", "fields", "fields.kicad_pcb")
 
 
