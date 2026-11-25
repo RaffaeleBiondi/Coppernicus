@@ -519,8 +519,10 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
                          f"{_num(rail.get('max_drop_pct'), '.3g')} | {loss_mw} | {_verdict_cell(rail)} |")
             problems = rail.get("problems", [])
             attention += sum(p.get("severity") == "attention" for p in problems)
-            shown = [p for p in problems if p.get("severity") in ("fail", "attention")]
+            shown = [p for p in problems if p.get("severity") == "fail"]
             room = max(0, problems_per_rail - len(shown))
+            # every attention item on top of the ranked ones, as in the problems list
+            shown += [p for p in problems if p.get("severity") == "attention"]
             shown += [p for p in problems if p.get("severity") not in ("fail", "attention")][:room]
             unjudged = rail.get("not_judged") or []
             if shown or unjudged:

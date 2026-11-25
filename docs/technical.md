@@ -111,14 +111,12 @@ one assumption line with each layer's value.
 - **Brooks and Adam** ([Internal trace temperatures](https://signalintegrityjournal.com/articles/1596-internal-trace-temperatures-more-complicated-than-we-think)):
   internal traces run cooler. With IPC-2152, that is why inner layers are not derated here.
 
-60 A/mm² sits at the conservative end of these figures. Electromigration in copper sets in
-about 100× higher, so it is not the limit here.
+Electromigration in copper sets in about 100× higher, so it is not the limit here.
 
 **Why attention only, never a fail.** Current density is not temperature:
 - **Short necks are often fine.** Schimel
   ([Efficient tool sizes high-current PCB traces](https://www.electronicdesign.com/boards/efficient-tool-sizes-high-current-pcb-traces))
-  finds that a short bottleneck takes about 3.3× more current than a long trace for the same
-  rise. Harris at Altium
+  finds that short bottlenecks take about 3.3× more current. Harris at Altium
   ([Copper current density simulations](https://resources.altium.com/p/copper-current-density-simulations-quick-and-dirty-way))
   writes: "Some areas exceeding this current density are likely going to be fine."
 - **Wide copper can heat a lot below it.** A wide pour carrying a high current can heat the

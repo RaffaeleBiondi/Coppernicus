@@ -112,6 +112,20 @@ def test_the_ranked_items_are_unchanged_attention_is_added(neck_80):
     problems = find_problems(neck_80, Limits(), top=5)
     info_spots = [p for p in problems if p.kind == "hotspot" and p.severity == INFO]
     assert info_spots and "top 1%" in info_spots[0].detail
+    assert _without_attention(problems) == find_problems(_no_thickness(neck_80), Limits(), top=5)
+
+
+def _no_thickness(res):
+    """``res`` with no layer thickness known: the problems as before the default."""
+    import copy
+    import dataclasses
+    out = copy.copy(res)
+    out.layers = [dataclasses.replace(lf, thickness_mm=None) for lf in res.layers]
+    return out
+
+
+def _without_attention(problems):
+    return [p for p in problems if p.severity != ATTENTION]
 
 
 def test_the_verdict_and_not_judged_are_unchanged_by_attention(neck_80):
@@ -230,6 +244,14 @@ def hot_tree(chain_board):
     return solve_project_tree(chain_board, _hot_chain())
 
 
+def test_the_tree_problems_are_unchanged_attention_is_added(hot_tree):
+    import copy
+    bare = copy.copy(hot_tree)
+    bare.groups = {k: _no_thickness(res) for k, res in hot_tree.groups.items()}
+    for key in hot_tree.groups:
+        assert _without_attention(find_tree_problems(hot_tree, key)) == find_tree_problems(bare, key)
+
+
 def test_a_tree_group_above_the_default_has_attention_and_no_fail(hot_tree):
     from coppernicus.power_tree import group_verdict
     problems = find_tree_problems(hot_tree, "+1V8")
@@ -334,6 +356,35 @@ def test_the_ci_summary_counts_attention_and_the_exit_code_is_unchanged(neck_pro
     md = ci.summary_markdown(index)
     assert "1 attention item" in md and "not a verdict" in md
     assert "**ATTENTION** Current crowding on F.Cu" in md
+
+
+def test_attention_rows_leave_the_ci_summary_room_for_the_ranked_problems():
+    """Like the problems lists, the summary shows every fail and attention item on top of
+    the ranked ones: many attention rows never push the loads out."""
+    from coppernicus import ci
+    spot = {"severity": "attention", "kind": "hotspot", "title": "Current crowding", "layer": "F.Cu",
+            "x_mm": 0.0, "y_mm": 0.0}
+    load = {"severity": "info", "kind": "load", "title": "U1: 0.99 V", "layer": None,
+            "x_mm": 0.0, "y_mm": 0.0}
+    rail = {"net": "VCC", "verdict": "not_judged", "limits": {}, "not_judged": [], "loads": [],
+            "problems": [spot] * 6 + [load]}
+    index = {"verdict": "not_judged", "projects": [{"project": "p.coppernicus.yml", "exit_code": 0,
+                                                    "doc": {"rails": [rail]}}]}
+    md = ci.summary_markdown(index, problems_per_rail=5)
+    assert md.count("**ATTENTION**") == 6 and "U1: 0.99 V" in md
+    assert "6 attention items" in md
+
+
+def test_the_ci_tree_tables_name_the_attention_items(tmp_path, monkeypatch):
+    from coppernicus import ci
+    save_snapshot(power_chain_board(), tmp_path / "power_chain.kipi.json.gz")
+    _hot_chain().save(tmp_path / "chain.coppernicus.yml")
+    monkeypatch.chdir(tmp_path)
+    index = ci.solve_all(["chain.coppernicus.yml"], Path("results"), html=False, tree=True)
+    assert index["exit_code"] == ci.EXIT_OK
+    md = ci.summary_markdown(index)
+    tree = md[md.index("### Power tree"):]
+    assert "Attention (Coppernicus's current-density default, not a verdict): " in tree
 
 
 def test_the_html_report_has_an_attention_badge(neck_80, tmp_path):
