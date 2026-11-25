@@ -1065,6 +1065,7 @@ def test_a_load_past_a_net_tie_is_judged_by_its_own_net_s_drop_limit():
     assert u2.net == "VCC_B" and u2.passed is False
     problem = _load_problem(tree, "U2")
     assert problem.severity == FAIL and "limit 0.5 %." in problem.detail, problem.detail
+    assert problem.detail.startswith("1 A on VCC_B, supply "), problem.detail   # the net it is on
     doc = tree_summary(tree)
     assert _group_doc(doc, "VCC")["verdict"] == "fail" and doc["verdict"] == "fail"
     assert next(ld for ld in doc["loads"] if ld["name"] == "U2")["exceeds_drop_limit"] is True

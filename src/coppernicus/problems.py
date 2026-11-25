@@ -294,9 +294,10 @@ def _tree_loads(tree: TreeResult, group: str, res: RailResult, per_net: NetLimit
         ground = ("no ground pins" if ld.v_ground_v is None
                   else f"ground at {ld.v_ground_v * 1e3:.2f} mV")
         status = f" {ld.status}." if ld.status and ld.status not in title else ""
+        on = f" on {ld.net}" if ld.net and ld.net != group else ""     # past a net tie
         out.append(Problem(
             FAIL if ld.passed is False else INFO, "load", title,
-            f"{ld.current_a:g} A, supply {ld.v_supply_v:.4f} V, {ground}; {limit}.{status}",
+            f"{ld.current_a:g} A{on}, supply {ld.v_supply_v:.4f} V, {ground}; {limit}.{status}",
             value, float(x), float(y),
             data={"name": ld.name, "drop_mv": ld.drop_v * 1e3, "drop_pct": ld.drop_pct,
                   "v_across_v": ld.v_across_v, "v_worst_v": ld.v_worst_v,
