@@ -535,6 +535,9 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
     overall, verdicts = tree_verdicts(tree, top)
     tv = thermal_verdict(tree)
     groups, failed = [], 0
+    # I max: each VRM's rated output current, the value judged (None where not given); only
+    # when some VRM has one, so a document without ratings stays as it was.
+    rated = any(v.current_limit_a is not None for v in tree.vrms)
     for key, res in tree.groups.items():
         gv = verdicts[key]
         failed += gv.failed
@@ -559,7 +562,8 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         "not_judged": [x for v in verdicts.values() for x in v.not_judged] + unsolved_limits(tree)
         + tv.not_judged,
         "vrms": [{"name": v.name, "kind": v.kind, "group": v.group, "v_set_v": v.v_set_v,
-                  "v_out_v": v.v_out_v, "i_out_a": v.i_out_a, "v_in_v": _num(v.v_in_v),
+                  "v_out_v": v.v_out_v, "i_out_a": v.i_out_a,
+                  **({"i_max_a": v.current_limit_a} if rated else {}), "v_in_v": _num(v.v_in_v),
                   "i_in_a": _num(v.i_in_a), "p_out_w": v.p_out_w, "p_in_w": _num(v.p_in_w),
                   "p_loss_w": _num(v.p_loss_w), "v_ground_v": _num(v.v_ground_v),
                   "v_sense_v": _num(v.v_sense_v), "v_ground_sense_v": _num(v.v_ground_sense_v),

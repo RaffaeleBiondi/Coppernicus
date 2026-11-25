@@ -942,7 +942,7 @@ class Session:
                                    "then solve again") from None
         merged.annotate(tree)
         rating_origins(tree, merged)          # where each regulator's rating was written
-        doc = C.vrm_ratings(tree_summary(tree, top=max(1, int(top))), project)
+        doc = tree_summary(tree, top=max(1, int(top)))   # with each VRM's I max, the rating judged
         if estimate is not None:
             doc["thermal_estimate"] = estimate
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.

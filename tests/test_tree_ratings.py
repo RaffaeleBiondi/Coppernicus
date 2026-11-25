@@ -360,6 +360,21 @@ def test_the_agent_interface_names_where_a_rating_was_written(tmp_path):
     assert u1["current_limit_from"] == "the project file", u1
 
 
+def test_the_cli_i_max_is_the_judged_rating_also_for_a_label_on_several_rails(tmp_path, capsys):
+    import json
+
+    from coppernicus.cli import EXIT_LIMIT, main
+    project = dual_label_chain(tmp_path / "dual")
+    assert main(["solve", str(project), "--tree", "--json", "--out", str(tmp_path / "o")]) == EXIT_LIMIT
+    rows = {v["name"]: v for v in json.loads(capsys.readouterr().out)["vrms"]}
+    assert rows["REG (+3V3)"]["i_max_a"] == 2.0 and rows["REG (+3V3)"]["exceeds_current_limit"] is True
+    assert rows["REG (+1V8)"]["i_max_a"] is None and rows["J1"]["i_max_a"] is None, rows
+    assert main(["solve", str(project), "--tree", "--out", str(tmp_path / "o")]) == EXIT_LIMIT
+    out = capsys.readouterr().out.splitlines()
+    assert "I max" in next(line for line in out if line.lstrip().startswith("name "))
+    assert "2.0000A" in next(line for line in out if line.lstrip().startswith("REG (+3V3)"))
+
+
 def test_the_power_tree_tab_and_problems_show_a_regulator_over_its_rating(tmp_path):
     rated = chain_project(tmp_path / "rated", {"+3V3": 2.0, "+1V8": 3.0})
     buck = rated_buck(tmp_path / "buck", "400mA")

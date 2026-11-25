@@ -353,8 +353,7 @@ def _cmd_solve_tree(args) -> int:
                     "PI_INPUT, PI_LINK...), then solve again")
     merged.annotate(tree)
     rating_origins(tree, merged)          # where each regulator's rating was written
-    from coppernicus.service.convert import vrm_ratings
-    doc = vrm_ratings(tree_summary(tree, top=args.top), project)    # + each VRM's I_max (shown)
+    doc = tree_summary(tree, top=args.top)        # with each VRM's I max, the rating judged
     if estimate is not None:
         doc["thermal_estimate"] = estimate
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
