@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEMO_BOARD = ROOT / "examples" / "demo" / "demo.kipi.json.gz"
 CHAIN_PROJECT = ROOT / "examples" / "power_chain" / "power_chain.coppernicus.yml"
 FIELDS_PROJECT = ROOT / "examples" / "fields" / "fields.coppernicus.yml"
+DEMO_THERMAL = ROOT / "examples" / "demo" / "demo-thermal.coppernicus.yml"
 
 
 class Checks:
@@ -1238,6 +1239,204 @@ def run_power_tree(window, check: Checks, args, out: Path):
     assert g.I_U4 == 0.5       # the example itself is unchanged
 
 
+def run_thermal(window, check: Checks, args, out: Path):
+    """Task 8 on the demo-thermal example: Solve power tree (Ctrl+T) fills the Temperature tab
+    with the F.Cu and B.Cu rows and a fail against its 15 °C rise limit; the Board temperature
+    map draws (the right way up), writes a PNG, reads °C on a double-click and in the hover
+    (the same cell at the same pixel) and redraws in under 1 s; a 100 °C rise limit passes
+    without a re-solve; a row double-click shows its layer; unticking Electro-thermal drops
+    the tree and keeps the rail solved alone; the form writes project.thermal; Cancel during
+    a solve shows no warning box. Saves only into ``out``."""
+    import re
+    import time
+
+    import numpy as np
+    from PySide6.QtGui import QImage
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.app.hover import temperature_reading
+    from coppernicus.project import Project, ThermalOptions
+    window.dirty = False
+    window.open_project(DEMO_THERMAL)
+    QApplication.processEvents()
+    panel, view = window.thermal_panel, window.view
+    tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
+    check("thermal: the Temperature tab follows Loss by layer",
+          tabs[tabs.index("Loss by layer") + 1] == "Temperature", str(tabs))
+    check("... it shows the project's options: Electro-thermal ticked, max rise 15 °C",
+          panel.enabled.isChecked() and panel.max_rise.text() == "15" and panel.max_temp.text() == ""
+          and panel.grid.text() == "automatic", f"{panel.max_rise.text()!r} {panel.grid.text()!r}")
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    window.field_box.setCurrentIndex(window.field_box.findData("temperature"))
+    QApplication.processEvents()
+    msg = window.statusBar().currentMessage()
+    check("... the Board temperature map before a solve says how to get one and shows the drop",
+          window.field_box.currentData() == "drop" and "tick Electro-thermal" in msg, msg)
+    res = solve_and_wait(window, args.timeout)          # a rail solved alone, kept by an untick
+    check("thermal: +3V3 solved alone (F5) first", res is not None)
+
+    t0 = time.perf_counter()
+    tree = solve_tree_and_wait(window, args.timeout)
+    solve_s = time.perf_counter() - t0
+    check("thermal: Ctrl+T solves the power tree electro-thermally",
+          tree is not None and tree.thermal is not None, f"{solve_s:.2f} s")
+    if tree is None or tree.thermal is None:
+        return
+    rows = panel.shown_layer_rows()
+    check("... and shows the Temperature tab", window.results_tabs.currentWidget() is panel)
+    check("... F.Cu and B.Cu rows, both FAIL against the 15 °C rise",
+          [r[0] for r in rows] == ["F.Cu", "B.Cu"] and all(r[-1] == "FAIL" for r in rows), str(rows))
+    check("... the tab's verdict and the Power tree header say limit(s) exceeded",
+          "limit(s) exceeded" in panel.summary.text()
+          and "limit(s) exceeded" in window.tree_panel.summary.text(),
+          f"{panel.summary.text()[:160]} | {window.tree_panel.summary.text()[-80:]}")
+    details = panel.details.text()
+    check("... the history, the grid peak and its nearest pad", "41.33 → 42.26 → 42.31 °C" in details
+          and ": settled" in details and rows[0][6] == "J1.1", details)
+    loads = panel.shown_load_rows()
+    check("... U1's drop: 39.156 mV at the ambient, 41.354 mV electro-thermal",
+          bool(loads) and loads[0][:4] == ("U1", "+3V3", "39.156", "41.354"), str(loads[:1]))
+
+    window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
+    window.field_box.setCurrentIndex(window.field_box.findData("temperature"))
+    view.reset_view()
+    QApplication.processEvents()
+    actors = view.plotter.renderer.actors
+    title = view.colorbar._title
+    check("thermal: the Board temperature map draws F.Cu's cells, one scale from the ambient",
+          "temperature" in actors and "°C" in title and abs(view.colorbar._lo - 25.0) < 1e-9
+          and abs(view.colorbar._hi - tree.thermal.peak_c) < 1e-9, title)
+    hx, hy, ht = tree.thermal.map("F.Cu").hottest()
+    if "temperature" in actors:
+        ds = actors["temperature"].mapper.dataset
+        vals = np.asarray(ds.cell_data["Board temperature (°C)"])
+        k = int(np.nanargmax(vals))
+        cx, cy, _ = ds.cell_centers().points[k]
+        check("... the hottest cell is drawn where the grid has it (y down in KiCad, up in the view)",
+              abs(cx - hx) < 1e-6 and abs(cy + hy) < 1e-6 and vals[k] == ht,
+              f"drawn ({cx:.3f}, {-cy:.3f}), grid ({hx:.3f}, {hy:.3f})")
+    check("... isolines, arrows, vias and Measure are off on it",
+          not any(w.isEnabled() for w in (window.show_isolines, window.show_arrows, window.show_vias,
+                                          window.measure)))
+    secs = timed_refresh(window, args.window)
+    what = "scene build and on-screen draw" if args.window else "scene build only, offscreen Qt"
+    print(f"  electro-thermal tree solve {solve_s:.2f} s; temperature map redraw {secs:.3f} s ({what})",
+          flush=True)
+    check("thermal: the map redraws in under 1 s", secs < 1.0, f"{secs:.3f} s")
+    png = out / "thermal_FCu_scene.png"
+    render_scene(view, png)
+    img = QImage(str(png))
+    check("... and writes a PNG", png.exists() and not img.isNull() and img.width() > 0, str(png))
+    if args.window:
+        view.screenshot(out / "thermal_FCu_view.png")
+        window.grab().save(str(out / "thermal_window.png"))
+
+    # A double-click and the hover at one display pixel, zoomed in on the hottest cell (a cell
+    # then spans many pixels, so the helpers' pixel rounding stays inside it).
+    d = tree.thermal.grid_mm
+    view.zoom_to(hx, hy, half_width_mm=1.0)
+    QApplication.processEvents()
+
+    def double_click_here() -> str:
+        """A double-click at the display point VTK holds now; the T it read."""
+        for _ in range(2):
+            view.plotter.iren.interactor.InvokeEvent("LeftButtonPressEvent")
+            view.plotter.iren.interactor.InvokeEvent("LeftButtonReleaseEvent")
+        QApplication.processEvents()
+        found = re.search(r"T = [^)]*\)", window.statusBar().currentMessage())
+        return found.group(0) if found else window.statusBar().currentMessage()
+
+    ren = view.plotter.renderer
+    ren.SetWorldPoint(hx, -hy, 0.0, 1.0)
+    ren.WorldToDisplay()
+    dx, dy, _ = ren.GetDisplayPoint()
+    view.plotter.iren.interactor.SetEventPosition(int(round(dx)), int(round(dy)))
+    clicked = double_click_here()
+    bx, by = view.display_to_board(*view._event_xy())
+    hovered = view.hover_at(bx, by).split("\n")[0]
+    check("thermal: a double-click on the map reads the °C of the cell under the pointer",
+          "°C" in clicked and clicked == temperature_reading(tree.thermal.map("F.Cu").at(bx, by), d),
+          f"{clicked} at ({bx:.3f}, {by:.3f}) mm")
+    check("... the hover at the same pixel reads the same T", hovered == clicked,
+          f"{hovered!r} | {clicked!r}")
+    if args.window:
+        check("... over the hottest cell, its temperature", clicked == temperature_reading(ht, d), clicked)
+        mouse_move(window, view_point(window, hx, hy))          # the pointer, as Qt delivers it
+        hover_settle(window)
+        label = view.hover_label.text().split("\n")[0] if view.hover_label.isVisible() else ""
+        clicked = double_click_here()                           # at the pixel the move set
+        check("... with the mouse: the readout beside the pointer is the double-click's T there",
+              label == clicked == temperature_reading(ht, d), f"{label!r} | {clicked!r}")
+
+    worker = window.tree_worker
+    panel.max_rise.setText("100")
+    panel.max_rise.editingFinished.emit()
+    QApplication.processEvents()
+    rows = panel.shown_layer_rows()
+    check("thermal: a 100 °C rise limit passes without a re-solve",
+          window.tree is tree and window.tree_worker is worker and window.project.thermal.max_rise_c == 100.0
+          and bool(rows) and all(r[-1] == "pass" for r in rows)
+          and "no limits exceeded" in panel.summary.text() and window.dirty,
+          f"{rows} | {panel.summary.text()[:120]}")
+    check("... and the Power tree header is judged again",
+          "no limits exceeded" in window.tree_panel.summary.text(), window.tree_panel.summary.text()[-80:])
+
+    window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+    window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
+    QApplication.processEvents()
+    panel.layers.cellDoubleClicked.emit(1, 0)                 # the B.Cu row
+    QApplication.processEvents()
+    QApplication.processEvents()
+    b = tree.thermal.copper[1]
+    focal = view.plotter.camera.focal_point
+    check("thermal: double-clicking the B.Cu row shows B.Cu's temperature, zoomed to its copper",
+          window.layer_box.currentText() == "B.Cu" and window.field_box.currentData() == "temperature"
+          and view._temperature is not None and view._temperature[0].layer_name == "B.Cu"
+          and abs(focal[0] - b.x_mm) < 1e-6 and abs(focal[1] + b.y_mm) < 1e-6,
+          f"{window.layer_box.currentText()} {window.field_box.currentData()} focal {focal[:2]}")
+
+    panel.enabled.setChecked(False)
+    QApplication.processEvents()
+    msg = window.statusBar().currentMessage()
+    check("thermal: unticking Electro-thermal drops the tree, keeps +3V3 solved alone",
+          window.tree is None and not window.project.thermal.enabled and "+3V3" in window.results
+          and panel.shown_layer_rows() == [],
+          f"tree {window.tree is not None}, results {sorted(window.results)}")
+    check("... and the map falls back to the drop, saying why",
+          window.field_box.currentData() == "drop" and view._temperature is None
+          and "tick Electro-thermal" in msg, msg)
+
+    panel.enabled.setChecked(True)
+    panel.ambient.setValue(30.0)
+    panel.iterations.setValue(4)
+    panel.grid.setValue(0.5)
+    panel.load_heat.setChecked(True)
+    panel.regulator_heat.setCurrentIndex(panel.regulator_heat.findData("part_pads"))
+    path = out / "demo-thermal-edited.coppernicus.yml"
+    window._save(path)
+    saved = Project.load(path).thermal
+    expected = ThermalOptions(enabled=True, ambient_c=30.0, iterations=4, grid_mm=0.5, load_heat=True,
+                              max_rise_c=100.0, regulator_heat="part_pads")
+    check("thermal: the form writes project.thermal, saved and read back", saved == expected, repr(saved))
+
+    n = len(DIALOGS)
+    window.solve_tree()
+    panel.cancel.click()
+    cancelling = window.statusBar().currentMessage()
+    window.tree_worker.wait(int(args.timeout * 1000))
+    QApplication.processEvents()
+    QApplication.processEvents()
+    msg = window.statusBar().currentMessage()
+    check("thermal: Cancel during a solve says it stops at the next iteration",
+          "Cancelling: stops at the next iteration" in cancelling, cancelling)
+    check("... and ends with no warning box, the tab cleared",
+          len(DIALOGS) == n and window.tree is None and "cancelled" in msg
+          and "cancelled" in panel.summary.text() and not panel.cancel.isEnabled(),
+          f"{DIALOGS[n:]} | {msg} | {panel.summary.text()}")
+    window.dirty = False
+
+
 def run_signs(window, check: Checks, args, out: Path):
     """T7.1 (d): a strip solved alone at -3.3 V and at 0 V shows the loads toward 0 V, and a
     ground's rise, with positive drops and no NaN; a 0 V rail in the power tree warns, in the
@@ -1957,6 +2156,7 @@ def main(argv=None) -> int:
         run_marked(window, check, out)
         run_power_chain(window, check, args, out)
         run_power_tree(window, check, args, out)
+        run_thermal(window, check, args, out)
         run_signs(window, check, args, out)
         run_fields(window, check, args, out)
         run_demo(window, check, args, out)

@@ -2,8 +2,9 @@
 
 Shows one copper layer at a time: the board outline, the net's copper outline, and after a
 solve a colour map (voltage drop, voltage or current density) with the sources, loads and
-vias on top. Left-drag pans, the wheel zooms, a double-click reads the values under the
-pointer and, as the pointer moves, a readout beside it shows the values chosen in View →
+vias on top, or the board temperature of an electro-thermal power-tree solve. Left-drag
+pans, the wheel zooms, a double-click reads the values under the pointer and, as the pointer
+moves, a readout beside it shows the values chosen in View →
 Hover shows. In pick mode a single click (a press and release less than 3 px apart, so a pan
 is never a click) reports the board point under it; in measure mode two clicks give the
 voltage difference between two points. Drop isolines and current-flow arrows can be laid
@@ -338,8 +339,7 @@ class BoardView(QWidget):
                                       point_color=HOTTEST_COLOR, point_size=12, font_size=11,
                                       text_color=HOTTEST_COLOR, shape_opacity=0.0,
                                       render_points_as_spheres=True, always_visible=True, name="hottest")
-        self.colorbar.set_scale(cmap, lo, hi, f"°C, every layer: ambient {lo:g} to the board peak "
-                                f"{hi:.2f}\n{d:.3g} mm cells")
+        self.colorbar.set_scale(cmap, lo, hi, f"°C, all layers: ambient → board peak\n{d:.3g} mm cells")
         self._add_outline(outline)
         self._temperature = (m, d)
         self._finish(fit)
