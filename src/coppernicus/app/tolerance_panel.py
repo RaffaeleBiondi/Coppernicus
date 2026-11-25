@@ -689,6 +689,10 @@ class TolerancePanel(QWidget):
         old = pair_text(getattr(row.term, key))
         try:
             note = set_value(win.project, win.merged, kind, row.net, row.index, key, item.text())
+        except (IndexError, AttributeError):  # the rail changed under the edit: show it anew
+            self._fill_editor(force=True)
+            self._say("Not applied: the rail changed meanwhile; type it again", bar=True)
+            return
         except ValueError as e:               # ProjectError too: nothing written
             table.blockSignals(True)
             item.setText(old)

@@ -2492,6 +2492,155 @@ def run_noise(window, check: Checks, args, out: Path):
     window.dirty = False
 
 
+TOLERANCE_DIR = ROOT / "examples" / "tolerance"
+
+
+def wait_idle(panel, timeout_s: float):
+    """Pump events until a tab's solve (sizing, the question, the solve) has ended."""
+    import time
+
+    from PySide6.QtWidgets import QApplication
+    t0 = time.monotonic()
+    QApplication.processEvents()
+    while panel.busy and time.monotonic() - t0 < timeout_s:
+        QApplication.processEvents()
+        time.sleep(0.01)
+    QApplication.processEvents()
+
+
+def run_tolerance(window, check: Checks, args, out: Path):
+    """T11b: the Tolerance tab on examples/tolerance (synthetic board only). Opened, the editor
+    shows the example's tolerances and nothing passes (no power tree held: the DC drop is
+    missing). The tab's Solve button runs the power tree, U1's noise and the impedance with
+    KiPI's transient estimate in turn, each through its own tab, its estimate first; then the
+    stack-up is the CLI's, number for number (PASS at ±6 %); 3 % FAILs without a solve dropped;
+    the row shows U2 on the board; export with the CLI's names; a rail edit turns it NOT JUDGED
+    (the tree dropped, the noise stale); save and reopen keep the tolerances."""
+    import csv
+    import json
+    import math
+
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.cli import main as cli_main
+    project = TOLERANCE_DIR / "tolerance.coppernicus.yml"
+    before = {f.name: f.read_bytes() for f in TOLERANCE_DIR.iterdir()}
+    panel = window.tolerance_panel
+    window.dirty = False
+    window.open_project(project)
+    window.results_tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
+    row = [panel.loads.item(0, c).text() for c in range(panel.loads.columnCount())]
+    check("tolerance: the tab follows Ripple & noise and shows U2's tolerances and U1's accuracy",
+          tabs[tabs.index("Ripple & noise") + 1] == "Tolerance"
+          and row == ["U2", "VOUT", "6", "", "3", "", "", "50", "", "30"]
+          and panel.sources.item(1, 2).text() == "1", str(row))
+
+    def cell(c):
+        return panel.table.item(0, c).text() if panel.table.rowCount() else ""
+    check("tolerance: nothing solved, nothing passes: the DC drop missing, solve the power tree (Ctrl+T)",
+          panel.result is not None and panel.result.verdict == "not_judged" and cell(3).startswith("missing")
+          and "Ctrl+T" in panel.table.item(0, 3).toolTip()
+          and panel.solve_button.text() == "Solve power tree",
+          f"{cell(3)} | {panel.solve_button.text()}")
+
+    panel.solve_next()                               # the power tree (cheap: no estimate to show)
+    if window.tree_worker is not None:
+        window.tree_worker.wait(int(args.timeout * 1000))
+    QApplication.processEvents()
+    QApplication.processEvents()
+    window.results_tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    check("tolerance: Solve power tree gives U2's DC drop from the tree; next, the noise of U1",
+          window.tree is not None and cell(3).endswith("mV · tree")
+          and panel.solve_button.text() == "Solve noise of U1", f"{cell(3)} | {panel.solve_button.text()}")
+    estimates = []
+    for tab, text in ((window.noise_panel, "Solve noise of U1"),
+                      (window.ac_panel, "Solve impedance of VOUT + transient")):
+        heard = []
+        tab.estimated.connect(heard.append)
+        shown = panel.solve_button.text()
+        panel.solve_next()
+        on_tab = window.results_tabs.currentWidget() is tab
+        wait_idle(tab, args.timeout)
+        tab.estimated.disconnect(heard.append)
+        estimates.append((text, shown, on_tab, heard))
+        window.results_tabs.setCurrentWidget(panel)
+        QApplication.processEvents()
+    check("tolerance: Solve runs the noise, then the impedance with KiPI's transient, each in its tab, "
+          "its estimate first",
+          all(shown == text and on_tab and len(heard) == 1 and "triangles ×" in heard[0]
+              for text, shown, on_tab, heard in estimates),
+          str([(t, s, o, h[:1]) for t, s, o, h in estimates])[:300])
+    res = panel.result
+    r = res.rows[0] if res is not None and res.rows else None
+    check("tolerance: every part known, PASS at ±6 %; KiPI's estimate shown, never judged",
+          res is not None and res.verdict == "pass" and cell(10) == "PASS"
+          and all(r.parts[k] is not None for k in ("dc", "accuracy", "ripple", "transient"))
+          and r.transient_estimate_v is not None and "aggressor U1" in cell(5)
+          and not panel.solve_button.isEnabled(), f"{cell(10)} | {panel.header.text()[:160]}")
+    code = cli_main(["tolerance", str(project), "--json", "--out", str(out / "cli")])
+    summary = out / "cli" / "tolerance.coppernicus_tolerance_summary.json"
+    doc = json.loads(summary.read_text(encoding="utf-8"))
+    cli = doc["loads"][0]
+    same = r is not None and all(
+        math.isclose(getattr(r.parts[k], side) * 1e3, cli["parts"][k][f"{side[:-2]}_mv"], rel_tol=1e-6,
+                     abs_tol=1e-9)
+        for k in ("dc", "accuracy", "ripple", "transient") for side in ("below_v", "above_v"))
+    check("tolerance: the app's stack-up is the CLI's, part for part, and the same verdict",
+          code == 0 and same and doc["verdict"] == res.verdict,
+          f"app {[(k, r.parts[k].below_v * 1e3) for k in r.parts] if r else None} cli {cli['parts']}"[:300])
+
+    tree, noise = window.tree, window.noise_panel.results.get("U1")
+    panel.set_cell("load", "U2", "tol_pct", "3")
+    check("tolerance: 3 % FAILs at once; a tolerance edit drops no solve and flags no result",
+          panel.result.verdict == "fail" and cell(10) == "FAIL" and window.tree is tree
+          and window.noise_panel.results.get("U1") is noise and not window.noise_panel.stale
+          and not window.ac_panel.stale and window.dirty, f"{cell(10)} {cell(9)[:80]}")
+
+    written = panel.export_files(out / "results")
+    names = sorted(p.name for p in written)
+    with open(out / "results" / "tolerance.coppernicus_tolerance.csv", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    check("tolerance: export writes the CLI's two files",
+          names == ["tolerance.coppernicus_tolerance.csv", "tolerance.coppernicus_tolerance_summary.json"]
+          and rows[0]["verdict"] == "fail" and rows[0]["ripple_source"].startswith("noise of U1"), str(names))
+
+    window.nets.select("VIN")
+    QApplication.processEvents()
+    said = panel.go_to_row(0)
+    QApplication.processEvents()
+    check("tolerance: clicking the row shows U2 on the board (its rail, zoomed to its pads)",
+          window.net == "VOUT" and said.startswith("U2 on VOUT: FAIL"), f"{window.net} {said}")
+
+    window.rail_panel.loads.table.cellWidget(0, 3).setValue(4.0)    # U2's current, in the Rail setup
+    QApplication.processEvents()
+    QApplication.processEvents()
+    check("tolerance: a rail edit turns it NOT JUDGED at once: the tree dropped, the noise stale",
+          window.tree is None and window.noise_panel.stale and cell(10) == "NOT JUDGED"
+          and cell(3).startswith("missing") and cell(5).startswith("missing"), f"{cell(10)} {cell(5)[:60]}")
+
+    saved = out / "tolerance-edited.coppernicus.yml"
+    window._save(saved)
+    window.open_project(saved)
+    QApplication.processEvents()
+    load = window.project.rail("VOUT").loads[0]
+    check("tolerance: saved and reopened, the tolerances are kept",
+          load.tol_pct == (-3.0, 3.0) and load.dc_tol_pct == (-3.0, 3.0) and load.ac_tol_mv == (-50.0, 50.0)
+          and load.transient_mv == (-30.0, 30.0) and window.project.rail("VOUT").sources[0].accuracy_pct
+          == (-1.0, 1.0) and panel.loads.item(0, 2).text() == "3" and not window.dirty, str(load))
+    shot = out / "tolerance_panel.png"
+    window.results_tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    panel.grab().save(str(shot))
+    print(f"  Tolerance tab: {shot}", flush=True)
+    after = {f.name: f.read_bytes() for f in TOLERANCE_DIR.iterdir()}
+    check("tolerance: the example's files are unchanged", after == before, str(sorted(after)))
+    window.results_tabs.setCurrentWidget(window.problems)
+    window.dirty = False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
@@ -2540,6 +2689,7 @@ def main(argv=None) -> int:
         run_fields(window, check, args, out)
         run_ac(window, check, args, out)
         run_noise(window, check, args, out)
+        run_tolerance(window, check, args, out)
         run_demo(window, check, args, out)
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:
