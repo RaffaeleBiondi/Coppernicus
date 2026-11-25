@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from kipi.core.progress import Canceled
@@ -64,13 +64,15 @@ def check_grounds(project: Project) -> None:
             "ground net (engine_options: excluded_nets)")
 
 
-def _assumptions(project: Project, setup) -> List[str]:
+def _assumptions(project: Project, setup, rho_note: Optional[str] = None) -> List[str]:
     # Only what KiPI solves: excluded groups dropped, a regulator fed from one an ideal source.
     setup = active_setup(setup)[0]
     names = terminal_names(project)
     vrms = {v.name: v for v in setup.vrms}
     links = {k.name for k in setup.links}
     settings_notes = engine_settings(project.settings)[1][:3]      # plating, ρ(T), mesh
+    if rho_note is not None:                   # electro-thermal: the copper's own temperature
+        settings_notes[1] = rho_note
     out = settings_notes + [
         "Power tree: each net group (nets joined by links and net ties) is solved from its one "
         "source. A regulator's input pins are a load on the group feeding it: LDO "
@@ -170,7 +172,12 @@ def solve_project_tree(board: Board, project: Project,
     except SolveError as e:
         raise EngineError(f"Power tree: {e}") from e
     seconds = time.perf_counter() - t0
+    return convert_tree(board, project, setup, kt, seconds, thickness)
 
+
+def group_keys(project: Project, kt) -> Dict[str, str]:
+    """KiPI's group label -> the ``TreeResult.groups`` key: a rail group's driving net (the
+    net its source drives), a ground group's first ground net the project names."""
     names = terminal_names(project)
     rail_of_vrm = {name: net for (what, net, _i), name in names.items() if what == "source"}
     grounds = ground_nets(project)
@@ -180,8 +187,28 @@ def solve_project_tree(board: Board, project: Project,
             key_of[label] = rail_of_vrm.get(g.driver, label)
         else:
             key_of[label] = next((n for n in grounds if n in g.nets), sorted(g.nets)[0])
+    return key_of
 
-    assumptions = _assumptions(project, setup)
+
+def load_drop(ld) -> Tuple[float, float]:
+    """``(drop, v_worst)`` of a KiPI tree load: the pin that has lost the most toward 0 V
+    (the lowest on a positive rail, the highest on a negative one, #220) and how far it is
+    from the nominal, toward 0 V."""
+    sign = -1.0 if ld.nominal < 0 else 1.0
+    side = ld.v_high if sign < 0 else ld.v_low
+    v_worst = side if side is not None else ld.v_worst
+    return sign * (ld.nominal - v_worst), v_worst
+
+
+def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
+                 thickness: Dict[str, float], rho_note: Optional[str] = None) -> TreeResult:
+    """KiPI's tree result ``kt`` as a :class:`TreeResult`, judged against the project's
+    limits. ``rho_note`` replaces the copper-temperature assumption (an electro-thermal
+    solve sets the copper temperature)."""
+    names = terminal_names(project)
+    key_of = group_keys(project, kt)
+
+    assumptions = _assumptions(project, setup, rho_note)
     assumptions += thickness_note(thickness, board.file_thickness_mm)
     excluded = set(setup.excluded_nets or [])
     notes = [f"Rail {r.net} is solved as a ground in the power tree (from the ground pins); its "
@@ -219,12 +246,7 @@ def solve_project_tree(board: Board, project: Project,
     load_net = {name: net for (what, net, _i), name in names.items() if what == "load"}
     for ld in kt.loads:
         key = key_of.get(ld.group, ld.group)
-        # The pin that has lost the most toward 0 V: the lowest on a positive rail, the
-        # highest on a negative one (#220).
-        sign = -1.0 if ld.nominal < 0 else 1.0
-        side = ld.v_high if sign < 0 else ld.v_low
-        v_worst = side if side is not None else ld.v_worst
-        drop = sign * (ld.nominal - v_worst)
+        drop, v_worst = load_drop(ld)
         pct = 100.0 * drop / abs(ld.nominal) if ld.nominal else math.nan
         across = ld.v_effective
         out.loads.append(LoadReport(
