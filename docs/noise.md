@@ -156,8 +156,8 @@ Only your margins judge.
 - A victim without a margin is ranked, not judged; with no margin at all, nothing is judged
   (exit 0).
 
-**Never judged:** the ripple (it depends on the load's own tolerance, which a later analysis
-stacks per load), the near field and the radiated estimate (an indicator, with CISPR 32 class B
+**Never judged:** the ripple (it depends on the load's own tolerance, which the
+[tolerance stack-up](tolerance.md) adds up per load), the near field and the radiated estimate (an indicator, with CISPR 32 class B
 for scale, not a compliance result). Coppernicus invents no margin.
 
 `coppernicus noise` exits 0, 1 when a margin is exceeded, 3 when a margin could not judge
@@ -170,8 +170,9 @@ for scale, not a compliance result). Coppernicus invents no margin.
 - [Board temperature](thermal.md): the electro-thermal solve of the power tree.
 - [PDN impedance](ac-impedance.md): |Z|(f) at the probes, against your targets.
 - [Ripple and coupled noise](noise.md): a switcher's ripple and the noise in victim nets, against your margins.
+- [Tolerance stack-up](tolerance.md): each load's DC drop, accuracy, ripple and transient, against your tolerances.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
 - [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
-- [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance and the noise.
+- [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance, the noise and the tolerance stack-up.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

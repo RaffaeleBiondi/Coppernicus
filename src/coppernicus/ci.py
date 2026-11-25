@@ -67,12 +67,15 @@ def _board_folder(project: Path) -> Optional[Path]:
 
 
 def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool = True,
-              tree: bool = False, ac: bool = False, noise: bool = False) -> Dict[str, Any]:
+              tree: bool = False, ac: bool = False, noise: bool = False,
+              tolerance: bool = False) -> Dict[str, Any]:
     """Solve every matching project; return the index written to ``out_dir/INDEX``. With
     ``tree``, each project is also solved as a whole power tree (``solve --tree --json``):
     its document goes into the entry's ``tree``, for the summary's tables; it does not set
     the exit code. With ``ac`` (``noise``), each project with probes (aggressors) is also
-    solved with ``coppernicus ac`` (``coppernicus noise``); that verdict joins the project's."""
+    solved with ``coppernicus ac`` (``coppernicus noise``); that verdict joins the project's.
+    With ``tolerance``, each project with a tolerance set (or a key that looks like a misspelt
+    one) is also run through ``coppernicus tolerance``; that verdict joins the project's."""
     out_dir = Path(out_dir)
     projects, unmatched = find_projects(patterns)
     boards = {p: _board_folder(p) for p in projects}
@@ -127,6 +130,9 @@ def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool =
         if noise and "doc" in entry and _has_aggressors(project):     # opt-in: heavy
             entry["noise"] = _solve_noise(project, folder, html, env)
             _judge_noise(entry)
+        if tolerance and "doc" in entry and _has_tolerances(project):     # opt-in: heavy where needed
+            entry["tolerance"] = _solve_tolerance(project, folder, html, env)
+            _judge_tolerance(entry)
         entries.append(entry)
     exit_code = EXIT_ERROR if unmatched else overall_exit_code(entries)
     verdict = "error" if unmatched else overall_verdict(entries)
@@ -317,6 +323,92 @@ def _judge_noise(entry: Dict[str, Any]) -> None:
     code = (EXIT_LIMIT if ndoc.get("verdict") == "fail" else
             EXIT_NOT_JUDGED if ndoc.get("not_judged") else EXIT_OK)
     entry["exit_code"] = next(c for c in PRECEDENCE if c in (entry["exit_code"], code))
+
+
+def _has_tolerances(project: Path) -> bool:
+    """Whether a load sets a tolerance, or a load or source holds a key that looks like a
+    misspelt tolerance (``tol_pc``): ``coppernicus tolerance`` then says it is not judged,
+    never a silent pass."""
+    try:
+        import yaml
+
+        from coppernicus.project import Project
+        from coppernicus.tolerance import misspelt_keys
+        if any(ld.has_tolerance() for r in Project.load(project).rails for ld in r.loads):
+            return True
+        return bool(misspelt_keys(yaml.safe_load(project.read_text(encoding="utf-8")))[1])
+    except Exception:                    # the rail-by-rail run reports a bad project
+        return False
+
+
+def _solve_tolerance(project: Path, folder: Path, html: bool, env) -> Dict[str, Any]:
+    """The tolerance stack-up document of a project (``coppernicus tolerance --json``, with its
+    offline page when ``html``), or its error."""
+    cmd = [sys.executable, "-m", "coppernicus", "tolerance", str(project), "--json", "--out", str(folder)]
+    if html:
+        cmd.append("--html")
+    print(f"coppernicus: the tolerance stack-up of {project.as_posix()}", file=sys.stderr, flush=True)
+    run = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
+    if run.stderr:
+        sys.stderr.write(run.stderr)
+    try:
+        return json.loads(run.stdout)
+    except json.JSONDecodeError:
+        return {"error": {"code": "internal_error",
+                          "message": f"coppernicus tolerance exited with {run.returncode} and no JSON",
+                          "hint": "see the log above"}}
+
+
+def _judge_tolerance(entry: Dict[str, Any]) -> None:
+    """The tolerance verdict joins the project's: a check over its tolerance sets 1, one that
+    could not judge sets 3 (its entries, with the load's net, are added to the project's
+    not_judged), an error sets 2. KiPI's transient estimate is never judged."""
+    tdoc, doc = entry.get("tolerance") or {}, entry.get("doc")
+    if doc is None:
+        return
+    if "error" in tdoc:
+        doc["verdict"] = "error"
+        entry["exit_code"] = EXIT_ERROR
+        return
+    doc["not_judged"] = list(doc.get("not_judged", [])) + [
+        {"rail": None, "item": f"tolerance of {e.get('item')} on {e.get('net')}", "limit": e.get("limit"),
+         "reason": e.get("reason")} for e in tdoc.get("not_judged", [])]
+    if tdoc.get("verdict") == "fail" and doc.get("verdict") != "error":
+        doc["verdict"] = "fail"
+    elif doc["not_judged"] and doc.get("verdict") in ("pass", "pass_partially_judged"):
+        doc["verdict"] = "not_judged"
+    doc["tolerance_verdict"] = tdoc.get("verdict")
+    code = (EXIT_LIMIT if tdoc.get("verdict") == "fail" else
+            EXIT_NOT_JUDGED if tdoc.get("not_judged") else EXIT_OK)
+    entry["exit_code"] = next(c for c in PRECEDENCE if c in (entry["exit_code"], code))
+
+
+def tolerance_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
+    """The tolerance stack-up of a project, for the job summary: the verdict and each check
+    with a tolerance set, its total against what it allows, load by load."""
+    from coppernicus.tolerance import CHECK_NAMES
+    lines = ["", f"### Tolerance: `{_cell(project)}`", ""]
+    if "error" in doc:
+        return lines + [f"**Error:** {_cell(doc['error'].get('message', ''))}"]
+    lines += [f"Verdict: **{_cell(doc.get('verdict'))}**. {_cell(doc.get('verdict_note', ''))}", "",
+              "| Load | Check | Allowed | Total | Verdict |", "|---|---|---:|---:|---|"]
+    for ld in doc.get("loads", []):
+        for kind, c in (ld.get("checks") or {}).items():
+            if not c.get("limit"):
+                continue
+            passed = c.get("passed")
+            verdict = "**FAIL**" if passed is False else "pass" if passed else "not judged"
+            total = f"{_num(c.get('below_mv'), '.4g')} / {_num(c.get('above_mv'), '.4g')} mV"
+            if not c.get("complete"):
+                total += " (at least: parts missing)"
+            allowed = (f"{_num(c.get('allowed_below_mv'), '.4g')} / "
+                       f"{_num(c.get('allowed_above_mv'), '.4g')} mV")
+            check = f"{CHECK_NAMES.get(kind, kind)} ({c['limit']})"
+            lines.append(f"| {_cell(ld['load'])} | {_cell(check)} | {allowed} | {_cell(total)} | {verdict} |")
+    lines += ["", "Below / above nominal. Judged only against the tolerances set in the project file, "
+              "a check only when every part is known (a missing part is never 0); KiPI's transient "
+              "estimate is shown, never judged."]
+    return lines
 
 
 def _mv_cell(x: Any) -> str:
@@ -558,6 +650,9 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
     for e in entries:                         # the ripple and noise of each project, when asked
         if "noise" in e:
             lines += noise_markdown(e["project"], e["noise"])
+    for e in entries:                         # the tolerance stack-up of each project, when asked
+        if "tolerance" in e:
+            lines += tolerance_markdown(e["project"], e["tolerance"])
     for e in entries:                         # the power tree of each project, when asked
         if "tree" in e:
             lines += tree_markdown(e["project"], e["tree"])
@@ -593,6 +688,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--noise", action="store_true",
                    help="also solve the ripple and coupled noise of each project with aggressors "
                         "(heavy); its verdict, against the noise margins only, sets the code")
+    p.add_argument("--tolerance", action="store_true",
+                   help="also run the tolerance stack-up of each project with a tolerance set (heavy "
+                        "where a load needs AC or noise); its verdict, against the tolerances only, "
+                        "sets the code")
     p = sub.add_parser("summary", help="print the Markdown summary of a solve")
     p.add_argument("--out", required=True, help="results folder of the solve")
     p.add_argument("--artifact-url", default="", help="link to the uploaded results")
@@ -611,7 +710,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 def _run(args) -> int:
     if args.command == "solve":
         index = solve_all(args.patterns, Path(args.out), top=args.top, html=not args.no_html,
-                          tree=args.tree, ac=args.ac, noise=args.noise)
+                          tree=args.tree, ac=args.ac, noise=args.noise, tolerance=args.tolerance)
         if "error" in index:
             print(f"error: {index['error']['message']}", file=sys.stderr)
         return index["exit_code"]

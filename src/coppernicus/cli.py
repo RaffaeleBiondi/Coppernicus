@@ -13,6 +13,8 @@
     coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
     coppernicus ac PROJECT [--rail NET ...] [--out DIR] [--json]   AC PDN impedance |Z|(f) (CSV + PNG)
     coppernicus noise PROJECT [--aggressor NAME ...] [--out DIR] [--json]   DC-DC ripple and coupled noise
+    coppernicus tolerance PROJECT [--skip-ac] [--skip-noise] [--out DIR] [--json] [--html [PATH]]
+                                                each load's tolerance stack-up
 
 ``solve`` exits with 0 when every rail solved and no user limit was exceeded (or none was
 set), 1 when a limit was exceeded, 3 when a limit that was set could not judge something (a
@@ -598,29 +600,21 @@ def _cmd_tolerance(args) -> int:
     drop on the worst pins), then, only where a load with a tolerance needs it, one AC solve
     per rail for KiPI's transient estimate at its probe (shown, never judged; only with a
     bandwidth given) and one noise solve per aggressor listing its probe (the ripple), each
-    cost printed first; ``--skip-ac`` / ``--skip-noise`` leave those parts missing. Writes
-    ``<project>_tolerance_summary.json`` and ``<project>_tolerance.csv`` into ``--out``
-    (default: results/ next to the project file). Prints the report, or with ``--json`` the
-    summary. Exit codes as ``solve``."""
+    cost printed before anything is solved; ``--skip-ac`` / ``--skip-noise`` leave those parts
+    missing. Writes ``<project>_tolerance_summary.json`` and ``<project>_tolerance.csv`` into
+    ``--out`` (default: results/ next to the project file), and with ``--html`` an offline
+    page. Prints the report, or with ``--json`` the summary. Exit codes as ``solve``. The run
+    is :mod:`coppernicus.service.tolerance`'s, shared with the MCP ``solve_tolerance``."""
     import time
 
     from coppernicus import board_fields
     from coppernicus.engine import Board, EngineError
-    from coppernicus.engine.ac import peak_rss_bytes, probe_rails, solve_ac_rail
     from coppernicus.engine.kicad_fields import read_board_fields
-    from coppernicus.engine.noise import solve_aggressor
-    from coppernicus.engine.tolerance import load_probes, loads_by_name
-    from coppernicus.engine.tree import solve_project_tree
     from coppernicus.maps import safe_file_name
-    from coppernicus.project import (
-        LOAD_TOLERANCE_KEYS,
-        SOURCE_ACCURACY_KEYS,
-        Load,
-        Project,
-        ProjectError,
-    )
-    from coppernicus.service.session import FIELD_HINT, ac_estimate, noise_estimate, thermal_estimate
-    from coppernicus.tolerance import compose, misspelt_keys, tolerance_summary, tolerance_text, write_csv
+    from coppernicus.project import Project, ProjectError
+    from coppernicus.service import tolerance as run
+    from coppernicus.service.session import FIELD_HINT
+    from coppernicus.tolerance import tolerance_summary, tolerance_text, write_csv
 
     quiet = args.json
     t0 = time.perf_counter()
@@ -645,121 +639,26 @@ def _cmd_tolerance(args) -> int:
                                     ties=[(t.net_a, t.net_b) for t in board.net_ties()])
     except (board_fields.FieldError, EngineError) as e:
         return fail("invalid_board_field", str(e), FIELD_HINT)
-    project = merged.project
-    warnings, dropped, lost_accuracy = list(merged.warnings), [], {}
-    import yaml
-    try:                                  # a misspelt tolerance key must never end in a silent pass
-        with open(args.project, encoding="utf-8") as fh:
-            typos, dropped = misspelt_keys(yaml.safe_load(fh))
-        warnings += typos
-    except (OSError, yaml.YAMLError):     # Project.load read it a moment ago
-        pass
-    for net in merged.from_fields:        # the fields' rail keeps by ref what the project gives
-        own, kept = loaded.rail(net), project.rail(net)
-        if own is None:
-            continue
-        sides = ((kept.sources if kept else [], own.sources, SOURCE_ACCURACY_KEYS),
-                 (kept.loads if kept else [], own.loads, board_fields.TOLERANCE_KEYS))
-        lost = [t for ts, own_ts, keys in sides for t in board_fields.carried_by_ref(ts, own_ts, keys)[1]]
-        if not lost:
-            continue
-        others = ", ".join(s.label for s in kept.sources) if kept is not None and kept.sources else "none"
-        names = ", ".join(t.label for t in lost)
-        warnings.append(f"Rail {net} comes from the board's KiCad footprint fields: the tolerances, accuracy "
-                        f"and entered parts of {names} in the project file are not used (no part of the "
-                        "fields' rail takes them); set override_board_fields: true on the rail to use the "
-                        "project's")
-        # A tolerance the user set that cannot be judged: not judged (exit 3), never a pass.
-        dropped += [{"item": t.label, "net": net, "limit": key,
-                     "reason": f"rail {net} comes from the board's KiCad footprint fields, where no part "
-                               f"takes {t.label}'s tolerances: set override_board_fields: true on the rail "
-                               "to use the project's"}
-                    for t in lost if isinstance(t, Load) for key in LOAD_TOLERANCE_KEYS
-                    if getattr(t, key) is not None]
-        for t in lost:                    # an accuracy entered, then lost: say so, not "enter it"
-            key = next((k for k in SOURCE_ACCURACY_KEYS if getattr(t, k, None) is not None), None)
-            if key is not None:
-                lost_accuracy[net] = (f"{t.label}'s {key} in the project file was lost: rail {net} comes "
-                                      f"from the board's KiCad footprint fields, whose source is {others} "
-                                      "(set override_board_fields: true on the rail to use the project's)")
     stream = sys.stderr if quiet else sys.stdout
     progress = (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None
-    estimates = []
-    if project.thermal.enabled:           # warn before a heavy electro-thermal solve
-        estimate = thermal_estimate(board, project.thermal)
-        estimates.append({"solve": "board temperature", **estimate})
-        print(f"Board temperature: {estimate['text']}", file=stream, flush=True)
+    lines = {"thermal": ("Board temperature", "the board temperature's model could exceed this machine's "
+                         "memory; a coarser grid (thermal: grid_mm) lowers it"),
+             "ac": ("Impedance of {}", "the AC solve of {} could exceed this machine's memory; a coarser "
+                    "AC mesh (ac: max_edge_mm) lowers it"),
+             "noise": ("Noise of {}", "the noise solve of {} could exceed this machine's memory; a coarser "
+                       "AC mesh (ac: max_edge_mm) or fewer field solves (noise: field_per_decade) lowers it")}
+
+    def said(kind, name, estimate):       # each solve's cost first: a heavy solve is never a surprise
+        line, risk = lines[kind]
+        print(f"{line.format(name)}: {estimate['text']}", file=stream, flush=True)
         if estimate["exceeds_memory"]:
-            print("warning: the board temperature's model could exceed this machine's memory; "
-                  "a coarser grid (thermal: grid_mm) lowers it", file=sys.stderr, flush=True)
+            print(f"warning: {risk.format(name)}", file=sys.stderr, flush=True)
     try:
-        tree = solve_project_tree(board, project, progress=progress)
-        pairs = load_probes(board, project)
-        rails_of = probe_rails(board, project)
+        plan = run.plan(board, args.project, loaded, merged, skip_ac=args.skip_ac,
+                        skip_noise=args.skip_noise, progress=progress, said=said, started=t0)
+        result = run.solve(board, plan, progress=progress)
     except EngineError as e:
         return fail("solve_failed", str(e), "fix the project file or the KiCad fields, then solve again")
-    needed = {pairs[n] for n, (_net, ld) in loads_by_name(project).items()
-              if ld.has_tolerance() and pairs.get(n)}             # the probes of loads judged
-    ac_notes, noise_notes, rails = {}, {}, []
-    for p in project.probes:              # AC only for KiPI's estimate: a step and a bandwidth given
-        rail = rails_of.get(p.name)
-        if not (p.step_a and p.slew_a_per_us) or rail is None:
-            continue
-        if p.name not in needed:
-            ac_notes[p.name] = "not solved in AC, as no load with a tolerance needs it"
-            continue
-        source = project.rail(rail).sources[0]
-        if project.ac.bandwidth_hz.get(source.label, project.ac.bandwidth_hz.get(source.ref)) is None:
-            continue
-        if args.skip_ac:
-            ac_notes[p.name] = "--skip-ac left it out"
-        elif rail not in rails:
-            rails.append(rail)
-    impedance = []
-    for net in rails:
-        probes_here = [n for n in needed if rails_of.get(n) == net]
-        try:                              # its cost first: a heavy solve is never a surprise
-            estimate = ac_estimate(board, project, net)
-            estimates.append({"solve": f"AC {net}", **estimate})
-            print(f"Impedance of {net}: {estimate['text']}", file=stream, flush=True)
-            if estimate["exceeds_memory"]:
-                print(f"warning: the AC solve of {net} could exceed this machine's memory; a coarser "
-                      "AC mesh (ac: max_edge_mm) lowers it", file=sys.stderr, flush=True)
-            impedance.append(solve_ac_rail(board, project, net, progress=progress, transient=True))
-        except EngineError as e:          # only KiPI's estimate is lost: shown, never judged
-            warnings.append(f"AC solve of {net} for KiPI's transient estimate failed: {e}")
-            ac_notes.update({n: f"the AC solve of {net} failed" for n in probes_here})
-    noise = []
-    for a in project.aggressors:
-        if not set(a.ripple_probes) & needed:
-            noise_notes[a.name] = "no load with a tolerance needs it"
-            continue
-        if args.skip_noise:
-            noise_notes[a.name] = "--skip-noise"
-            continue
-        try:                              # its cost first, as coppernicus noise
-            estimate = noise_estimate(board, project, a.name, progress, fields_rails=merged.from_fields)
-            estimates.append({"solve": f"noise {a.name}", **estimate})
-            print(f"Noise of {a.name}: {estimate['text']}", file=stream, flush=True)
-            if estimate["exceeds_memory"]:
-                print(f"warning: the noise solve of {a.name} could exceed this machine's memory; a "
-                      "coarser AC mesh (ac: max_edge_mm) or fewer field solves (noise: "
-                      "field_per_decade) lowers it", file=sys.stderr, flush=True)
-            res = solve_aggressor(board, project, a.name, progress=progress, fields_rails=merged.from_fields)
-            merged.annotate(res)
-            noise.append(res)
-        except EngineError as e:          # its ripple is missing: not judged, never a pass
-            warnings.append(f"Noise solve of {a.name} failed: {e}")
-            noise_notes[a.name] = "its noise solve failed"
-    merged.annotate(tree)
-    result = compose(project, tree, impedance, noise, pairs, ac_notes, noise_notes, warnings, dropped,
-                     lost_accuracy)
-    merged.annotate(result)               # the KiCad-field notes, as the other commands
-    result.estimates = estimates
-    peak = peak_rss_bytes()
-    result.stats = {"seconds": time.perf_counter() - t0, "tree_seconds": tree.stats.get("seconds"),
-                    "ac_rails": len(impedance), "aggressors": len(noise),
-                    "memory_peak_mb": peak / 1e6 if peak else None}
     stem = safe_file_name(Path(args.project).stem)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -767,6 +666,11 @@ def _cmd_tolerance(args) -> int:
     doc = tolerance_summary(result, csv_path.as_posix())
     summary_path = out_dir / f"{stem}_tolerance_summary.json"
     doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
+    if args.html is not None:            # one offline page: each load's parts and checks
+        from coppernicus.report import write_tolerance_report
+        html_path = Path(args.html) if args.html else out_dir / f"{stem}_tolerance_report.html"
+        doc["report_file"] = write_tolerance_report(doc, html_path, project=Path(args.project).name,
+                                                    board_name=board.name).as_posix()
     summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
                             encoding="utf-8")
     if quiet:
@@ -775,6 +679,8 @@ def _cmd_tolerance(args) -> int:
         print(f"Board: {board.name}")
         print("\n".join(tolerance_text(doc)))
         print(f"Summary: {summary_path}")
+        if "report_file" in doc:
+            print(f"Report: {doc['report_file']}")
     return _exit_for(doc)
 
 
@@ -934,6 +840,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="folder for the CSV and summary (default: results/ next to the project file)")
     p.add_argument("--no-board-fields", action="store_true",
                    help="ignore the board's KiCad footprint fields (PI_*)")
+    p.add_argument("--html", nargs="?", const="", default=None, metavar="PATH",
+                   help="also write an offline HTML page of the stack-up (default path: "
+                        "<out>/<project>_tolerance_report.html)")
     p.add_argument("-v", "--verbose", action="store_true", help="show the engines' progress")
     p.add_argument("--json", action="store_true",
                    help="print a JSON summary on stdout (for scripts and agents)")
