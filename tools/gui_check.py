@@ -20,6 +20,7 @@ import argparse
 import faulthandler
 import multiprocessing
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -1800,10 +1801,19 @@ def run_fields(window, check: Checks, args, out: Path):
     check("fields: the example's files are unchanged", after == before)
 
 
+def remove_output(failed: int, out_given: bool, keep: bool) -> bool:
+    """Whether the run's output folder goes at the end: only a temporary one (no --out), only
+    when every check passed (a failed run keeps its images to look at), and not with --keep."""
+    return not failed and not out_given and not keep
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
-    ap.add_argument("--out", help="folder for screenshots (default: a new temporary folder)")
+    ap.add_argument("--out", help="folder for screenshots (default: a new temporary folder, "
+                    "removed when every check passes)")
+    ap.add_argument("--keep", action="store_true",
+                    help="keep the temporary folder even when every check passes")
     ap.add_argument("--timeout", type=float, default=300.0, help="hard limit for the whole run, s")
     ap.add_argument("--local", help="a local project to time (read-only)")
     ap.add_argument("--rail", help="with --local: the rail to solve and time")
@@ -1853,8 +1863,12 @@ def main(argv=None) -> int:
             window.dirty = False          # never ask to save
             window.close()
         app.processEvents()
-    print(f"{'all checks passed' if not check.failed else f'{check.failed} check(s) failed'}"
-          + f"; images in {out}", flush=True)
+    verdict = "all checks passed" if not check.failed else f"{check.failed} check(s) failed"
+    if remove_output(check.failed, bool(args.out), args.keep):
+        shutil.rmtree(out, ignore_errors=True)
+        print(f"{verdict}; temporary folder removed (--keep to keep it)", flush=True)
+    else:
+        print(f"{verdict}; images in {out}", flush=True)
     return 1 if check.failed else 0
 
 
