@@ -25,7 +25,7 @@ import anyio.from_thread
 from mcp.server import MCPServer
 from mcp.server.mcpserver import Context, Image
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from coppernicus import __version__
 from coppernicus.service import ServiceError, Session
@@ -51,6 +51,9 @@ result. Errors come back as {"error": {code, message, hint}}; the hint says what
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 WRITES_FILE = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
                               open_world_hint=False)
+# Writes a project file; with overwrite: true it replaces one (its comments are not kept).
+OVERWRITES_FILE = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_hint=False,
+                                  open_world_hint=False)
 
 
 class SourceSpec(BaseModel):
@@ -81,6 +84,59 @@ class LimitsSpec(BaseModel):
                                                 "as loads): largest allowed rise of its copper "
                                                 "above 0 V, mV. On a supply rail it is not judged "
                                                 "(listed in not_judged).")
+
+
+class PinRefSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    net: str = Field(description="The net of these pins.")
+    pins: Optional[list[str]] = Field(None, description="Pad numbers or globs; omit for every pin "
+                                                        "of the part on the net.")
+    ref: Optional[str] = Field(None, description="Another part (default: the terminal's own).")
+
+
+class ProjectSourceSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ref: str
+    voltage_v: float
+    pins: Optional[list[str]] = None
+    name: Optional[str] = None
+    kind: Optional[Literal["source", "ldo", "smps"]] = Field(None, description="source (ideal, the "
+                                                             "default), ldo or smps.")
+    efficiency: Optional[float] = Field(None, description="A switcher's efficiency, a fraction 0-1.")
+    quiescent_a: Optional[float] = Field(None, description="A regulator's quiescent current, A.")
+    input: Optional[PinRefSpec] = Field(None, description="A regulator's input pins.")
+    ground: Optional[PinRefSpec] = None
+    sense: Optional[PinRefSpec] = None
+    ground_sense: Optional[PinRefSpec] = None
+
+
+class ProjectLoadSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ref: str
+    current_a: float = Field(ge=0)
+    pins: Optional[list[str]] = None
+    name: Optional[str] = None
+    ground: Optional[PinRefSpec] = Field(None, description="The pins its current returns through.")
+
+
+class RailSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    net: str
+    sources: list[ProjectSourceSpec] = []
+    loads: list[ProjectLoadSpec] = []
+    limits: Optional["LimitsSpec"] = None
+    follow_net_ties: Optional[bool] = None
+    override_board_fields: Optional[bool] = Field(None, description="Use this rail even where the "
+                                                  "board's KiCad fields define the net.")
+
+
+class LinkSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    ref: str
+    a: PinRefSpec
+    b: PinRefSpec
+    resistance_ohm: float = Field(ge=0)
 
 
 class SettingsSpec(BaseModel):
@@ -302,6 +358,50 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         return _call("solve_tree", session.solve_tree, project_path, top,
                      progress=bridge.progress, cancelled=bridge.cancelled,
                      use_board_fields=use_board_fields)
+
+    @mcp.tool(annotations=READ_ONLY)
+    def read_project(project_path: Annotated[str, Field(description="Absolute path to a "
+                                                                    "*.coppernicus.yml project file.")]
+                     ) -> dict[str, Any]:
+        """A project file as written (rails, sources, loads, limits, links, settings; unknown
+        keys included), checked by the project loader, with the board it names."""
+        return _call("read_project", session.read_project, project_path)
+
+    @mcp.tool(annotations=OVERWRITES_FILE)
+    def write_project(project_path: Annotated[str, Field(description="Absolute path of the "
+                                                                     "*.coppernicus.yml to write.")],
+                      board_path: Annotated[Optional[str], Field(
+                          description="The board the project is for (a new project needs it).")] = None,
+                      rails: Annotated[Optional[list[RailSpec]], Field(
+                          description="Rails to add, or to replace whole (by net).")] = None,
+                      remove_rails: Annotated[Optional[list[str]], Field(
+                          description="Nets of rails to remove.")] = None,
+                      links: Annotated[Optional[list[LinkSpec]], Field(
+                          description="Links (ferrite, sense resistor, fuse) to add or replace "
+                                      "(by name).")] = None,
+                      remove_links: Annotated[Optional[list[str]], Field(
+                          description="Names of links to remove.")] = None,
+                      settings: Annotated[Optional[dict[str, Any]], Field(
+                          description="Settings keys to set (max_edge_mm, via_plating_um, copper_temp_c, "
+                                      "copper_thickness_mm); null removes one (its default).")] = None,
+                      use_board_fields: Annotated[Optional[bool], Field(
+                          description="false: ignore the board's KiCad footprint fields.")] = None,
+                      from_project: Annotated[Optional[str], Field(
+                          description="Start from this project file (to save an edited copy).")] = None,
+                      overwrite: Annotated[bool, Field(description="Replace an existing file.")] = False,
+                      ) -> dict[str, Any]:
+        """Create or edit a project file for the user and save it to project_path. Starts from
+        from_project, else the existing file at project_path, else an empty project for
+        board_path. Rails are replaced whole by net. An existing file is replaced only with
+        overwrite: true; the file is rewritten from its data (comments are lost, unknown keys
+        kept) and checked by the project loader before it is replaced. The board is only
+        read. A warning says when the board's KiCad fields define a rail you wrote (they win:
+        set override_board_fields: true on it to use yours)."""
+        return _call("write_project", session.write_project, project_path, board_path,
+                     [r.model_dump(exclude_none=True) for r in rails] if rails is not None else None,
+                     remove_rails,
+                     [k.model_dump(exclude_none=True) for k in links] if links is not None else None,
+                     remove_links, settings, use_board_fields, from_project, overwrite)
 
     @mcp.tool(annotations=WRITES_FILE)
     def report(result_ids: Annotated[Optional[list[str]], Field(

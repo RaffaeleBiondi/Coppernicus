@@ -606,6 +606,109 @@ class Session:
             "warnings": entry.warnings(),
         })
 
+    # ================================================================== project files
+    def read_project(self, project_path) -> Dict[str, Any]:
+        """A project file as it is written (its mapping, unknown keys included), checked by
+        the project loader, with the board it names."""
+        path = Path(str(project_path)).expanduser()
+        mapping = _read_mapping(path)
+        try:
+            project = Project.from_dict(mapping, path)
+        except ProjectError as e:
+            raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                               "fix the project file; its format is in the README") from None
+        return C.jsonable({
+            "path": path.resolve(), "board_path": project.board_path().resolve(),
+            "project": mapping, "rails": [r.net for r in project.rails],
+            "links": [k.name for k in project.links],
+            "assumptions": ["The project as written; solves also take rails from the board's "
+                            "KiCad footprint fields unless use_board_fields is false."],
+            "warnings": []})
+
+    def write_project(self, project_path, board_path=None, rails: Optional[Sequence[Any]] = None,
+                      remove_rails: Optional[Sequence[str]] = None,
+                      links: Optional[Sequence[Any]] = None, remove_links: Optional[Sequence[str]] = None,
+                      settings: Optional[Mapping[str, Any]] = None,
+                      use_board_fields: Optional[bool] = None, from_project=None,
+                      overwrite: bool = False) -> Dict[str, Any]:
+        """Create or edit a project file and save it to ``project_path`` (a
+        ``*.coppernicus.yml``). It starts from ``from_project``, else from the file at
+        ``project_path`` when it exists, else from an empty project for ``board_path``.
+        Rails are added or replaced whole by net, links by name; ``settings`` keys are set
+        (None removes one). An existing file is replaced only with ``overwrite``. The result is
+        checked by the project loader before the file is replaced; the board is only read."""
+        from coppernicus.project import board_reference
+        from coppernicus.service import projects as P
+        path = Path(str(project_path)).expanduser()
+        if not path.name.endswith(".coppernicus.yml"):
+            raise ServiceError(E.INVALID_INPUT, f"{path.name}: a project file is a *.coppernicus.yml",
+                               "give the path of the project file to write, e.g. power.coppernicus.yml")
+        if path.exists() and not overwrite:
+            raise ServiceError(E.FILE_EXISTS, f"{path.name} exists",
+                               "pass overwrite: true to replace it (its comments are not kept), or "
+                               "choose another path")
+        start = Path(str(from_project)).expanduser() if from_project else (path if path.exists() else None)
+        if start is not None:
+            mapping = _read_mapping(start)
+            try:
+                board = Project.from_dict(mapping, start).board_path()
+            except ProjectError as e:
+                raise ServiceError(E.INVALID_PROJECT, f"{start.name}: {e}",
+                                   "fix the project file; its format is in the README") from None
+        elif board_path is None:
+            raise ServiceError(E.INVALID_INPUT, "a new project needs board_path",
+                               "give the board file (.kicad_pcb, ODB++, ...) the project is for")
+        else:
+            mapping, board = Project().to_dict(), None
+        if board_path is not None:
+            board = Path(str(board_path)).expanduser()
+        board = board.resolve()
+        if not board.is_file():
+            raise ServiceError(E.FILE_NOT_FOUND, f"No such board file: {board}",
+                               "give the path of the board the project is for")
+        if path.resolve() == board:
+            raise ServiceError(E.INVALID_INPUT, "the project path is the board file",
+                               "the board file is never written")
+        mapping["board"] = board_reference(board, path)
+        mapping = P.edit(mapping, rails=rails, remove_rails=remove_rails, links=links,
+                         remove_links=remove_links, settings=settings, use_board_fields=use_board_fields)
+        try:
+            Project.from_dict(mapping, path)
+        except ProjectError as e:
+            raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                               "nothing was written; fix the values and try again") from None
+        _replace_checked(path, mapping)
+        project = Project.load(path)
+        edited = [r.get("net") for r in rails or [] if isinstance(r, Mapping)
+                  and (r.get("sources") or r.get("loads"))]
+        return C.jsonable({
+            "path": path.resolve(), "board_path": board, "rails": [r.net for r in project.rails],
+            "links": [k.name for k in project.links],
+            "assumptions": ["The file is rewritten from its data: comments in it are not kept; keys "
+                            "Coppernicus does not know are kept, a replaced rail's included.",
+                            "Checked by the project loader before the file was replaced. The board "
+                            "file was only read."],
+            "warnings": self._fields_warnings(project, board, edited)})
+
+    def _fields_warnings(self, project: Project, board: Path, nets: Sequence[str]) -> List[str]:
+        """What the board's KiCad fields will do to the rails just written: win over a rail of
+        a net they define (it is ignored when solving), or fail every run if malformed."""
+        try:
+            entry = self._entry(self.open_board(board)["board_id"])
+            merged = BF.apply(project, lambda: self._board_fields(entry), None,
+                              ties=[(t.net_a, t.net_b) for t in entry.board.net_ties()])
+        except (BF.FieldError, ServiceError) as e:
+            return [f"The board's KiCad fields cannot be used ({e}): every solve fails until they "
+                    "are fixed in KiCad, or turned off with use_board_fields: false."]
+        out = []
+        for net in nets:
+            origin = merged.origins.get(net)
+            if origin is not None and origin.source == "fields":
+                out.append(f"KiCad fields define {net}: they win over this project rail when solving "
+                           "(it is ignored); set override_board_fields: true on the rail to use the "
+                           "project's values.")
+        return out
+
     def solve_tree(self, project_path, top: int = 5, progress: Progress = None,
                    cancelled: Cancel = None, use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
         """Solve the project's whole power tree at once: every rail and ground group, with
@@ -1003,6 +1106,42 @@ def _fed_through_link(board: Board, project: Project, rail: Rail):
                         used.append(name)
     drivers = sorted(r.net for r in project.rails if r.sources and r.net in nets - {rail.net})
     return (list(dict.fromkeys(used)), drivers) if drivers and used else None
+
+
+def _read_mapping(path: Path) -> Dict[str, Any]:
+    """A project file's YAML mapping, as written."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ServiceError(E.FILE_NOT_FOUND, f"No such project file: {path}",
+                           "give the path of a *.coppernicus.yml file") from None
+    except (OSError, yaml.YAMLError) as e:
+        raise ServiceError(E.INVALID_PROJECT, f"{path.name} cannot be read: {e}",
+                           "fix the project file; its format is in the README") from None
+    if not isinstance(data, dict):
+        raise ServiceError(E.INVALID_PROJECT, f"{path.name} is not a project file (not a mapping)",
+                           "fix the project file; its format is in the README")
+    return data
+
+
+def _replace_checked(path: Path, mapping: Mapping[str, Any]) -> None:
+    """Write ``mapping`` to a temporary file beside ``path``, load it with the project
+    loader, then put it in place; on any failure the old file is left as it was."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            yaml.safe_dump(dict(mapping), f, sort_keys=False, allow_unicode=True)
+        Project.load(tmp)
+        os.replace(tmp, path)
+    except ProjectError as e:
+        raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                           "nothing was written; fix the values and try again") from None
+    except OSError as e:
+        raise ServiceError(E.INVALID_INPUT, f"{path.name} cannot be written: {e}",
+                           "choose a folder you can write to") from None
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def _feeds(board: Board, project: Project, rail: Rail) -> bool:

@@ -63,7 +63,11 @@ why, and ask for what is missing.
    (supply minus ground, from nominal), the VRMs' `regulation`, and each group's problems.
    It returns no result ids: for maps, use `solve_project`, or point the user to
    `coppernicus solve PROJECT --tree --html` (every group's maps and the VRM and load tables).
-9. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
+9. Setting up a project: `write_project(project_path, board_path, rails=[...])` saves the
+   rails you agreed with the user to a `*.coppernicus.yml` they can solve again (CLI, app,
+   CI). Ask before `overwrite: true` (it replaces their file and drops its comments); report
+   every warning, e.g. that the KiCad fields win over a rail you wrote.
+10. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
    layer's maps with zoom, pan and a hover readout, plus the problems, worst values and
    assumptions. Give the user its `path`; you cannot read the page yourself.
 

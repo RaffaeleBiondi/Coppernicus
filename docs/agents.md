@@ -77,6 +77,8 @@ input.
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
 | `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. |
 | `solve_tree` | `project_path`, `top`?, `use_board_fields`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. |
+| `read_project` | `project_path` | A project file as written (rails, sources, loads, limits, links, settings; unknown keys included), checked by the project loader, with the board it names. |
+| `write_project` | `project_path`, `board_path`?, `rails`?, `remove_rails`?, `links`?, `remove_links`?, `settings`?, `use_board_fields`?, `from_project`?, `overwrite`? | Creates or edits a project file for the user. See [Editing projects](#editing-projects). |
 | `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
 
 A summary's `problems` list is complete: every load, then the `top` current-crowding spots and
@@ -117,6 +119,30 @@ positive like the drops.
   thickens (shorter when it thins). Even a net with no copper on the changed layer then moves
   slightly through its vias. The result's assumptions say which layers were overridden, with
   the board file's value next to each.
+
+### Editing projects
+
+`write_project` sets up a project for the user, so they can solve it again with the CLI, the
+app or CI. It writes one file, at the path you give (a `*.coppernicus.yml`):
+- it starts from `from_project` (to save an edited copy elsewhere), else the file at
+  `project_path` when it exists, else an empty project for `board_path`;
+- `rails` are added, or replaced **whole** by net (sources with their v2 fields: `kind`,
+  `efficiency`, `quiescent_a`, `input`, `ground`, `sense`, `ground_sense`; loads with
+  `ground`; `limits`; `follow_net_ties`; `override_board_fields`); `remove_rails` removes by
+  net; `links` and `remove_links` work by name; `settings` keys are set, and null removes one
+  (its default again); `use_board_fields: false` turns the KiCad fields off;
+- an existing file is replaced only with `overwrite: true`, else `file_exists`;
+- the file is rewritten from its data: **comments are lost**, keys Coppernicus does not know
+  are kept (a replaced rail's included); the board path is written relative to the project's
+  folder;
+- the result goes through the project loader before the file is replaced (a temporary file
+  beside it, then a rename): a refused edit (`invalid_project`) leaves the old file as it was;
+- the board file is only read, never written;
+- when the board's KiCad fields define a rail you wrote, a warning says they win (the rail is
+  ignored when solving) and that `override_board_fields: true` on it uses your values; a
+  malformed field is a warning too, since this is how the user turns the fields off.
+
+Ask the user before you overwrite their project file, and tell them where you saved it.
 
 ### KiCad footprint fields
 
