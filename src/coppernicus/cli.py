@@ -12,6 +12,7 @@
     coppernicus fields BOARD [--json]          the KiCad footprint fields (PI_*) of a board
     coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
     coppernicus ac PROJECT [--rail NET ...] [--out DIR] [--json]   AC PDN impedance |Z|(f) (CSV + PNG)
+    coppernicus noise PROJECT [--aggressor NAME ...] [--out DIR] [--json]   DC-DC ripple and coupled noise
 
 ``solve`` exits with 0 when every rail solved and no user limit was exceeded (or none was
 set), 1 when a limit was exceeded, 3 when a limit that was set could not judge something (a
@@ -480,6 +481,94 @@ def _cmd_ac(args) -> int:
     return _exit_for(doc)
 
 
+def _cmd_noise(args) -> int:
+    """``noise PROJECT``: the ripple and coupled noise of the project's aggressors (every one,
+    or each ``--aggressor``): per aggressor a CSV, a waveforms PNG and H / E field-map PNGs,
+    and ``<project>_noise_summary.json`` in ``--out`` (default: results/ next to the project
+    file). Prints the report, or with ``--json`` the summary. Exit codes as ``solve``."""
+    from coppernicus import board_fields
+    from coppernicus.coupled_noise import (
+        noise_summary,
+        noise_text,
+        write_csv,
+        write_field_png,
+        write_png,
+    )
+    from coppernicus.engine import Board, EngineError
+    from coppernicus.engine.kicad_fields import read_board_fields
+    from coppernicus.engine.noise import solve_aggressor
+    from coppernicus.maps import safe_file_name, safe_name
+    from coppernicus.project import Project, ProjectError
+    from coppernicus.service.session import FIELD_HINT
+
+    quiet = args.json
+    hint = "fix the aggressors, victims or noise: block of the project file, then solve again"
+
+    def fail(code, message, hint=""):
+        if quiet:
+            _print_json({"error": {"code": code, "message": message, "hint": hint}})
+        print(f"error: {message}".replace("\n", " "), file=sys.stderr)
+        return EXIT_ERROR
+    if not Path(args.project).is_file():
+        return fail("file_not_found", f"No such file: {args.project}")
+    try:
+        project = Project.load(args.project)
+        board = Board.open(project.board_path())
+    except (OSError, ProjectError) as e:
+        return fail("invalid_project", str(e))
+    except EngineError as e:
+        return fail("board_unreadable", str(e))
+    try:                                  # the KiCad footprint fields, as the other solves
+        merged = board_fields.apply(project, lambda: read_board_fields(board.path),
+                                    False if args.no_board_fields else None,
+                                    ties=[(t.net_a, t.net_b) for t in board.net_ties()])
+    except (board_fields.FieldError, EngineError) as e:
+        return fail("invalid_board_field", str(e), FIELD_HINT)
+    project = merged.project
+    if not project.aggressors:
+        return fail("invalid_input", "No aggressor in the project: nothing to solve",
+                    "add an aggressor (aggressors: in the project file) on a switcher source")
+    known = [a.name for a in project.aggressors]
+    names = list(dict.fromkeys(args.aggressor or known))
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        return fail("invalid_input", f"No aggressor named {', '.join(unknown)}",
+                    f"the project's aggressors: {', '.join(known)}")
+    stream = sys.stderr if quiet else sys.stdout
+    progress = (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None
+    stem = safe_file_name(Path(args.project).stem)
+    out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    outline = board.outline()
+    results, files = [], {}
+    for name in names:
+        try:
+            res = solve_aggressor(board, project, name, progress=progress,
+                                  fields_rails=merged.from_fields)
+        except EngineError as e:
+            return fail("solve_failed", str(e), hint)
+        merged.annotate(res)
+        base = out_dir / f"{stem}_{safe_name(name)}_noise"
+        pngs = [write_png(res, base.with_name(base.name + ".png"))]
+        maps = (res.emi.h_map, res.emi.e_map) if res.emi is not None else (None, None)
+        pngs += [write_field_png(res, kind, base.with_name(f"{base.name}_{kind.lower()}_field.png"),
+                                 outline) for kind, m in zip("HE", maps) if m is not None]
+        files[name] = (write_csv(res, base.with_name(base.name + ".csv")).as_posix(),
+                       [png.as_posix() for png in pngs])
+        results.append(res)
+    doc = noise_summary(results, files)
+    summary_path = out_dir / f"{stem}_noise_summary.json"
+    doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
+    summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
+                            encoding="utf-8")
+    if quiet:
+        _print_json(doc)
+    else:
+        print(f"Board: {board.name}")
+        print("\n".join(noise_text(doc)))
+        print(f"Summary: {summary_path}")
+    return _exit_for(doc)
+
 def _print_rail(res, problems):
     from coppernicus.problems import FAIL, max_drop_text
     others = [n for n in res.nets if n != res.net]
@@ -603,6 +692,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true",
                    help="print a JSON summary on stdout (for scripts and agents)")
     p.set_defaults(func=_cmd_ac)
+
+    p = sub.add_parser("noise", help="DC-DC ripple and coupled noise of the project's aggressors",
+                       epilog=EXIT_CODES)
+    p.add_argument("project")
+    p.add_argument("--aggressor", action="append",
+                   help="solve only this aggressor (repeatable; default: every one)")
+    p.add_argument("--out",
+                   help="folder for CSV, PNG and summary (default: results/ next to the project file)")
+    p.add_argument("--no-board-fields", action="store_true",
+                   help="ignore the board's KiCad footprint fields (PI_*)")
+    p.add_argument("-v", "--verbose", action="store_true", help="show the engine's progress")
+    p.add_argument("--json", action="store_true",
+                   help="print a JSON summary on stdout (for scripts and agents)")
+    p.set_defaults(func=_cmd_noise)
     return ap
 
 
