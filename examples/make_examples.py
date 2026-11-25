@@ -8,6 +8,7 @@ then try them:
     uv run coppernicus gui examples/demo/demo.coppernicus.yml
     uv run coppernicus gui examples/power_chain/power_chain.coppernicus.yml
     uv run coppernicus gui examples/fields/fields.coppernicus.yml
+    uv run coppernicus ac examples/pdn/pdn.coppernicus.yml --out results/pdn
 
 ``demo``: one rail, three loads, a tight drop budget. ``power_chain``: a whole power tree
 (12 V input, switcher, ferrite, remote-sensed LDO, ground pins), copied from KiPI's
@@ -24,18 +25,26 @@ temperature on (``thermal: {enabled: true, max_rise_c: 15}``); its copper heats 
 above the 25 °C ambient, so it fails:
 
     uv run coppernicus solve examples/demo/demo-thermal.coppernicus.yml --tree --out results/demo
+
+``pdn``: AC impedance (Task 9) of KiPI's decoupling validation board, a 50 mm plane pair with
+one 10 µF capacitor (ESL 0.5 nH, ESR 20 mΩ) on C1, the source's bandwidth 100 kHz and KiPI's
+default sweep. From one solve: |Z| is 160 mΩ at the bandwidth, 22 mΩ at 1.49 MHz (the series
+resonance), so ``pdn.coppernicus.yml``'s 50 mΩ target up to 10 MHz fails and
+``pdn-relaxed.coppernicus.yml``'s 200 mΩ holds.
 """
 
 from pathlib import Path
 
 from coppernicus.engine.synthetic import (
+    ac_decap_board,
+    ac_decap_project,
     demo_board,
     power_chain_board,
     power_chain_project,
     save_snapshot,
     write_strip_kicad_pcb,
 )
-from coppernicus.project import Limits, Load, Project, Rail, Source, ThermalOptions
+from coppernicus.project import AcOptions, Limits, Load, Project, Rail, Source, ThermalOptions
 
 ROOT = Path(__file__).resolve().parent
 HERE = ROOT / "demo"
@@ -91,6 +100,17 @@ def main(board: bool = True):
 
     write_fields_example(FIELDS)
     print(f"Wrote {FIELDS}")
+
+    # AC impedance: the source U1 (pin 1, ground pin 2) and the probe U1 on the same pins.
+    pdn = ROOT / "pdn"
+    pdn.mkdir(exist_ok=True)
+    save_snapshot(ac_decap_board(), pdn / "pdn.kipi.json.gz")
+    for name, target_ohm in (("pdn", 0.05), ("pdn-relaxed", 0.2)):
+        p = ac_decap_project("pdn.kipi.json.gz")
+        p.probes[0].target_ohm, p.probes[0].target_hz = target_ohm, 10e6
+        p.ac = AcOptions(bandwidth_hz={"U1": 100e3})
+        p.save(pdn / f"{name}.coppernicus.yml")
+    print(f"Wrote {pdn}")
 
 
 if __name__ == "__main__":

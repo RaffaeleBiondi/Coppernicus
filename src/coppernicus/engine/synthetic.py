@@ -27,7 +27,7 @@ from kipi.core.model.board import (
 )
 from shapely.geometry import MultiPolygon, box
 
-from coppernicus.project import Link, Load, Project, Rail, Source
+from coppernicus.project import AcOptions, CapModel, Link, Load, Probe, Project, Rail, Source
 
 F, B = 3, 34                    # KiCad layer ids of F.Cu and B.Cu
 OZ1 = 0.035                     # 1 oz copper
@@ -318,6 +318,162 @@ def power_chain_project(board: str = "power_chain.kipi.json.gz") -> Project:
                              ground_sense_net="GND")],
              loads=[Load("U3", g.I_U3, ["1"], ground_pins=["2"], ground_net="GND")]),
     ], links=[Link("FB1", "FB1", ["1"], "+3V3", ["2"], "+3V3_F", g.R_FB)])
+
+
+# ---------------------------------------------------------------------- AC boards (Task 9)
+# Copied from KiPI's AC validation boards (examples/validation/make_boards.py:65-82,
+# :333-449), dimensions and part values unchanged, so its hand calculations hold here too.
+
+IN1, IN2 = 4, 5                 # KiCad layer ids of In1.Cu and In2.Cu
+OZ_HALF = 0.0175
+AC_ER = 4.5                     # FR4 of KiPI's validation stackup
+
+
+def four_layer_stackup(copper=(OZ1, OZ_HALF, OZ_HALF, OZ1), diel=(0.2, 1.0, 0.2),
+                       er: float = AC_ER) -> Stackup:
+    """KiPI's validation stackup: four copper layers (or two, with one dielectric), εr 4.5."""
+    ids = [F, IN1, IN2, B] if len(copper) == 4 else [F, B]
+    names = ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"] if len(copper) == 4 else ["F.Cu", "B.Cu"]
+    total = sum(copper) + sum(diel)
+    z, cu, ds = total, [], []
+    for i, (lid, name, t) in enumerate(zip(ids, names, copper)):
+        z -= t
+        cu.append(CopperLayer(lid, name, i, t, z))
+        if i < len(diel):
+            z -= diel[i]
+            ds.append(DielectricLayer(diel[i], "FR4", er, lid, ids[i + 1]))
+    return Stackup(cu, ds, total)
+
+
+class AcPlane:
+    """A rail plane on F.Cu over a GND plane on In1.Cu, 0.2 mm apart. The probe U1 has a
+    rail pad on the plane and a GND pad in a cut-out, with a via down to In1.Cu."""
+    SIZE = 100.0
+    H = 0.2
+    PROBE = (5.0, 5.0)
+    PAD, HOLE, GAP = 0.6, 1.2, 1.2     # pad side, GND pad cut-out side, rail pad -> GND pad
+    MAX_EDGE = 2.0
+
+
+class AcDecap:
+    """A 50 mm plane pair (as :class:`AcPlane`) with one capacitor C1 beside the probe U1."""
+    SIZE = 50.0
+    PROBE = (25.0, 25.0)
+    CAP = (25.0, 30.0)
+    C, ESL, ESR = 10e-6, 0.5e-9, 0.02
+    MAX_EDGE = 1.0
+
+
+class AcFerrite:
+    """+3V3 (a 40 mm plane pair with a bulk capacitor C1) feeds +3V3_F (a 15 mm plane pair
+    with the probe U2) through ferrite FB1, a link of R_FB and L_FB. The source U1 has no
+    ground pins."""
+    SIZE_A, SIZE_B, GAP = 40.0, 15.0, 5.0
+    C, ESL, ESR = 100e-6, 1e-9, 0.01
+    R_FB, L_FB = 1.0, 1e-6
+    MAX_EDGE = 1.0
+
+
+AC_BANDWIDTH_HZ = 100.0          # KiPI's validation VRMs: 0.1 kHz, below the sweep
+
+
+def _ac_part(b: SyntheticBoard, ref, xy, value, rail="+3V3", gap=AcPlane.GAP):
+    """A two-pad part: rail pad at ``xy``, GND pad ``gap`` to the right with a via down to
+    In1.Cu. Returns the GND pad's cut-out in the rail plane."""
+    x, y = xy
+    s = AcPlane.PAD / 2
+    b.pad(ref, "1", rail, box(x - s, y - s, x + s, y + s), value=value)
+    gx = x + gap
+    b.pad(ref, "2", "GND", box(gx - s, y - s, gx + s, y + s), value=value)
+    b.via("GND", gx, y, 0.3, 0.6, layers=(F, IN1))
+    h = AcPlane.HOLE / 2
+    return box(gx - h, y - h, gx + h, y + h)
+
+
+def _ac_board(name, size, parts, rail="+3V3", er: float = AC_ER) -> SyntheticBoard:
+    b = SyntheticBoard(name, four_layer_stackup((OZ1, OZ_HALF, OZ_HALF, OZ1), (AcPlane.H, 1.0, 0.2), er))
+    holes = [_ac_part(b, ref, xy, value, rail) for ref, xy, value in parts]
+    plane = box(0, 0, size, size)
+    for h in holes:
+        plane = plane.difference(h)
+    b.zone(rail, F, plane)
+    b.zone("GND", IN1, box(0, 0, size, size))
+    return b
+
+
+def ac_plane_board() -> BoardSnapshot:
+    g = AcPlane
+    return _ac_board("ac_plane", g.SIZE, [("U1", g.PROBE, "Probe")]).snapshot()
+
+
+def ac_decap_board(er: float = AC_ER) -> BoardSnapshot:
+    """``er`` 0: a stackup that gives no εr (KiPI then uses ac.default_er)."""
+    g = AcDecap
+    return _ac_board("ac_decap", g.SIZE, [("U1", g.PROBE, "Probe"), ("C1", g.CAP, "10u")], er=er).snapshot()
+
+
+def ac_ferrite_board() -> BoardSnapshot:
+    g = AcFerrite
+    b = SyntheticBoard("ac_ferrite", four_layer_stackup((OZ1, OZ_HALF, OZ_HALF, OZ1), (AcPlane.H, 1.0, 0.2)))
+    xb = g.SIZE_A + g.GAP                      # +3V3_F plane's left edge
+    yb = (g.SIZE_A - g.SIZE_B) / 2
+    holes_a = [_ac_part(b, "C1", (20.0, 20.0), "100u")]
+    holes_b = [_ac_part(b, "U2", (xb + 7.0, yb + 7.5), "Probe", rail="+3V3_F")]
+    b.pad("U1", "1", "+3V3", box(5 - 0.3, 20 - 0.3, 5 + 0.3, 20 + 0.3), value="Regulator")
+    s = AcPlane.PAD / 2
+    b.pad("FB1", "1", "+3V3", box(g.SIZE_A - 1.0 - s, 20 - s, g.SIZE_A - 1.0 + s, 20 + s),
+          value="Ferrite")
+    b.pad("FB1", "2", "+3V3_F", box(xb + 1.0 - s, 20 - s, xb + 1.0 + s, 20 + s))
+    plane_a, plane_b = box(0, 0, g.SIZE_A, g.SIZE_A), box(xb, yb, xb + g.SIZE_B, yb + g.SIZE_B)
+    for h in holes_a:
+        plane_a = plane_a.difference(h)
+    for h in holes_b:
+        plane_b = plane_b.difference(h)
+    b.zone("+3V3", F, plane_a)
+    b.zone("+3V3_F", F, plane_b)
+    b.zone("GND", IN1, box(0, 0, xb + g.SIZE_B, g.SIZE_A))
+    return b.snapshot()
+
+
+def _ac_probe(ref: str, rail: str = "+3V3") -> Probe:
+    return Probe(ref, ref, rail, ["1"], ground_pins=["2"], ground_net="GND")
+
+
+def ac_plane_project(board: str = "ac_plane.kipi.json.gz") -> Project:
+    """KiPI's ac_plane setup: the source on the probe's pins, its sweep (to 1 GHz, past the
+    first cavity mode at 706.6 MHz) and its 0.1 kHz bandwidth."""
+    g = AcPlane
+    return Project(board=board, rails=[Rail("+3V3", sources=[
+        Source("U1", 3.3, ["1"], ground_pins=["2"], ground_net="GND")])],
+        probes=[_ac_probe("U1")],
+        ac=AcOptions(f_start_hz=1e3, f_stop_hz=1e9, points_per_decade=100,
+                     field_points_per_decade=20, max_edge_mm=g.MAX_EDGE,
+                     bandwidth_hz={"U1": AC_BANDWIDTH_HZ}))
+
+
+def ac_decap_project(board: str = "ac_decap.kipi.json.gz") -> Project:
+    """KiPI's ac_decap setup: the plane pair with model "10u" on C1."""
+    g = AcDecap
+    return Project(board=board, rails=[Rail("+3V3", sources=[
+        Source("U1", 3.3, ["1"], ground_pins=["2"], ground_net="GND")])],
+        probes=[_ac_probe("U1")], capacitors=[CapModel("10u", g.C, g.ESL, g.ESR, ["C1"])],
+        ac=AcOptions(f_start_hz=1e3, f_stop_hz=1e9, points_per_decade=100,
+                     field_points_per_decade=10, max_edge_mm=g.MAX_EDGE,
+                     bandwidth_hz={"U1": AC_BANDWIDTH_HZ}))
+
+
+def ac_ferrite_project(board: str = "ac_ferrite.kipi.json.gz") -> Project:
+    """KiPI's ac_ferrite setup: FB1 a link of R_FB with L_FB as its series inductance, the
+    probe U2 on +3V3_F, the source U1 without ground pins (the ground is the probe's)."""
+    g = AcFerrite
+    return Project(board=board, rails=[Rail("+3V3", sources=[Source("U1", 3.3, ["1"])])],
+                   links=[Link("FB1", "FB1", ["1"], "+3V3", ["2"], "+3V3_F", g.R_FB)],
+                   probes=[_ac_probe("U2", "+3V3_F")],
+                   capacitors=[CapModel("100u", g.C, g.ESL, g.ESR, ["C1"])],
+                   ac=AcOptions(f_start_hz=1e3, f_stop_hz=300e6, points_per_decade=100,
+                                field_points_per_decade=10, max_edge_mm=g.MAX_EDGE,
+                                bandwidth_hz={"U1": AC_BANDWIDTH_HZ},
+                                link_esl_h={"FB1": g.L_FB}))
 
 
 def save_snapshot(snapshot: BoardSnapshot, path) -> None:

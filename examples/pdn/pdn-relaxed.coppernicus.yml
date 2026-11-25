@@ -1,0 +1,39 @@
+board: pdn.kipi.json.gz
+settings:
+  max_edge_mm: 0.5
+  via_plating_um: null
+  copper_temp_c: 20.0
+rails:
+- net: +3V3
+  sources:
+  - ref: U1
+    pins:
+    - '1'
+    voltage: 3.3
+    ground:
+      net: GND
+      pins:
+      - '2'
+  loads: []
+probes:
+- name: U1
+  ref: U1
+  net: +3V3
+  pins:
+  - '1'
+  ground:
+    net: GND
+    pins:
+    - '2'
+  target_ohm: 0.2
+  target_hz: 10000000.0
+capacitors:
+- name: 10u
+  capacitance_f: 1.0e-05
+  esl_h: 5.0e-10
+  esr_ohm: 0.02
+  refs:
+  - C1
+ac:
+  bandwidth_hz:
+    U1: 100000.0
