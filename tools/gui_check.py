@@ -2123,6 +2123,165 @@ def remove_output(failed: int, out_given: bool, keep: bool) -> bool:
     return not failed and not out_given and not keep
 
 
+PDN_DIR = ROOT / "examples" / "pdn"
+
+
+def solve_ac_and_wait(window, timeout_s: float, cancel_in_solve: bool = False):
+    """Solve on the Impedance tab and pump events until the panel is idle (the worker object
+    changes between sizing and solving). Returns (the shown rail's result or None, the
+    estimates the panel showed before solving). With ``cancel_in_solve``, Cancel is pressed
+    as soon as the field solve starts."""
+    import time
+
+    from PySide6.QtWidgets import QApplication
+    panel = window.ac_panel
+    heard = []
+    panel.estimated.connect(heard.append)
+    panel.solve()
+    t0 = time.monotonic()
+    while panel.busy and time.monotonic() - t0 < timeout_s:
+        QApplication.processEvents()
+        if cancel_in_solve and panel.worker is not None and panel.worker.phase == "solve":
+            panel.cancel()
+            cancel_in_solve = False
+        time.sleep(0.01)
+    QApplication.processEvents()
+    panel.estimated.disconnect(heard.append)
+    entry = panel.results.get(panel.rail_box.currentText())
+    return (entry[0] if entry else None), heard
+
+
+def run_ac(window, check: Checks, args, out: Path):
+    """T9b: the Impedance tab on examples/pdn (synthetic boards only: AC solves are never run on
+    a real board here). Solve: the estimate shown first, the plot drawn, FAIL against 50 mΩ;
+    Cancel leaves no box; pdn-relaxed passes; no bandwidth shows the band (impedance's own
+    label) and judges nothing; the quick preset only when pressed; a RAM risk asks and, not
+    answered Yes, solves nothing; pick a probe's pins and a model's part, save, reopen."""
+    import csv
+
+    from PySide6.QtWidgets import QApplication
+
+    import coppernicus.engine.ac as engine_ac
+    from coppernicus.impedance import ASSUMED_LABEL, rail_verdict
+    panel = window.ac_panel
+    window.dirty = False
+    window.open_project(PDN_DIR / "pdn.coppernicus.yml")
+    window.results_tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    check("ac: the Impedance tab shows the example's probe, model, rail and bandwidth",
+          panel.probes.rowCount() == 1 and panel.caps.item(0, 4).text() == "C1"
+          and panel.rail_box.currentText() == "+3V3" and panel.bandwidth.text() == "100k",
+          f"{panel.rail_box.currentText()} {panel.bandwidth.text()}")
+    spin = panel.opt["field_points_per_decade"]
+    check("ac: KiPI's 20 copper solves per decade until the quick preset is pressed",
+          window.project.ac.field_points_per_decade == 20 and spin.value() == 20, str(spin.value()))
+    n_boxes = len(DIALOGS)
+    res, heard = solve_ac_and_wait(window, args.timeout)
+    check("ac: the cost estimate (triangles × ports) is shown before the solve starts",
+          len(heard) == 1 and "triangles ×" in heard[0] and "ports" in heard[0]
+          and "no earlier solve" in heard[0], heard[0][:160] if heard else "none")
+    ax = panel.figure.axes[0] if panel.figure.axes else None
+    title = ax.get_title() if ax else ""
+    check("ac: pdn solved, |Z| and its target drawn, FAIL against the 50 mΩ target",
+          res is not None and rail_verdict(res)[0] == "fail" and len(ax.get_lines()) >= 2
+          and "FAIL" in title and panel.table.item(0, 8).text() == "FAIL" and len(DIALOGS) == n_boxes,
+          f"{title} | {panel.status.text()[:120]}")
+    check("ac: the stats give the memory peak, the copper solved at KiPI's 20 per decade",
+          res is not None and "memory peak" in panel.stats.text() and res.stats["field_frequencies"] == 111
+          and any("(20 per decade)" in a for a in res.assumptions), panel.stats.text())
+    if res is not None:
+        print(f"  pdn AC solve: {res.stats['seconds']:.1f} s, {int(res.stats['triangles']):,} triangles; "
+              f"{panel.stats.text()}", flush=True)
+    first = res
+    res, heard = solve_ac_and_wait(window, args.timeout, cancel_in_solve=True)
+    check("ac: Cancel during the field solve shows no box, keeps the last result, says cancelled",
+          len(DIALOGS) == n_boxes and res is first and "cancelled" in panel.status.text()
+          and not panel.busy and panel.solve_button.isEnabled(), panel.status.text())
+    check("ac: the second estimate is scaled from the last solve's measured time",
+          bool(heard) and "scaled from the last solve" in heard[0], heard[0][:200] if heard else "none")
+
+    window.dirty = False
+    window.open_project(PDN_DIR / "pdn-relaxed.coppernicus.yml")
+    QApplication.processEvents()
+    res, _ = solve_ac_and_wait(window, args.timeout)
+    check("ac: pdn-relaxed passes its 200 mΩ target",
+          res is not None and rail_verdict(res)[0] == "pass" and panel.table.item(0, 8).text() == "pass"
+          and "PASS" in panel.figure.axes[0].get_title(), panel.figure.axes[0].get_title())
+
+    panel.set_bandwidth_text("")
+    panel.use_quick_preset()
+    check("ac: the quick preset, pressed, sets 10 copper solves per decade in the visible field",
+          window.project.ac.field_points_per_decade == 10 and spin.value() == 10 and window.dirty,
+          str(spin.value()))
+    res, _ = solve_ac_and_wait(window, args.timeout)
+    ax = panel.figure.axes[0]
+    legend = [t.get_text() for t in ax.get_legend().get_texts()] if ax.get_legend() else []
+    check("ac: without a bandwidth the band is drawn with impedance's label, nothing judged",
+          res is not None and ASSUMED_LABEL in legend and "bandwidth not given" in ax.get_title()
+          and rail_verdict(res)[0] == "not_judged" and panel.table.item(0, 8).text() == "not judged",
+          f"{legend} | {ax.get_title()}")
+    check("ac: ... solved at the quick preset's 10 per decade, as its assumption says",
+          res is not None and res.stats["field_frequencies"] == 56
+          and any("(10 per decade)" in a for a in res.assumptions),
+          str(res.stats.get("field_frequencies") if res else None))
+    if res is not None:
+        csv_path, png_path = panel.export_files(out / "results" / "pdn_P3V3_impedance.csv")
+        with open(csv_path, encoding="utf-8") as fh:
+            rows = list(csv.DictReader(fh))
+        check("ac: CSV and PNG exported by the core's writers, the assumed bandwidth flagged",
+              png_path.is_file() and png_path.stat().st_size > 0 and len(rows) == len(res.freq_hz)
+              and rows[0]["bandwidth_assumed"] == "true", f"{csv_path.name} {png_path.name}")
+        panel.grab().save(str(out / "ac_result.png"))
+        print(f"  Impedance tab with a result: {out / 'ac_result.png'}", flush=True)
+
+    real = engine_ac.ram_estimate
+    engine_ac.ram_estimate = lambda *a, **k: engine_ac.RamEstimate(9e12, 8e9, True, "up to 9000 GB (forced)")
+    try:
+        before = panel.results.get("+3V3")
+        res, heard = solve_ac_and_wait(window, args.timeout)
+    finally:
+        engine_ac.ram_estimate = real
+    asked = [t for k, t in DIALOGS[n_boxes:] if k == "warning"]
+    check("ac: a RAM risk asks before solving; not answered Yes, nothing is solved",
+          asked == ["This solve could exceed the memory"] and panel.results.get("+3V3") is before
+          and "Not solved" in panel.status.text() and not panel.busy, f"{asked} {panel.status.text()}")
+    del DIALOGS[n_boxes:]
+
+    panel.add_probe()
+    panel.start_pick("supply")
+    window.view.pad_picked.emit(25.0, 25.0)               # U1 pad 1 on +3V3 (AcDecap.PROBE)
+    panel.start_pick("ground")
+    window.view.pad_picked.emit(26.2, 25.0)               # U1 pad 2 on GND, 1.2 mm right
+    panel.probes.item(1, 0).setText("U1b")
+    panel.start_pick("parts")
+    panel.caps.setCurrentCell(0, 0)
+    window.view.pad_picked.emit(25.0, 30.0)               # C1 leaves model 10u ...
+    out_of_model = list(window.project.capacitors[0].refs)
+    window.view.pad_picked.emit(25.0, 30.0)               # ... and joins it again
+    window.stop_clicking()
+    p = window.project.probes[1] if len(window.project.probes) > 1 else None
+    check("ac: picked pads fill a new probe's supply and ground pins and toggle C1 in model 10u",
+          p is not None and (p.name, p.ref, p.net, p.pins, p.ground_net, p.ground_pins)
+          == ("U1b", "U1", "+3V3", ["1"], "GND", ["2"]) and out_of_model == []
+          and window.project.capacitors[0].refs == ["C1"] and panel.pick_kind == "", str(p))
+    saved = out / "pdn-edited.coppernicus.yml"
+    window._save(saved)
+    window.open_project(saved)
+    QApplication.processEvents()
+    back = window.project
+    check("ac: saved and reopened, the probes, the model and the ac: options are as edited",
+          [q.name for q in back.probes] == ["U1", "U1b"] and back.capacitors[0].refs == ["C1"]
+          and back.ac.field_points_per_decade == 10 and back.ac.bandwidth_hz == {}
+          and panel.probes.rowCount() == 2 and not window.dirty, str(back.to_dict().get("ac")))
+    shot = out / "ac_panel.png"
+    window.results_tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    panel.grab().save(str(shot))
+    print(f"  Impedance tab: {shot}", flush=True)
+    window.results_tabs.setCurrentWidget(window.problems)
+    window.dirty = False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
@@ -2169,6 +2328,7 @@ def main(argv=None) -> int:
         run_thermal(window, check, args, out)
         run_signs(window, check, args, out)
         run_fields(window, check, args, out)
+        run_ac(window, check, args, out)
         run_demo(window, check, args, out)
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:
