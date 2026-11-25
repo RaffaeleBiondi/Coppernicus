@@ -373,9 +373,10 @@ def drop_words(volts: float, v_ref: float, sign: float, rise: bool) -> Tuple[str
     the net's ``v_ref``, ``sign`` (:attr:`RailResult.sign`) and whether it is read as a rise
     (:meth:`RailResult.is_rise`): ("drop", "below 3.3 V"), ("drop", "above -3.3 V (toward
     0 V)"), or on a ground ("ground rise", "above 0 V") and, below 0 V (a ground under a
-    negative rail), ("ground shift", "below 0 V")."""
+    negative rail), ("ground shift", "below 0 V"). A NaN is a rise, as for
+    :meth:`RailResult.is_shift`."""
     if rise:
-        return ("ground rise", "above 0 V") if volts >= 0 else ("ground shift", "below 0 V")
+        return ("ground shift", "below 0 V") if volts < 0 else ("ground rise", "above 0 V")
     if sign < 0:
         return "drop", f"above {v_ref:g} V (toward 0 V)"
     return "drop", f"below {v_ref:g} V"

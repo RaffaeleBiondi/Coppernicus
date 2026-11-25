@@ -72,6 +72,17 @@ def test_the_worst_drop_reads_above_or_below_its_reference_and_rise_on_a_ground(
     assert max_drop_text(res) == text
 
 
+def test_a_nan_rise_is_a_rise_in_the_summary_and_the_maps_alike():
+    """A ground with no worst value (NaN) is not a shift: drop_words and
+    RailResult.is_shift read it the same way, as a rise above 0 V."""
+    from coppernicus.problems import drop_words, max_drop_text
+    nan = float("nan")
+    assert drop_words(nan, 0.0, -1.0, True) == ("ground rise", "above 0 V")
+    res = _result("GND", 0.0, nan, kind="ground")
+    assert not res.is_shift() and res.drop_word() == "rise"
+    assert max_drop_text(res) == "max ground rise nan mV above 0 V"
+
+
 RISE, SHIFT = "mV above 0 V (ground rise)", "mV below 0 V (ground shift)"
 
 
@@ -82,6 +93,7 @@ RISE, SHIFT = "mV above 0 V (ground rise)", "mV below 0 V (ground shift)"
     (_result("GND", 0.0, 0.00567, drop_sign=-1.0), RISE, RISE),
     (_result("GND", 0.0, 0.00567, kind="ground"), RISE, RISE),
     (_result("GND", 0.0, 0.0, kind="ground"), RISE, RISE),                     # nothing solved yet
+    (_result("GND", 0.0, float("nan"), kind="ground"), RISE, RISE),            # no worst value
     (_result("GND", 0.0, -0.00567, kind="ground"), RISE, SHIFT),
     (_result("GND", 0.0, -0.00567, drop_sign=-1.0), RISE, SHIFT),
     (_result("VZ", 0.0, 0.00567), "mV below 0 V", "mV below 0 V"),
