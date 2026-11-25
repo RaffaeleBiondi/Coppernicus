@@ -45,6 +45,13 @@ inputs:
       GBs on a large board; its size and memory estimate is printed in the log first). Its
       verdict, against the probes' own targets, sets the step's result (1 fail, 3 not judged).
     default: "false"
+  noise:
+    description: >-
+      Also solve the DC-DC ripple and coupled noise of each project that has aggressors (heavy:
+      minutes and GBs on a large board; its size and memory estimate is printed in the log
+      first). Its verdict, against the victims' noise margins only, sets the step's result (1
+      fail, 3 not judged); the ripple and the radiated estimate are never judged.
+    default: "false"
   python-version:
     description: Python used to run Coppernicus (3.12 or 3.13).
     default: "3.12"
@@ -101,6 +108,7 @@ runs:
         COPPERNICUS_HTML: ${{ inputs.html }}
         COPPERNICUS_TREE: ${{ inputs.tree }}
         COPPERNICUS_AC: ${{ inputs.ac }}
+        COPPERNICUS_NOISE: ${{ inputs.noise }}
       run: |
         # The results go to their own folder; nothing is written next to a board and nothing
         # is committed.
@@ -110,10 +118,13 @@ runs:
         if [ "$COPPERNICUS_TREE" = "true" ]; then tree_flag="--tree"; fi
         ac_flag=""
         if [ "$COPPERNICUS_AC" = "true" ]; then ac_flag="--ac"; fi
+        noise_flag=""
+        if [ "$COPPERNICUS_NOISE" = "true" ]; then noise_flag="--noise"; fi
         index="$COPPERNICUS_OUT/coppernicus-ci.json"
         rm -f "$index"
         uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -m coppernicus.ci solve \
-          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag $tree_flag $ac_flag "$COPPERNICUS_PROJECTS" || true
+          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag $tree_flag $ac_flag $noise_flag \
+          "$COPPERNICUS_PROJECTS" || true
         # The exit code and verdict come from the index the helper writes: a crash also exits
         # with 1, which must not read as "limit exceeded". No index means an error.
         result=$(uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -c \

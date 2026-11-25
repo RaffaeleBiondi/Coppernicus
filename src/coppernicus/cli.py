@@ -503,19 +503,13 @@ def _cmd_noise(args) -> int:
     and ``<project>_noise_summary.json`` in ``--out`` (default: results/ next to the project
     file). Prints the report, or with ``--json`` the summary. Exit codes as ``solve``."""
     from coppernicus import board_fields
-    from coppernicus.coupled_noise import (
-        noise_summary,
-        noise_text,
-        write_csv,
-        write_field_png,
-        write_png,
-    )
+    from coppernicus.coupled_noise import noise_summary, noise_text, write_files
     from coppernicus.engine import Board, EngineError
     from coppernicus.engine.kicad_fields import read_board_fields
     from coppernicus.engine.noise import solve_aggressor
     from coppernicus.maps import safe_file_name, safe_name
     from coppernicus.project import Project, ProjectError
-    from coppernicus.service.session import FIELD_HINT
+    from coppernicus.service.session import FIELD_HINT, noise_estimate
 
     quiet = args.json
     hint = "fix the aggressors, victims or noise: block of the project file, then solve again"
@@ -556,25 +550,36 @@ def _cmd_noise(args) -> int:
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     outline = board.outline()
-    results, files = [], {}
+    results, files, estimates = [], {}, {}
     for name in names:
+        try:                              # its cost first: a heavy solve is never a surprise
+            estimates[name] = estimate = noise_estimate(board, project, name, progress,
+                                                        fields_rails=merged.from_fields)
+        except EngineError as e:
+            return fail("solve_failed", str(e), hint)
+        print(f"Noise of {name}: {estimate['text']}", file=stream, flush=True)
+        if estimate["exceeds_memory"]:
+            print(f"warning: the noise solve of {name} could exceed this machine's memory; a coarser "
+                  "AC mesh (ac: max_edge_mm) or fewer field solves (noise: field_per_decade) lowers "
+                  "it", file=sys.stderr, flush=True)
         try:
             res = solve_aggressor(board, project, name, progress=progress,
                                   fields_rails=merged.from_fields)
         except EngineError as e:
             return fail("solve_failed", str(e), hint)
         merged.annotate(res)
-        base = out_dir / f"{stem}_{safe_name(name)}_noise"
-        pngs = [write_png(res, base.with_name(base.name + ".png"))]
-        maps = (res.emi.h_map, res.emi.e_map) if res.emi is not None else (None, None)
-        pngs += [write_field_png(res, kind, base.with_name(f"{base.name}_{kind.lower()}_field.png"),
-                                 outline) for kind, m in zip("HE", maps) if m is not None]
-        files[name] = (write_csv(res, base.with_name(base.name + ".csv")).as_posix(),
-                       [png.as_posix() for png in pngs])
+        files[name] = write_files(res, out_dir / f"{stem}_{safe_name(name)}_noise", outline)
         results.append(res)
     doc = noise_summary(results, files)
+    for a in doc["aggressors"]:
+        a["estimate"] = estimates.get(a["aggressor"])
     summary_path = out_dir / f"{stem}_noise_summary.json"
     doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
+    if args.html is not None:            # one offline page: each aggressor's waveforms and victims
+        from coppernicus.report import write_noise_report
+        html_path = Path(args.html) if args.html else out_dir / f"{stem}_noise_report.html"
+        doc["report_file"] = write_noise_report(doc, html_path, project=Path(args.project).name,
+                                                board_name=board.name).as_posix()
     summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
                             encoding="utf-8")
     if quiet:
@@ -583,6 +588,8 @@ def _cmd_noise(args) -> int:
         print(f"Board: {board.name}")
         print("\n".join(noise_text(doc)))
         print(f"Summary: {summary_path}")
+        if "report_file" in doc:
+            print(f"Report: {doc['report_file']}")
     return _exit_for(doc)
 
 
@@ -722,6 +729,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="folder for CSV, PNG and summary (default: results/ next to the project file)")
     p.add_argument("--no-board-fields", action="store_true",
                    help="ignore the board's KiCad footprint fields (PI_*)")
+    p.add_argument("--html", nargs="?", const="", default=None, metavar="PATH",
+                   help="also write an offline HTML page of the ripple and noise (default path: "
+                        "<out>/<project>_noise_report.html)")
     p.add_argument("-v", "--verbose", action="store_true", help="show the engine's progress")
     p.add_argument("--json", action="store_true",
                    help="print a JSON summary on stdout (for scripts and agents)")

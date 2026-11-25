@@ -636,6 +636,136 @@ def write_ac_report(doc: Mapping[str, Any], path, *, project: str = "", board_na
     return out
 
 
+NOISE_PAGE_CSS = AC_PAGE_CSS + "\n" + "\n".join([
+    "figure { margin: 12px 0; } figcaption { color: #7a838c; font-size: 13px; }",
+    ".scroll { overflow-x: auto; } td.fail { color: #c62828; font-weight: 600; }",
+    "td.num { white-space: nowrap; }",
+])
+
+
+def _mv_text(x) -> str:
+    """A voltage given in mV, in mV below 1 V and in V above (as ``coppernicus noise``)."""
+    if x is None:
+        return "–"
+    return f"{x / 1e3:.4g} V" if abs(x) >= 999.95 else f"{x:.4g} mV"
+
+
+def _noise_image_label(png: str) -> str:
+    stem = Path(png).stem
+    if stem.endswith("_h_field"):
+        return "H field 5 mm above the top copper, strongest harmonic (an indicator, never judged)"
+    if stem.endswith("_e_field"):
+        return "E field 5 mm above the top copper, strongest harmonic (an indicator, never judged)"
+    return "Waveforms: switch node, inductor current, ripple and each victim's receiver voltage"
+
+
+def write_noise_report(doc: Mapping[str, Any], path, *, project: str = "", board_name: str = "",
+                       title: str = "") -> Path:
+    """One offline HTML page of a ``noise`` document (``coppernicus noise``'s summary): the
+    verdict, and per aggressor its waveforms and field-map PNGs (the files the solve wrote, kept
+    inside the page), the ripple (never judged), the victims with their peak, margin, verdict
+    and reason, the stand-ins, the assumptions and the warnings."""
+    from coppernicus.coupled_noise import victim_verdict_words
+    from coppernicus.impedance import hz_text
+
+    def esc(x) -> str:
+        return html.escape(str(x if x is not None else "–"))
+
+    def num(x, fmt: str = ".4g", scale: float = 1.0) -> str:
+        return "–" if x is None else format(x * scale, fmt)
+    parts = []
+    for a in doc.get("aggressors", []):
+        name = a.get("aggressor")
+        figures = []
+        for png in a.get("png_files", []):
+            p = Path(png or "")
+            if not p.is_file():
+                continue
+            label = _noise_image_label(png)
+            data = base64.b64encode(p.read_bytes()).decode("ascii")
+            figures.append(f'<figure><img src="data:image/png;base64,{data}" alt="{esc(label)} of '
+                           f'{esc(name)}"><figcaption>{esc(label)}</figcaption></figure>')
+        point = ", ".join([
+            f"{num(a.get('vin_v'), 'g')} V → {num(a.get('vout_v'), 'g')} V", f"{num(a.get('iout_a'))} A",
+            f"duty {num(a.get('duty'))}", hz_text(a.get("fsw_hz")),
+            f"edges {num(a.get('rise_s'), 'g', 1e9)} / {num(a.get('fall_s'), 'g', 1e9)} ns"])
+        loops = "".join(
+            f"<li>phase {esc(h.get('phase'))}: hot loop {esc(num(h.get('loop_l_h'), '.3g', 1e9))} nH, "
+            f"switch node {esc(num(h.get('c_sw_f'), '.4g', 1e12))} pF; "
+            + (f"rings at {esc(hz_text(h.get('f_ring_hz')))}, ζ {esc(num(h.get('zeta'), '.3g'))}"
+               if h.get("f_ring_hz") else "no ringing") + "</li>" for h in a.get("hot_loops", []))
+        ripple = "".join(
+            f"<tr><td>{esc(r.get('name'))}</td><td>{esc(r.get('where'))}</td>"
+            f"<td>{esc(r.get('net'))} − {esc(r.get('ground_net'))}</td>"
+            f"<td class=num>{esc(_mv_text(r.get('pp_20mhz_mv')))}</td>"
+            f"<td class=num>{esc(_mv_text(r.get('below_20mhz_mv')))} / "
+            f"{esc(_mv_text(r.get('above_20mhz_mv')))}</td>"
+            f"<td class=num>{esc(_mv_text(r.get('pp_mv')))}</td>"
+            f"<td class=num>{esc(_mv_text(r.get('rms_mv')))}</td></tr>" for r in a.get("ripple", []))
+        rows = []
+        for v in a.get("victims", []):
+            verdict, reason = victim_verdict_words(v, a.get("failed", []))
+            rows.append(f"<tr><td>{esc(v.get('name'))}</td><td>{esc(v.get('net'))}</td>"
+                        f"<td class=num>{esc(_mv_text(v.get('peak_mv')))}</td>"
+                        f"<td>{esc(v.get('dominant') or '–')}</td>"
+                        f"<td class=num>{esc(_mv_text(v.get('margin_mv')))}</td>"
+                        f"<td class=num>{esc(num(v.get('ratio'), '.3g', 100.0))}</td>"
+                        f"<td{' class=fail' if verdict == 'FAIL' else ''}>{esc(verdict)}</td>"
+                        f"<td>{esc(reason)}</td></tr>")
+        stand_ins = list(a.get("stand_ins", []))
+        stand_ins += [f"{v.get('name')}: {s}" for v in a.get("victims", []) for s in v.get("stand_ins", [])
+                      if s not in a.get("stand_ins", [])]
+        stand = ("<ul>" + "".join(f"<li>{esc(s)}</li>" for s in stand_ins) + "</ul>" if stand_ins else
+                 "<p>None: no KiPI default stands in for a value.</p>")
+        e = a.get("emi") or {}
+        radiated = ""
+        if e.get("radiated_dbuv_m") is not None:
+            limit = (f"CISPR 32 class B {num(e.get('cispr32_b_dbuv_m'), '.0f')} dBµV/m for scale"
+                     if e.get("cispr32_b_dbuv_m") is not None else "below the 30 MHz band")
+            radiated = (f"<p>Radiated estimate at {esc(num(e.get('distance_m'), 'g'))} m: "
+                        f"{esc(num(e.get('radiated_dbuv_m'), '.1f'))} dBµV/m at "
+                        f"{esc(hz_text(e.get('radiated_hz')))} ({esc(limit)}; never judged).</p>")
+        notes = "".join(f"<li>{esc(x)}</li>" for x in a.get("assumptions", []))
+        warns = "".join(f"<li>{esc(w)}</li>" for w in a.get("warnings", []))
+        parts += [f"<section><h2>Aggressor {esc(name)} <span class=muted>(source {esc(a.get('vrm'))}, "
+                  f"{esc(a.get('topology'))})</span></h2>", f"<p>{esc(point)}</p>",
+                  f"<ul>{loops}</ul>" if loops else "",
+                  f"<p class=verdict>Victims: {esc(a.get('verdict') or 'partial')}. "
+                  f"{esc(a.get('verdict_note', ''))}</p>", *figures,
+                  "<h3>Ripple (never judged)</h3><div class=scroll><table><thead><tr><th>Ripple</th>"
+                  "<th>Where</th><th>Between</th><th class=num>p-p, 20 MHz</th>"
+                  "<th class=num>Below / above, 20 MHz</th><th class=num>p-p, full band</th>"
+                  f"<th class=num>RMS</th></tr></thead><tbody>{ripple}</tbody></table></div>",
+                  "<h3>Victims</h3><div class=scroll><table><thead><tr><th>Victim</th><th>Net</th>"
+                  "<th class=num>Peak</th><th>Mostly</th><th class=num>Margin</th>"
+                  "<th class=num>% of margin</th><th>Verdict</th><th>Reason</th></tr></thead>"
+                  f"<tbody>{''.join(rows)}</tbody></table></div>",
+                  "<h3>Stand-ins</h3><p class=muted>KiPI defaults standing in for a value: while one "
+                  "is in play, a victim with a margin is not judged, whatever its peak.</p>", stand,
+                  radiated, f"<details><summary>Assumptions</summary><ul>{notes}</ul></details>",
+                  f"<h3>Warnings</h3><ul>{warns}</ul>" if warns else "", "</section>"]
+    head = title or f"Coppernicus ripple and noise: {project or board_name}"
+    where = " · ".join(x for x in (f"Project {project}" if project else "",
+                                   f"board {board_name}" if board_name else "") if x)
+    top_warns = "".join(f"<li>{esc(w)}</li>" for w in doc.get("warnings", []))
+    page = "\n".join([
+        "<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        f"<title>{esc(head)}</title>", f"<style>{NOISE_PAGE_CSS}</style></head><body>",
+        f"<h1>{esc(head)}</h1>", f"<p class=muted>{esc(where)}</p>",
+        f"<p class=verdict>Verdict: {esc(doc.get('verdict'))}. {esc(doc.get('verdict_note', ''))}</p>",
+        f"<h3>Warnings</h3><ul>{top_warns}</ul>" if top_warns else "",
+        *parts,
+        f"<p class=muted>Generated by Coppernicus {esc(__version__)}. Board files were only read. This "
+        "page works offline: everything it shows is inside this file. Verdicts only against the "
+        "victims' noise margins; the ripple, the near field and the radiated estimate are never "
+        "judged.</p>", "</body></html>", ""])
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(page, encoding="utf-8")
+    return out
+
+
 def kind_label(p: Problem) -> str:
     """The word for a problem's kind on the page, from its own title: a ground's "rise" is a
     "ground shift" when its title says so (a ground below 0 V)."""
