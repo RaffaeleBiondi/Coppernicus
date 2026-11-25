@@ -530,6 +530,23 @@ def test_a_limits_only_rail_on_a_tied_net_adds_its_limits_and_the_loads_still_mo
     assert any("PI_LIMIT_DROP" in w and "VCC_B" in w for w in merged.warnings)
 
 
+def test_a_drop_limit_on_a_tied_net_is_kept_when_its_loads_move():
+    """A PI_LIMIT_DROP on a net whose loads move into the driven rail through a net tie was
+    lost with them. A KiCad limit always applies to its net: it stays as a rail of that net
+    that holds only the limit, as a project file would write it."""
+    fields = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V"},
+              "U2": {"PI_RAIL": "VCC_B", "PI_LOAD": "1A", "PI_LIMIT_DROP": "1%"}}
+    merged = merge(Project(), fields, ties=[("VCC", "VCC_B")])
+    rails = {r.net: r for r in merged.project.rails}
+    assert rails["VCC"] == Rail("VCC", [Source("J1", 3.3)], [Load("U2", 1.0)])
+    assert rails["VCC_B"] == Rail("VCC_B", limits=Limits(max_drop_pct=1.0))
+    origin = merged.origins["VCC_B"]
+    assert origin.source == "fields" and merged.warnings == []
+    assert any("PI_LIMIT_DROP" in n and "U2" in n and "VCC" in n for n in origin.notes)
+    no_limit = {**fields, "U2": {"PI_RAIL": "VCC_B", "PI_LOAD": "1A"}}
+    assert [r.net for r in merge(Project(), no_limit, ties=[("VCC", "VCC_B")]).project.rails] == ["VCC"]
+
+
 def test_pins_are_compared_as_pads_not_as_spelling():
     project = Project(rails=[Rail("VCC", [Source("J1", 1.0, ["1"])], [Load("U1", 1.0, ["1"])])])
     fields = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "1V"}, "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}}

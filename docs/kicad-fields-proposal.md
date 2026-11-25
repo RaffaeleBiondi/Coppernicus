@@ -149,10 +149,11 @@ So the custom fields are parsed with the rest of the file and then dropped.
    and no load is complete when it feeds a regulator's input or a link (from the fields or the
    project): it draws their estimated current. Loads on a net a net tie joins to a driven net
    go into that rail, even when the project file has a rail on the tied net that holds only
-   limits (it stays, and its limits judge that net); loads behind a link on a net with no source make a loads-only rail (per
-   rail it is skipped, its loads drawn through the link by the driven rail; the tree solves
-   it). A net with loads and no source in its group, or a source feeding nothing, is an error
-   naming the missing field, unless the project file defines the rail; then that rail is used,
+   limits (it stays, limits only); loads behind a link on a net with no source make a
+   loads-only rail (per rail it is skipped, its loads drawn through the link by the driven
+   rail; the tree solves it). A net with loads and no source in its group, or a source
+   feeding nothing, is an error naming the missing field, unless the project file defines
+   the rail; then that rail is used,
    with a warning that the fields are incomplete. Pins are compared as the pads they select.
    A footprint with `PI_*` fields and no reference is an error that gives its position.
 6. **`coppernicus solve --tree`** reads the fields too, as the MCP `solve_tree` tool does.

@@ -447,7 +447,9 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
       of nets a net-tie footprint joins) as the solve does; a net the fields leave incomplete keeps the
       project's rail (a warning) or, with none, is an error naming the missing field;
     * loads on a net tied to a driven net go into the driven rail; a project rail of the tied
-      net that holds only limits stays as it is, and its limits judge that net;
+      net that holds only limits stays as it is (with a ``PI_LIMIT_DROP`` there applied to
+      it); with none, a ``PI_LIMIT_DROP`` there stays on that net, in a rail that holds only
+      the limit;
     * ``PI_LINK`` parts replace project links on the same part (a warning when they differ).
     """
     rails = field_rails(fields)
@@ -477,7 +479,7 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
     own = {r.net: r for r in out.rails}
     # Loads on a net that a net tie joins to a driven net go into that rail: the per-rail
     # solve joins tied copper, and finds their pads on the tied net. A project rail of the
-    # tied net that holds only limits stays, limits only: they judge that net (per net).
+    # tied net that holds only limits stays, limits only.
     tie_notes: Dict[str, List[str]] = {}
     folded: Dict[str, Tuple[FieldRail, str]] = {}       # tied net -> (its fields, the driver)
     for net in sorted(rails):
@@ -562,6 +564,16 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
     if errors:
         raise FieldError("Incomplete rails in the KiCad footprint fields: " + "; ".join(errors)
                          + ". Add the missing field, or define the rail in the project file")
+    for net, (tied, driver) in folded.items():   # a KiCad limit stays on its net, limits only
+        if net in own or tied.limit is None:
+            continue
+        new_rails.append(Rail(net, limits=Limits(max_drop_pct=tied.limit[0])))
+        merged.origins[net] = Origin(
+            net, "fields",
+            [f"Rail {net}: limit max_drop_pct {tied.limit[0]:g} ({tied.limit[1].origin()}), limits "
+             f"only: its loads {', '.join(t.term.ref for t in tied.loads)} are in rail {driver}, "
+             "joined to it by a net tie; a KiCad limit always applies to its net."]
+            + link_notes.get(net, []))
     out.rails = new_rails
     for driver, notes in tie_notes.items():
         merged.origins[driver].notes += notes
