@@ -1,0 +1,133 @@
+board: noise.kipi.json.gz
+settings:
+  max_edge_mm: 0.5
+  via_plating_um: null
+  copper_temp_c: 20.0
+rails:
+- net: VIN
+  sources:
+  - ref: J1
+    pins:
+    - '1'
+    voltage: 12.0
+    ground:
+      net: GND
+      pins:
+      - '2'
+  loads: []
+- net: VOUT
+  sources:
+  - name: U1
+    ref: L1
+    pins:
+    - '2'
+    voltage: 1.8
+    kind: smps
+    efficiency: 0.9
+    input:
+      ref: U1
+      net: VIN
+      pins:
+      - '1'
+    ground:
+      ref: U1
+      net: GND
+      pins:
+      - '2'
+  loads:
+  - ref: U2
+    pins:
+    - '1'
+    current: 5.0
+    ground:
+      net: GND
+      pins:
+      - '2'
+probes:
+- name: LOAD
+  ref: U2
+  net: VOUT
+  pins:
+  - '1'
+  ground:
+    net: GND
+    pins:
+    - '2'
+capacitors:
+- name: 10u
+  capacitance_f: 1.0e-05
+  esl_h: 4.0e-10
+  esr_ohm: 0.003
+  refs:
+  - C1
+- name: 47u
+  capacitance_f: 4.7e-05
+  esl_h: 6.0e-10
+  esr_ohm: 0.002
+  refs:
+  - C2
+aggressors:
+- name: U1
+  vrm: U1
+  fsw_hz: 1000000.0
+  rise_s: 2.0e-09
+  fall_s: 2.0e-09
+  ripple_probes:
+  - LOAD
+  phases:
+  - inductor: L1
+    inductance_h: 1.0e-06
+    switch_net: SW
+    high_side:
+      ref: U1
+      net: VIN
+      pins:
+      - '1'
+    low_side:
+      ref: U1
+      net: GND
+      pins:
+      - '2'
+    input_caps:
+    - C1
+    output_caps:
+    - C2
+    coss_f: 3.0e-10
+    qrr_nc: 5.0
+victims:
+- net: SIG_SW
+  preset: cmos
+  driver:
+    ref: U3
+    pins:
+    - '1'
+  receiver:
+    ref: U4
+    pins:
+    - '1'
+  logic_v: 3.3
+  noise_margin_v: 0.5
+- net: SIG_LOOP
+  preset: cmos
+  driver:
+    ref: U5
+    pins:
+    - '1'
+  receiver:
+    ref: U6
+    pins:
+    - '1'
+  logic_v: 3.3
+  noise_margin_v: 0.5
+- net: SIG_BURIED
+  preset: cmos
+  driver:
+    ref: U7
+    pins:
+    - '1'
+  receiver:
+    ref: U8
+    pins:
+    - '1'
+  logic_v: 3.3
+  noise_margin_v: 0.5

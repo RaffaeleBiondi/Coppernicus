@@ -665,3 +665,22 @@ def test_the_ram_estimate_is_the_measured_upper_bound_and_warns_past_the_machine
     big = noise_ram_estimate(1_000_000, 16e9)
     assert big.risk and "could swap" in big.text and "extrapolated" in big.text
     assert "cannot be read" in noise_ram_estimate(1000, None).text
+
+
+def test_the_example_passes_and_its_tight_copy_fails(tmp_path, capsys):
+    """examples/noise: every value entered, 3.3 V logic; SIG_LOOP's 655 mV is 82 % of the
+    0.8 V JESD8 margin (pass) and above noise-tight's 0.5 V (fail)."""
+    import json
+
+    from coppernicus.cli import EXIT_LIMIT, EXIT_OK, main
+    folder = ROOT / "examples" / "noise"
+    assert main(["noise", str(folder / "noise.coppernicus.yml"), "--json", "--out", str(tmp_path)]) == EXIT_OK
+    (a,) = json.loads(capsys.readouterr().out)["aggressors"]
+    assert a["stand_ins"] == [] and [v["passed"] for v in a["victims"]] == [True, True, True]
+    loop = next(v for v in a["victims"] if v["name"] == "SIG_LOOP")
+    assert loop["peak_mv"] == pytest.approx(655.4, rel=2e-3)
+    assert loop["ratio"] == pytest.approx(0.82, abs=0.01)
+    assert main(["noise", str(folder / "noise-tight.coppernicus.yml"), "--json",
+                 "--out", str(tmp_path)]) == EXIT_LIMIT
+    doc = json.loads(capsys.readouterr().out)
+    assert [e["item"] for e in doc["failed"]] == ["SIG_LOOP"]

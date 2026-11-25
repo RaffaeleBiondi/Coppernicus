@@ -9,6 +9,7 @@ then try them:
     uv run coppernicus gui examples/power_chain/power_chain.coppernicus.yml
     uv run coppernicus gui examples/fields/fields.coppernicus.yml
     uv run coppernicus ac examples/pdn/pdn.coppernicus.yml --out results/pdn
+    uv run coppernicus noise examples/noise/noise.coppernicus.yml --out results/noise
 
 ``demo``: one rail, three loads, a tight drop budget. ``power_chain``: a whole power tree
 (12 V input, switcher, ferrite, remote-sensed LDO, ground pins), copied from KiPI's
@@ -31,6 +32,15 @@ one 10 µF capacitor (ESL 0.5 nH, ESR 20 mΩ) on C1, the source's bandwidth 100 
 default sweep. From one solve: |Z| is 160 mΩ at the bandwidth, 22 mΩ at 1.49 MHz (the series
 resonance), so ``pdn.coppernicus.yml``'s 50 mΩ target up to 10 MHz fails and
 ``pdn-relaxed.coppernicus.yml``'s 200 mΩ holds.
+
+``noise``: DC-DC ripple and coupled noise (Task 10) of KiPI's coupled-noise validation board, a
+12 V to 1.8 V buck at 1 MHz (2 ns edges, 1 µH, Coss 300 pF and Qrr 5 nC entered, 10 µF and
+47 µF modelled) with three 0.2 mm victims, each a CMOS line on 3.3 V logic with both ends
+entered. From one solve: SIG_LOOP, beside the hot loop's VIN track, picks up 655 mV (82 % of
+the 0.8 V JESD8 margin), SIG_SW 33 mV, the shielded SIG_BURIED 1.4 mV, so
+``noise.coppernicus.yml`` passes and ``noise-tight.coppernicus.yml`` (a 0.5 V noise margin on
+every victim) fails; the ripple at the load's probe LOAD (never judged) is 18 mV p-p, 12 mV
+through 20 MHz.
 """
 
 from pathlib import Path
@@ -38,6 +48,8 @@ from pathlib import Path
 from coppernicus.engine.synthetic import (
     ac_decap_board,
     ac_decap_project,
+    coupled_noise_board,
+    coupled_noise_project,
     demo_board,
     power_chain_board,
     power_chain_project,
@@ -111,6 +123,17 @@ def main(board: bool = True):
         p.ac = AcOptions(bandwidth_hz={"U1": 100e3})
         p.save(pdn / f"{name}.coppernicus.yml")
     print(f"Wrote {pdn}")
+
+    # DC-DC noise: every device value and both ends of each victim entered, 3.3 V logic.
+    noise = ROOT / "noise"
+    noise.mkdir(exist_ok=True)
+    save_snapshot(coupled_noise_board(), noise / "noise.kipi.json.gz")
+    for name, margin in (("noise", None), ("noise-tight", 0.5)):
+        p = coupled_noise_project("noise.kipi.json.gz", qrr_nc=5.0, logic_v=3.3)
+        for v in p.victims:
+            v.noise_margin_v = margin
+        p.save(noise / f"{name}.coppernicus.yml")
+    print(f"Wrote {noise}")
 
 
 if __name__ == "__main__":

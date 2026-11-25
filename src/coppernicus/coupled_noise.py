@@ -211,7 +211,10 @@ def _hz(f) -> str:
 
 
 def _mv_text(x) -> str:
-    return "-" if x is None else f"{x:.4g} mV"
+    """A voltage given in mV, in mV below 1 V and in V above."""
+    if x is None:
+        return "-"
+    return f"{x / 1e3:.4g} V" if abs(x) >= 999.95 else f"{x:.4g} mV"
 
 
 def noise_text(doc: Dict[str, Any]) -> List[str]:
