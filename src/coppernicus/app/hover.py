@@ -24,7 +24,7 @@ class HoverValues:
     voltage_v: float               # NaN on copper not connected to a source
     drop_mv: float                 # RailResult.shown_drop_at, in mV
     drop_word: str                 # RailResult.drop_word: "drop", "rise" or "shift"
-    drop_unit: str                 # RailResult.drop_unit: "mV below 3.3 V", ...
+    drop_unit: str                 # RailResult.shown_drop_unit: "mV below 3.3 V", ...
     current_density_a_mm2: float
     layer: str
     nets: str                      # every net of the result: the mesh has no net per point
@@ -33,7 +33,7 @@ class HoverValues:
 def hover_values(result: RailResult, layer: str, p: Probe) -> HoverValues:
     """The values at probe ``p`` on ``layer`` of ``result``, with the result's wording."""
     return HoverValues(p.voltage_v, float(result.shown_drop_at(p.voltage_v)) * 1e3,
-                       result.drop_word(), result.drop_unit(),
+                       result.drop_word(), result.shown_drop_unit(),
                        p.current_density_a_mm2, layer, " + ".join(result.nets) or result.net)
 
 

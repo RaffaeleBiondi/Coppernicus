@@ -163,7 +163,7 @@ class ColorBar(QWidget):
 def drop_mv(result: RailResult, v: np.ndarray) -> np.ndarray:
     """The 'drop' map's values in mV: below the source voltage on a positive rail, toward
     0 V on a negative one, the rise above 0 V on a ground, the depth below 0 V on a ground
-    under a negative rail (``RailResult.shown_drop_at``, as ``drop_unit`` names it)."""
+    under a negative rail (``RailResult.shown_drop_at``, as ``shown_drop_unit`` names it)."""
     return result.shown_drop_at(v) * 1e3
 
 
@@ -283,7 +283,7 @@ class BoardView(QWidget):
                 clim = [lo, hi]
         self.plotter.add_mesh(mesh, scalars=title, cmap=cmap, clim=clim, nan_color="#dddddd",
                               show_edges=False, name="field", show_scalar_bar=False)
-        units = {"drop": result.drop_unit(), "voltage": "V", "current": "A/mm²",
+        units = {"drop": result.shown_drop_unit(), "voltage": "V", "current": "A/mm²",
                  "difference": "mV of drop, current − baseline (red: more)"}[field]
         note = f"\ntop clipped at {J_CLIP_PERCENTILE:g}th pct" if field == "current" else ""
         if field == "difference" and difference_note:

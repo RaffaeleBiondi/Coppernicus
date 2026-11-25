@@ -131,19 +131,21 @@ class RailResult:
         return "shift" if self.is_shift() else "rise" if self.is_rise() else "drop"
 
     def shown_drop_at(self, v):
-        """The drop (V) at voltages ``v`` as the maps and readouts show it, measured the way
-        :meth:`drop_unit` says: :meth:`drop_at`, negated on a ground shift, where it is the
-        depth below 0 V (a point above 0 V on it reads negative, as a boost does)."""
+        """The drop (V) at voltages ``v`` as the app's maps and readouts show it, measured the
+        way :meth:`shown_drop_unit` says: :meth:`drop_at`, negated on a ground shift, where it
+        is the depth below 0 V (a point above 0 V on it reads negative, as a boost does)."""
         drop = self.drop_at(v)
         return -drop if self.is_shift() else drop
 
+    def shown_drop_unit(self) -> str:
+        """The unit of :meth:`shown_drop_at`, for the app's maps and readouts (the side
+        :func:`coppernicus.problems.drop_words` names): :meth:`drop_unit`, or "mV below 0 V
+        (ground shift)" on a ground shift (:meth:`is_shift`)."""
+        return "mV below 0 V (ground shift)" if self.is_shift() else self.drop_unit()
+
     def drop_unit(self) -> str:
-        """What the drop is measured as, for map labels and readouts (the side
-        :func:`coppernicus.problems.drop_words` names): "mV below 3.3 V", "mV above -3.3 V
-        (toward 0 V)", "mV above 0 V (ground rise)", "mV below 0 V (ground shift)" (see
-        :meth:`is_shift`; the values beside it are :meth:`shown_drop_at`)."""
-        if self.is_shift():
-            return "mV below 0 V (ground shift)"
+        """What the drop is measured as, for map labels: "mV below 3.3 V", "mV above
+        -3.3 V (toward 0 V)", "mV above 0 V (ground rise)"."""
         if self.is_rise():
             return "mV above 0 V (ground rise)"
         if self.sign < 0:

@@ -564,6 +564,31 @@ def test_a_ground_below_0_v_is_a_rise_by_its_magnitude():
     assert "max ground shift" in line and "mV below 0 V" in line and "rise" not in line, line
 
 
+def test_the_tree_report_of_a_ground_below_0_v_keeps_its_rise_unit(tmp_path):
+    """The tree report reads a ground below 0 V as a signed rise from 0 V (drop_at, its
+    drop_sign -1): its meta keeps RailResult.drop_unit's "mV above 0 V (ground rise)", as it
+    always did. Only the app's maps and readouts give the depth below 0 V
+    (shown_drop_unit)."""
+    import json
+    import re
+
+    from coppernicus.power_tree import tree_summary
+    from coppernicus.project import Project, Rail
+    from coppernicus.report import write_tree_report
+    project = Project(rails=[
+        Rail("VCC", sources=[Source("J1", -3.3, ["1"], ground_pins=["2"], ground_net="GND")],
+             loads=[Load("U1", 1.0, ["1"], ground_pins=["2"], ground_net="GND")]),
+        Rail("GND")])
+    tree = solve_project_tree(strip_board_with_ground(), project)
+    assert tree.groups["GND"].max_drop < -1e-3                      # below 0 V
+    page = write_tree_report(tree, tree_summary(tree), tmp_path / "tree.html")
+    meta = json.loads(re.search(r'id="meta">(.*?)</script>', page.read_text(encoding="utf-8"), re.S).group(1))
+    gnd = next(r for r in meta["rails"] if r["net"] == "GND")
+    assert gnd["drop_unit"] == "mV above 0 V (ground rise)" and gnd["drop_sign"] == -1
+    assert gnd["drop_max_mv"] == 0.0 and [lf["max_drop_mv"] for lf in gnd["layers"]] == [0.0]
+    assert tree.groups["GND"].shown_drop_unit() == "mV below 0 V (ground shift)"
+
+
 def strip_board_with_ground():
     """VCC: J1.1 → U1.1 and GND: J1.2 → U1.2, 40 mm tracks on F.Cu."""
     from coppernicus.engine.synthetic import F, SyntheticBoard, two_layer_stackup

@@ -100,7 +100,8 @@ def test_the_drop_map_of_a_ground_below_0_v_is_its_depth_below_0_v(tmp_path):
     layer = LayerField(0, "F.Cu", pts, tris, np.array([0.0, -0.002, -0.005, -0.001]),
                        np.ones(2), np.zeros(2), np.full(2, 25.0))
     gnd = RailResult("GND", ["GND"], 0.0, [layer], [], [], [], -0.005, 1.0, 0.0, 0.0, kind="ground")
-    assert gnd.drop_unit() == "mV below 0 V (ground shift)"
+    assert gnd.shown_drop_unit() == "mV below 0 V (ground shift)"
+    assert gnd.drop_unit() == "mV above 0 V (ground rise)"         # the report's, a signed rise
     assert np.allclose(drop_mv(gnd, layer.voltage), [0.0, 2.0, 5.0, 1.0])
     scale = render_layer_map(gnd, layer, "drop", [], tmp_path / "gnd_drop.png")
     assert scale["min"] == 0.0 and scale["max"] == pytest.approx(5.0)
