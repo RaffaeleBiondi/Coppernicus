@@ -2303,6 +2303,189 @@ def run_ac(window, check: Checks, args, out: Path):
     window.dirty = False
 
 
+NOISE_DIR = ROOT / "examples" / "noise"
+
+
+def solve_noise_and_wait(window, timeout_s: float, cancel_in_solve: bool = False):
+    """Solve on the Ripple & noise tab and pump events until the panel is idle (the worker
+    object changes between sizing and solving). Returns (the shown aggressor's result or None,
+    the estimates the panel showed before solving, whether partial waveforms were drawn).
+    With ``cancel_in_solve``, Cancel is pressed as soon as the solve phase starts."""
+    import time
+
+    from PySide6.QtWidgets import QApplication
+    panel = window.noise_panel
+    heard, partial = [], False
+    panel.estimated.connect(heard.append)
+    panel.solve()
+    t0 = time.monotonic()
+    while panel.busy and time.monotonic() - t0 < timeout_s:
+        QApplication.processEvents()
+        axes = panel.wave_figure.axes
+        partial = partial or bool(axes and "partial" in axes[0].get_title())
+        if cancel_in_solve and panel.worker is not None and panel.worker.phase == "solve":
+            panel.cancel()
+            cancel_in_solve = False
+        time.sleep(0.01)
+    QApplication.processEvents()
+    panel.estimated.disconnect(heard.append)
+    entry = panel.results.get(panel.aggressor_box.currentText())
+    return (entry[0] if entry else None), heard, partial
+
+
+def run_noise(window, check: Checks, args, out: Path):
+    """T10b: the Ripple & noise tab on examples/noise (synthetic boards only: noise solves are
+    never run on a real board here). Solve: the estimate first, the waveforms, field maps and
+    tables, PASS; Cancel leaves no box; noise-tight FAILs; a RAM risk asks and, not answered
+    Yes, solves nothing; export with the CLI's names; Fill from board and Guess ends leave
+    stand-ins, so the victims are not judged; save and reopen."""
+    import json
+
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    import coppernicus.engine.noise as engine_noise
+    from coppernicus.app.noise_panel import LAST_SOLVE_SETTING, RIPPLE_HEADERS, VICTIM_HEADERS, _settings
+    before = {f.name: f.read_bytes() for f in NOISE_DIR.iterdir()}
+    panel = window.noise_panel
+    _settings().remove(LAST_SOLVE_SETTING)        # "no earlier solve" holds in a reused --out too
+    window.dirty = False
+    window.open_project(NOISE_DIR / "noise.coppernicus.yml")
+    window.results_tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    check("noise: the tab shows the example's aggressor, source, fsw, phase and victims",
+          panel.aggressor_box.currentText() == "U1" and panel.vrm_box.currentData() == "U1"
+          and panel.field["fsw_hz"].text() == "1000" and panel.phases.rowCount() == 1
+          and panel.victims.rowCount() == 3,
+          f"{panel.aggressor_box.currentText()} {panel.field['fsw_hz'].text()}")
+    n_boxes = len(DIALOGS)
+    res, heard, partial = solve_noise_and_wait(window, args.timeout)
+    check("noise: the cost estimate (triangles × ports, harmonics) is shown before the solve starts",
+          len(heard) == 1 and "triangles ×" in heard[0] and "harmonics to" in heard[0]
+          and "no earlier solve" in heard[0] and panel.estimate.toolTip() == heard[0]
+          and "harmonics to" in panel.estimate.text(),
+          heard[0][:200] if heard else "none")
+    verdicts = [panel.victim_table.item(i, VICTIM_HEADERS.index("Verdict")).text()
+                for i in range(panel.victim_table.rowCount())]
+    loop = res.victim("SIG_LOOP") if res is not None else None
+    check("noise: example solved, every victim PASSes (SIG_LOOP the noisiest, inductive, under 0.8 V)",
+          res is not None and res.verdict == "pass" and verdicts == ["PASS"] * 3 and len(DIALOGS) == n_boxes
+          and loop.dominant == "inductive" and 0.6 < loop.peak_v < 0.8 and "PASS" in panel.header.text(),
+          f"{verdicts} {loop.peak_v * 1e3:.4g} mV" if loop else panel.status.text())
+    axes = panel.wave_figure.axes
+    check("noise: the waveforms drawn (switch node, inductor, ripple, victims), shown partial first",
+          len(axes) == 4 and partial and "PASS" in axes[0].get_title()
+          and all(ax.get_lines() for ax in axes), f"{len(axes)} axes, partial {partial}")
+    maps = [panel.canvases[k][0].axes[0].images for k in "HE"]
+    check("noise: the H and E field maps drawn", all(len(m) == 1 for m in maps), str([len(m) for m in maps]))
+    rows = [[panel.ripple_table.item(i, c).text() for c in range(len(RIPPLE_HEADERS))]
+            for i in range(panel.ripple_table.rowCount())]
+    check("noise: ripple at LOAD and the device pins, the 20 MHz column first, never judged",
+          [r[0] for r in rows] == ["LOAD", "output", "input"] and RIPPLE_HEADERS[3] == "p-p, 20 MHz"
+          and {r[-1] for r in rows} == {"not judged"} and rows[0][3].endswith("mV"), str(rows[:1]))
+    check("noise: the radiated estimate is for scale, not judged; the stats give the memory peak",
+          panel.radiated.text().endswith("for scale, not judged") and "memory peak" in panel.stats.text(),
+          f"{panel.radiated.text()} | {panel.stats.text()}")
+    if res is not None:
+        print(f"  noise solve: {res.stats['seconds']:.1f} s; {panel.stats.text()}", flush=True)
+    first = res
+    res, heard, _ = solve_noise_and_wait(window, args.timeout, cancel_in_solve=True)
+    title = panel.wave_figure.axes[0].get_title() if panel.wave_figure.axes else ""
+    check("noise: Cancel during the solve shows no box, keeps the last result, says cancelled",
+          len(DIALOGS) == n_boxes and res is first and "cancelled" in panel.status.text()
+          and not panel.busy and panel.solve_button.isEnabled() and "partial" not in title,
+          f"{panel.status.text()} | {title}")
+    check("noise: the second estimate is scaled from the last solve's measured time",
+          bool(heard) and "scaled from the last solve" in heard[0], heard[0][:200] if heard else "none")
+
+    if first is not None:
+        written = panel.export_files(out / "results")
+        names = sorted(p.name for p in written)
+        summary = out / "results" / "noise.coppernicus_noise_summary.json"
+        doc = json.loads(summary.read_text(encoding="utf-8"))
+        check("noise: CSV, waveforms and field-map PNGs and the summary, named as the CLI names them",
+              names == ["noise.coppernicus_U1_noise.csv", "noise.coppernicus_U1_noise.png",
+                        "noise.coppernicus_U1_noise_e_field.png", "noise.coppernicus_U1_noise_h_field.png",
+                        "noise.coppernicus_noise_summary.json"]
+              and all(p.stat().st_size > 0 for p in written) and doc["kind"] == "noise"
+              and doc["verdict"] == "pass", str(names))
+
+    real = engine_noise.noise_ram_estimate
+    engine_noise.noise_ram_estimate = lambda *a, **k: engine_noise.RamEstimate(9e12, 8e9, True,
+                                                                               "up to 9000 GB (forced)")
+    try:
+        kept = panel.results.get("U1")
+        solve_noise_and_wait(window, args.timeout)
+    finally:
+        engine_noise.noise_ram_estimate = real
+    asked = [t for k, t in DIALOGS[n_boxes:] if k == "warning"]
+    check("noise: a RAM risk asks before solving; not answered Yes, nothing is solved",
+          asked == ["This noise solve could exceed the memory"] and panel.results.get("U1") is kept
+          and "Not solved" in panel.status.text() and not panel.busy, f"{asked} {panel.status.text()}")
+    del DIALOGS[n_boxes:]
+
+    window.dirty = False
+    window.open_project(NOISE_DIR / "noise-tight.coppernicus.yml")
+    QApplication.processEvents()
+    res, _, _ = solve_noise_and_wait(window, args.timeout)
+    verdicts = [panel.victim_table.item(i, VICTIM_HEADERS.index("Verdict")).text()
+                for i in range(panel.victim_table.rowCount())]
+    check("noise: noise-tight FAILs its 0.5 V margin at SIG_LOOP",
+          res is not None and res.verdict == "fail" and verdicts[1] == "FAIL"
+          and "FAIL" in panel.header.text()
+          and [e["item"] for e in res.failed] == ["SIG_LOOP"], f"{verdicts} {res.verdict if res else None}")
+
+    window.dirty = False
+    window.open_project(NOISE_DIR / "noise.coppernicus.yml")
+    QApplication.processEvents()
+    panel.victims.item(1, 3).setText("")                 # SIG_LOOP: driver and receiver parts cleared
+    panel.victims.item(1, 5).setText("")
+    panel.victims.setCurrentCell(1, 0)
+    panel.guess_ends()
+    v = window.project.victims[1]
+    check("noise: Guess ends shows KiPI's guess, marked, and enters nothing",
+          (panel.victims.item(1, 3).text(), panel.victims.item(1, 5).text()) == ("U5", "U6")
+          and "guessed" in panel.victims.item(1, 3).toolTip() and (v.driver_ref, v.receiver_ref) == ("", ""),
+          panel.status.text())
+    ask = QMessageBox.question
+    QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)     # replace the phase: Yes
+    try:
+        panel.fill_from_board()
+    finally:
+        QMessageBox.question = ask
+    ph = window.project.aggressors[0].phases[0]
+    check("noise: Fill from board reads L1, SW, C1 and C2; Coss and Qrr left empty and marked",
+          (ph.inductor, ph.switch_net, ph.input_caps, ph.output_caps, ph.coss_f, ph.qrr_nc)
+          == ("L1", "SW", ["C1"], ["C2"], None, None)
+          and panel.phases.item(0, 12).toolTip().startswith("Not entered: KiPI's"), str(ph))
+    res, _, _ = solve_noise_and_wait(window, args.timeout)
+    loop = res.victim("SIG_LOOP") if res is not None else None
+    row = {h: panel.victim_table.item(1, c).text() for c, h in enumerate(VICTIM_HEADERS)}
+    check("noise: with the stand-ins (Coss, Qrr, guessed ends) the victims are not judged",
+          res is not None and res.verdict == "not_judged" and loop.passed is None
+          and "Coss not entered on phase 1" in loop.not_judged
+          and "driver and receiver not both entered: KiPI guessed" in loop.not_judged
+          and row["Verdict"] == "NOT JUDGED" and row["Ends"].endswith("(guessed by KiPI)"),
+          loop.not_judged[:200] if loop else panel.status.text())
+    saved = out / "noise-edited.coppernicus.yml"
+    window._save(saved)
+    window.open_project(saved)
+    QApplication.processEvents()
+    back = window.project
+    check("noise: saved and reopened, the filled phase is kept and the guessed ends were never entered",
+          back.aggressors[0].phases[0].coss_f is None and back.victims[1].driver_ref == ""
+          and back.victims[0].driver_ref == "U3" and panel.phases.rowCount() == 1 and not window.dirty,
+          str(back.to_dict().get("victims", [])[1:2]))
+    shot = out / "noise_panel.png"
+    window.results_tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    panel.grab().save(str(shot))
+    print(f"  Ripple & noise tab: {shot}", flush=True)
+    after = {f.name: f.read_bytes() for f in NOISE_DIR.iterdir()}
+    check("noise: the example's files are unchanged", after == before, str(sorted(after)))
+    window.results_tabs.setCurrentWidget(window.problems)
+    window.dirty = False
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--window", action="store_true", help="use a real window (it closes itself)")
@@ -2350,6 +2533,7 @@ def main(argv=None) -> int:
         run_signs(window, check, args, out)
         run_fields(window, check, args, out)
         run_ac(window, check, args, out)
+        run_noise(window, check, args, out)
         run_demo(window, check, args, out)
         run_flow_demo(window, check, args, out)
         if args.local and args.rail:

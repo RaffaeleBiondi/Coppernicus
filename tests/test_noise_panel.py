@@ -294,6 +294,24 @@ def test_the_estimate_text_joins_the_cost_harmonics_and_memory():
     assert "board model off (noise.board_model)" in text
 
 
+def test_the_estimate_line_is_short_and_keeps_the_numbers():
+    """The label shows the numbers on one short line (the full text is its tooltip and the
+    memory question's), so the editor stays in sight in a short dock."""
+    from coppernicus.app.noise_panel import estimate_line
+    from coppernicus.engine.noise import noise_cost_estimate, noise_ram_estimate
+    size = _size()
+    last = {"seconds": 2.0, "field_seconds": 0.8, "triangles": 12000.0, "ports": 7.0, "field_solves": 34.0}
+    line = estimate_line(size, noise_cost_estimate(size, last), noise_ram_estimate(size.unknowns, 24e9))
+    assert line == ("Before solving: 12,000 triangles × 7 ports, 34 field solves, about 2 s; 1600 harmonics "
+                    "to 1.6 GHz; memory up to 0.61 GB of 24 GB (hover for how)")
+    risky = estimate_line(size, noise_cost_estimate(size), noise_ram_estimate(size.unknowns, 1e8))
+    assert "34 field solves;" in risky and "of 0.1 GB: it could exceed this machine's memory" in risky
+    off = _size(False, "Board model left out (no ground pads)")
+    line = estimate_line(off, noise_cost_estimate(off), noise_ram_estimate(0, None))
+    assert line == ("Before solving: 1600 harmonics to 1.6 GHz; no field solve (Board model left out (no "
+                    "ground pads)); memory up to 0.2 GB (hover for how)")
+
+
 def test_stats_text_names_the_memory_peak_and_leaves_out_what_was_not_measured():
     from coppernicus.app.noise_panel import stats_text
     st = {"seconds": 2.04, "harmonics": 1600.0, "triangles": 12000.0, "unknowns": 11000.0, "ports": 7.0,
@@ -626,6 +644,8 @@ def test_a_solve_that_could_exceed_the_memory_starts_only_on_yes():
         pump(lambda: not panel.busy)
         assert asked == ["This noise solve could exceed the memory"] and panel.worker is None, asked
         assert heard and "could exceed" in heard[0] and "1,000 triangles" in heard[0], heard
+        assert panel.estimate.toolTip() == heard[0] and "1,000 triangles × 4 ports" in panel.estimate.text()
+        assert len(panel.estimate.text()) < len(heard[0])
         assert "Not solved" in panel.status.text() and panel.results == {{}}
     '''))
 

@@ -543,6 +543,30 @@ def estimate_text(size, cost, ram) -> str:
     return f"Before solving: {cost.text}; {reach}. {risk}{ram.text}"
 
 
+def _gb(x: float) -> str:
+    return f"{x / 1e9:.3g} GB"
+
+
+def _duration(seconds: float) -> str:
+    if seconds < 90:
+        return f"{seconds:.0f} s"
+    return f"{seconds / 60:.0f} min" if seconds < 5400 else f"{seconds / 3600:.1f} h"
+
+
+def estimate_line(size, cost, ram) -> str:
+    """The estimate's numbers on one short line, for the label (its tooltip and the memory
+    question give :func:`estimate_text`): the editor stays in sight in a short dock."""
+    reach = f"{size.harmonics} harmonics to {hz_text(size.f_max_hz)}"
+    memory = f"memory up to {_gb(ram.bytes)}" + (f" of {_gb(ram.total_bytes)}" if ram.total_bytes else "")
+    memory += ": it could exceed this machine's memory" if ram.risk else " (hover for how)"
+    if not size.board_model:
+        why = size.note or "board model off (noise.board_model)"
+        return f"Before solving: {reach}; no field solve ({why}); {memory}"
+    took = f", about {_duration(cost.seconds)}" if cost.seconds is not None else ""
+    return (f"Before solving: {cost.triangles:,} triangles × {cost.ports} ports, {cost.field_frequencies} "
+            f"field solves{took}; {reach}; {memory}")
+
+
 def may_start(ram, answered_yes: bool) -> bool:
     """A solve starts unless it could exceed the memory and the user did not answer Yes."""
     return (not ram.risk) or answered_yes
@@ -757,6 +781,7 @@ def _set_item(table: QTableWidget, r: int, c: int, text: str) -> QTableWidgetIte
 PROBLEM_BG, DRAFT_BG, ERROR_BG = QColor("#fdecea"), QColor("#f0f0f0"), QColor("#f8c9c4")
 STAND_IN_BG = QColor("#fff3cd")     # a KiPI stand-in: not entered, so nothing is judged
 CHART_SURFACE = "#fcfcfb"
+PLOT_FONT = 7
 
 
 def _row_bg(why: str) -> QBrush:
@@ -892,14 +917,15 @@ class NoisePanel(QWidget):
         guess.setToolTip("Show KiPI's guess at the selected victims' empty driver and receiver (the net's "
                          "two pads farthest apart). A guess is not entered: the victim is not judged.")
         use.setToolTip("Enter the guessed ends shown in the selected rows: then they count as yours")
-        vb = QHBoxLayout()
-        for w in (add_v, rem_v, guess, use):
-            vb.addWidget(w)
-        vb.addStretch(1)
         victim_tab = QWidget()
         vl = QVBoxLayout(victim_tab)
         vl.setContentsMargins(2, 2, 2, 2)
-        vl.addLayout(vb)
+        for buttons in ((add_v, rem_v), (guess, use)):          # two rows: the column is narrow
+            vb = QHBoxLayout()
+            for w in buttons:
+                vb.addWidget(w)
+            vb.addStretch(1)
+            vl.addLayout(vb)
         vl.addWidget(self.victims, 1)
 
         # Options tab.
@@ -935,11 +961,10 @@ class NoisePanel(QWidget):
                               f"{KIPI_FIELD_PER_DECADE}: set here, visible and saved, never applied by "
                               "itself")
         kipi_default = QPushButton(f"KiPI's {KIPI_FIELD_PER_DECADE}")
-        row = QHBoxLayout()
-        row.addWidget(self.quick)
-        row.addWidget(kipi_default)
-        row.addStretch(1)
-        oform.addRow("", row)
+        quick_row = QHBoxLayout()                # under the form: the column is narrow
+        quick_row.addWidget(self.quick)
+        quick_row.addWidget(kipi_default)
+        quick_row.addStretch(1)
         board_model = QCheckBox("Board model")
         board_model.setToolTip("The copper's field model of the rails and ground: the ripple at probes and "
                                "the shared-ground coupling need it; off, the victims are not judged")
@@ -953,6 +978,7 @@ class NoisePanel(QWidget):
         ol = QVBoxLayout(opt_tab)
         ol.setContentsMargins(2, 2, 2, 2)
         ol.addLayout(oform)
+        ol.addLayout(quick_row)
         ol.addStretch(1)
 
         self.tabs = QTabWidget()
@@ -1657,8 +1683,16 @@ class NoisePanel(QWidget):
         fig, canvas = self.canvases["wave"]
         fig.clear()
         draw_waveforms(fig, r)
-        for ax in fig.axes:
+        for ax in fig.axes:              # the core's plot, its text smaller: the dock is short
             ax.title.set_wrap(True)
+            ax.title.set_fontsize(PLOT_FONT + 1)
+            ax.yaxis.label.set_fontsize(PLOT_FONT)
+            ax.xaxis.label.set_fontsize(PLOT_FONT)
+            ax.tick_params(labelsize=PLOT_FONT)
+            legend = ax.get_legend()
+            if legend is not None:
+                for text in legend.get_texts():
+                    text.set_fontsize(PLOT_FONT - 1)
         canvas.draw_idle()
 
     def _draw_map(self, r, kind: str):
@@ -1824,6 +1858,7 @@ class NoisePanel(QWidget):
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
         self.last_estimate = ""
+        self.estimate.setToolTip("")
         self.estimate.setText("Estimating: meshing the aggressor's rails and ground as the noise solve "
                               "will…")
         # What is solved: a copy of the merged project as it is now (the user may edit on).
@@ -1884,7 +1919,8 @@ class NoisePanel(QWidget):
         cost = engine_noise.noise_cost_estimate(size, self._last_solve())
         ram = engine_noise.noise_ram_estimate(size.unknowns, total_memory_bytes())
         self.last_estimate = estimate_text(size, cost, ram)
-        self.estimate.setText(self.last_estimate)
+        self.estimate.setText(estimate_line(size, cost, ram))
+        self.estimate.setToolTip(self.last_estimate)
         self.estimated.emit(self.last_estimate)
         yes = False
         if ram.risk:
@@ -1953,6 +1989,7 @@ class NoisePanel(QWidget):
     def _clear_estimating(self):
         if not self.last_estimate:                 # still "Estimating…": no estimate came
             self.estimate.setText("")
+            self.estimate.setToolTip("")
 
     def _worker_finished(self, worker: NoiseWorker):
         if worker is self.worker:
@@ -1992,6 +2029,7 @@ class NoisePanel(QWidget):
         self._outline = None
         self.last_estimate = ""
         self.estimate.setText("")
+        self.estimate.setToolTip("")
         self._say("")
         self.load_project()
 
