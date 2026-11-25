@@ -98,6 +98,8 @@ def test_exit_codes_and_json(write, tmp_path, capsys):
     assert main(["tolerance", str(write(tol_pct=None)), "--json", *o]) == EXIT_OK
     doc = json.loads(capsys.readouterr().out)
     assert doc["verdict"] == "not_judged" and doc["not_judged"] == []
+    hints = doc["loads"][0]["hints"]                       # shown: why nothing was solved for it
+    assert hints["ripple"] == "U1 not solved (no load with a tolerance needs it)"
 
 
 def test_errors(write, tmp_path, capsys):

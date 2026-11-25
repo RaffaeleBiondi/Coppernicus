@@ -1271,7 +1271,8 @@ coincide"); full band or 20 MHz. Where each part came from is in its `source` an
   bandwidth given) and one noise solve per aggressor listing such a probe, each cost printed
   first (`ac_estimate`; the noise one from `mesh_estimate`, `noise_cost_estimate`,
   `noise_ram_estimate`) with the memory warning on stderr. `--skip-ac` / `--skip-noise` leave
-  those parts out (the hint names the flag). A failed AC solve only loses KiPI's estimate (a
+  those parts out (the hint names the flag); a load without a tolerance gets no solve of its
+  own (its hints say so). A failed AC solve only loses KiPI's estimate (a
   warning); a failed noise solve leaves the ripple missing (a warning; not judged). Prints per
   load the four parts (mV below / above, where each came from), the checks with what each
   allows and the margin, the verdict, what to do about a missing part; then the assumptions,

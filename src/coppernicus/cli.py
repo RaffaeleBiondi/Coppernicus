@@ -683,7 +683,10 @@ def _cmd_tolerance(args) -> int:
     ac_notes, noise_notes, rails = {}, {}, []
     for p in project.probes:              # AC only for KiPI's estimate: a step and a bandwidth given
         rail = rails_of.get(p.name)
-        if p.name not in needed or not (p.step_a and p.slew_a_per_us) or rail is None:
+        if not (p.step_a and p.slew_a_per_us) or rail is None:
+            continue
+        if p.name not in needed:
+            ac_notes[p.name] = "not solved in AC, as no load with a tolerance needs it"
             continue
         source = project.rail(rail).sources[0]
         if project.ac.bandwidth_hz.get(source.label, project.ac.bandwidth_hz.get(source.ref)) is None:
@@ -709,6 +712,7 @@ def _cmd_tolerance(args) -> int:
     noise = []
     for a in project.aggressors:
         if not set(a.ripple_probes) & needed:
+            noise_notes[a.name] = "no load with a tolerance needs it"
             continue
         if args.skip_noise:
             noise_notes[a.name] = "--skip-noise"
