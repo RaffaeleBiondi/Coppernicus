@@ -94,6 +94,7 @@ setting out to check the board as designed.
 | `tree` | `false` | Also solve each project's whole power tree (`coppernicus solve --tree`) and add its VRM and load tables to the job summary. The tree's verdict is shown there; it does not set the exit code, except for the board temperature of a project that enables it (see Notes). |
 | `ac` | `false` | Also solve the AC PDN impedance \|Z\|(f) of each project that has probes (`coppernicus ac`). Heavy: minutes and gigabytes on a large board; its size and memory estimate is printed in the log first. Its verdict, only against the probes' own targets, sets the step's result (1 fail, 3 not judged), and the summary adds each probe's worst \|Z\| against its target. The CSV and PNG of \|Z\|(f) go into the results. |
 | `noise` | `false` | Also solve the DC-DC ripple and coupled noise of each project that has aggressors (`coppernicus noise`; see [Ripple and coupled noise](noise.md)). Heavy: minutes and gigabytes on a large board; each aggressor's size and memory estimate is printed in the log first. Its verdict, only against the victims' noise margins, sets the step's result (1 a margin exceeded, 3 a margin that could not judge, its entries listed as NOT JUDGED with their aggressor; 2 an error). The ripple and the radiated estimate are never judged. The summary adds a "Ripple and noise" table: each victim's peak against its margin, per aggressor. The CSV, the waveforms and field-map PNGs and, with `html`, the noise page go into the results. |
+| `tolerance` | `false` | Also run the tolerance stack-up of each project that sets a tolerance on a load, or holds a key that looks like a misspelt one (`coppernicus tolerance`; see [Tolerance stack-up](tolerance.md)). The power tree is cheap; an AC or noise solve runs only where a load with a tolerance needs it, its size and memory estimate printed in the log first. Its verdict, only against the tolerances set and only when every part is known, sets the step's result (1 a check exceeded, 3 a tolerance that could not judge, its entries listed as NOT JUDGED with the load and net; 2 an error). KiPI's transient estimate is never judged. The summary adds a "Tolerance" table: each check's total against what it allows, per load. The CSV and, with `html`, the tolerance page go into the results. |
 | `python-version` | `3.12` | Python used to run Coppernicus (3.12 or 3.13). |
 | `uv-version` | latest | uv version to install. |
 | `upload-artifact` | `true` | Upload the results folder as an artifact. |
@@ -146,6 +147,12 @@ uv run --project path/to/Coppernicus python -m coppernicus.ci summary --out resu
   While a KiPI default stands in for a value (Coss, Qrr, a capacitor without a model, guessed
   ends, the board model left out) the victim is NOT JUDGED and the step exits 3, never a
   silent pass: enter the value to judge it. A project without aggressors is not run.
+- **Tolerance.** With `tolerance: true`, a load is judged only against the tolerance written
+  for it (`tol_*`, `dc_tol_*`, `ac_tol_*`), and a check passes only when every part is known:
+  an accuracy not entered, a ripple no aggressor gives (and no `ripple_mv`), a `transient_mv`
+  not entered, a misspelt key or a tolerance lost to a KiCad-fields rail make it NOT JUDGED
+  (exit 3), never a silent pass. Its known parts alone can still fail it. A project without any
+  tolerance (or misspelt tolerance key) is not run.
 - **Privacy.** The board is processed on the runner of your repository's workflow. The results
   stay in that run's artifacts. Nothing is sent anywhere else.
 - **Self-test.** This repository runs the action on the synthetic demo at every push

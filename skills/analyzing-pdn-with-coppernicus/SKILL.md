@@ -1,6 +1,6 @@
 ---
 name: analyzing-pdn-with-coppernicus
-description: Use when asked whether a PCB power rail "is OK" or "holds", about IR drop / voltage drop at a chip, current density, current crowding, via current, copper heating, PDN impedance, DC-DC ripple or switching noise coupled into a signal net, or a what-if on copper thickness, via plating or temperature, for a KiCad (.kicad_pcb), ODB++ or HyperLynx board, and the Coppernicus MCP tools (open_board, solve_rail, render_map, cut_current…) or the `coppernicus` CLI are available.
+description: Use when asked whether a PCB power rail "is OK" or "holds", about IR drop / voltage drop at a chip, current density, current crowding, via current, copper heating, PDN impedance, DC-DC ripple or switching noise coupled into a signal net, a chip's supply tolerance stack-up, or a what-if on copper thickness, via plating or temperature, for a KiCad (.kicad_pcb), ODB++ or HyperLynx board, and the Coppernicus MCP tools (open_board, solve_rail, render_map, cut_current…) or the `coppernicus` CLI are available.
 ---
 
 # Analyzing a PDN with Coppernicus
@@ -92,6 +92,15 @@ why, and ask for what is missing.
      judged**, never a pass: name each reason and what to enter. The ripple and the radiated
      estimate are never judged: report the numbers only. Point the user to `png_files` (the
      waveforms, then the H and E field maps), or `coppernicus noise PROJECT --html` for one page.
+   - Tolerance stack-up: `solve_tolerance(project_path)` answers "does this chip's supply stay
+     within its tolerance?": per load and per side, DC drop + the source's accuracy, ripple +
+     transient, and their total, against the `tol_*` / `dc_tol_*` / `ac_tol_*` the user set.
+     Read `estimates` first; `solve_too_large` means tell the user and ask, then
+     `confirm_large: true` (or `skip_ac` / `skip_noise`). A part not known is missing, never 0,
+     so a check passes only with every part known: for a `not_judged` load, name each missing
+     part and its `hints` (enter the accuracy, `ripple_mv`, `transient_mv`…). KiPI's transient
+     estimate is shown, never judged: never use it as the transient. Never invent a tolerance,
+     an accuracy or a ripple. `coppernicus tolerance PROJECT --html` gives the user one page.
 9. Before and after a change in KiCad: solve the rail (`result_a`), let the user change and save
    the board, `open_board` again (new `board_id`), solve the same rail with the same sources and
    loads (`result_b`), then `compare_revisions(result_a, result_b)`: per-load drop deltas, via

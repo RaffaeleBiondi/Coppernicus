@@ -1126,7 +1126,9 @@ engine only inside the functions that need it, so importing it does not load KiP
 `results.TolerancePart`, `ToleranceCheck` (with `floors`), `ToleranceRow` (with `floors`,
 `ripple_from`, `transient_estimate_v`), `ToleranceResult`, `TransientResult` (in
 `ProbeImpedance.transient`), `LoadReport.v_low_v` / `v_high_v`, `board_fields.carried_by_ref`,
-`coppernicus tolerance` in `cli.py`, `examples/tolerance`.
+`coppernicus.service.tolerance` (`project_inputs`, `plan`, `solve`: the run `coppernicus
+tolerance` in `cli.py` and `Session.solve_tolerance` / MCP `solve_tolerance` share),
+`report.write_tolerance_report`, `ci` (`--tolerance`), `examples/tolerance`.
 
 KiPI (evaluate.py:1-10): per load, each side apart (below and above nominal), every value a
 deviation in volts, never negative: **DC** = the DC drop (or boost) + the VRM's DC accuracy,
@@ -1168,7 +1170,8 @@ yet)." A part the fields' rail lacks loses them: `coppernicus tolerance` warns, 
 the user set on such a load is a not-judged entry (exit 3, never a silent pass), and an accuracy
 entered for a source it lacks is said lost ("J5's accuracy_pct in the project file was lost:
 rail VCC comes from the board's KiCad footprint fields, whose source is J1 …"), not "enter it".
-The app (it replaces a project rail's terminals with KiCad's itself) and MCP do not do this yet.
+MCP `solve_tolerance` does the same, through the same code (`service.tolerance.project_inputs`).
+The app (it replaces a project rail's terminals with KiCad's itself) does not do this yet.
 
 Limits: KiPI's `deviation_limits` (evaluate.py:28-36) through `range_volts` (model.py:276):
 a % of a negative rail is of its magnitude (`pct_to_volts`, model.py:254-259, swaps the ends:
@@ -1313,18 +1316,30 @@ came from is in its `source` and `detail`.
   `_margin_below_mv`, `_margin_above_mv`, `_verdict`, then `verdict`. A check's sums (CSV and
   summary) include its floors, so on an incomplete check they are a least value.
 - `coppernicus tolerance PROJECT [--skip-ac] [--skip-noise] [--out DIR] [--no-board-fields]
-  [--json] [-v]`: the power tree (KiCad footprint fields merged as `solve --tree`; the board
-  temperature's estimate first when `thermal.enabled`), then **only where a load with a
-  tolerance needs it** one AC solve per rail (a probe with a step and a slew whose source has a
-  bandwidth given) and one noise solve per aggressor listing such a probe, each cost printed
-  first (`ac_estimate`; `noise_estimate`, as `coppernicus noise`) with the memory warning on
-  stderr. `--skip-ac` / `--skip-noise` leave
+  [--json] [--html [PATH]] [-v]`: the power tree (KiCad footprint fields merged as `solve
+  --tree`; the board temperature's estimate first when `thermal.enabled`), then **only where a
+  load with a tolerance needs it** one AC solve per rail (a probe with a step and a slew whose
+  source has a bandwidth given) and one noise solve per aggressor listing such a probe, every
+  cost printed before anything is solved (`thermal_estimate`; `ac_estimate`; `noise_estimate`,
+  as `coppernicus noise`) with the memory warning on stderr; an AC or noise solve that cannot
+  be sized is left out as one that fails. `--skip-ac` / `--skip-noise` leave
   those parts out (the hint names the flag); a load without a tolerance gets no solve of its
   own (its hints say so). A failed AC solve only loses KiPI's estimate (a
   warning); a failed noise solve leaves the ripple missing (a warning; not judged). Prints per
   load the four parts (mV below / above, where each came from), the checks with what each
   allows and the margin, the verdict, what to do about a missing part; then the assumptions,
-  the warnings and the verdict line.
+  the warnings and the verdict line. `--html` writes `report.write_tolerance_report`'s offline
+  page (default `<out>/<project>_tolerance_report.html`, its path in `report_file`).
+- `Session.solve_tolerance` / MCP `solve_tolerance(project_path, skip_ac?, skip_noise?,
+  confirm_large?, use_board_fields?)`: the same document through the same run
+  (`service.tolerance.plan` then `solve`), its files in the session's folder; when an estimate
+  exceeds this machine's memory nothing is solved or written (`solve_too_large`, the hint per
+  kind of solve) unless `confirm_large`.
+- CI (`python -m coppernicus.ci solve --tolerance`; action.yml `tolerance`, default false): on
+  each project that sets a tolerance on a load or holds a misspelt-looking key; fail 1, not
+  judged 3 (its entries added to the project's `not_judged`, `rail` null, "tolerance of <load>
+  on <net>"), error 2; the job summary's "### Tolerance" table (load, check, allowed, total,
+  verdict).
 
 ### Cost
 
@@ -1377,9 +1392,10 @@ here, not reported upstream):
 Also:
 - No KiCad field holds a tolerance or an accuracy yet: a rail from the board's fields carries
   the project's by ref; a part it lacks loses them (a warning; each lost tolerance not judged).
-  The app and MCP do not carry them yet.
-- Loads and sources still ignore unknown keys when loading; only `coppernicus tolerance` warns
-  about one that looks like a tolerance (and does not judge its load).
+  `coppernicus tolerance` and MCP `solve_tolerance` carry them; the app does not yet.
+- Loads and sources still ignore unknown keys when loading; only `coppernicus tolerance` (and
+  MCP `solve_tolerance`, CI's `--tolerance`) warns about one that looks like a tolerance (and
+  does not judge its load).
 - KiPI's estimate is shown even when its AC result hangs on something assumed (capacitors
   without a model, an assumed εr); it is never judged.
 - One-sided tolerances (a `null` end) are not offered: both ends are entered.

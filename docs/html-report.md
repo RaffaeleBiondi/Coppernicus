@@ -125,14 +125,32 @@ is on.
   <img src="images/report-noise.png" alt="The noise page of noise-tight: verdict fail, the ripple table marked never judged, the victims table with SIG_LOOP 655.4 mV against a 500 mV margin, 131 %, FAIL and its reason, the stand-ins (none) and the radiated estimate for scale" width="760">
 </p>
 
+## The tolerance page
+
+`coppernicus tolerance PROJECT --html [PATH]` writes one page of the
+[tolerance stack-up](tolerance.md) (default `<out>/<project>_tolerance_report.html`): the
+verdict, every failed and not-judged entry with its reason (a misspelt key or a tolerance lost
+to a KiCad-fields rail included), the warnings, and for each load its four parts (mV below and
+above nominal, where each came from; a missing part says "missing", with its least value where
+known and what to enter, never 0), KiPI's transient estimate (shown, never judged), and its
+checks (the tolerance, the total, what it allows, the margin, the verdict and its reason; an
+incomplete check's total is "at least" and its margin "at most"); then the assumptions and each
+solve's estimate. In CI, the Action's `tolerance` input writes it with the other results when
+`html` is on.
+
+<p align="center">
+  <img src="images/report-tolerance.png" alt="The tolerance page of tolerance-tight: verdict fail, U2's four parts (DC drop 27.05 / 0 mV from the power tree, accuracy 18 / 18 mV, ripple 7.883 / 10.57 mV from the noise of U1, transient 30 / 30 mV entered), KiPI's estimate shown, never judged, and the checks: DC and AC pass, the total 82.94 / 58.57 mV against 54 / 54 mV fails" width="760">
+</p>
+
 ## Documentation
 
 - [Power tree](power-tree.md): regulators, ground return, groups and verdicts.
 - [Board temperature](thermal.md): the electro-thermal solve of the power tree.
 - [PDN impedance](ac-impedance.md): |Z|(f) at the probes, against your targets.
 - [Ripple and coupled noise](noise.md): a switcher's ripple and the noise in victim nets, against your margins.
+- [Tolerance stack-up](tolerance.md): each load's DC drop, accuracy, ripple and transient, against your tolerances.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
 - [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
-- [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance and the noise.
+- [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance, the noise and the tolerance stack-up.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

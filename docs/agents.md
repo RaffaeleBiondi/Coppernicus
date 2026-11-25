@@ -81,6 +81,7 @@ input.
 | `solve_tree` | `project_path`, `top`?, `use_board_fields`?, `thermal`?, `thermal_options`?, `confirm_large`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. With `thermal` (or the project's `thermal.enabled`) it also solves the board temperature: see [Board temperature](#board-temperature). |
 | `solve_ac` | `project_path`, `rails`?, `confirm_large`?, `use_board_fields`? | The open-loop PDN impedance \|Z\|(f) at the project's probes, rail by rail: the document of `coppernicus ac --json`, with each rail's CSV and PNG of \|Z\|(f), sized first. See [AC impedance](#ac-impedance). |
 | `solve_noise` | `project_path`, `aggressors`?, `confirm_large`?, `use_board_fields`? | The DC-DC ripple and the noise each switching regulator (aggressor) couples into the victim nets: the document of `coppernicus noise --json`, with each aggressor's CSV, waveforms PNG and field-map PNGs, sized first. Judged only against the victims' noise margins; the ripple and the radiated estimate are never judged. See [Ripple and coupled noise](#ripple-and-coupled-noise). |
+| `solve_tolerance` | `project_path`, `skip_ac`?, `skip_noise`?, `confirm_large`?, `use_board_fields`? | Each load's tolerance stack-up (DC drop + accuracy, ripple + transient, their total): the document of `coppernicus tolerance --json`, with its CSV, every AC and noise solve it needs sized first. Judged only against the tolerances the user set, and only when every part is known; KiPI's transient estimate is shown, never judged. See [Tolerance stack-up](#tolerance-stack-up). |
 | `propose_fields` | `project_path` or `result_id` | The KiCad `PI_*` field text that describes a project's rails and links (or one solved rail), part by part, to paste into KiCad. See [Proposing fields](#proposing-fields). |
 | `read_project` | `project_path` | A project file as written (rails, sources, loads, limits, links, settings; unknown keys included), checked by the project loader, with the board it names. |
 | `write_project` | `project_path`, `board_path`?, `rails`?, `remove_rails`?, `links`?, `remove_links`?, `settings`?, `use_board_fields`?, `from_project`?, `overwrite`? | Creates or edits a project file for the user. See [Editing projects](#editing-projects). |
@@ -605,6 +606,49 @@ Problem kinds, in `problems` of every summary and of `get_problems`:
 - `return`: in a power-tree ground group, one ground return pin and its rise above 0 V
   (`rise_mv`, `current_a`), judged against `max_ground_rise_mv`.
 
+### Tolerance stack-up
+
+`solve_tolerance(project_path)` adds up, per load and per side (below and above nominal), the
+DC drop on its worst pins (the power tree) and its source's DC accuracy against the DC
+tolerance, the ripple at its probe and its transient against the AC tolerance, and all four
+against the tolerance, as `coppernicus tolerance PROJECT --json` does, through the same code.
+What it adds up and what the user enters: [Tolerance stack-up](tolerance.md); every key:
+[engine-mapping.md](engine-mapping.md#task-11-tolerance-stack-up--kipitolerance-kipitoleranceevaluatepy-kipitolerancegatherpy).
+
+- The document: `kind: "tolerance"`, `verdict` and `verdict_note`, `failed` and `not_judged`
+  (each entry `{item, net, limit, reason}`; some have no load row: a misspelt key, a tolerance
+  lost to a KiCad-fields rail), `options`, `warnings`, `assumptions`, `estimates` (each solve's
+  cost, `solve` "board temperature", "AC <rail>" or "noise <aggressor>"), `stats`, `csv_file`,
+  `summary_file`, and `loads`: each with `nominal_v`, `source`, `probe`, `verdict`, `parts`
+  (`dc`, `accuracy`, `ripple`, `transient`: `{below_mv, above_mv, source, detail}`, or `null`
+  when missing), `hints` (what to enter for a missing part), `floors`, `transient_estimate`,
+  `checks` (`dc`, `ac`, `total`: `limit`, `below_mv`, `above_mv`, `allowed_below_mv`,
+  `allowed_above_mv`, `margin_below_mv`, `margin_above_mv`, `complete`, `passed`, `missing`,
+  `reason`) and `stand_ins`. The files go into the server's output folder.
+- **The verdict comes only from the tolerances the user set** (`tol_*`, `dc_tol_*`,
+  `ac_tol_*`), and **a check passes only when every part is known**. A part not known is
+  missing, never 0: an accuracy not entered, a ripple no aggressor gives (and no `ripple_mv`),
+  an aggressor not solved or resting on KiPI stand-ins, a `transient_mv` not entered. A check
+  can fail on its known parts alone (`failed` says so), but is otherwise **not judged, never a
+  pass**; report each `not_judged` reason and the hint of what to enter. **KiPI's transient
+  estimate is shown, never judged**: give its numbers, never use them as the transient. Never
+  invent a tolerance, an accuracy or a ripple.
+- The KiCad fields are merged as in the other solves; a rail from the fields carries the
+  project's tolerances by part reference, and a tolerance on a part the fields' rail lacks is
+  not judged (with a warning). A key that looks like a misspelt tolerance (`tol_pc`) is a
+  warning and a `not_judged` entry.
+- **Cost first.** The power tree is cheap; an AC solve (KiPI's estimate, only when a probe has
+  a step and its source a bandwidth) and a noise solve (the ripple) run only where a load with
+  a tolerance needs them. Each is sized before anything is solved, in `estimates` (with the
+  board temperature's when the project enables it). When one would exceed this machine's
+  memory, nothing is solved and the call is refused with `solve_too_large`: tell the user the
+  estimate, and call again with `confirm_large: true` only if they agree, or with `skip_ac` /
+  `skip_noise` (those parts are then left out: missing, so not judged, for the ripple).
+- Exit codes as the others: 1 a check exceeded, 3 a tolerance that could not judge.
+- On the command line, `coppernicus tolerance PROJECT` prints each solve's estimate first (on
+  stderr with `--json`), and `--html [PATH]` writes one offline page with each load's parts and
+  checks. In CI, the Action's `tolerance: true` input runs it (see [CI](ci.md)).
+
 ## Conventions
 
 - **Units are in every key name:** `_v`, `_mv`, `_a`, `_a_mm2`, `_mm`, `_mm2`, `_w`, `_pct`,
@@ -772,7 +816,7 @@ limit. The map is still the copper drop below the group's source output, as its 
 
 ## Without MCP: the CLI with `--json`
 
-`nets`, `parts`, `solve`, `ac` and `noise` take `--json`. Each prints one JSON document on
+`nets`, `parts`, `solve`, `ac`, `noise` and `tolerance` take `--json`. Each prints one JSON document on
 stdout (the same data as the tools) and nothing else; progress from `-v` goes to stderr.
 
 ```sh
@@ -784,6 +828,8 @@ uv run coppernicus solve project.coppernicus.yml --out results --json [--rail NE
 uv run coppernicus fields board.kicad_pcb --json
 uv run coppernicus ac project.coppernicus.yml --out results --json [--rail NET] [--html [PATH]]
 uv run coppernicus noise project.coppernicus.yml --out results --json [--aggressor NAME] [--html [PATH]]
+uv run coppernicus tolerance project.coppernicus.yml --out results --json [--skip-ac] [--skip-noise] \
+  [--html [PATH]] [--no-board-fields]
 ```
 
 `fields` lists a board's KiCad footprint fields and the rails they make, as the `board_fields`
@@ -799,8 +845,8 @@ Exit codes:
 | Code | Meaning |
 |---|---|
 | 0 | Done, and no limit you set was exceeded (or none was set). |
-| 1 | `solve`, `ac`, `noise`: a limit you set was exceeded (a drop, a target, a noise margin). |
-| 3 | `solve`, `ac`, `noise`: a limit you set could not judge something (the `not_judged` items). Precedence: 2, 1, 3, 0. |
+| 1 | `solve`, `ac`, `noise`, `tolerance`: a limit you set was exceeded (a drop, a target, a noise margin, a tolerance). |
+| 3 | `solve`, `ac`, `noise`, `tolerance`: a limit you set could not judge something (the `not_judged` items). Precedence: 2, 1, 3, 0. |
 | 2 | Error, including a crash (a bug: code `internal_error`). stdout holds `{"error": {"code", "message", "hint"}}` with `--json`, and stderr a one-line message. A crash never exits 1. |
 
 `solve` writes the PNG maps and `<project>_summary.json` to `--out`, with or without `--json`.
@@ -846,8 +892,9 @@ setting with the others.
   whose hint says which rail to solve again.
 - **Ground return.** A single-rail solve does not include the ground return; solve the ground
   net as its own rail, or the whole project with `solve_tree`. The board temperature
-  (`solve_tree` with `thermal`), the AC impedance (`solve_ac`) and the DC-DC ripple and coupled
-  noise (`solve_noise`) are solved from a project file only, with no result ids.
+  (`solve_tree` with `thermal`), the AC impedance (`solve_ac`), the DC-DC ripple and coupled
+  noise (`solve_noise`) and the tolerance stack-up (`solve_tolerance`) are solved from a
+  project file only, with no result ids.
 - **No maps of tree groups.** `solve_tree` returns tables and problems with their x/y, not
   result ids.
 - **What-ifs are settings only:** copper thickness, via plating and temperature, in `solve_rail`
