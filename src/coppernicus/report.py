@@ -213,6 +213,9 @@ class RailReport:
     # Its verdict as already judged (a power-tree group: the tree's own), instead of judging
     # ``problems`` against ``limits`` here.
     judged: Optional[Mapping[str, Any]] = None
+    # A power-tree group's loads as the tree judged them (:func:`tree_group_loads`): the
+    # loads table and the worst card show these instead of the copper drop of the rail.
+    tree_loads: Optional[Sequence[Mapping[str, Any]]] = None
 
 
 def _median_edge_mm(result: RailResult) -> float:
@@ -284,7 +287,8 @@ class ReportBuilder:
     def add_rail(self, result: RailResult, limits: Optional[Limits] = None,
                  problems: Optional[List[Problem]] = None, label: str = "",
                  notes: Sequence[str] = (), estimated: Optional[Sequence[str]] = None,
-                 judged: Optional[Mapping[str, Any]] = None) -> None:
+                 judged: Optional[Mapping[str, Any]] = None,
+                 tree_loads: Optional[Sequence[Mapping[str, Any]]] = None) -> None:
         """Sample and add one solved rail. ``limits`` are the user's (judged only against
         them); ``problems`` default to :func:`find_problems` with those limits. ``estimated``
         names the loads that are estimated draws; without it, the engine's name suffix
@@ -332,10 +336,22 @@ class ReportBuilder:
                               or not math.isfinite(result.drop_pct(t))
                               else bool(result.drop_pct(t) > limits.max_drop_pct)),
                   "pads": [list(p) for p in t.positions[:200]]} for t in result.loads]
+        if tree_loads is not None:          # a tree group: the loads as the tree judged them
+            terms = {t.name: t for t in result.loads}
+            loads = []
+            for row in tree_loads:
+                t = terms.get(row["name"])
+                loads.append({**row, "ref": t.ref if t else row["name"].split(" ")[0],
+                              "pins": len(t.pad_ids) if t else 0, "estimated": False,
+                              "v_min_v": t.v_min if t else None,
+                              "pads": [list(p) for p in t.positions[:200]] if t else []})
         sources = [{"name": t.name, "ref": t.ref, "pins": len(t.pad_ids), "current_a": t.current,
                     "v_v": t.v_max, "pads": [list(p) for p in t.positions[:200]]} for t in result.sources]
-        worst_load = max(loads, key=lambda d: d["drop_mv"] if math.isfinite(d["drop_mv"]) else -1,
-                         default=None)
+
+        def size(d):
+            x = d.get("drop_mv")
+            return x if x is not None and math.isfinite(x) else -math.inf
+        worst_load = max(loads, key=size, default=None)
         hot = [p for p in problems if p.kind == "hotspot"]
         top_hot = max(hot, key=lambda p: p.value, default=None)
         top_via = max(result.vias, key=lambda v: v.current, default=None)
@@ -344,8 +360,10 @@ class ReportBuilder:
         judged["verdict_text"] = verdict_text(judged)
         shift = -1 if result.is_shift() else 1      # the drop as the app shows it (shown_drop_at)
         worst_mv = shift * result.max_drop * 1e3
+        worst_keys = ("name", "drop_mv", "drop_pct") + (("nominal_v",) if tree_loads is not None else ())
         self.rails.append({
             "net": result.net, "label": label or result.net, "nets": list(result.nets),
+            "tree": tree_loads is not None,
             "v_ref_v": result.v_ref, "v_lo_v": v_lo, "v_hi_v": v_hi,
             # The drop as the app shows it (RailResult.shown_drop_at): drop = drop_sign · (v_ref
             # − V), toward 0 V on a negative rail, a rise above 0 V on a ground, and on a ground
@@ -355,7 +373,7 @@ class ReportBuilder:
             "drop_max_mv": max(float(result.shown_drop_at([v_lo, v_hi]).max()), 0.0) * 1e3, "cell_mm": cell,
             **judged,
             "worst": {
-                "load": worst_load and {k: worst_load[k] for k in ("name", "drop_mv", "drop_pct")},
+                "load": worst_load and {k: worst_load.get(k) for k in worst_keys},
                 "max_drop_mv": worst_mv,
                 "max_drop_pct": worst_mv / 10.0 / abs(result.v_ref) if result.v_ref else None,
                 "power_loss_w": result.power_loss,
@@ -373,7 +391,9 @@ class ReportBuilder:
             "problems": [{**problem_dict(p), "kind_label": kind_label(p)} for p in problems],
             "layers": layers,
             "busiest": busiest.name if busiest else None,
-            "assumptions": [*result.assumptions, *RAIL_CAVEATS,
+            # A tree group is solved with its ground return: the caveats of a rail solved
+            # alone do not apply to it.
+            "assumptions": [*result.assumptions, *(RAIL_CAVEATS if tree_loads is None else ()),
                             f"Maps are sampled on {cell:.4g} mm cells. The readout gives the values at "
                             "the centre of the cell under the pointer, from the full-resolution "
                             "solution; summary numbers and problems use the full mesh."],
@@ -468,7 +488,7 @@ def build_report(items: Sequence[RailReport], *, title: str = "", board_name: st
                           expected_layers=sum(len(i.result.layers) for i in items))
         for item in items:
             b.add_rail(item.result, item.limits, item.problems, item.label, item.notes,
-                       item.estimated, item.judged)
+                       item.estimated, item.judged, item.tree_loads)
         b.tree = tree
         return b
 
@@ -504,12 +524,32 @@ def write_tree_report(tree, doc: Mapping[str, Any], path, *, outline: Sequence[n
                   "failed": g.get("failed", 0), "not_judged": g.get("not_judged") or [],
                   "verdict_note": g.get("verdict_note", "")}
         items.append(RailReport(res, group_limits(tree, key)[0], find_tree_problems(tree, key, top=top),
-                                label=f"{key} ({res.kind} group)", judged=judged))
+                                label=f"{key} ({res.kind} group)", judged=judged,
+                                tree_loads=tree_group_loads(tree, key)))
     meta = {k: doc.get(k) for k in ("verdict", "verdict_note", "not_judged", "vrms", "loads", "links")}
     builder, text = build_report(items, title=title or f"Coppernicus power tree: {project or board_name}",
                                  board_name=board_name, outline=outline, project=project,
                                  settings=settings, budget_mb=budget_mb, tree=meta)
     return builder.write(path, text)
+
+
+def tree_group_loads(tree, key: str) -> List[Dict[str, Any]]:
+    """The loads of tree group ``key`` as the tree judged them: each load and each regulator
+    input the group feeds ("U2 (input)"), with the voltage across its supply (input) and ground
+    pins, its drop from its nominal voltage and the tree's verdict (``exceeds``: None when not
+    judged; ``status`` says why when it could not be)."""
+    def mv(v):
+        return None if v is None else v * 1e3
+    rows = [{"name": ld.name, "current_a": ld.current_a, "nominal_v": ld.nominal_v,
+             "v_across_v": ld.v_across_v, "v_worst_v": ld.v_worst_v, "drop_mv": mv(ld.drop_v),
+             "drop_pct": ld.drop_pct, "exceeds": None if ld.passed is None else not ld.passed,
+             "status": ld.status} for ld in tree.loads if ld.group == key]
+    rows += [{"name": f"{v.name} (input)", "current_a": v.i_in_a, "nominal_v": v.input_nominal_v,
+              "v_across_v": v.v_in_worst_v, "v_worst_v": v.v_in_worst_v, "drop_mv": mv(v.input_drop_v),
+              "drop_pct": v.input_drop_pct,
+              "exceeds": None if v.input_passed is None else not v.input_passed,
+              "status": v.input_status} for v in tree.vrms if v.input_net and v.input_group == key]
+    return rows
 
 
 def kind_label(p: Problem) -> str:

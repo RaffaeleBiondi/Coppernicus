@@ -608,7 +608,13 @@ The demo board's report is 2.2 MB, with 0.027 mm cells.
 
 Paths: `--html` alone writes `<out>/<project>_report.html`, where `<out>` defaults to
 `results/` next to the project file. `--html PATH` writes it elsewhere, and `--open` also opens
-it in the default browser.
+it in the default browser. A link ending in `#group=NET` (for example `report.html#group=+3V3`)
+opens that rail, or that group of a power-tree report, instead of the first.
+
+In the power-tree report (`solve --tree --html`), each group's loads table and worst-load card
+show what the tree judged: the voltage across each load's supply (or a regulator's input) and
+ground pins, its drop from its nominal voltage and the tree's verdict, each by its own net's
+limit. The map is still the copper drop below the group's source output, as its scale says.
 
 ## Without MCP: the CLI with `--json`
 
