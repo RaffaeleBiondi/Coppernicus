@@ -474,13 +474,17 @@ def _group_worst(gr: Dict[str, Any]) -> str:
 
 def tree_text(doc: Dict[str, Any]) -> List[str]:
     """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
+    # I max: a source's rated output current (PI_IMAX), shown, not judged; only when some VRM
+    # has one, so the table is unchanged otherwise.
+    rated = any(v.get("i_max_a") is not None for v in doc["vrms"])
     lines = ["VRMs (sources and regulators)",
              f"  {'name':<14} {'kind':<6} {'group':<10} {'V set':>8} {'V out':>9} {'I out':>9} "
-             f"{'V in':>9} {'I in':>9} {'P loss':>9}"]
+             + (f"{'I max':>9} " if rated else "") + f"{'V in':>9} {'I in':>9} {'P loss':>9}"]
     for v in doc["vrms"]:
         lines.append(f"  {v['name']:<14} {v['kind']:<6} {v['group']:<10} {_fmt(v['v_set_v'], 8, '.4g', 'V')} "
                      f"{_fmt(v['v_out_v'], 9, '.5f', 'V')} {_fmt(v['i_out_a'], 9, '.4f', 'A')} "
-                     f"{_fmt(v['v_in_v'], 9, '.5f', 'V')} {_fmt(v['i_in_a'], 9, '.4f', 'A')} "
+                     + (f"{_fmt(v.get('i_max_a'), 9, '.4f', 'A')} " if rated else "")
+                     + f"{_fmt(v['v_in_v'], 9, '.5f', 'V')} {_fmt(v['i_in_a'], 9, '.4f', 'A')} "
                      f"{_fmt(v['p_loss_w'], 9, '.1f', 'mW', 1e3)}"
                      + (f"  {v['regulation']}" if v["regulation"] else "") + _input_text(v))
     lines += ["Loads (the voltage across supply and ground pins)",
