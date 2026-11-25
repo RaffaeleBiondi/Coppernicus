@@ -323,6 +323,11 @@ class LoadReport:
     passed: Optional[bool] = None  # against its net's max_drop_pct; None without a limit
     net: str = ""                  # its supply net: the net its supply pins are on
     rail: str = ""                 # the rail it is listed in: another net when a net tie joins them
+    # Both worst pins, KiPI's v_low / v_high (Task 11; None where KiPI gives none): the lowest
+    # supply pin minus the highest ground pin, and the highest supply pin minus the lowest
+    # ground pin. v_worst_v is one of them, the side toward 0 V.
+    v_low_v: Optional[float] = None
+    v_high_v: Optional[float] = None
 
 
 @dataclass

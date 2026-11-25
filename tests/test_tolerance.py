@@ -124,3 +124,51 @@ def test_an_unknown_load_key_is_ignored_as_before():
     key leaves the load without that tolerance. Recorded, not changed (T11a)."""
     p = _project(load={"tol_pc": 5})
     assert p.rails[0].loads[0].tol_pct is None
+
+
+# ---------------------------------------------------------------------- the tree: worst pins
+
+def _pins_tree(sense=False, voltage=3.3, **load):
+    """``pins_board``: U1's three pins at 10, 12 and 14 mm along a strip fed by J1 at 0 mm;
+    with ``sense`` J1 holds its voltage at U1's middle pin (remote sense)."""
+    from coppernicus.engine import Board
+    from coppernicus.engine.synthetic import pins_board
+    from coppernicus.engine.tree import solve_project_tree
+    from coppernicus.project import Rail
+    kw = dict(sense_ref="U1", sense_pins=["2"], sense_net="VCC") if sense else {}
+    project = Project(rails=[Rail("VCC", sources=[Source("J1", voltage, ["1"], **kw)],
+                                  loads=[Load("U1", 3.0, ["1", "2", "3"], **load)])])
+    return project, solve_project_tree(Board(pins_board()), project)
+
+
+@pytest.fixture(scope="module")
+def pins_tree():
+    return _pins_tree()
+
+
+@pytest.fixture(scope="module")
+def sensed_tree():
+    return _pins_tree(sense=True)
+
+
+def test_a_load_report_keeps_both_worst_pins(pins_tree):
+    _, tree = pins_tree
+    (u1,) = tree.loads
+    # The far pin is the lowest (the worst, as before), the near pin the highest.
+    assert u1.v_low_v == u1.v_worst_v
+    assert u1.v_low_v < u1.v_across_v < u1.v_high_v < 3.3
+    assert u1.drop_v == pytest.approx(3.3 - u1.v_low_v, abs=1e-15)
+
+
+def test_a_remote_sensed_load_sits_above_and_below_its_nominal(sensed_tree):
+    _, tree = sensed_tree
+    (u1,) = tree.loads
+    # J1 holds the middle pin at 3.3 V: the near pin is above it, the far pin below.
+    assert u1.v_low_v < 3.3 < u1.v_high_v
+    assert u1.v_worst_v == u1.v_low_v
+
+
+def test_on_a_negative_rail_the_worst_pin_is_the_highest():
+    _, tree = _pins_tree(voltage=-3.3)
+    (u1,) = tree.loads
+    assert u1.v_worst_v == u1.v_high_v and -3.3 < u1.v_low_v < u1.v_high_v

@@ -276,9 +276,15 @@ def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
             v_supply_v=float(ld.v_supply), v_supply_min_v=float(ld.v_supply_min),
             v_ground_v=ld.v_ground, v_across_v=float(across), v_worst_v=float(v_worst),
             drop_v=float(drop), drop_pct=float(pct), status=ld.status,
-            net=pad_net.get(ld.name) or rail_of_load.get(ld.name, ""), rail=rail_of_load.get(ld.name, "")))
+            net=pad_net.get(ld.name) or rail_of_load.get(ld.name, ""), rail=rail_of_load.get(ld.name, ""),
+            v_low_v=_volts(ld.v_low), v_high_v=_volts(ld.v_high)))
     apply_limits(out, project)
     return out
+
+
+def _volts(x) -> Optional[float]:
+    """A KiPI load's v_low or v_high as a float; None where KiPI gives none."""
+    return None if x is None else float(x)
 
 
 def _judge_input(tree: TreeResult, v: VrmReport, s: Optional[Source]) -> None:
