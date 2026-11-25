@@ -753,7 +753,15 @@ class Session:
                             "or link it feeds; or PI_LOAD on a net that links and net ties join "
                             "to a net with a source (complete_through and the note say which). "
                             "Solves use them by default; a project-file rail of the same net is "
-                            "ignored unless it sets override_board_fields."],
+                            "ignored unless it sets override_board_fields.",
+                            *(["A capacitor has a model only with PI_ESR, PI_ESL, PI_DIELECTRIC and a "
+                               "capacitance (PI_C, else its footprint Value with its unit), and a "
+                               "class II dielectric PI_VRATED: never a default. Without one, missing "
+                               "says what it lacks; it is left out of the AC model (its probes not "
+                               "judged) and is a noise stand-in, unless the project file has a model "
+                               "for it. A complete one wins over the project file's model of that "
+                               "part unless that model sets override_board_fields."]
+                              if "capacitors" in listed else [])],
             "warnings": entry.warnings(),
         })
 
@@ -908,7 +916,14 @@ class Session:
                 "PI_LIMIT_DROP is placed on the rail's first source; if it is a chip's own supply "
                 "tolerance, it belongs in that chip's library symbol instead.",
                 "Checked by parsing the proposal back: it gives the project's rails, except what "
-                "not_expressed lists (remote sense, names, the other limits)."],
+                "not_expressed lists (remote sense, names, the other limits).",
+                *(["PI_ACC sits beside PI_SOURCE on the instance (an adjustable output's accuracy); "
+                   "for a fixed-output part, move both, as PI_VOUT and PI_ACC, to its library symbol. "
+                   "A capacitor model's fields (PI_C, PI_ESR, PI_ESL, PI_VRATED, PI_DIELECTRIC) go on "
+                   "each part's library symbol; PI_C may be dropped where the footprint Value gives "
+                   "the capacitance with its unit."]
+                  if any(k in p["library_symbol"] or k in p["schematic_instance"]
+                         for p in proposal["parts"] for k in ("PI_ACC", *BF.CAP_FIELDS)) else [])],
             "warnings": []})
 
     def _fields_warnings(self, project: Project, board: Path, nets: Sequence[str]) -> List[str]:

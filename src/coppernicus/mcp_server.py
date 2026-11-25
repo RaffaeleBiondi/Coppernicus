@@ -283,6 +283,10 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         PI_SOURCE_REF, PI_GND_REF, PI_LINK, PI_LINK_PINS...; KiCad board files only) and the rails and
         links they describe, each value with the field it came from. Library-only parts
         (PI_KIND, PI_EFF, PI_IQ, PI_VOUT, PI_IMAX, PI_FSW without PI_RAIL) make no rail.
+        A load's PI_TOL / PI_DC_TOL / PI_AC_TOL and a source's PI_ACC are in its rail entry, or
+        in part_tolerances without PI_RAIL; capacitors (PI_C, PI_ESR, PI_ESL, PI_VRATED,
+        PI_DIELECTRIC) gives each capacitor's model, or in missing what it lacks (no model:
+        its AC probes and noise victims are not judged).
         Nothing is solved; solve_project and solve_tree use them by default. If you copy these
         values into solve_rail, say they come from the KiCad fields."""
         return _call("board_fields", session.board_fields, board_id)
@@ -550,9 +554,10 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                            description="Or a solved rail (from solve_rail or solve_project).")] = None,
                        ) -> dict[str, Any]:
         """The KiCad PI_* field text that describes a project's rails and links (or one solved
-        rail), part by part: library_symbol fields (PI_KIND, PI_EFF, PI_IQ, PI_IMAX, PI_FSW)
+        rail), part by part: library_symbol fields (PI_KIND, PI_EFF, PI_IQ, PI_IMAX, PI_FSW;
+        a load's PI_TOL...; a capacitor model's PI_C, PI_ESR, PI_ESL, PI_VRATED, PI_DIELECTRIC)
         and schematic_instance fields (PI_RAIL, PI_SOURCE, PI_SOURCE_REF, PI_LOAD, PI_PINS,
-        PI_INPUT, PI_GND, PI_LINK, PI_LINK_PINS...), ';' between rails by position. Give the
+        PI_INPUT, PI_GND, PI_LINK, PI_LINK_PINS, PI_ACC...), ';' between rails by position. Give the
         user this text to paste; nothing
         is written to KiCad files. not_expressed lists what fields cannot carry."""
         return _call("propose_fields", session.propose_fields, project_path, result_id)

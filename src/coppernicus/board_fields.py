@@ -925,7 +925,7 @@ def field_caps(fields: Mapping[str, Mapping[str, str]], values: Optional[Mapping
         cap.model = CapModel(f"{ref} (KiCad)", capacitance, read["PI_ESL"], read["PI_ESR"], [ref],
                              rated_v=None if diel in NON_CERAMIC else rated, dielectric=diel)
 
-        def origin(name: str) -> str:
+        def origin(name: str, ref=ref, given=given) -> str:
             return FieldValue(ref, name, given[name]).origin()
         cap.values = [(si_text(capacitance, "F"), where),
                       (f"ESR {si_text(read['PI_ESR'], 'Ω')}", origin("PI_ESR")),
@@ -1776,12 +1776,15 @@ def _cap_fields(m: CapModel, ref: str, not_expressed: List[Dict[str, Any]]) -> O
         return None
     lacks = [k for k in ("capacitance_f", "esl_h", "esr_ohm") if not getattr(m, k) > 0]
     diel = _norm_dielectric(m.dielectric)
-    why = (f"{', '.join(lacks)} not entered" if lacks else
-           "no dielectric (the fields need PI_DIELECTRIC)" if not diel else
-           f"dielectric {m.dielectric} (PI_DIELECTRIC is one of {', '.join(DIELECTRICS)})"
-           if diel not in DIELECTRICS else
-           f"{diel} without rated_v (a class II capacitor needs PI_VRATED)"
-           if diel in CLASS_II and not m.rated_v else "")
+    why = ""
+    if lacks:
+        why = f"{', '.join(lacks)} not entered"
+    elif not diel:
+        why = "no dielectric (the fields need PI_DIELECTRIC)"
+    elif diel not in DIELECTRICS:
+        why = f"dielectric {m.dielectric} (PI_DIELECTRIC is one of {', '.join(DIELECTRICS)})"
+    elif diel in CLASS_II and not m.rated_v:
+        why = f"{diel} without rated_v (a class II capacitor needs PI_VRATED)"
     if why:
         unsaid(f"capacitor model {m.name}: {why}", "as KiCad fields it would have no model, so it is "
                "not proposed")
@@ -1815,12 +1818,14 @@ def _ground_fields(t, out: Dict[str, str], blocked: List[str], part: str = "") -
 def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None
             ) -> Dict[str, Any]:
     """The PI_* field text that describes ``project``'s rails and links, part by part, split
-    between the library symbol (``PI_KIND``, ``PI_EFF``, ``PI_IQ``: what the part is) and the
-    schematic instance (the rest: where it sits). A part on several rails gets one value per
-    rail, by position. What fields cannot carry is listed in ``not_expressed``; a rail that
-    needs it is not proposed (a wrong field would fail every run). The proposal is checked by
-    parsing it back with :func:`merge`. ``pad_nets``: reference → {pad: net}, to check that a
-    link's pins are all its pads on each net."""
+    between the library symbol (``PI_KIND``, ``PI_EFF``, ``PI_IQ``, a load's ``PI_TOL``..., a
+    capacitor model's ``PI_C``, ``PI_ESR``...: what the part is) and the schematic instance (the
+    rest, ``PI_ACC`` beside ``PI_SOURCE``: where it sits). A part on several rails gets one value
+    per rail, by position. What fields cannot carry is listed in ``not_expressed``; a rail that
+    needs it is not proposed (a wrong field would fail every run), nor a capacitor model the
+    fields would leave without a model. The proposal is checked by parsing it back with
+    :func:`merge`. ``pad_nets``: reference → {pad: net}, to check that a link's pins are all its
+    pads on each net."""
     not_expressed: List[Dict[str, Any]] = []
     staged: Dict[str, List[Tuple[str, Dict[str, str]]]] = {}       # rail net -> [(ref, fields)]
     for rail in project.rails:
@@ -1853,7 +1858,7 @@ def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]
             not_expressed.append({"rail": rail.net, "part": None, "what": "follow_net_ties: false",
                                   "reason": "it stays in the project file"})
         staged[rail.net] = positions
-    links: Dict[str, Dict[str, str]] = {}
+    links: Dict[str, Dict[str, str]] = {}    # the fields of parts outside rails: links, capacitors
     for k in project.links:
         pads = (pad_nets or {}).get(k.ref)
         sides = None                         # PI_LINK_PINS, when the link needs its sides named
@@ -1912,8 +1917,8 @@ def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]
 
 def _assemble(staged: Mapping[str, List[Tuple[str, Dict[str, str]]]],
               links: Mapping[str, Dict[str, str]]) -> List[Dict[str, Any]]:
-    """Per part: its positions joined by ';' (PI_RAIL in rail order), split into library
-    and instance fields."""
+    """Per part: its positions joined by ';' (PI_RAIL in rail order) and its fields outside
+    rails (``links``: PI_LINK, a capacitor's), split into library and instance fields."""
     by_ref: Dict[str, List[Tuple[str, Dict[str, str]]]] = {}
     for net, positions in staged.items():
         for ref, fields in positions:
@@ -1936,6 +1941,7 @@ def _assemble(staged: Mapping[str, List[Tuple[str, Dict[str, str]]]],
     return out
 
 
-__all__: Sequence[str] = ("FIELDS", "BoardFields", "FieldError", "FieldRail", "Merged", "Origin",
-                          "field_text", "propose",
-                          "apply", "field_links", "field_rails", "listing", "merge", "quantity")
+__all__: Sequence[str] = ("FIELDS", "BoardFields", "FieldCap", "FieldError", "FieldRail", "Merged",
+                          "Origin", "field_text", "propose", "apply", "dielectric", "field_caps",
+                          "field_links", "field_rails", "listing", "merge", "quantity", "tolerance",
+                          "tolerance_text")

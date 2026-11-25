@@ -404,7 +404,8 @@ def test_propose_round_trips_capacitor_models_tolerances_and_accuracy():
         got = caps[ref]
         assert got.capacitance_f == pytest.approx(m.capacitance_f, rel=1e-12)
         assert got.esl_h == pytest.approx(m.esl_h, rel=1e-12) and got.esr_ohm == pytest.approx(m.esr_ohm)
-        assert got.rated_v == m.rated_v and got.dielectric == ("C0G" if m.dielectric == "NP0" else m.dielectric)
+        assert got.rated_v == m.rated_v
+        assert got.dielectric == ("C0G" if m.dielectric == "NP0" else m.dielectric)
     rail = back.project.rail("VCC")
     u1 = rail.loads[0]
     assert (u1.tol_pct, u1.dc_tol_mv, u1.ac_tol_pct) == ((-5.0, 5.0), (-30.0, 20.0), (-2.0, 2.0))
