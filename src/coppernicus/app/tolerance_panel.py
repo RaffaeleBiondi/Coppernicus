@@ -7,7 +7,8 @@ An editor beside the table. The editor holds each load's tolerances (``tol``, ``
 number (± that) or a signed ``below, above`` as datasheets write it, empty is "not set" and 0 is
 a value; an edit builds a new terminal through its own checks (``dataclasses.replace``), so
 nothing the project file would refuse is written. A rail from the fields is editable too (a
-part's own PI_TOL / PI_ACC fields still win over an edit, as in every merge): the edit is held on the project's own rail of that net,
+part's own PI_TOL / PI_ACC fields still win over an edit, as in every merge): the edit is
+held on the project's own rail of that net,
 on the part of the same reference, which the merge carries by ref
 (:func:`coppernicus.board_fields.carried_by_ref`); with no rail of its own there, the
 project's rail becomes a copy of the fields' parts, so the merge sees nothing to warn about.
