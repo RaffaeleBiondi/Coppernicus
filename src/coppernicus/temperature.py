@@ -90,6 +90,7 @@ def judge(temp, limits, groups: Optional[Mapping[str, Any]] = None) -> ThermalVe
     options or ``{max_temp_c, max_rise_c}``): sets each layer row's ``passed`` and returns
     the verdict. ``groups`` (``TreeResult.groups``) tells which rows come from a group that
     did not converge."""
+    from coppernicus.problems import FAIL, INFO
     limits = thermal_limits(limits) or {}
     for row in temp.copper:
         row.passed = temp_passed(row.t_max_c, temp.ambient_c, limits)
@@ -102,11 +103,11 @@ def judge(temp, limits, groups: Optional[Mapping[str, Any]] = None) -> ThermalVe
                  f"{_pad_text(row.pad_ref, row.pad_number, row.pad_distance_mm)}")
         if fail:
             title += f" (limit {_limits_text(limits)}" + (f"; {unsettled})" if unsettled else ")")
-        problems.append({"severity": "FAIL" if fail else "INFO", "kind": "temperature", "title": title,
+        problems.append({"severity": FAIL if fail else INFO, "kind": "temperature", "title": title,
                          "layer": row.layer_name, "x_mm": row.x_mm, "y_mm": row.y_mm,
                          "t_max_c": row.t_max_c, "rise_c": row.rise_c, "group": row.group,
                          "nearest_pad": _pad(row.pad_ref, row.pad_number, row.pad_distance_mm)})
-    problems.sort(key=lambda p: (p["severity"] != "FAIL", -p["t_max_c"]))
+    problems.sort(key=lambda p: (p["severity"] != FAIL, -p["t_max_c"]))
     if not limits:
         return ThermalVerdict("not_judged", 0, {}, [], "No limits set: nothing is judged.", problems)
     failed = [r for r in temp.copper if r.passed is False]

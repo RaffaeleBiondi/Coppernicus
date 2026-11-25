@@ -89,6 +89,7 @@ from coppernicus.engine.synthetic import (  # noqa: E402
 from coppernicus.engine.thermal import engine_defaults, solve_kipi_reference  # noqa: E402
 from coppernicus.engine.tree import solve_project_tree  # noqa: E402
 from coppernicus.power_tree import tree_summary  # noqa: E402
+from coppernicus.problems import FAIL, INFO  # noqa: E402
 from coppernicus.project import Load, Rail, Source  # noqa: E402
 from coppernicus.temperature import (  # noqa: E402
     NOT_SOLVED,
@@ -323,7 +324,8 @@ def test_verdict_against_the_users_limits_only(demo_tree):
     apply_thermal_limits(tree, ThermalOptions(max_rise_c=(hottest - temp.ambient_c) - 0.01))
     v = thermal_verdict(tree)
     assert v.verdict == "fail" and v.failed == 1 and [r.passed for r in temp.copper] == [False, True]
-    assert "nearest pad J1.1" in v.note and v.problems[0]["severity"] == "FAIL"
+    assert "nearest pad J1.1" in v.note
+    assert [p["severity"] for p in v.problems] == [FAIL, INFO]       # as every other problem
     apply_thermal_limits(tree, ThermalOptions())
     v = thermal_verdict(tree)
     assert v.verdict == "not_judged" and not v.not_judged and v.note.startswith("No limits set")
