@@ -110,6 +110,15 @@ def rail_header_html(res: RailResult, limits: Limits, problems) -> str:
             f"{res.power_loss * 1e3:.3g} mW ({split}) · {verdict}")
 
 
+def saved_rail(rail: Rail) -> bool:
+    """Whether a project rail is written to the file: one picked but never set up is not. A
+    rail is kept for anything it says: sources or loads, a limit (a ground net's ground-rise
+    limit, or limits added to a rail from the KiCad fields), the net-tie option off, or
+    override_board_fields (an override emptied of its sources and loads too)."""
+    return bool(rail.sources or rail.loads or any(v is not None for v in vars(rail.limits).values())
+                or not rail.follow_net_ties or rail.override_board_fields)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         # One number format whatever the system locale: a dot for decimals and no group
@@ -538,17 +547,16 @@ class MainWindow(QMainWindow):
             self._save(Path(path))
 
     def _save(self, path: Path):
-        # Rails picked but never set up are not saved; a rail with only limits (a ground
-        # net's ground-rise limit) is, and so is the net-tie option of a KiCad fields' rail.
-        kicad = set(self.merged.from_fields)
-        self.project.rails = [r for r in self.project.rails if r.sources or r.loads
-                              or any(v is not None for v in vars(r.limits).values())
-                              or (r.net in kicad and not r.follow_net_ties)]
+        # A copy is written, with the rails the project says something about: the rails on
+        # screen stay the project's, an emptied one too (it is simply not written).
+        out = copy.copy(self.project)
+        out.rails = [r for r in self.project.rails if saved_rail(r)]
         try:
-            self.project.save(path)
+            out.save(path)
         except (OSError, ProjectError) as e:
             QMessageBox.critical(self, "Cannot save project", str(e))
             return
+        self.project.path, self.project.board = out.path, out.board     # as saved: relative to it
         self._remerge()                 # its path, board path and rails, as saved
         self.dirty = False
         self._update_title()

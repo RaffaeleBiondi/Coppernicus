@@ -478,6 +478,60 @@ def test_override_over_an_ignored_project_rail_asks_which_to_keep_and_not_when_i
     ''', tmp_path)
 
 
+# ---------------------------------------------------------------------- saving
+
+def test_saving_keeps_every_rail_the_project_says_something_about_and_edits_none(tmp_path):
+    run_in_window('''
+        # The net-tie option of a KiCad rail, saved with the fields turned off.
+        open_net(strip(TMP / "a"))
+        rp.follow_ties.setChecked(False)
+        window.use_fields_action.trigger()                       # off
+        window._save(TMP / "a" / "off.coppernicus.yml")
+        rails = Project.load(TMP / "a" / "off.coppernicus.yml").rails
+        assert rails == [Rail("VCC", follow_net_ties=False)], rails
+        assert window.project.rails == [Rail("VCC", follow_net_ties=False)], window.project.rails
+        window.use_fields_action.trigger()                       # on again: still not followed
+        assert window.merged.project.rail("VCC").follow_net_ties is False
+
+        # ... and while a field elsewhere cannot be used.
+        other = {**FIELDS, "U2": {"PI_RAIL": "OTHER", "PI_LOAD": "1A"}}
+        project = strip(TMP / "b", other, rails=[Rail("VCC", follow_net_ties=False)],
+                        extra_parts=[("U2", 20.0, 3.0, "OTHER")])
+        open_net(project)
+        assert window.fields_error, "a field elsewhere should not be usable"
+        rp.temp.setValue(25.0)                                   # any edit, then Save
+        window.save_project()
+        rails = Project.load(project).rails
+        assert rails == [Rail("VCC", follow_net_ties=False)], rails
+
+        # An override emptied of its sources and loads stays an override: saved, and shown.
+        open_net(strip(TMP / "c"))
+        rp.banner.button.click()                                 # Override in project
+        for table in (rp.sources, rp.loads):
+            while table.table.rowCount():
+                table.table.selectRow(0)
+                table.remove_row()
+        assert window.project.rails == [Rail("VCC", override_board_fields=True)], window.project.rails
+        window._save(TMP / "c" / "emptied.coppernicus.yml")
+        rails = Project.load(TMP / "c" / "emptied.coppernicus.yml").rails
+        assert rails == [Rail("VCC", override_board_fields=True)], rails
+        assert window.merged.origins["VCC"].source == "overridden", window.merged.origins["VCC"]
+        assert not rp.read_only and rp.banner.button.text() == "Use KiCad fields", rp.banner.button.text()
+        assert window._rail_draft is window.project.rail("VCC")     # the panel edits the project's rail
+
+        # A rail emptied by hand is not written, and saving leaves the one on screen alone.
+        open_net(strip(TMP / "d", fields={}, rails=[Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0)])]))
+        shown = window.project.rail("VCC")
+        for table in (rp.sources, rp.loads):
+            while table.table.rowCount():
+                table.table.selectRow(0)
+                table.remove_row()
+        window._save(TMP / "d" / "empty.coppernicus.yml")
+        assert Project.load(TMP / "d" / "empty.coppernicus.yml").rails == []
+        assert window.project.rails == [shown] and window._rail_draft is shown, window.project.rails
+    ''', tmp_path)
+
+
 # ---------------------------------------------------------------------- menus
 
 def test_use_kicad_fields_off_takes_every_rail_from_the_project_and_is_saved(tmp_path):
