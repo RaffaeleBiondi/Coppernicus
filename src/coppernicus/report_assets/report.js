@@ -22,7 +22,6 @@ function xy(x, y) { return `(${fix(x, 2)}, ${fix(y, 2)}) mm`; }
 const S = { rail: 0, layer: 0, field: "drop", view: null, mark: null, drag: null,
   show: { sources: true, loads: true, hotspots: true } };
 const FIELDS = [["drop", "Drop"], ["voltage", "Voltage"], ["current", "Current density"]];
-const KINDS = { rise: "ground rise", return: "ground return" };   // other kinds read as they are
 const data = new Map(), images = new Map(), luts = new Map();
 const canvas = $("map"), ctx = canvas.getContext("2d");
 const R = () => M.rails[S.rail], L = () => R().layers[S.layer];
@@ -225,7 +224,7 @@ function panels() {
     `${w.hotspot.layer} at ${xy(w.hotspot.x_mm, w.hotspot.y_mm)}, over ${sig(w.hotspot.area_mm2, 3)} mm²; peak ${sig(w.hotspot.peak_j_a_mm2, 4)} A/mm² is mesh-dependent at sharp corners`));
   if (w.via) cards.append(card("Most loaded via", `${sig(w.via.current_a, 4)} A`, `at ${xy(w.via.x_mm, w.via.y_mm)}, drill ${sig(w.via.drill_mm, 3)} mm`));
   table("problems", [["", ""], ["Kind", ""], ["Problem", ""], ["Layer", ""], ["Where", ""]],
-    rail.problems.map((p) => [[p.severity === "fail" ? el("span", { class: "badge fail" }, "FAIL") : "", ""], [KINDS[p.kind] || p.kind, ""],
+    rail.problems.map((p) => [[p.severity === "fail" ? el("span", { class: "badge fail" }, "FAIL") : "", ""], [p.kind_label || p.kind, ""],
       [el("span", {}, p.title, el("br"), el("span", { class: "muted small" }, p.detail)), ""], [p.layer || "–", ""], [xy(p.x_mm, p.y_mm), ""]]),
     (n) => { const p = rail.problems[n];
       if (p.layer) { const li = rail.layers.findIndex((l) => l.name === p.layer); if (li >= 0) setLayer(li, false); }

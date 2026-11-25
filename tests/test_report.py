@@ -191,3 +191,18 @@ def test_the_verdict_sentence_names_failures_and_what_was_not_judged(tmp_path):
     assert "Not judged: U1 (max_drop_pct): 0 V nominal" in text
     none = write_report([RailReport(res)], None, tmp_path / "none.html", outline=board.outline())
     assert parse(none)[1]["rails"][0]["verdict_text"].startswith("Not judged: no limits were set")
+
+
+@pytest.mark.parametrize("title, label", [("GND: largest ground shift -5.00 mV on F.Cu", "ground shift"),
+                                          ("GND: largest ground rise 5.00 mV on F.Cu", "ground rise")])
+def test_the_kind_label_follows_the_problems_own_words(tmp_path, title, label):
+    """A rise problem below 0 V is a ground shift: the page labels it from its own title,
+    not from a fixed "ground rise"."""
+    from coppernicus.problems import Problem
+    board = Board(strip_board())
+    res = solve_rail(board, Rail(Strip.NET, sources=[Source("J1", 0.0)], loads=[Load("U1", 1.0)]))
+    problem = Problem("info", "rise", title, "detail", 5.0, 1.0, 0.0, "F.Cu", {"rise_mv": 5.0})
+    path = write_report([RailReport(res, problems=[problem])], None, tmp_path / "k.html",
+                        outline=board.outline())
+    [p] = parse(path)[1]["rails"][0]["problems"]
+    assert p["kind_label"] == label

@@ -365,7 +365,7 @@ class ReportBuilder:
             },
             "loss_breakdown_w": result.loss_breakdown(),
             "loads": loads, "sources": sources,
-            "problems": [problem_dict(p) for p in problems],
+            "problems": [{**problem_dict(p), "kind_label": kind_label(p)} for p in problems],
             "layers": layers,
             "busiest": busiest.name if busiest else None,
             "assumptions": [*result.assumptions, *RAIL_CAVEATS,
@@ -505,6 +505,14 @@ def write_tree_report(tree, doc: Mapping[str, Any], path, *, outline: Sequence[n
                                  board_name=board_name, outline=outline, project=project,
                                  settings=settings, budget_mb=budget_mb, tree=meta)
     return builder.write(path, text)
+
+
+def kind_label(p: Problem) -> str:
+    """The word for a problem's kind on the page, from its own title: a ground's "rise" is a
+    "ground shift" when its title says so (a ground below 0 V)."""
+    if p.kind == "rise":
+        return "ground shift" if "shift" in p.title.lower() else "ground rise"
+    return {"return": "ground return"}.get(p.kind, p.kind)
 
 
 def verdict_text(judged: Mapping[str, Any]) -> str:

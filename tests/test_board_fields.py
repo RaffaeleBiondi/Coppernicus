@@ -241,6 +241,10 @@ def test_a_project_link_on_a_field_link_part_is_replaced_with_a_warning():
     merged = merge(project, CHAIN_FIELDS, CHAIN_PADS)
     assert merged.project.links[0].resistance_ohm == pytest.approx(0.05)
     assert any("project file link FB1 ignored" in w and "0.1" in w for w in merged.warnings)
+    # Per net, structured, under both nets of the link (+3V3_F is no rail of its own).
+    [on_33] = merged.link_warnings["+3V3"]
+    assert merged.link_warnings["+3V3_F"] == [on_33] and "FB1" in on_33
+    assert "VIN" not in merged.link_warnings
 
 
 def test_merge_never_changes_the_loaded_project():

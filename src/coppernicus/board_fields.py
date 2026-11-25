@@ -399,6 +399,8 @@ class Merged:
     origins: Dict[str, Origin] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     link_notes: List[str] = field(default_factory=list)
+    # The warnings about each link, under both of its nets (a net need not be a rail).
+    link_warnings: Dict[str, List[str]] = field(default_factory=dict)
 
     @property
     def from_fields(self) -> List[str]:
@@ -460,9 +462,11 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
             out.links.append(link)
         else:
             if not _same_link(old, link):
-                merged.warnings.append(f"project file link {link.ref} ignored: KiCad field PI_LINK "
-                                       f"defines it (KiCad {_link_text(link)}, project "
-                                       f"{_link_text(old)})")
+                warning = (f"project file link {link.ref} ignored: KiCad field PI_LINK defines it "
+                           f"(KiCad {_link_text(link)}, project {_link_text(old)})")
+                merged.warnings.append(warning)
+                for net in dict.fromkeys((link.net_a, link.net_b, old.net_a, old.net_b)):
+                    merged.link_warnings.setdefault(net, []).append(warning)
             out.links[out.links.index(old)] = link
         merged.link_notes.append(note)
         for net in (link.net_a, link.net_b):
