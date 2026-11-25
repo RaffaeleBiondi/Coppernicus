@@ -370,3 +370,182 @@ group is always a rise (`RailResult.sign` is −1 there).
 | Service: rail summary `drop_sign`, layers' `max_drop_mv`, `probe` `drop_mv` / `drop_pct` | `drop_at`. `v_min_v` / `v_max_v` stay the lowest and highest pin: on a negative rail or at 0 V the worst pin is `v_max_v`. |
 | Report: meta `drop_sign`, `drop_unit`, `drop_max_mv`, layers' `max_drop_mv`; `report.js` lut, readout, colour bar, worst card | the same formula in JS (`dropSign(rail)`; reports written before the field read +1). |
 | Tree: a 0 V rail group (no ground pins named) | `drop_sign` +1, and a warning in `tree.warnings` and the group's notes: "… is solved as a 0 V rail (no ground pins named): KiPI draws its loads' current out of it, so its voltages are shown with the opposite sign to a ground's; name ground pins on it to solve it as a ground." |
+
+---
+
+## Task 8: electro-thermal board temperature (`kipi/dc/thermal/cosim.py`, `kipi/dc/thermal/model.py`)
+
+Code: `coppernicus.engine.tree.solve_project_tree(board, project, progress=None, cancelled=…,
+thermal=None)`. `thermal=None` follows `project.thermal.enabled`; `True` forces the
+electro-thermal solve, `False` the plain tree. With it, `coppernicus.engine.thermal` solves
+the tree and the result carries `TreeResult.thermal` (a `BoardTemperature`). Without it the
+tree is solved exactly as in Task 7: the thermal-off `tree_summary` of the demo and
+power-chain examples is byte-identical before and after this task. One rail (F5, `solve
+--rail`) is never heated; with `thermal.enabled` set its result says "the board temperature is
+solved with the power tree only (Ctrl+T / solve --tree)".
+
+### `ThermalOptions` → `ThermalSettings` (model.py:84-98)
+
+| Coppernicus (`thermal:` block) | KiPI | Default (KiPI's) | Checked on load |
+|---|---|---|---|
+| `enabled` | `enabled` | `false` | true or false |
+| `ambient_c` | `ambient_c` | 25 °C | finite |
+| `iterations` | `iterations` | 3 | a whole number ≥ 1 (KiPI clamps; we refuse) |
+| `airflow_m_s` | `airflow_m_s` | 0 m/s | finite, ≥ 0 |
+| `grid_mm` | `grid_mm` | 0 = automatic (max(span/250, 0.2 mm), model.py:182) | finite, ≥ 0; no floor |
+| `load_heat` | `load_power` | `false` | true or false |
+| `max_temp_c`, `max_rise_c` | not passed (judged by Coppernicus) | none | finite or empty |
+| `regulator_heat` | — (see below) | `output_pads` | `output_pads` or `part_pads` |
+| — | `edges` | none | not exposed |
+
+The block is written only with the keys not at their default (`thermal:` is omitted while
+all are), so older files load and save unchanged. Unknown keys raise `ProjectError`.
+
+### The loop: a thin copy of `solve_electrothermal` (cosim.py:232-280)
+
+`engine.thermal._electrothermal` repeats KiPI's loop with KiPI's own pieces: one
+`BoardThermalModel` (grid, conductances, one factorization), every cell at `ambient_c`, then
+`iterations` passes of `solve_tree(temperature=model.sampler(temps), mesh_cache, factor_cache)`
+→ heat (`heat_sources`, or `_Heat` + `_copper_heat` for `part_pads`) → `model.deposit` →
+`model.solve`, with KiPI's history entry per pass. Iteration 1 therefore solves the copper at
+the ambient, not at 20 °C; each later one at the temperature the last gave, each layer its own
+(`kipi.core.temperature.at` with `on_layers`). It differs from KiPI's function in three ways
+only:
+- it keeps iteration 1's load drops: the "drop at the ambient" baseline, with no extra solve;
+- `regulator_heat: part_pads` places the regulators' conversion loss differently (below);
+- its settling warning is Coppernicus's own (in `BoardTemperature.warnings`).
+
+**Drift test** (`tests/test_thermal.py::test_our_loop_is_bit_identical_to_kipis`): with
+`output_pads`, the temperatures, the history and every load drop equal KiPI's own
+`solve_electrothermal` to the last bit (`==`, NaN masks equal), on the demo board and on the
+power chain. `engine.thermal.solve_kipi_reference` runs KiPI's function through the same
+conversion for it. A KiPI upgrade that changes the loop fails this test.
+
+`copper_temp_c` is not read by the electro-thermal solve (the copper's temperature comes from
+the loop); the assumption "Copper at … °C" is replaced by the electro-thermal one, and a line
+says `copper_temp_c` is not used when it is not 20 °C. `copper_thickness_mm` restacks the board
+as for every solve, and the heat model reads the restacked thickness. `via_plating_um` (KiPI's
+`via_rules`) sizes the barrels that carry heat between layers as well as current.
+
+### Where the heat goes (cosim.py:190-229)
+
+- Copper losses: each triangle's loss at its centroid, on its own layer.
+- Via and plated-hole barrels: their loss shared by the layers the barrel spans.
+- Links (`DcLink`): their loss spread evenly over the link's pads.
+- Regulators: each phase's conversion loss (input − output power), split evenly over pads,
+  each pad's share over its copper layers, as a point at the pad centre deposited into the one
+  grid cell that holds it (model.py:348-375; a point just outside the board goes to the
+  nearest inside cell). `regulator_heat` chooses the pads:
+  - `output_pads` (default): KiPI's placement, the phase's output pins (cosim.py:205-214);
+  - `part_pads`: every copper pad of the regulator's part, all nets.
+- Loads (`load_heat: true`): each load's power, Σ pin current × pin voltage, at its pins.
+
+The package itself (its body, thermal pad, junction-to-board resistance, its own convection)
+is not modelled under either option. With `output_pads` the temperatures at the output pads
+are likely overestimated (an upper-bound reading); with `part_pads` the split is even, so
+individual pads can be over- or under-estimated: on a test board the grid peak rose 11 % and
+moved to the regulator's GND pad, copper of no solved net.
+
+### Results (`results.py`)
+
+- `TemperatureMap`: one per copper layer, `x_mm`, `y_mm` (cell centres) and `t_c` (ny, nx)
+  °C, NaN outside the board; `peak_c`, `hottest()`, `at(x, y)` (the cell holding the point).
+- `LayerTemperature`: KiPI's `layer_temps` row (report.py:94-119): the hottest **solved
+  copper** of a layer (the temperature read at its mesh nodes), its rise over the ambient,
+  where, its group, `passed`, and the nearest pad (`pad_ref`, `pad_number`,
+  `pad_distance_mm`: the distance in the plane from the point to the pad's copper on any
+  layer, 0 on the pad; the nearest centre on a tie). Always given, with no threshold.
+- `BoardTemperature`: the maps, the rows, the grid peak (any layer; shown, never judged) with
+  its nearest pad, `ambient_c`, `airflow_m_s`, `h_w_m2k` (KiPI's `h_w_mm2_k()·1e6`), the cell
+  size and count, `iterations`, `settled` (KiPI's rule, cosim.py:276: the last iteration
+  changed no cell by more than 5 % of the peak rise; `None` after one iteration), `history`
+  (`iteration`, `heat_w`, `t_max_c`, `dt_max_c`), `heat_w` and `heat_by_kind_w`, the load
+  drops at the ambient and electro-thermal, `regulator_heat`, `load_heat`, assumptions and
+  warnings.
+- `TreeResult.thermal` (`None` without the solve) and `TreeResult.thermal_limits`
+  (`{max_temp_c, max_rise_c}`, those set; `None` when none is).
+
+### Verdict (coordinator's rulings; `coppernicus.temperature`)
+
+Only the user's `max_temp_c` / `max_rise_c` judge, by KiPI's rule (`temp_passed`,
+model.py:114-120), and only the solved-copper rows. `apply_thermal_limits(tree, options)`
+re-judges without a solve.
+
+| Board temperature | When |
+|---|---|
+| `fail` | a row exceeds a limit, settled or not; when not settled the text says "not settled: last change X °C" |
+| `not_judged` | no row exceeds, and: the solve did not settle ("last change X °C over a Y °C rise: run more iterations"), ran one iteration ("one iteration: settling not checked"), a row's group did not converge, or there is no solved copper. One entry per limit set: `{item: "board temperature", net: "", limit: "max_temp_c" / "max_rise_c", reason}` |
+| `not_judged` | limits set but the tree was solved without the temperature: "board temperature not solved (thermal disabled in the project)" |
+| `not_judged` | no limit set (no entry: nothing is judged) |
+| `pass` | every row judged and within the limits |
+
+When no row exceeds a limit but the grid peak does (for instance on copper of a net that is
+not solved), the verdict note names the peak, its nearest pad, and says it is not judged.
+
+The overall power-tree verdict (`power_tree.tree_verdicts`) takes the board temperature as one
+more group: fail wins, then a not-judged item from a limit set, then pass. `tree_summary`
+merges its not-judged entries and failed rows into the top-level `not_judged` and `failed`,
+and names the thermal limits in `verdict_note`; `solve` exits 1 on fail, 3 when a limit set
+could not judge. The app's verdict header (`main_window._tree_verdict`) still counts groups
+only: the Temperature tab (task 8b) adds the board temperature there.
+
+### Summary (`tree_summary(tree)["thermal"]`, present only when the temperature was solved)
+
+| Group | Keys |
+|---|---|
+| Verdict | `verdict`, `verdict_note`, `not_judged`, `limits`, `failed`, `problems` (one per layer row: `severity`, `kind: "temperature"`, `title`, `layer`, `x_mm`, `y_mm`, `t_max_c`, `rise_c`, `group`, `nearest_pad`) |
+| Solve | `ambient_c`, `airflow_m_s`, `h_w_m2k`, `grid_mm`, `grid_nx`, `grid_ny`, `grid_cells`, `iterations`, `settled`, `history`, `load_heat`, `regulator_heat` |
+| Heat and peak | `heat_w`, `heat_by_kind_w`, `peak_c`, `peak_rise_c`, `peak_x_mm`, `peak_y_mm`, `peak_layer`, `peak_nearest_pad` |
+| Rows | `layers: [{layer, t_max_c, rise_c, x_mm, y_mm, group, exceeds_limit, nearest_pad}]`; `loads: [{name, group, drop_ambient_mv, drop_mv, change_pct}]` |
+| Notes | `assumptions`, `warnings` |
+
+`nearest_pad` is `{ref, pad, distance_mm}`. No arrays; NaN becomes `null`.
+
+### Command line
+
+`coppernicus solve PROJECT --thermal` (alone, or with `--tree` in either order) solves the
+power tree with the board temperature; `--tree` alone does too when the project enables it.
+The text output adds a "Board temperature" block (grid peak with its nearest pad, history,
+heat by kind, one row per layer with its nearest pad and verdict, load drops at the ambient
+→ electro-thermal, the verdict, the thermal assumptions). One PNG per copper layer is written
+next to the summary (`<project>_temperature_<layer>.png`, every layer on one scale from the
+ambient to the board's peak), unless `--no-maps`. `--rail` is refused, as with `--tree`.
+
+Measured on `examples/demo/demo-thermal.coppernicus.yml` (the demo rail at 8 + 6 + 1.2 A,
+automatic 250 × 167 grid, 3 iterations, macOS arm64, SuperLU): grid peak 42.31 °C on J1.1;
+hottest copper F.Cu 42.29 °C (rise 17.29 °C, on J1.1), B.Cu 41.77 °C; settled (last change
+0.05 °C); U1's drop 39.156 mV at the ambient, 41.354 mV electro-thermal; `max_rise_c` 15 →
+fail. About 0.7 s for the solve.
+
+### Assumptions (in `BoardTemperature.assumptions`)
+
+Steady state, ambient, airflow and h per face (KiPI's 10 + 3.8·v W/m²K); the iterations and
+ρ(T) with the last change and whether it settled (also in the tree's assumptions, in place of
+the copper-temperature line); the heat counted, where the regulators' loss goes for the chosen
+`regulator_heat`, and whether the loads' own power is; a line per regulator heat source with
+the overestimate (`output_pads`) or the even split (`part_pads`) caveat, when a regulator
+dissipates; the grid (cells, size, count inside the board; a cell is all copper or none, read
+at its centre; every net's copper spreads heat, k = 390 W/m·K); one line per laminate, with
+what it was taken as (an unrecognized name: FR4 core, 0.8 / 0.3 W/m·K); the solder mask and
+silkscreen, when the stackup has them; the board shape (outline, or the copper's bounding box
+plus 1 mm); what is not modelled (heat sinks, enclosures, mounting, edge clamps; packages, no
+junction temperature; transients); what is judged (above).
+
+### Known limitations
+
+- **Laminate names.** KiPI recognizes a laminate by a regular expression on its material name
+  (materials.py:33-51); the prepreg patterns need a word boundary (materials.py:47-48), so a
+  prepreg name with a prefix glued to it falls back to FR4 core (0.8 / 0.3 W/m·K in place of
+  prepreg's 0.6 / 0.25). The assumption line names every laminate and what it was taken as.
+  Not reported upstream (coordinator's ruling); no override is exposed.
+- **Regulator heat is a point deposit.** Each pad's share of a regulator's loss lands in the
+  single grid cell holding the pad centre, with no package model: the temperature there grows
+  slowly as the cell shrinks (+5-8 % from the automatic grid down to 0.05-0.1 mm on the test
+  boards), while the hottest solved copper per layer moves less than 2 %. Read regulator-pad
+  temperatures as rough.
+- **The grid peak is not judged.** It can sit on laminate or on copper of a net that is not
+  solved (a regulator's GND pad with `part_pads`); the rows judge solved copper only, and the
+  verdict note names a peak that exceeds a limit the rows do not.
+- **No cancel inside the factorization.** KiPI checks for cancel once per iteration and inside
+  the tree solve, not during the thermal model's one factorization (most of the time on a large
+  board).
