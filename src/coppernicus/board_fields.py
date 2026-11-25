@@ -35,7 +35,12 @@ Fields, on the part (every one optional; ``PI_RAIL`` is required with any per-ra
 ``PI_FSW``          ``1.2MHz``   A switcher's fixed switching frequency (stored, not used yet).
 ``PI_SOURCE_REF``   ``L1``       The part whose pads hold the rail (an external-inductor
                                  buck's inductor); ``PI_PINS`` then selects that part's pads,
-                                 while input, ground and kind stay on this part.
+                                 while input, ground and kind stay on this part. A list,
+                                 ``BT1,BT5``: the pads of every listed part, one terminal at
+                                 the source voltage (cell holders in parallel); ``PI_PINS``
+                                 then takes ``REF.PAD`` entries, or a pad for every listed part.
+``PI_GND_REF``      ``BT4``      The part whose pads are the source's (or load's) ground pins
+                                 on ``PI_GND``, when not this part (one part).
 ==================  ===========  ===========================================================
 
 **Library and instance.** ``PI_KIND``, ``PI_EFF``, ``PI_IQ``, ``PI_VOUT``, ``PI_IMAX`` and
@@ -78,11 +83,12 @@ PREFIX = "PI_"
 LIBRARY_FIELDS = ("PI_KIND", "PI_EFF", "PI_IQ", "PI_VOUT", "PI_IMAX", "PI_FSW")
 # Where it sits (the schematic instance): one value per rail of PI_RAIL.
 RAIL_FIELDS = ("PI_SOURCE", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP", "PI_INPUT", "PI_INPUT_PINS",
-               "PI_GND", "PI_GND_PINS", "PI_SOURCE_REF")
+               "PI_GND", "PI_GND_PINS", "PI_SOURCE_REF", "PI_GND_REF")
 PER_RAIL = (*RAIL_FIELDS, *LIBRARY_FIELDS)
 FIELDS = ("PI_RAIL", *PER_RAIL, "PI_LINK", "PI_LINK_PINS")
 INSTANCE_FIELDS = ("PI_RAIL", "PI_SOURCE", "PI_SOURCE_REF", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP",
-                   "PI_INPUT", "PI_INPUT_PINS", "PI_GND", "PI_GND_PINS", "PI_LINK", "PI_LINK_PINS")
+                   "PI_INPUT", "PI_INPUT_PINS", "PI_GND", "PI_GND_PINS", "PI_GND_REF", "PI_LINK",
+                   "PI_LINK_PINS")
 SOURCE_ONLY = ("PI_INPUT", "PI_INPUT_PINS", "PI_SOURCE_REF")
 _OHM = ("Ohm", "Ω", "Ω")                    # Ohm, Greek capital omega, the Ohm sign
 _MICRO = ("u", "µ", "μ")                     # u, the micro sign, Greek small mu
@@ -346,22 +352,32 @@ def field_rails(fields: Mapping[str, Mapping[str, str]],
         if net in rails and any(t.term.ref == ref for t in rails[net].loads):
             raise FieldError(f"{ref}: PI_LOAD on {net} and PI_INPUT {net}: its input current would "
                              f"be counted twice; remove the PI_LOAD on {net}, PI_INPUT draws it")
-    if pad_nets:                          # a PI_SOURCE_REF part holds the rail on its pads
+    if pad_nets:            # the parts PI_SOURCE_REF and PI_GND_REF name have pads where they hold
         for net, fr in rails.items():
             for t in fr.sources:
-                if t.part == t.term.ref:
-                    continue
-                pads = pad_nets.get(t.term.ref)
-                if pads is None:
-                    raise FieldError(f"{t.part}: PI_SOURCE_REF {t.term.ref}: no part {t.term.ref} on "
-                                     "the board; name the part whose pads hold the rail (e.g. the "
-                                     "inductor of an external-inductor buck)")
-                if net not in pads.values():
-                    on = ", ".join(sorted({n for n in pads.values() if n})) or "no net"
-                    raise FieldError(f"{t.part}: PI_SOURCE_REF {t.term.ref} has no pad on {net} (its "
-                                     f"pads are on {on}); name the part whose pads hold {net}, e.g. "
-                                     "the inductor's output pad")
+                held = ([t.term.ref] if t.part != t.term.ref else []) + list(dict.fromkeys(
+                    e.split(".", 1)[0] for e in (t.term.extra_pins or ())))
+                for other in held:
+                    _check_part(t.part, "PI_SOURCE_REF", other, net, pad_nets,
+                                "name the part whose pads hold the rail (e.g. the inductor of an "
+                                "external-inductor buck, or every cell holder)")
+            for t in fr.sources + fr.loads:
+                gref = t.term.ground_ref
+                if gref and gref != t.part and any(fv.field == "PI_GND_REF" for _, fv in t.values):
+                    _check_part(t.part, "PI_GND_REF", gref, t.term.ground_net, pad_nets,
+                                "name the part whose pads are the ground pins")
     return rails
+
+
+def _check_part(owner: str, field_name: str, ref: str, net: str,
+                pad_nets: Mapping[str, Mapping[str, str]], hint: str) -> None:
+    pads = pad_nets.get(ref)
+    if pads is None:
+        raise FieldError(f"{owner}: {field_name} {ref}: no part {ref} on the board; {hint}")
+    if net not in pads.values():
+        on = ", ".join(sorted({n for n in pads.values() if n})) or "no net"
+        raise FieldError(f"{owner}: {field_name} {ref} has no pad on {net} (its pads are on {on}); "
+                         f"{hint}")
 
 
 def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=frozenset()
@@ -376,7 +392,7 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=f
     if not src and not load and not vout:
         raise FieldError(f"{ref}: rail {net} (PI_RAIL position {i + 1}) has neither PI_SOURCE nor "
                          "PI_LOAD")
-    for name, of in (("PI_INPUT_PINS", "PI_INPUT"), ("PI_GND_PINS", "PI_GND")):
+    for name, of in (("PI_INPUT_PINS", "PI_INPUT"), ("PI_GND_PINS", "PI_GND"), ("PI_GND_REF", "PI_GND")):
         if v[name] and not v[of]:
             raise FieldError(f"{ref}: {name} without {of} for rail {net}: set {of} to the net")
     values: List[Tuple[str, FieldValue]] = []
@@ -390,8 +406,9 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=f
         current = quantity(ref, "PI_LOAD", load)
         values.append((f"{current:g} A", FieldValue(ref, "PI_LOAD", load)))
         pins = _pins(ref, v["PI_PINS"], "PI_PINS", values)
-        ground, gpins = _ground(ref, v, values)
-        term: Union[Source, Load] = Load(ref, current, pins, ground_pins=gpins, ground_net=ground)
+        ground, gpins, gref = _ground(ref, v, values)
+        term: Union[Source, Load] = Load(ref, current, pins, ground_ref=gref if gref != ref else "",
+                                         ground_pins=gpins, ground_net=ground)
     else:
         if src:
             voltage = quantity(ref, "PI_SOURCE", src)
@@ -403,10 +420,19 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=f
         else:
             voltage = quantity(ref, "PI_VOUT", vout)
             values.append((f"{voltage:g} V", FieldValue(ref, "PI_VOUT", vout)))
-        out_ref = v["PI_SOURCE_REF"] if v["PI_SOURCE_REF"] and v["PI_SOURCE_REF"] != ref else ""
-        if out_ref:
-            values.append((f"output on {out_ref}", FieldValue(ref, "PI_SOURCE_REF", out_ref)))
-        pins = _pins(ref, v["PI_PINS"], "PI_PINS", values)
+        # PI_SOURCE_REF: the part(s) whose pads hold the rail; this part first when listed.
+        refs = list(dict.fromkeys(r.strip() for r in (v["PI_SOURCE_REF"] or "").split(",") if r.strip()))
+        if ref in refs:
+            refs.remove(ref)
+            refs.insert(0, ref)
+        out_ref = refs[0] if refs and refs[0] != ref else ""
+        if refs and refs != [ref]:
+            values.append((f"output on {', '.join(refs)}",
+                           FieldValue(ref, "PI_SOURCE_REF", v["PI_SOURCE_REF"])))
+        if len(refs) > 1:
+            pins, extra = _terminal_pins(ref, refs, v["PI_PINS"], values)
+        else:
+            pins, extra = _pins(ref, v["PI_PINS"], "PI_PINS", values), None
         kind = (v["PI_KIND"] or "source").lower()
         if kind not in SOURCE_KINDS:
             raise FieldError(f'{ref}: PI_KIND = "{v["PI_KIND"]}": PI_KIND is one of '
@@ -448,13 +474,17 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=f
             fsw = quantity(ref, "PI_FSW", v["PI_FSW"])
             values.append((f"f_sw {fsw:g} Hz (stored, not used yet)",
                            FieldValue(ref, "PI_FSW", v["PI_FSW"])))
-        ground, gpins = _ground(ref, v, values)
-        # PI_SOURCE_REF: the rail is held at that part's pads; input and ground stay this part's.
-        term = Source(out_ref or ref, voltage, pins, name=ref if out_ref else "", kind=kind,
+        ground, gpins, gref = _ground(ref, v, values)
+        # PI_SOURCE_REF: the rail is held at that part's pads; input and ground stay this part's,
+        # unless PI_GND_REF names the part with the ground pins.
+        anchor = out_ref or ref
+        gref = gref or (ref if out_ref and ground else "")
+        term = Source(anchor, voltage, pins, name=ref if out_ref else "", kind=kind,
                       efficiency=efficiency, quiescent_a=iq,
                       input_ref=ref if out_ref and v["PI_INPUT"] else "", input_pins=ipins,
-                      input_net=v["PI_INPUT"] or "", ground_ref=ref if out_ref and ground else "",
-                      ground_pins=gpins, ground_net=ground, current_limit_a=imax, fsw_hz=fsw)
+                      input_net=v["PI_INPUT"] or "", ground_ref=gref if gref != anchor else "",
+                      ground_pins=gpins, ground_net=ground, current_limit_a=imax, fsw_hz=fsw,
+                      extra_pins=extra)
         if out_ref:
             return _limited(FieldTerm(term, values, owner=ref, warnings=warnings), ref, v)
     return _limited(FieldTerm(term, values, warnings=warnings), ref, v)
@@ -470,11 +500,42 @@ def _limited(term: FieldTerm, ref: str, v: Mapping[str, Optional[str]]
     return term, limit
 
 
-def _ground(ref: str, v: Mapping[str, Optional[str]], values: List) -> Tuple[str, PinSpec]:
+def _ground(ref: str, v: Mapping[str, Optional[str]], values: List) -> Tuple[str, PinSpec, str]:
+    """The ground net, pins and part (PI_GND, PI_GND_PINS, PI_GND_REF; "" for this part)."""
     if not v["PI_GND"]:
-        return "", None
+        return "", None, ""
     values.append((f"ground {v['PI_GND']}", FieldValue(ref, "PI_GND", v["PI_GND"])))
-    return v["PI_GND"], _pins(ref, v["PI_GND_PINS"], "PI_GND_PINS", values)
+    gref = ""
+    if v["PI_GND_REF"]:
+        refs = [r.strip() for r in v["PI_GND_REF"].split(",") if r.strip()]
+        if len(refs) != 1:
+            raise FieldError(f'{ref}: PI_GND_REF = "{v["PI_GND_REF"]}": give one part (the power tree '
+                             "takes a terminal's ground pins on one part)")
+        gref = refs[0]
+        values.append((f"ground pins on {gref}", FieldValue(ref, "PI_GND_REF", v["PI_GND_REF"])))
+    return v["PI_GND"], _pins(ref, v["PI_GND_PINS"], "PI_GND_PINS", values), gref
+
+
+def _terminal_pins(ref: str, refs: Sequence[str], text: Optional[str], values: List
+                   ) -> Tuple[PinSpec, Optional[List[str]]]:
+    """The pins of a terminal on several parts (PI_SOURCE_REF ``refs``, the first holding the
+    rail): those of ``refs[0]``, and the others' as "REF.PAD" extra pins. PI_PINS ``text``
+    takes "REF.PAD" entries (REF one of ``refs``) and plain pads, which apply to every listed
+    part; none: every pad of each part on the rail."""
+    if not text:
+        return None, [f"{r}.*" for r in refs[1:]]
+    values.append((f"pins {text}", FieldValue(ref, "PI_PINS", text)))
+    per: Dict[str, List[str]] = {r: [] for r in refs}
+    for entry in (e.strip() for e in text.split(",") if e.strip()):
+        head, dot, pad = entry.partition(".")
+        for r in ([head] if dot and head in per else refs):
+            per[r].append(pad if dot and head in per else entry)
+    empty = [r for r in refs if not per[r]]
+    if empty:
+        raise FieldError(f'{ref}: PI_PINS = "{text}": {empty[0]} gets no pad; with PI_SOURCE_REF '
+                         f"{', '.join(refs)}, write REF.PAD entries (e.g. {refs[0]}.1,{empty[0]}.1) "
+                         "or plain pads, which apply to every listed part")
+    return per[refs[0]], [f"{r}.{p}" for r in refs[1:] for p in per[r]]
 
 
 def field_links(fields: Mapping[str, Mapping[str, str]],
@@ -822,7 +883,8 @@ def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = N
 # ---------------------------------------------------------------------- comparing
 
 _SOURCE_KEYS = ("voltage", "pins", "kind", "efficiency", "quiescent_a", "input_ref", "input_pins",
-                "input_net", "ground_ref", "ground_pins", "ground_net", "current_limit_a", "fsw_hz")
+                "input_net", "ground_ref", "ground_pins", "ground_net", "current_limit_a", "fsw_hz",
+                "extra_pins")
 _LOAD_KEYS = ("current", "pins", "ground_ref", "ground_pins", "ground_net")
 
 
@@ -837,6 +899,9 @@ def _key(t: Union[Source, Load], net: str = "", pads: Optional[PadNets] = None) 
     out = []
     for k in keys:
         v = getattr(t, k)
+        if k == "extra_pins":                          # REF.PAD entries, in any order
+            out.append(tuple(sorted(v or ())))
+            continue
         if k.endswith("_ref") and v == t.ref:
             v = ""                                     # the part's own pins either way
         if k.endswith("pins"):
@@ -877,6 +942,8 @@ def _term_text(t: Union[Source, Load]) -> str:
             s += f" I_max {t.current_limit_a:g} A"
         if t.fsw_hz is not None:
             s += f" f_sw {t.fsw_hz:g} Hz"
+        if t.extra_pins:
+            s += f" + {', '.join(t.extra_pins)}"
     else:
         s = f"{t.ref} {t.current:g} A{pins(t.pins)}"
     if t.ground_net:
@@ -980,25 +1047,25 @@ def field_text(name: str, value: float) -> str:
 
 
 def _source_part(s: Source) -> str:
-    """The part whose fields describe source ``s``: its own, or, when its rail is held at
-    another part's pads (an external-inductor buck: input and ground on the IC, the output
-    at the inductor), the part with its input and ground, written with PI_SOURCE_REF."""
-    others = {r for r in (s.input_ref, s.ground_ref) if r and r != s.ref}
-    if len(others) != 1:
-        return s.ref
-    (part,) = others
-    if all(not net or ref == part for ref, net in ((s.input_ref, s.input_net),
-                                                    (s.ground_ref, s.ground_net))):
-        return part
+    """The part whose fields describe source ``s``: its own, or, when its input is on another
+    part (an external-inductor buck: the input on the IC, the output at the inductor), that
+    part, written with PI_SOURCE_REF; ground pins elsewhere are PI_GND_REF."""
+    if s.input_net and s.input_ref and s.input_ref != s.ref:
+        return s.input_ref
     return s.ref
 
 
 def _source_fields(s: Source, net: str, blocked: List[str], notes: List[str]) -> Dict[str, str]:
     part = _source_part(s)
     out = {"PI_SOURCE": field_text("PI_SOURCE", s.voltage)}
-    if part != s.ref:
-        out["PI_SOURCE_REF"] = s.ref
-    if s.pins:
+    refs = list(dict.fromkeys([s.ref] + [e.split(".", 1)[0] for e in (s.extra_pins or ())]))
+    if part != s.ref or len(refs) > 1:
+        out["PI_SOURCE_REF"] = ",".join(refs)
+    if len(refs) > 1:            # REF.PAD for each part, none when every pad of each is used
+        own = [f"{s.ref}.{p}" for p in s.pins] if s.pins else [f"{s.ref}.*"]
+        if s.pins or any(not e.endswith(".*") for e in s.extra_pins):
+            out["PI_PINS"] = ",".join(own + list(s.extra_pins))
+    elif s.pins:
         out["PI_PINS"] = ",".join(s.pins)
     regulator = s.kind in ("ldo", "smps")
     if s.kind != "source":
@@ -1047,9 +1114,10 @@ def _load_fields(ld: Load, blocked: List[str]) -> Dict[str, str]:
 def _ground_fields(t, out: Dict[str, str], blocked: List[str], part: str = "") -> None:
     if not t.ground_net:
         return
-    if t.ground_ref and t.ground_ref not in (t.ref, part or t.ref):
-        blocked.append(f"ground pins on another part ({t.ground_ref})")
+    on = t.ground_ref or t.ref                   # the part with the ground pins
     out["PI_GND"] = t.ground_net
+    if on != (part or t.ref):
+        out["PI_GND_REF"] = on
     if t.ground_pins:
         out["PI_GND_PINS"] = ",".join(t.ground_pins)
 

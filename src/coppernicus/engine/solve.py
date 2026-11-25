@@ -137,6 +137,20 @@ def _unique(names: List[str]) -> List[str]:
     return out
 
 
+def source_pad_ids(board: Board, nets, source) -> List[str]:
+    """The pads a source holds at its voltage: its own (``ref``, ``pins``) and, when set, those
+    of ``extra_pins`` ("REF.PAD", the pad may be a glob): one terminal on several parts (cell
+    holders in parallel). Without ``extra_pins``, exactly ``board.pads(nets, ref, pins)``."""
+    ids = [p.id for p in board.pads(nets, source.ref, source.pins)]
+    by_ref: Dict[str, List[str]] = {}
+    for entry in getattr(source, "extra_pins", None) or ():
+        ref, _, pad = entry.partition(".")
+        by_ref.setdefault(ref, []).append(pad)
+    for ref, pins in by_ref.items():
+        ids += [p.id for p in board.pads(nets, ref, pins) if p.id not in ids]
+    return ids
+
+
 def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
                progress: Optional[Callable[[str], None]] = None,
                cancelled: Callable[[], bool] = lambda: False,
@@ -162,7 +176,7 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
     src_names = _unique([s.label for s in rail.sources])
     names = _unique([ld.label for ld in rail.loads] + [d.name for d in draws])
     load_names = names[:len(rail.loads)]
-    sources = [VoltageSource(name, [p.id for p in board.pads(nets, s.ref, s.pins)], s.voltage)
+    sources = [VoltageSource(name, source_pad_ids(board, nets, s), s.voltage)
                for name, s in zip(src_names, rail.sources)]
     # KiPI: amps leaving the copper at the pads. A load on a negative rail or on a net at 0 V
     # returns its current into the copper, as in the power tree (#220).

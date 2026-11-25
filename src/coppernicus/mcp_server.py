@@ -113,6 +113,10 @@ class ProjectSourceSpec(BaseModel):
                                              "(shown next to I_out; not judged yet).")
     fsw_hz: Optional[float] = Field(None, gt=0, description="A switcher's switching frequency, Hz "
                                     "(stored; not used yet).")
+    extra_pins: Optional[list[str]] = Field(None, description="More pads held at the same voltage on "
+                                            "other parts, as REF.PAD (BT5.1, BT5.* for all its pads "
+                                            "on the rail): one terminal, e.g. cell holders in "
+                                            "parallel.")
     input: Optional[PinRefSpec] = Field(None, description="A regulator's input pins.")
     ground: Optional[PinRefSpec] = None
     sense: Optional[PinRefSpec] = None
@@ -249,7 +253,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
     def board_fields(board_id: str) -> dict[str, Any]:
         """The board's KiCad footprint fields (PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS,
         PI_LIMIT_DROP, PI_KIND, PI_EFF, PI_IQ, PI_VOUT, PI_IMAX, PI_FSW, PI_INPUT, PI_GND,
-        PI_SOURCE_REF, PI_LINK, PI_LINK_PINS...; KiCad board files only) and the rails and
+        PI_SOURCE_REF, PI_GND_REF, PI_LINK, PI_LINK_PINS...; KiCad board files only) and the rails and
         links they describe, each value with the field it came from. Library-only parts
         (PI_KIND, PI_EFF, PI_IQ, PI_VOUT, PI_IMAX, PI_FSW without PI_RAIL) make no rail.
         Nothing is solved; solve_project and solve_tree use them by default. If you copy these

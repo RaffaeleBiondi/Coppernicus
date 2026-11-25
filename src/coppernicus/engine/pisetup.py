@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from kipi.dc.pi.model import DcLink, PinRef, PISetup, Vrm, validate
+from kipi.dc.pi.model import DcLink, PinRef, PISetup, SensePoint, Vrm, validate
 from kipi.dc.pi.model import Load as KipiLoad
 
 from coppernicus.engine.board import Board, EngineError
@@ -111,6 +111,22 @@ def _pin_ref(board: Board, terminal, what: str, owner: str) -> Optional[PinRef]:
     return PinRef(ref, net, _numbers(pads, pins))
 
 
+def _extra_terminal(board: Board, nets: Sequence[str], source, owner: str) -> List[SensePoint]:
+    """A source's ``extra_pins`` ("REF.PAD") as KiPI mesh-sense points, one per other part, each
+    held at the source's voltage; empty without them. Refused with a remote sense of its own."""
+    by_ref: Dict[str, List[str]] = {}
+    for entry in getattr(source, "extra_pins", None) or ():
+        ref, _, pad = entry.partition(".")
+        by_ref.setdefault(ref, []).append(pad)
+    if not by_ref:
+        return []
+    if source.sense_net or source.ground_sense_net:
+        raise EngineError(f"{owner}: extra_pins (a terminal on several parts) and remote sense "
+                          "cannot be combined: remove one")
+    return [SensePoint(sense=_on_rail(board, nets, ref, pins, f"{owner} (extra pins)"))
+            for ref, pins in by_ref.items()]
+
+
 def _overlap(a: PinRef, b: PinRef) -> bool:
     """Whether two pin references share a pad (an empty list is every pad)."""
     if (a.ref, a.net) != (b.ref, b.net):
@@ -172,16 +188,21 @@ def to_pisetup(board: Board, project: Project) -> PISetup:
             if s.kind in SWITCHING_KINDS and s.efficiency is None:
                 raise EngineError(f"{owner} on {r.net}: a switcher needs its efficiency (a "
                                   "fraction 0–1); there is no default")
+            output = _on_rail(board, nets, s.ref, s.pins, owner)
+            held = _extra_terminal(board, nets, s, owner)
             vrms.append(Vrm(
                 name=names[("source", r.net, i)],
-                output=_on_rail(board, nets, s.ref, s.pins, owner),
+                output=output,
                 voltage=float(s.voltage), kind=s.kind,
                 efficiency=float(s.efficiency) if s.kind in SWITCHING_KINDS else UNUSED_EFFICIENCY,
                 quiescent_a=float(s.quiescent_a),
                 input=None if s.kind == "source" else _pin_ref(board, s, "input", owner),
                 ground=_pin_ref(board, s, "ground", owner),
-                sense=_pin_ref(board, s, "sense", owner),
-                ground_sense=_pin_ref(board, s, "ground_sense", owner)))
+                # extra_pins: KiPI's mesh sense holds its own pins and each other part's at the
+                # voltage, the current entering there (one terminal on several parts).
+                sense=output if held else _pin_ref(board, s, "sense", owner),
+                ground_sense=_pin_ref(board, s, "ground_sense", owner),
+                **({"mesh_sense": True, "sense_points": held} if held else {})))
         for i, ld in enumerate(r.loads):
             owner = f"Load {ld.label}"
             name = names[("load", r.net, i)]

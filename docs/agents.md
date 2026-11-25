@@ -215,7 +215,8 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
 | `PI_VOUT` | `3.3V` | source | A fixed-output part's voltage: the source voltage when the instance has `PI_RAIL` and no `PI_SOURCE` (the assumption says "from KiCad field PI_VOUT"). When both are given and differ, `PI_SOURCE` wins, with a warning. |
 | `PI_IMAX` | `2A`, `500mA` | source | Its rated output current: kept as the source's `current_limit_a` and shown next to I_out (rail summary `current_limit_a`, tree `vrms[].i_max_a`, the report and CI tables). **Not judged yet.** |
 | `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its fixed switching frequency (`Hz`, `kHz`, `MHz`): kept as the source's `fsw_hz`. **Not used yet.** |
-| `PI_SOURCE_REF` | `L1` | source | The part whose pads hold the rail, when it is not this part: an external-inductor buck's inductor. `PI_PINS` then selects that part's pads; input, ground and kind stay on this part. An error when that part has no pad on the rail. |
+| `PI_SOURCE_REF` | `L1`, `BT1,BT5` | source | The part whose pads hold the rail, when it is not this part: an external-inductor buck's inductor. `PI_PINS` then selects that part's pads; input, ground and kind stay on this part. A list of parts (`BT1,BT5`) makes **one terminal**: every listed part's pads on the rail, all held at the source voltage (cell holders in parallel), not parallel regulators; `PI_PINS` then takes `REF.PAD` entries (`BT1.1,BT5.1`), and a plain pad applies to every listed part. An error when a part has no pad on the rail. |
+| `PI_GND_REF` | `BT4` | source, load | The part whose pads are the ground pins on `PI_GND`, when not this part (`PI_GND_PINS` chooses them). One part. An error when it has no pad on that net. |
 
 - **Library and instance.** `PI_KIND`, `PI_EFF`, `PI_IQ`, `PI_VOUT`, `PI_IMAX` and `PI_FSW` say
   what the part **is**: put them on the library symbol. They need no `PI_RAIL`: a part that
@@ -297,8 +298,8 @@ that describes the project's rails and links, part by part, for the user to past
 symbols in KiCad. Coppernicus never writes KiCad files. Each part has:
 - `library_symbol`: `PI_KIND`, `PI_EFF`, `PI_IQ`, `PI_IMAX`, `PI_FSW`, what the part is;
 - `schematic_instance`: `PI_RAIL`, `PI_SOURCE`, `PI_SOURCE_REF`, `PI_LOAD`, `PI_PINS`,
-  `PI_LIMIT_DROP`, `PI_INPUT`, `PI_INPUT_PINS`, `PI_GND`, `PI_GND_PINS`, `PI_LINK`,
-  `PI_LINK_PINS`, where it sits.
+  `PI_LIMIT_DROP`, `PI_INPUT`, `PI_INPUT_PINS`, `PI_GND`, `PI_GND_PINS`, `PI_GND_REF`,
+  `PI_LINK`, `PI_LINK_PINS`, where it sits.
 
 A part on several rails gets one value per rail, by position (`PI_RAIL=+3V3;+1V8`,
 `PI_LOAD=1.2A;400mA`). Values are written with their unit and read back exactly. A rail's
@@ -362,6 +363,23 @@ The link joins VIN (Q1 pins 1, 2) and VOUT (Q1 pin 5). Without `PI_LINK_PINS` th
 refused, since its pads are on four nets. The loads on VOUT are drawn through it by the rail
 that drives VIN; the power tree solves VIN and VOUT as one group. A two-pad ferrite needs only
 `PI_LINK`.
+
+**A battery of cell holders** (2S2P from single-contact holders): BT1 and BT5 sit in parallel on
++V_BAT, the negative pole is BT4 on -V_BAT, and no single part has pads on both. One part,
+the anchor, carries the fields:
+
+| Where | Fields |
+|---|---|
+| Placed BT1 | `PI_RAIL=+V_BAT`, `PI_KIND=source`, `PI_SOURCE=6.4V`, `PI_SOURCE_REF=BT1,BT5`, `PI_GND=-V_BAT`, `PI_GND_REF=BT4` |
+| Placed BT5, BT4 | nothing |
+
+The source is one terminal, BT1's and BT5's pads on +V_BAT all held at 6.4 V, with its ground
+pins on BT4 (the reference of the ground net in the power tree). In a project file it is a
+source with `ref: BT1` and `extra_pins: [BT5.*]` ("REF.PAD", the pad may be a glob; every pad
+of BT5 on the rail), and `ground: {ref: BT4, net: -V_BAT}`. Rail by rail every pad of the
+terminal is held at the voltage; the power tree holds them with KiPI's mesh sense (one point
+per part), so it cannot be combined with a remote sense of the source's own. To use only some
+pads: `PI_PINS=BT1.1,BT5.1`, or `PI_PINS=1` for pad 1 of every listed part.
 
 **Loads** carry instance fields only: `PI_RAIL=+3V3`, `PI_LOAD=1.2A`, and `PI_GND=GND` for the
 power tree. A chip on two rails gives one value per rail: `PI_RAIL=+3V3;+1V2`,

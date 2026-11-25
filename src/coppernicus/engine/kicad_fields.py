@@ -66,7 +66,8 @@ def read_board_fields(path, prefix: str = PREFIX) -> BoardFields:
         out.fields[ref] = mine
         out.pad_nets[ref] = pad_nets(fp)
     named = {r.strip() for f in out.fields.values() for k, v in f.items()
-             if k.upper() == f"{prefix.upper()}SOURCE_REF" for r in v.split(";") if r.strip()}
+             if k.upper() in (f"{prefix.upper()}SOURCE_REF", f"{prefix.upper()}GND_REF")
+             for r in v.replace(";", ",").split(",") if r.strip()}
     for ref in sorted(named - set(out.pad_nets)):
         if ref in others:
             out.pad_nets[ref] = pad_nets(others[ref])

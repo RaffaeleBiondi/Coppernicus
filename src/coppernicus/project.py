@@ -103,6 +103,10 @@ class Source:
     # switching frequency (PI_FSW; stored, not used yet).
     current_limit_a: Optional[float] = None
     fsw_hz: Optional[float] = None
+    # More pads held at the same voltage, on other parts: one terminal, not parallel sources
+    # (a battery of cell holders in parallel). "REF.PAD" entries, the pad may be a glob
+    # ("BT5.*": every pad of BT5 on the rail). None: the source's own pads only.
+    extra_pins: Optional[List[str]] = None
 
     @property
     def label(self) -> str:
@@ -656,6 +660,8 @@ class Project:
                     d["current_limit_a"] = t.current_limit_a
                 if t.fsw_hz is not None:
                     d["fsw_hz"] = t.fsw_hz
+                if t.extra_pins:
+                    d["extra_pins"] = list(t.extra_pins)
             for what in (SOURCE_PIN_REFS if value_key == "voltage" else LOAD_PIN_REFS):
                 if getattr(t, f"{what}_net"):
                     d[what] = _pin_ref_out(getattr(t, f"{what}_ref"), getattr(t, f"{what}_pins"),
@@ -832,6 +838,21 @@ def _pin_ref_in(data: Dict[str, Any], what: str, owner: str) -> Dict[str, Any]:
             f"{what}_pins": parse_pins(value.get("pins")), f"{what}_net": net}
 
 
+def _extra_pins_in(value: Any, ref: str) -> Optional[List[str]]:
+    """A source's ``extra_pins``: a list of "REF.PAD" (the pad may be a glob)."""
+    if not isinstance(value, list):
+        raise ValueError(f"source {ref}: extra_pins is a list of REF.PAD entries (e.g. [BT5.1]), "
+                         f"not {value!r}")
+    out = []
+    for e in value:
+        part, dot, pad = str(e).strip().partition(".")
+        if not (part and dot and pad):
+            raise ValueError(f"source {ref}: extra_pins entry {e!r} is not REF.PAD (e.g. BT5.1, or "
+                             "BT5.* for every pad of BT5 on the rail)")
+        out.append(f"{part}.{pad}")
+    return out or None
+
+
 def _source_in(s: Dict[str, Any]) -> Source:
     ref = str(s["ref"])
     kind = str(s.get("kind") or "source")
@@ -846,12 +867,14 @@ def _source_in(s: Dict[str, Any]) -> Source:
     quiescent = _number(s.get("quiescent_a", 0.0), f"source {ref}: quiescent_a")
     if quiescent < 0:
         raise ValueError(f"source {ref}: quiescent_a cannot be negative")
-    extra: Dict[str, Optional[float]] = {}
+    extra: Dict[str, Any] = {}
     for key in ("current_limit_a", "fsw_hz"):           # part data: > 0 when given
         if s.get(key) is not None:
             extra[key] = _number(s[key], f"source {ref}: {key}")
             if not extra[key] > 0:
                 raise ValueError(f"source {ref}: {key} is above 0, not {extra[key]:g}")
+    if s.get("extra_pins") is not None:
+        extra["extra_pins"] = _extra_pins_in(s["extra_pins"], ref)
     refs: Dict[str, Any] = {}
     for what in SOURCE_PIN_REFS:
         refs.update(_pin_ref_in(s, what, f"source {ref}"))

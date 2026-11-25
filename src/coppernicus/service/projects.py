@@ -18,7 +18,7 @@ from coppernicus.service.errors import ServiceError
 
 RAIL_KEYS = ("net", "sources", "loads", "limits", "follow_net_ties", "override_board_fields")
 SOURCE_KEYS = ("ref", "voltage_v", "pins", "name", "kind", "efficiency", "quiescent_a", "input",
-               "ground", "sense", "ground_sense", "current_limit_a", "fsw_hz")
+               "ground", "sense", "ground_sense", "current_limit_a", "fsw_hz", "extra_pins")
 LOAD_KEYS = ("ref", "current_a", "pins", "name", "ground")
 PIN_REF_KEYS = ("net", "pins", "ref")
 LINK_KEYS = ("name", "ref", "a", "b", "resistance_ohm")
@@ -58,7 +58,7 @@ def source_to_file(spec: Any) -> Dict[str, Any]:
                                "a source is {ref, voltage_v, pins?, ...}")
     out: Dict[str, Any] = {"name": s["name"]} if s.get("name") else {}
     out.update(ref=s["ref"], pins=_pins(s.get("pins")), voltage=s["voltage_v"])
-    for key in ("kind", "efficiency", "quiescent_a", "current_limit_a", "fsw_hz"):
+    for key in ("kind", "efficiency", "quiescent_a", "current_limit_a", "fsw_hz", "extra_pins"):
         if s.get(key) is not None:
             out[key] = s[key]
     for key in ("input", "ground", "sense", "ground_sense"):

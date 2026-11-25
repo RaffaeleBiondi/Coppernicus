@@ -186,3 +186,17 @@ Decided by the owner for annotating a real KiCad library, additive:
   without it.
 
 Everything maps onto existing or additive project objects; the engine path is unchanged.
+
+## Third step (several parts in one terminal, ground on another part)
+
+Decided by the owner for a battery of single-contact cell holders, additive:
+
+- `PI_SOURCE_REF` takes a comma-separated list (`BT1,BT5`): one terminal made of every listed
+  part's pads on the rail, all held at the source voltage. `PI_PINS` then takes `REF.PAD`
+  entries, and a plain pad applies to every listed part. It maps to `Source(ref=BT1,
+  extra_pins=["BT5.*"])`: rail by rail the voltage source holds the union of the pads; in the
+  power tree KiPI's mesh sense holds each part's pads (one sense point per part), refused with
+  a remote sense of the source's own. Without `extra_pins`, both paths are unchanged.
+- `PI_GND_REF=<ref>` puts a source's (or load's) ground pins on another part: one part now,
+  since KiPI's VRM takes its ground pins on one part.
+

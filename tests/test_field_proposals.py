@@ -79,16 +79,16 @@ def test_multi_rail_parts_and_a_part_twice_on_one_rail():
 
 def test_what_fields_cannot_carry_is_listed_and_not_proposed():
     project = Project(rails=[
-        # Input and ground on two other parts: PI_SOURCE_REF (one other part) cannot say it.
-        Rail("OUT", [Source("U2", 3.3, kind="ldo", input_ref="U7", input_net="VIN", ground_ref="U8",
-                            ground_net="GND")], [Load("U4", 1.0)]),
+        # A switcher without its efficiency: fields have no default for it, so not proposed.
+        # (Input and ground on other parts are expressible: PI_SOURCE_REF and PI_GND_REF.)
+        Rail("OUT", [Source("U2", 3.3, kind="smps", input_net="VIN")], [Load("U4", 1.0)]),
         Rail("VIN", [Source("J1", 12.0, name="Supply")], [Load("U5", 0.1)])])
     proposal = propose(project)
     assert proposal["rails"] == ["VIN"]
     refs = {p["ref"] for p in proposal["parts"]}
     assert "U2" not in refs and "U4" not in refs
     whats = " ".join(n["what"] for n in proposal["not_expressed"])
-    assert "input on another part (U7)" in whats and "name" in whats
+    assert "a switcher without its efficiency" in whats and "name" in whats
 
 
 def test_session_mcp_and_cli_propose(tmp_path, capsys):

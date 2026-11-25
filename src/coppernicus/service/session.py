@@ -805,7 +805,7 @@ class Session:
                 "schematic, then update the PCB from the schematic.",
                 "Library-symbol fields (PI_KIND, PI_EFF, PI_IQ, PI_IMAX, PI_FSW; PI_VOUT for a "
                 "fixed output) describe the part itself; schematic-instance fields (PI_RAIL, "
-                "PI_SOURCE, PI_SOURCE_REF, PI_LOAD, PI_PINS, PI_INPUT, PI_GND, PI_LINK, "
+                "PI_SOURCE, PI_SOURCE_REF, PI_LOAD, PI_PINS, PI_INPUT, PI_GND, PI_GND_REF, PI_LINK, "
                 "PI_LINK_PINS...) where it sits. A part on several rails gets one value per rail, "
                 "by position, separated by ';'.",
                 "PI_LIMIT_DROP is placed on the rail's first source; if it is a chip's own supply "
