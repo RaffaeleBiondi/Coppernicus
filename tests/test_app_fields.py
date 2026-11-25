@@ -532,6 +532,20 @@ def test_saving_keeps_every_rail_the_project_says_something_about_and_edits_none
     ''', tmp_path)
 
 
+def test_save_as_names_the_new_file_where_a_field_cannot_be_used(tmp_path):
+    run_in_window('''
+        open_net(strip(TMP / "a", {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}}))       # no PI_SOURCE
+        assert rp.banner.error.text().startswith("strip.coppernicus.yml: "), rp.banner.error.text()
+        FILES.append(TMP / "a" / "renamed.coppernicus.yml")
+        window.save_project_as()
+        assert window.project.path.name == "renamed.coppernicus.yml", window.project.path
+        error = rp.banner.error.text()
+        assert error.startswith("renamed.coppernicus.yml: ") and window.fields_error in error, error
+        notes = window.problems.notes.toPlainText()
+        assert "renamed.coppernicus.yml: " in notes and "strip.coppernicus.yml" not in notes, notes
+    ''', tmp_path)
+
+
 # ---------------------------------------------------------------------- menus
 
 def test_use_kicad_fields_off_takes_every_rail_from_the_project_and_is_saved(tmp_path):

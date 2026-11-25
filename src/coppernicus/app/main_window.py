@@ -430,13 +430,11 @@ class MainWindow(QMainWindow):
         if self.project.use_board_fields == on:
             return
         self.project.use_board_fields = on
-        self._remerge()
-        self._show_fields_error()
+        self._merge_again(reshow=True)
         self.dirty = True
         self._update_title()
         if self.board is None:
             return
-        self.nets.mark_configured(self._configured_nets(), self._kicad_nets())
         self._revision += 1
         self._drop_tree("KiCad footprint fields turned " + ("on" if on else "off")
                         + ": solve the power tree again (Ctrl+T)")
@@ -444,8 +442,6 @@ class MainWindow(QMainWindow):
         self.runs.clear()
         self._diff_cache = None
         if self.net:
-            rail = self._show_rail(self.net)
-            self.rail_panel.set_net_kind(self._net_at_0v(rail))
             self.problems.clear(f"<b>{self.net}</b>: KiCad footprint fields turned "
                                 f"{'on' if on else 'off'} — press Solve (F5)")
             self._refresh_results()
@@ -489,6 +485,30 @@ class MainWindow(QMainWindow):
                 self.fields_error = f"{where}{e} ({FIELD_HINT})"
         self.merged = merged
         self.last_remerge_s = time.perf_counter() - t0
+
+    def _merge_again(self, reshow: bool = False):
+        """Merge again after the project changed (or its file name, which the red line
+        names), and show what that changes: the red line and the pinned note, the net list's
+        marks, and the shown rail: anew when its origin changed (or ``reshow``), read-only
+        or editable as the new origin says; else its banner only."""
+        before = self._shown_origin()
+        self._remerge()
+        self._show_fields_error()
+        if self.board is None:
+            return
+        self.nets.mark_configured(self._configured_nets(), self._kicad_nets())
+        if not self.net:
+            return
+        if reshow or self._shown_origin() != before:
+            rail = self._show_rail(self.net)
+            self.rail_panel.set_net_kind(self._net_at_0v(rail))
+        else:
+            self._show_banner(self.net)
+
+    def _shown_origin(self) -> Optional[str]:
+        """Where the shown net's rail comes from (an Origin's source), None for no origin."""
+        origin = self.merged.origins.get(self.net) if self.net else None
+        return origin.source if origin is not None else None
 
     def _fields_refusal(self) -> str:
         """What a solve says when a KiCad field cannot be used: the CLI's text, and the
@@ -557,7 +577,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Cannot save project", str(e))
             return
         self.project.path, self.project.board = out.path, out.board     # as saved: relative to it
-        self._remerge()                 # its path, board path and rails, as saved
+        self._merge_again()             # its path and board path; the red line names the file
         self.dirty = False
         self._update_title()
         self.statusBar().showMessage(f"Saved {path}")
@@ -743,14 +763,9 @@ class MainWindow(QMainWindow):
     def _origin_changed(self, net: str):
         """The project now says otherwise where the rail of ``net`` comes from: merge again,
         show the rail anew, and drop what was solved with the old one."""
-        self._remerge()
-        self._show_fields_error()
-        self.nets.mark_configured(self._configured_nets(), self._kicad_nets())
+        self._merge_again(reshow=net == self.net)
         self.dirty = True
         self._update_title()
-        if net == self.net:
-            rail = self._show_rail(net)
-            self.rail_panel.set_net_kind(self._net_at_0v(rail))
         self._setup_changed(net)
 
     def _adopt_draft(self):
@@ -761,10 +776,7 @@ class MainWindow(QMainWindow):
             has_content = rail.sources or rail.loads or any(v is not None for v in vars(rail.limits).values())
             if self.project.rail(rail.net) is None and has_content:
                 self.project.rails.append(rail)
-        self._remerge()
-        self._show_fields_error()
-        self.nets.mark_configured(self._configured_nets(), self._kicad_nets())
-        self._show_banner(rail.net)
+        self._merge_again()
         self.dirty = True
         self._update_title()
         return rail
