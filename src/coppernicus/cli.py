@@ -11,6 +11,7 @@
     coppernicus solve PROJECT --thermal [--out DIR] [--top N] [--json]   power tree with board temperature
     coppernicus fields BOARD [--json]          the KiCad footprint fields (PI_*) of a board
     coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
+    coppernicus ac PROJECT [--rail NET ...] [--out DIR] [--json]   AC PDN impedance |Z|(f) (CSV + PNG)
 
 ``solve`` exits with 0 when every rail solved and no user limit was exceeded (or none was
 set), 1 when a limit was exceeded, 3 when a limit that was set could not judge something (a
@@ -375,6 +376,94 @@ def _cmd_solve_tree(args) -> int:
     return _exit_for(doc)
 
 
+def _cmd_ac(args) -> int:
+    """``ac PROJECT``: the open-loop PDN impedance |Z|(f) at the project's probes, rail by rail
+    (every rail with a probe, or each ``--rail``): a CSV and a PNG per rail and
+    ``<project>_ac_summary.json`` in ``--out`` (default: results/ next to the project file).
+    Prints the report, or with ``--json`` the summary. Exit codes as ``solve``."""
+    from coppernicus import board_fields
+    from coppernicus.engine import Board, EngineError
+    from coppernicus.engine.ac import probe_rails, resolve_rail, solve_ac_rail
+    from coppernicus.engine.kicad_fields import read_board_fields
+    from coppernicus.impedance import ac_summary, ac_text, unsolved_entries, write_csv, write_png
+    from coppernicus.maps import safe_file_name, safe_name
+    from coppernicus.project import Project, ProjectError
+    from coppernicus.service.session import FIELD_HINT
+
+    quiet = args.json
+    hint = "fix the probes, capacitor models or ac: block of the project file, then solve again"
+
+    def fail(code, message, hint=""):
+        if quiet:
+            _print_json({"error": {"code": code, "message": message, "hint": hint}})
+        print(f"error: {message}".replace("\n", " "), file=sys.stderr)
+        return EXIT_ERROR
+    if not Path(args.project).is_file():
+        return fail("file_not_found", f"No such file: {args.project}")
+    try:
+        project = Project.load(args.project)
+        board = Board.open(project.board_path())
+    except (OSError, ProjectError) as e:
+        return fail("invalid_project", str(e))
+    except EngineError as e:
+        return fail("board_unreadable", str(e))
+    try:                                  # the KiCad footprint fields, as the other solves
+        merged = board_fields.apply(project, lambda: read_board_fields(board.path),
+                                    ties=[(t.net_a, t.net_b) for t in board.net_ties()])
+    except (board_fields.FieldError, EngineError) as e:
+        return fail("invalid_board_field", str(e), FIELD_HINT)
+    project = merged.project
+    stream = sys.stderr if quiet else sys.stdout
+    progress = (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None
+    if not project.probes:
+        return fail("invalid_input", "No probe in the project: nothing to solve",
+                    "add a probe (probes: in the project file) on a rail that has a source")
+    try:
+        rails_of = probe_rails(board, project)
+    except EngineError as e:
+        return fail("solve_failed", str(e), hint)
+    not_solved, warnings = [], []
+    if args.rail:                         # the rails asked for; other probes left as chosen
+        try:                              # each net to the rail it is solved with, once
+            rails = list(dict.fromkeys(resolve_rail(board, project, net) for net in args.rail))
+        except EngineError as e:
+            return fail("solve_failed", str(e), hint)
+    else:
+        reached = set(rails_of.values())
+        rails = [r.net for r in project.rails if r.net in reached]
+        if not rails:
+            return fail("invalid_input", "No rail with a source reaches the probes: " + ", ".join(
+                f"{p.name} on {p.net}" for p in project.probes),
+                "add the source of their rail, or a link joining their net to a rail that has one")
+        not_solved, warnings = unsolved_entries(project.probes, rails_of)
+    stem = safe_file_name(Path(args.project).stem)
+    out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    results, files = [], {}
+    for net in rails:
+        try:
+            res = solve_ac_rail(board, project, net, progress=progress)
+        except EngineError as e:
+            return fail("solve_failed", str(e), hint)
+        merged.annotate(res)
+        csv_path = out_dir / f"{stem}_{safe_name(res.rail)}_impedance.csv"
+        png_path = csv_path.with_suffix(".png")
+        files[res.rail] = (write_csv(res, csv_path).as_posix(), write_png(res, png_path).as_posix())
+        results.append(res)
+    doc = ac_summary(results, files, not_solved, warnings)
+    summary_path = out_dir / f"{stem}_ac_summary.json"
+    doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
+    summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
+                            encoding="utf-8")
+    if quiet:
+        _print_json(doc)
+    else:
+        print(f"Board: {board.name}")
+        print("\n".join(ac_text(doc)))
+        print(f"Summary: {summary_path}")
+    return _exit_for(doc)
+
+
 def _print_rail(res, problems):
     from coppernicus.problems import FAIL, max_drop_text
     others = [n for n in res.nets if n != res.net]
@@ -487,6 +576,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-result-mb", type=float, default=2048,
                    help="memory bound for kept results, MB (default: 2048)")
     p.set_defaults(func=_cmd_mcp)
+
+    p = sub.add_parser("ac", help="AC PDN impedance |Z|(f) at the project's probes (CSV + PNG)")
+    p.add_argument("project")
+    p.add_argument("--out",
+                   help="folder for CSV, PNG and summary (default: results/ next to the project file)")
+    p.add_argument("--rail", action="append",
+                   help="solve only this rail (repeatable; default: every rail with a probe)")
+    p.add_argument("-v", "--verbose", action="store_true", help="show the engine's progress")
+    p.add_argument("--json", action="store_true",
+                   help="print a JSON summary on stdout (for scripts and agents)")
+    p.set_defaults(func=_cmd_ac)
     return ap
 
 
