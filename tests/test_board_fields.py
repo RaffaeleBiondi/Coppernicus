@@ -17,7 +17,7 @@ from kicad_fixture import PAD, X0, X1, W, write_strip_board
 from mcp import Client
 
 from coppernicus import ci
-from coppernicus.board_fields import FieldError, field_rails, merge, quantity
+from coppernicus.board_fields import FieldError, field_rails, listing, merge, quantity
 from coppernicus.cli import EXIT_LIMIT, EXIT_OK, main
 from coppernicus.engine.kicad_fields import read_board_fields, read_part_fields
 from coppernicus.engine.synthetic import OZ1, save_snapshot, strip_board
@@ -633,3 +633,123 @@ def test_a_loads_only_rail_behind_a_link_is_skipped_not_an_error(tmp_path):
     message = rails["+3V3_F"]["skipped"]["message"]
     assert "drawn through link FB1 by rail +3V3" in message
     assert [ld["name"] for ld in rails["+3V3"]["loads"]] == ["FB1 (link, estimated)"]
+
+
+# ---------------------------------------------------------------------- the listing judges as the merge
+
+# Loads behind a ferrite: +3V3_A has loads and no source; FB1 joins it to +3V3, held by U1.
+BEHIND_LINK = {"J1": {"PI_RAIL": "VIN", "PI_SOURCE": "5V"},
+               "U1": {"PI_RAIL": "+3V3", "PI_SOURCE": "3.3V", "PI_KIND": "ldo", "PI_INPUT": "VIN"},
+               "FB1": {"PI_LINK": "50mOhm"},
+               "U2": {"PI_RAIL": "+3V3_A", "PI_LOAD": "1A"}}
+BEHIND_LINK_PADS = {"FB1": {"1": "+3V3", "2": "+3V3_A"}}
+# A battery with no load of its own that feeds a regulator through two links: BT1 holds VBAT,
+# FB1 and FB2 lead to VIN_U1, the input of U1.
+BATTERY_CHAIN = {"BT1": {"PI_RAIL": "VBAT", "PI_SOURCE": "7.4V"},
+                 "FB1": {"PI_LINK": "20mOhm"}, "FB2": {"PI_LINK": "30mOhm"},
+                 "U1": {"PI_RAIL": "+3V3_A", "PI_SOURCE": "3.3V", "PI_KIND": "ldo",
+                        "PI_INPUT": "VIN_U1"},
+                 "U2": {"PI_RAIL": "+3V3_A", "PI_LOAD": "500mA"}}
+BATTERY_CHAIN_PADS = {"FB1": {"1": "VBAT", "2": "V_MID"}, "FB2": {"1": "V_MID", "2": "VIN_U1"}}
+ISOLATED = {"U9": {"PI_RAIL": "+3V3_X", "PI_LOAD": "1A"}}
+SOURCE_ALONE = {"J1": {"PI_RAIL": "VIN", "PI_SOURCE": "12V"}}
+TIED = {"J1": {"PI_RAIL": "V", "PI_SOURCE": "1V"}, "U2": {"PI_RAIL": "V_T", "PI_LOAD": "1A"}}
+
+
+def listed_rails(fields, pads=None, ties=()):
+    return {r["net"]: r for r in listing(fields, pads, ties)["rails"]}
+
+
+def test_the_listing_counts_a_loads_only_net_behind_a_link_complete_and_names_the_link():
+    rails = listed_rails(BEHIND_LINK, BEHIND_LINK_PADS)
+    behind = rails["+3V3_A"]
+    assert behind["complete"] and behind["missing"] is None
+    assert "link FB1" in behind["complete_through"] and "+3V3" in behind["complete_through"]
+    assert behind["complete_through"] in behind["note"]
+    # +3V3 has a source and no load of its own: it feeds the link, as VIN feeds U1's input.
+    assert rails["+3V3"]["complete"] and "FB1" in rails["+3V3"]["complete_through"]
+    assert rails["VIN"]["complete"] and "U1" in rails["VIN"]["complete_through"]
+
+
+def test_the_listing_counts_a_source_feeding_a_two_link_chain_to_a_regulator_complete():
+    rails = listed_rails(BATTERY_CHAIN, BATTERY_CHAIN_PADS)
+    battery = rails["VBAT"]
+    assert battery["complete"] and battery["missing"] is None
+    assert "FB1" in battery["complete_through"] and battery["complete_through"] in battery["note"]
+    # A rail with a source and a load of its own needs nothing else.
+    assert rails["+3V3_A"]["complete"] and rails["+3V3_A"]["complete_through"] is None
+
+
+def test_the_listing_still_says_why_a_truly_isolated_net_is_incomplete():
+    isolated = listed_rails({**BEHIND_LINK, **ISOLATED}, BEHIND_LINK_PADS)["+3V3_X"]
+    assert not isolated["complete"] and isolated["note"] is None
+    assert isolated["missing"].startswith("+3V3_X: loads U9 have PI_LOAD but no part on this net "
+                                          "has PI_SOURCE")
+    assert "no link or net tie joins it to a net that has one" in isolated["missing"]
+    alone = listed_rails(SOURCE_ALONE)["VIN"]
+    assert not alone["complete"] and "feeds no regulator input or link" in alone["missing"]
+
+
+def test_the_listing_follows_net_ties_and_keeps_each_nets_own_parts():
+    rails = listed_rails(TIED, ties=[("V", "V_T")])
+    tied, driver = rails["V_T"], rails["V"]
+    assert tied["complete"] and "net tie" in tied["complete_through"] and "V" in tied["complete_through"]
+    assert driver["complete"] and "U2" in driver["complete_through"]
+    assert [ld["ref"] for ld in tied["loads"]] == ["U2"] and driver["loads"] == []
+    assert not listed_rails(TIED)["V_T"]["complete"]
+
+
+@pytest.mark.parametrize("fields, pads, ties", [
+    (BEHIND_LINK, BEHIND_LINK_PADS, ()),
+    (BATTERY_CHAIN, BATTERY_CHAIN_PADS, ()),
+    (CHAIN_FIELDS, CHAIN_PADS, ()),
+    (TIED, None, [("V", "V_T")]),
+    (TIED, None, ()),
+    ({**BEHIND_LINK, **ISOLATED}, BEHIND_LINK_PADS, ()),
+    (SOURCE_ALONE, None, ()),
+], ids=["behind a link", "battery chain", "power chain", "tied", "tie not on the board",
+        "isolated", "source alone"])
+def test_the_listing_and_the_merge_agree(fields, pads, ties):
+    """One judge for both: what the listing calls complete the merge takes, what it calls
+    incomplete the merge refuses, with the same words."""
+    rails = listing(fields, pads, ties)["rails"]
+    missing = [r["missing"] for r in rails if not r["complete"]]
+    if missing:
+        with pytest.raises(FieldError) as refused:
+            merge(Project(), fields, pads, ties)
+        assert f"fields: {'; '.join(missing)}. Add" in str(refused.value)
+        return
+    merged = merge(Project(), fields, pads, ties)
+    terms = {t.ref for r in merged.project.rails for t in r.sources + r.loads}
+    assert terms == {t["ref"] for r in rails for t in r["sources"] + r["loads"]}
+
+
+def test_a_merged_rails_board_fields_say_complete_as_the_merge_judged():
+    own = Rail("+3V3_A", loads=[Load("U2", 2.0)], override_board_fields=True)
+    merged = merge(Project(rails=[own]), BEHIND_LINK, BEHIND_LINK_PADS)
+    assert merged.origins["+3V3_A"].board_fields["complete"] is True
+
+
+def test_board_fields_follows_the_boards_net_ties(tmp_path):
+    from kicad_fixture import write_board
+    parts = [("J1", [("1", 0.0, 0.0, "V")], TIED["J1"]),
+             ("NT1", [("1", 19.5, 0.0, "V"), ("2", 20.5, 0.0, "V_T")], {"Value": "NetTie_2"}),
+             ("U2", [("1", 40.0, 0.0, "V_T")], TIED["U2"])]
+    board = write_board(tmp_path / "tied.kicad_pcb", parts,
+                        [("V", (0.0, 0.0), (19.5, 0.0), 0.5), ("V_T", (20.5, 0.0), (40.0, 0.0), 0.5)])
+    session = Session(out_dir=tmp_path / "out")
+    doc = session.board_fields(session.open_board(board)["board_id"])
+    rails = {r["net"]: r for r in doc["rails"]}
+    assert rails["V_T"]["complete"] and "net tie" in rails["V_T"]["note"]
+    assert rails["V"]["complete"]
+
+
+def test_cli_fields_says_what_completes_a_rail_behind_a_ferrite(tmp_path, capsys):
+    from kicad_fixture import write_board
+    board = write_board(tmp_path / "b.kicad_pcb", ferrite_parts(FERRITE_FIELDS), CHAIN_TRACKS)
+    assert main(["fields", str(board)]) == EXIT_OK
+    out = capsys.readouterr().out
+    assert "have PI_LOAD but no part" not in out and "feeds no regulator" not in out
+    lines = out.splitlines()
+    at = lines.index("Rail +3V3_F")
+    assert "link FB1" in lines[at + 1] and lines[at + 1].startswith("  Rail +3V3_F from KiCad")

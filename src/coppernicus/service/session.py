@@ -705,7 +705,8 @@ class Session:
         entry = self._entry(board_id)
         found = self._board_fields(entry)
         try:
-            listed = BF.listing(found.fields, found.pad_nets)
+            listed = BF.listing(found.fields, found.pad_nets,
+                                [(t.net_a, t.net_b) for t in entry.board.net_ties()])
         except BF.FieldError as e:
             raise ServiceError(E.INVALID_BOARD_FIELD, str(e), FIELD_HINT) from None
         return C.jsonable({
@@ -713,10 +714,14 @@ class Session:
                                              sorted(found.fields.items(), key=lambda kv: BF._ref_key(kv[0]))],
             **listed,
             "assumptions": ["Fields are read from the board file's footprints, as KiCad copies "
-                            "them from the symbols; only PI_* fields are listed. A rail needs a "
-                            "PI_SOURCE, and a PI_LOAD or a regulator input or link it feeds; each "
-                            "value carries its unit. Solves use them by default; a project-file "
-                            "rail of the same net is ignored unless it sets override_board_fields."],
+                            "them from the symbols; only PI_* fields are listed. Each value "
+                            "carries its unit. A rail is complete as a solve judges it, from the "
+                            "fields alone (their PI_LINK links and the board's net ties, no "
+                            "project file): a PI_SOURCE with a PI_LOAD, or with a regulator input "
+                            "or link it feeds; or PI_LOAD on a net that links and net ties join "
+                            "to a net with a source (complete_through and the note say which). "
+                            "Solves use them by default; a project-file rail of the same net is "
+                            "ignored unless it sets override_board_fields."],
             "warnings": entry.warnings(),
         })
 

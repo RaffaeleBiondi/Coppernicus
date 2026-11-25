@@ -170,7 +170,9 @@ class FieldRail:
     parts: List[str] = field(default_factory=list)              # refs with PI_RAIL on it
 
     def missing(self) -> Optional[str]:
-        """Why it is not a rail by itself (no source, no load), or None."""
+        """Why it is not a rail, or None when it has a source and a load. What it says of
+        links, net ties and regulator inputs holds only once :func:`judge` found none that
+        completes it: the judge is the one caller."""
         if not self.sources:
             return (f"{self.net}: loads {', '.join(t.part for t in self.loads)} have PI_LOAD "
                     "but no part on this net has PI_SOURCE (the voltage that holds the rail), and "
@@ -178,7 +180,8 @@ class FieldRail:
         if not self.loads:
             return (f"{self.net}: {', '.join(t.part for t in self.sources)} has PI_SOURCE but "
                     "no part on this net has PI_LOAD (a current drawn from the rail), and it feeds "
-                    "no regulator input or link")
+                    "no regulator input or link (a link to a net that another source drives does "
+                    "not count)")
         return None
 
     @property
@@ -201,8 +204,10 @@ class FieldRail:
         return (f"Rail {self.net} from KiCad footprint fields (from KiCad field PI_RAIL on "
                 f"{', '.join(self.parts)}): {self.values_text()}.")
 
-    def listing(self) -> Dict[str, Any]:
-        """As plain data, each terminal with the fields it came from."""
+    def listing(self, missing: Optional[str], through: Optional[str] = None) -> Dict[str, Any]:
+        """As plain data, each terminal with the fields it came from, complete as
+        :func:`judge` found it: ``missing``, why it is not (None: complete); ``through``, what
+        completes it beyond its own net."""
         def term(t: FieldTerm) -> Dict[str, Any]:
             d = {k: v for k, v in dataclasses.asdict(t.term).items()
                  if v not in (None, "", 0.0) or k in ("voltage", "current")}
@@ -211,7 +216,8 @@ class FieldRail:
                 d["fields_on"] = t.part
             d["fields"] = {fv.field: fv.text for _, fv in t.values}
             return d
-        return {"net": self.net, "parts": list(self.parts), "complete": self.missing() is None,
+        return {"net": self.net, "parts": list(self.parts), "complete": missing is None,
+                "complete_through": through,
                 "sources": [{**term(t), "voltage_v": t.term.voltage, "from": t.values[0][1].origin()}
                             for t in self.sources],
                 "loads": [{**term(t), "current_a": t.term.current, "from": t.values[0][1].origin()}
@@ -698,45 +704,13 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
             link_notes.setdefault(net, []).append(note)
 
     own = {r.net: r for r in out.rails}
-    # Loads on a net that a net tie joins to a driven net go into that rail: the per-rail
-    # solve joins tied copper, and finds their pads on the tied net. A project rail of the
-    # tied net that holds only limits stays, limits only.
+    judged = judge(rails, out, ties)          # folds tied loads into their driven rail
+    folded, missing, through = judged.folded, judged.missing, judged.through
     tie_notes: Dict[str, List[str]] = {}
-    folded: Dict[str, Tuple[FieldRail, str]] = {}       # tied net -> (its fields, the driver)
-    for net in sorted(rails):
-        fr = rails[net]
-        if fr.sources or not fr.loads or (net in own and (own[net].sources or own[net].loads
-                                                          or own[net].override_board_fields)):
-            continue
-        drivers = sorted(n for n in _group(net, ties) - {net}
-                         if (n in rails and rails[n].sources) or (n in own and own[n].sources))
-        if not drivers:
-            continue
-        driver = drivers[0]
-        if driver in rails and rails[driver].sources:
-            rails[driver].loads += fr.loads
-            rails[driver].parts += fr.parts
-        else:
-            own[driver].loads += [copy.deepcopy(t.term) for t in fr.loads]
+    for net, (fr, driver) in folded.items():
         tie_notes.setdefault(driver, []).append(
             f"Rail {driver}: loads {', '.join(t.term.ref for t in fr.loads)} on {net}, joined to it "
             f"by a net tie (from KiCad field PI_RAIL {net}).")
-        folded[net] = (fr, driver)
-        del rails[net]
-    trial = copy.deepcopy(out)                # every field rail with a source in place, to
-    for net, fr in rails.items():             # see what a source-only rail feeds
-        if fr.sources and not (net in own and own[net].override_board_fields):
-            trial.rails = [r for r in trial.rails if r.net != net] + [fr.rail()]
-    # Complete: a source and a load; a source feeding a regulator or a link; or loads on a
-    # net that links and net ties join to a driven net (the loads behind a ferrite).
-    joins = [(k.net_a, k.net_b) for k in trial.links] + list(ties)
-    driven = {r.net for r in trial.rails if r.sources}
-
-    def complete(net: str, fr: FieldRail) -> bool:
-        if fr.sources:
-            return bool(fr.loads) or _feeds(trial, net, ties)
-        return bool(fr.loads) and bool((_group(net, joins) - {net}) & driven)
-    missing = {net: None if complete(net, fr) else fr.missing() for net, fr in rails.items()}
 
     new_rails: List[Rail] = []
     for r in out.rails:
@@ -759,17 +733,18 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
                 r.net, "overridden",
                 [f"Rail {r.net} from the project file: override_board_fields is set, so it replaces "
                  f"the rail of the KiCad footprint fields ({fr.values_text()})."]
-                + link_notes.get(r.net, []), board_fields=fr.listing())
+                + link_notes.get(r.net, []),
+                board_fields=fr.listing(missing[r.net], through.get(r.net)))
             _kicad_drop_limit(fr, r, origin, "even under override_board_fields")
         elif missing[r.net] is not None:
             new_rails.append(r)
             origin = merged.origins[r.net] = Origin(
                 r.net, "project", list(link_notes.get(r.net, [])),
                 [f"KiCad fields on {r.net} are incomplete ({missing[r.net]}): the project file's "
-                 "rail is used"], board_fields=fr.listing())
+                 "rail is used"], board_fields=fr.listing(missing[r.net]))
             _kicad_drop_limit(fr, r, origin, "even though the fields' rail is incomplete")
         else:
-            rail, origin = _from_fields(fr, r, pad_nets)
+            rail, origin = _from_fields(fr, r, pad_nets, through.get(r.net))
             origin.notes += link_notes.get(r.net, [])
             new_rails.append(rail)
             merged.origins[r.net] = origin
@@ -778,7 +753,7 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
         if missing[net] is not None:
             errors.append(missing[net])
             continue
-        rail, origin = _from_fields(rails[net], None, pad_nets)
+        rail, origin = _from_fields(rails[net], None, pad_nets, through.get(net))
         origin.notes += link_notes.get(net, [])
         new_rails.append(rail)
         merged.origins[net] = origin
@@ -815,15 +790,119 @@ def _group(net: str, joins: Sequence[Tuple[str, str]]) -> set:
     return nets
 
 
-def _feeds(project: Project, net: str, ties: Sequence[Tuple[str, str]] = ()) -> bool:
-    """Whether a rail on ``net`` (and the nets tied to it) delivers current to a regulator
-    input or a link, at nominal voltages, as the per-rail solve estimates it. An estimate
-    that cannot be made counts as yes: the solve reports it."""
+def _path(net: str, joins: Sequence[Tuple[str, str, str]], driven: set) -> Optional[Tuple[str, str]]:
+    """How ``joins`` ((net a, net b, what joins them): links, net ties) join ``net`` to the
+    nearest other net in ``driven``: the text ("link FB2 joins it to V_MID, link FB1 to
+    +3V3") and that net; None when they join it to none."""
+    came: Dict[str, Optional[Tuple[str, str]]] = {net: None}      # net -> (what, from net)
+    todo = [net]
+    while todo:
+        n = todo.pop(0)                       # breadth first: the fewest steps
+        if n != net and n in driven:
+            end, steps = n, []
+            while came[n] is not None:
+                what, back = came[n]
+                steps.append((what, n))
+                n = back
+            steps.reverse()
+            return ", ".join(f"{what} joins it to {to}" if i == 0 else f"{what} to {to}"
+                             for i, (what, to) in enumerate(steps)), end
+        for a, b, what in joins:
+            for x, y in ((a, b), (b, a)):
+                if x == n and y not in came:
+                    came[y] = (what, n)
+                    todo.append(y)
+    return None
+
+
+def _feeds(project: Project, net: str, ties: Sequence[Tuple[str, str]] = ()) -> Optional[str]:
+    """What a rail on ``net`` (and the nets tied to it) delivers current to, regulator inputs
+    and links, at nominal voltages, as the per-rail solve estimates it (None: nothing). An
+    estimate that cannot be made counts as fed: the solve reports it."""
     from coppernicus.power_tree import EstimateError, estimated_draws
     try:
-        return bool(estimated_draws(project, sorted(_group(net, ties)), list(ties)))
-    except EstimateError:
-        return True
+        draws = estimated_draws(project, sorted(_group(net, ties)), list(ties))
+    except EstimateError as e:
+        return f"counted as fed, as the solve does, though what it feeds cannot be estimated ({e})"
+    return "it feeds " + "; ".join(d.what for d in draws) if draws else None
+
+
+@dataclass
+class Judged:
+    """The fields' rails as :func:`judge` found them, by net (every net of the rails it was
+    given, folded ones included)."""
+    missing: Dict[str, Optional[str]] = field(default_factory=dict)  # why not complete; None: complete
+    through: Dict[str, str] = field(default_factory=dict)      # what completes it beyond its net
+    folded: Dict[str, Tuple[FieldRail, str]] = field(default_factory=dict)  # tied net -> (fields, driver)
+
+
+def judge(rails: Dict[str, FieldRail], project: Project,
+          ties: Sequence[Tuple[str, str]] = ()) -> Judged:
+    """Which of the fields' ``rails`` are complete, the one judge of the merge and the
+    listing. ``project``: the project being merged, its links those of the fields (PI_LINK)
+    and of the project file (an empty project with the field links: the fields alone);
+    ``ties``: the board's net-tie pairs.
+
+    Complete: a source and a load; a source that feeds a regulator input or a link (through
+    links and net ties, as the per-rail solve estimates it); or loads on a net that links and
+    net ties join to a driven net (the loads behind a ferrite). Loads on a net that a net tie
+    joins to a driven net go into that rail (the per-rail solve joins tied copper and finds
+    their pads on the tied net), unless a project rail of their net has sources, loads or
+    ``override_board_fields``: ``rails`` and ``project``'s rails are changed in place, as the
+    merge wants (the listing passes copies)."""
+    own = {r.net: r for r in project.rails}
+    out = Judged()
+    had_loads = {net for net, fr in rails.items() if fr.loads}
+    tied_in: Dict[str, List[str]] = {}                 # driver -> "U2 on V_T", the loads tied in
+    for net in sorted(rails):
+        fr = rails[net]
+        if fr.sources or not fr.loads or (net in own and (own[net].sources or own[net].loads
+                                                          or own[net].override_board_fields)):
+            continue
+        drivers = sorted(n for n in _group(net, ties) - {net}
+                         if (n in rails and rails[n].sources) or (n in own and own[n].sources))
+        if not drivers:
+            continue
+        driver = drivers[0]
+        if driver in rails and rails[driver].sources:
+            rails[driver].loads += fr.loads
+            rails[driver].parts += fr.parts
+        else:
+            own[driver].loads += [copy.deepcopy(t.term) for t in fr.loads]
+        tied_in.setdefault(driver, []).append(f"{', '.join(t.term.ref for t in fr.loads)} on {net}")
+        out.folded[net] = (fr, driver)
+        del rails[net]
+    trial = copy.deepcopy(project)            # every field rail with a source in place, to
+    for net, fr in rails.items():             # see what a source-only rail feeds
+        if fr.sources and not (net in own and own[net].override_board_fields):
+            trial.rails = [r for r in trial.rails if r.net != net] + [fr.rail()]
+    joins = ([(k.net_a, k.net_b, f"link {k.ref}") for k in trial.links]
+             + [(a, b, "a net tie") for a, b in ties])
+    driven = {r.net for r in trial.rails if r.sources}
+
+    def driven_by(net: str) -> str:
+        labels = [s.label for r in trial.rails if r.net == net for s in r.sources]
+        return f", driven by {', '.join(dict.fromkeys(labels))}" if labels else ""
+    for net, (_, driver) in out.folded.items():
+        out.missing[net] = None
+        out.through[net] = (f"a net tie joins it to {driver}{driven_by(driver)}; its loads are "
+                            f"solved in rail {driver}")
+    for net, fr in rails.items():
+        if fr.sources and fr.loads:
+            out.missing[net] = None
+            if net in tied_in and net not in had_loads:
+                out.through[net] = (f"loads {'; '.join(tied_in[net])}, joined to it by a net "
+                                    f"tie{'s' if len(tied_in[net]) > 1 else ''}")
+            continue
+        if fr.sources:
+            found = _feeds(trial, net, ties)
+        else:
+            path = _path(net, joins, driven)
+            found = path[0] + driven_by(path[1]) if path else None
+        out.missing[net] = None if found else fr.missing()
+        if found:
+            out.through[net] = found
+    return out
 
 
 def _kicad_drop_limit(fr: FieldRail, rail: Rail, origin: Origin, why: str = "") -> None:
@@ -843,12 +922,14 @@ def _kicad_drop_limit(fr: FieldRail, rail: Rail, origin: Origin, why: str = "") 
                             "its net.")
 
 
-def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = None
-                 ) -> Tuple[Rail, Origin]:
-    """The fields' rail, with what it keeps from the project rail ``own`` of its net, and its
-    origin (notes and warnings)."""
+def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = None,
+                 through: Optional[str] = None) -> Tuple[Rail, Origin]:
+    """The fields' rail (complete; ``through``: what completes it beyond its own net), with
+    what it keeps from the project rail ``own`` of its net, and its origin (notes and
+    warnings)."""
     rail = fr.rail()
-    origin = Origin(fr.net, "fields", [fr.note()], list(fr.warnings), board_fields=fr.listing())
+    origin = Origin(fr.net, "fields", [fr.note()], list(fr.warnings),
+                    board_fields=fr.listing(None, through))
     if own is None:
         return rail, origin
     # A project rail with no sources and no loads only adds limits: nothing to compare.
@@ -989,17 +1070,32 @@ def _link_text(k: Link) -> str:
 # ---------------------------------------------------------------------- listing
 
 def listing(fields: Mapping[str, Mapping[str, str]],
-            pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None) -> Dict[str, Any]:
+            pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None,
+            ties: Sequence[Tuple[str, str]] = ()) -> Dict[str, Any]:
     """The fields' rails and links as plain data, each value with the field it came from
-    (for the MCP tool and the CLI). Raises FieldError like :func:`field_rails`."""
+    (for the MCP tool and the CLI). Each rail is complete as the merge judges the fields
+    alone (:func:`judge`: their links and the board's net ties, ``ties``, no project file),
+    and a rail completed by a link, a net tie or a regulator input it feeds says so in
+    ``complete_through`` and its note. Raises FieldError like :func:`field_rails`."""
     rails = field_rails(fields, pad_nets)
+    links = field_links(fields, pad_nets or {})
+    judged = judge(copy.deepcopy(rails), Project(links=[k for k, _ in links]), ties)
+
+    def note(fr: FieldRail) -> Optional[str]:
+        if judged.missing[fr.net] is not None:
+            return None
+        through = judged.through.get(fr.net)
+        if through is None:
+            return fr.note()
+        return (f"{fr.note()} Complete without a {'load' if fr.sources else 'source'} of its "
+                f"own: {through}.")
     return {
-        "rails": [{**fr.listing(), "missing": fr.missing(),
-                   "note": fr.note() if fr.missing() is None else None}
-                  for _, fr in sorted(rails.items())],
+        "rails": [{**fr.listing(judged.missing[net], judged.through.get(net)),
+                   "missing": judged.missing[net], "note": note(fr)}
+                  for net, fr in sorted(rails.items())],
         "links": [{"ref": k.ref, "net_a": k.net_a, "pins_a": k.pins_a, "net_b": k.net_b,
                    "pins_b": k.pins_b, "resistance_ohm": k.resistance_ohm, "from": fv.origin()}
-                  for k, fv in field_links(fields, pad_nets or {})],
+                  for k, fv in links],
     }
 
 
