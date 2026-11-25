@@ -486,8 +486,7 @@ The overall power-tree verdict (`power_tree.tree_verdicts`) takes the board temp
 more group: fail wins, then a not-judged item from a limit set, then pass. `tree_summary`
 merges its not-judged entries and failed rows into the top-level `not_judged` and `failed`,
 and names the thermal limits in `verdict_note`; `solve` exits 1 on fail, 3 when a limit set
-could not judge. The app's verdict header (`main_window._tree_verdict`) still counts groups
-only: the Temperature tab (task 8b) adds the board temperature there.
+could not judge.
 
 ### Summary (`tree_summary(tree)["thermal"]`, present only when the temperature was solved)
 
@@ -527,7 +526,7 @@ the overestimate (`output_pads`) or the even split (`part_pads`) caveat, when a 
 dissipates; the grid (cells, size, count inside the board; a cell is all copper or none, read
 at its centre; every net's copper spreads heat, k = 390 W/m·K); one line per laminate, with
 what it was taken as (an unrecognized name: FR4 core, 0.8 / 0.3 W/m·K); the solder mask and
-silkscreen, when the stackup has them; the board shape (outline, or the copper's bounding box
+silkscreen with their thickness and k, when the stackup has them; the board shape (outline, or the copper's bounding box
 plus 1 mm); what is not modelled (heat sinks, enclosures, mounting, edge clamps; packages, no
 junction temperature; transients); what is judged (above).
 
@@ -537,7 +536,7 @@ junction temperature; transients); what is judged (above).
   (materials.py:33-51); the prepreg patterns need a word boundary (materials.py:47-48), so a
   prepreg name with a prefix glued to it falls back to FR4 core (0.8 / 0.3 W/m·K in place of
   prepreg's 0.6 / 0.25). The assumption line names every laminate and what it was taken as.
-  Not reported upstream (coordinator's ruling); no override is exposed.
+  No override is exposed.
 - **Regulator heat is a point deposit.** Each pad's share of a regulator's loss lands in the
   single grid cell holding the pad centre, with no package model: the temperature there grows
   slowly as the cell shrinks (+5-8 % from the automatic grid down to 0.05-0.1 mm on the test
