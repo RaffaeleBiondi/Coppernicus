@@ -466,9 +466,9 @@ class MainWindow(QMainWindow):
             self.board_fields = read_board_fields(board.path) if board.path is not None else None
         except EngineError as e:
             self._fields_read_error = f"{e} ({FIELD_HINT})"       # as the CLI prints it
+        self.last_fields_read_s = time.perf_counter() - t0
         # The nets the board's net ties join: the merge follows them, as the CLI's does.
         self._tie_pairs = [(t.net_a, t.net_b) for t in board.net_ties()]
-        self.last_fields_read_s = time.perf_counter() - t0
 
     def _remerge(self):
         """Merge the project with the board's fields into ``self.merged``, as the CLI does
