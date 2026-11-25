@@ -102,9 +102,9 @@ class Source:
     ground_sense_ref: str = ""
     ground_sense_pins: PinSpec = None
     ground_sense_net: str = ""
-    # Part data kept for later use (none of it changes a solve yet): the rated output
-    # current (KiCad field PI_IMAX; shown next to I_out, not judged) and a switcher's fixed
-    # switching frequency (PI_FSW; stored, not used yet).
+    # Part data (none of it changes a solve): the rated output current (KiCad field PI_IMAX;
+    # shown next to I_out, and judged in the power tree: coppernicus.power_tree.judge_ratings)
+    # and a switcher's fixed switching frequency (PI_FSW; stored, not used yet).
     current_limit_a: Optional[float] = None
     fsw_hz: Optional[float] = None
     # More pads held at the same voltage, on other parts: one terminal, not parallel sources

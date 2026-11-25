@@ -52,6 +52,7 @@ from coppernicus.power_tree import (
     group_verdict,
     has_limits,
     not_judged_text,
+    rating_origins,
     tree_verdicts,
     unsolved_limits,
 )
@@ -1226,6 +1227,7 @@ class MainWindow(QMainWindow):
         merged = getattr(self.sender(), "merged", None)
         if merged is not None:
             merged.annotate(tree)                   # where the rails came from, as the CLI says
+            rating_origins(tree, merged)            # ... and each regulator's rating
         # Limits do not change the solve: judge it by the ones set now (one may have been
         # edited while it solved, on the copy the worker took).
         apply_limits(tree, self.merged.project)         # the board temperature's too

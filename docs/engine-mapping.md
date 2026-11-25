@@ -78,7 +78,8 @@ spread over several tied nets raise `EngineError`: pick the pins on one net.
 | `ground` (`ground_ref`, `ground_pins`, `ground_net`) | `ground` | — | none | Turns on the ground-net solve. A `"source"`'s ground pins are that ground's 0 V reference. |
 | `sense` (`sense_ref`, `sense_pins`, `sense_net`) | `sense` | — | none | **Proposed (beyond the plan's field list).** Remote sense: the regulator holds its voltage at these pins. KiPI's power-chain validation board, which Task 7 copies, uses it. |
 | `ground_sense` (`ground_sense_ref`, `ground_sense_pins`, `ground_sense_net`) | `ground_sense` | — | none | **Proposed.** Negative remote sense: the regulator holds the voltage above these pins. |
-| — | `input_ground`, `phases`, `current_limit_a`, `dropout_v`, `vin_min`, `vin_max`, `vin_pct`, `vin_dv`, `acc_*`, `load_line_mohm`, `mesh_sense`, `sense_points` | — | KiPI defaults (off) | Not exposed in Task 6. |
+| `current_limit_a` | — (not passed) | A | `None` | The rated output current (KiCad field `PI_IMAX`, or the project file). Not passed to KiPI's `Vrm.current_limit_a`: Coppernicus judges it itself (Verdicts: regulator ratings). Passing it would change nothing else (the power-chain tree summary is identical with and without it: KiPI only sets `VrmReport.passed` from it, `tree.py:836-845`), but KiPI's `passed` is set whether or not the group converged, and its bare `abs(i_out) <= limit` fails a part rated exactly for what it delivers on round-off. |
+| — | `input_ground`, `phases`, `dropout_v`, `vin_min`, `vin_max`, `vin_pct`, `vin_dv`, `acc_*`, `load_line_mohm`, `mesh_sense`, `sense_points` | — | KiPI defaults (off) | Not exposed in Task 6. |
 | — | `bandwidth_khz` | kHz | KiPI's 50 | AC only; the DC solve does not read it. Task 9 must take it from the user, not from KiPI's default. |
 
 ### Load → `Load`
@@ -225,7 +226,8 @@ KiPI's own `SolveError`s become `EngineError` too.
 | `v_ground` | `v_ground_v` | V |
 | `v_ground_sense` | `v_ground_sense_v` | V |
 | `regulation` | `regulation` | — | KiPI's reason it cannot hold its voltage (an LDO with less than its dropout across it; the dropout defaults to 0 V, so this means its input fell below its output). |
-| `current_limit_a`, `passed`, `phases`, `load_line_mohm`, `v_droop` | — | | Not exposed (no current limit, single phase, no load line). |
+| `current_limit_a`, `passed`, `phases`, `load_line_mohm`, `v_droop` | — | | Not read (the rating is not passed to KiPI, single phase, no load line). |
+| — (the project's `Source.current_limit_a`) | `current_limit_a`, `current_limit_from`, `current_passed` | A | The rating as the user wrote it (copied in `convert_tree` from the source the engine named), where it was written (`power_tree.rating_origins`, from the merged project: "KiCad field PI_IMAX on U1" or "the project file"; "" when not known), and `power_tree.judge_ratings`'s verdict (Verdicts: regulator ratings). |
 | terminal `"U1 (input)"` of the feeding group, `"U1 (gnd)"` of the ground group | `input_net`, `input_group`, `input_nominal_v`, `v_in_worst_v`, `input_drop_v`, `input_drop_pct`, `input_status`, `input_passed` | V, % | New (second review). A regulator's input judged as a load on the rail feeding it: `v_in_worst_v` = lowest input pin − highest ground pin (on a negative rail the highest minus the lowest), `input_drop_v` = toward 0 V from the set voltage of the source driving that rail. `input_status`: `DISCONNECTED`, `NOT CONVERGED`, or `VRM OUT OF REGULATION` when that source cannot hold its voltage. |
 
 ### Loads → `TreeResult.loads: List[LoadReport]` (new, `results.py`)
@@ -285,6 +287,24 @@ Which limit judges what (`power_tree.LIMITS_RULE`, also an assumption line of ev
   value, so a value read from the file can be cleared).
 - On a ground, `max_ground_rise_mv` judges each return pin's rise and the copper's largest
   rise, by magnitude (signed values shown).
+- **Regulator ratings** (`power_tree.judge_ratings`). A source's rated output current
+  (`Source.current_limit_a`: KiCad field `PI_IMAX`, or `current_limit_a` in the project file)
+  is a limit the user wrote: the regulator fails when |I out| is over it, as KiPI's own check
+  (`abs(i_out) <= limit`), with |I out| within 1e-9 (relative) of the rating counted as at it
+  (the solve's round-off: 2.0000000000001 A out of a 2 A load). It belongs to the group the
+  regulator drives: a fail is a `regulator` problem there, "U1: 2.502 A out, over its rated 2 A
+  (from the project file)" or "(from KiCad field PI_IMAX on U1)", and is named in the verdict
+  note ("Over a rated output current: …"). Where the rating was written comes from the merged
+  project's origins (`power_tree.rating_origins`: a rail from the KiCad fields, or the project
+  file's rail, its override, or a rail the fields leave incomplete); where that is not known
+  (a caller that did not pass the merged project), "(from KiCad field PI_IMAX or the project
+  file)". In a group that did not converge it is not judged (`{"item": "U1", "net": "+3V3",
+  "limit": "current_limit_a", "reason": "its iteration did not converge"}`). A source without
+  a rating is not judged and not listed. The rating stays out of the groups' `limits` (keyed by
+  the net limits); a group judged only by a rating passes or fails by it. VRM rows of
+  `tree_summary`: `exceeds_current_limit` (None: no rating, or not judged) and
+  `current_limit_from` (None: no rating); the value itself is `i_max_a`
+  (`service.convert.vrm_ratings`).
 
 The verdict of a group (`power_tree.group_verdict`):
 - `fail` when a limit is exceeded;

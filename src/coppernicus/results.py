@@ -295,6 +295,13 @@ class VrmReport:
     input_drop_pct: Optional[float] = None
     input_status: str = ""         # DISCONNECTED, NOT_CONVERGED or OUT_OF_REGULATION
     input_passed: Optional[bool] = None        # against its input net's max_drop_pct
+    # Its rated output current as the user wrote it (Source.current_limit_a: KiCad field
+    # PI_IMAX or the project file; None: not given), where it was written ("" when not known:
+    # coppernicus.power_tree.rating_origins names it), and |I out| within it (None: no rating,
+    # or not judged; coppernicus.power_tree.judge_ratings).
+    current_limit_a: Optional[float] = None
+    current_limit_from: str = ""
+    current_passed: Optional[bool] = None
 
 
 @dataclass

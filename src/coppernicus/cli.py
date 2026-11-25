@@ -305,7 +305,7 @@ def _cmd_solve_tree(args) -> int:
     from coppernicus.engine.kicad_fields import read_board_fields
     from coppernicus.engine.tree import solve_project_tree
     from coppernicus.maps import safe_name
-    from coppernicus.power_tree import tree_summary, tree_text
+    from coppernicus.power_tree import rating_origins, tree_summary, tree_text
     from coppernicus.project import Project, ProjectError
     from coppernicus.service.session import FIELD_HINT
 
@@ -352,6 +352,7 @@ def _cmd_solve_tree(args) -> int:
         return fail("solve_failed", str(e), "fix the project file or the KiCad fields (PI_GND, "
                     "PI_INPUT, PI_LINK...), then solve again")
     merged.annotate(tree)
+    rating_origins(tree, merged)          # where each regulator's rating was written
     from coppernicus.service.convert import vrm_ratings
     doc = vrm_ratings(tree_summary(tree, top=args.top), project)    # + each VRM's I_max (shown)
     if estimate is not None:

@@ -249,6 +249,8 @@ def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
                for (what, net, i), name in names.items() if what == "source"}
     for v in out.vrms:
         _judge_input(out, v, sources.get(v.name))
+        # Its rating, judged in coppernicus.power_tree (judge_ratings), not passed to KiPI.
+        v.current_limit_a = getattr(sources.get(v.name), "current_limit_a", None)
 
     # A load's supply net is the one its pins are on: past a net tie, not its rail's (R6).
     rail_of_load = {name: net for (what, net, _i), name in names.items() if what == "load"}
