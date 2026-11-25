@@ -295,18 +295,31 @@ Which limit judges what (`power_tree.LIMITS_RULE`, also an assumption line of ev
   regulator drives: a fail is a `regulator` problem there, "U1: 2.502 A out, over its rated 2 A
   (from the project file)" or "(from KiCad field PI_IMAX on U1)", and is named in the verdict
   note ("Over a rated output current: …"). Where the rating was written comes from the merged
-  project's origins (`power_tree.rating_origins`: a rail from the KiCad fields, or the project
-  file's rail, its override, or a rail the fields leave incomplete); where that is not known
-  (a caller that did not pass the merged project), "(from KiCad field PI_IMAX or the project
-  file)". It is not judged while its I out is not settled: its group, or a group it feeds
-  (I out includes their regulators' inputs), did not converge, or KiPI marks a load there NOT
-  CONVERGED (`{"item": "U1", "net": "+3V3", "limit": "current_limit_a", "reason": "+1V8, which
-  it feeds, did not converge"}`). A source without
-  a rating is not judged and not listed. The rating stays out of the groups' `limits` (keyed by
-  the net limits); a group judged only by a rating passes or fails by it. VRM rows of
-  `tree_summary`: `exceeds_current_limit` (None: no rating, or not judged) and
-  `current_limit_from` (None: no rating); the value itself is `i_max_a`
-  (`service.convert.vrm_ratings`).
+  project's origins (`power_tree.rating_origins`, called by the CLI, the app and
+  `Session.solve_tree`: a rail from the KiCad fields, or the project file's rail, its override,
+  or a rail the fields leave incomplete); a caller that does not pass the merged project gets
+  "(from KiCad field PI_IMAX or the project file)".
+  - Not judged while its I out is not settled (I out includes the inputs of the regulators on
+    the rails it feeds): its group or a group it feeds did not converge, KiPI's outer
+    (ground-sense) iteration did not settle (`TreeResult.converged`, from KiPI's warning,
+    `kipi/dc/pi/tree.py:707-711`), or KiPI marks a load there NOT CONVERGED (`{"item": "U1",
+    "net": "+3V3", "limit": "current_limit_a", "reason": "+1V8, which it feeds, did not
+    converge"}`).
+  - A regulator out of regulation is still judged on its current, as KiPI does, unlike the
+    voltage rule for loads (a load's drop is not judged behind a regulator that cannot hold its
+    voltage, which the engine still holds at its set point).
+  - A rated source on a rail the tree does not solve as a rail (excluded: KiPI makes its
+    regulator a load on its input, `model.py:975-994`; or on a net used as a ground, left out
+    of the setup by `pisetup._mapped`) is not judged: `{"item": "U2", "net": "+1V8", "limit":
+    "current_limit_a", "reason": "not solved in the power tree"}`, as a drop limit there
+    (`TreeResult.unsolved_ratings`, through `unsolved_limits`; exit 3).
+  - A source without a rating is not judged and not listed. The rating stays out of the
+    groups' `limits` (keyed by the net limits); a group judged only by a rating passes or fails
+    by it. An assumption line (`power_tree.RATING_RULE`) states the rule whenever a rating
+    exists.
+  - VRM rows of `tree_summary`: `i_max_a` (the rating judged, `VrmReport.current_limit_a`; on
+    every row when some VRM has one, absent otherwise), `exceeds_current_limit` (None: no
+    rating, or not judged) and `current_limit_from` (None: no rating).
 
 The verdict of a group (`power_tree.group_verdict`):
 - `fail` when a limit is exceeded;

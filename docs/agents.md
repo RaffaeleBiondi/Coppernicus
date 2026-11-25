@@ -420,11 +420,14 @@ ground net is solved, each regulator's and load's `ground` pins (see
   A tree's not-judged entry is `{"item", "net", "limit", "reason"}`: the item is a load,
   `"U2 (input)"`, a return pin, or the net itself for a net-level entry (a limit of the wrong
   kind, a net the tree does not solve, a group that did not converge, a `max_drop_pct` with
-  nothing to judge);
+  nothing to judge), or a rated regulator (`"limit": "current_limit_a"`, see below);
 - `vrms`: each source and regulator, with `v_set_v`, `v_out_v`, `i_out_a`, `v_in_v`, `i_in_a`,
   `p_loss_w` and `regulation` (why it cannot hold its voltage, if so). A regulator's input, as
   a load of the rail that feeds it: `input_net`, `input_drop_mv`, `input_drop_pct`,
-  `input_exceeds_drop_limit`, `input_status`;
+  `input_exceeds_drop_limit`, `input_status`. Its rating: `i_max_a` (the rated output current
+  judged, `null` where none is given; the key is there only when some VRM has a rating),
+  `exceeds_current_limit` (`true`/`false`; `null` without a rating or when not judged) and
+  `current_limit_from` (where the rating was written; `null` without one);
 - `loads`: each load's `v_supply_v`, `v_ground_v`, `v_across_v`, `drop_mv` and `drop_pct`
   (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`, `net`
   (the net its supply pins are on) and `rail` (the rail it is listed in; another net past a
@@ -435,8 +438,30 @@ ground net is solved, each regulator's and load's `ground` pins (see
   `limits` (the strictest of each kind over its nets), `limits_by_net` (the limits each net
   sets), `verdict`, `not_judged` and `problems`: `load` on a rail, the regulator inputs it
   feeds among them as `"U1 (input)"` (`current_a` is the input current; `drop_mv` can be
-  `null`); `rise` and `return` on a ground; `hotspot` and `via` on both;
+  `null`), and `regulator` for a rated regulator driving it (below); `rise` and `return` on a
+  ground; `hotspot` and `via` on both;
 - `assumptions` and `warnings`.
+
+#### Regulator ratings in the power tree
+
+A source's rated output current (KiCad field `PI_IMAX`, or `current_limit_a` in the project
+file) is a limit the user wrote: the regulator **fails** when |I_out| is above it (|I_out|
+within 1e-9, relative, of the rating counts as at it: the solve's round-off). It belongs to
+the group the regulator drives:
+- a `regulator` problem there, `"U1: 2.502 A out, over its rated 2 A (from KiCad field
+  PI_IMAX on U1)"` (or `"(from the project file)"`; `"within its rated"` when it passes, an
+  info row), with `name`, `i_out_a`, `current_limit_a`, `current_limit_from` and
+  `rating_used_pct`; a fail is also named in `verdict_note` ("Over a rated output current: …");
+- not judged, listed as `{"item": "U1", "net": "+3V3", "limit": "current_limit_a", "reason":
+  …}`, while I_out is not settled ("its iteration did not converge", "+1V8, which it feeds,
+  did not converge", "the power-tree iteration did not converge"), and for a rated source on a
+  rail the tree does not solve as a rail, excluded or used as a ground (`"reason": "not solved
+  in the power tree"`; the item is the source);
+- a regulator out of regulation is still judged on its current, as KiPI does;
+- a source without a rating is not judged and not listed.
+
+The rating stays out of a group's `limits`; a tree whose only limit is a rating passes or fails
+by it. An assumption line states the rule whenever a rating exists.
 
 Verdicts in the tree follow the rule above: a copper limit (via, current density, rise) with
 nothing to judge passes; a `max_drop_pct` with no load to judge is not judged; a limit set on
