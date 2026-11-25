@@ -773,3 +773,30 @@ def test_the_composition_module_imports_without_kipi():
     code = "import sys, coppernicus.tolerance; print('kipi' in sys.modules)"
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "False"
+
+
+# ---------------------------------------------------------------------- review fixes
+
+def test_a_non_finite_part_or_limit_is_never_a_pass():
+    """NaN makes every comparison false: a NaN part counts as missing, a NaN limit places
+    nothing (I1)."""
+    from coppernicus.engine.tolerance import stack
+    nan = float("nan")
+    limits = {"dc": (0.020, 0.020), "ac": (0.050, 0.050), "total": (0.090, 0.090)}
+    parts = {"dc": (0.005, 0.0), "accuracy": (0.010, 0.010), "ripple": (nan, 0.002),
+             "transient": (0.01, 0.01)}
+    c = stack(parts, limits)
+    assert c["ac"].passed is None and c["ac"].missing == ["ripple"] and not c["ac"].complete
+    assert c["total"].passed is None and c["dc"].passed is True
+    over = stack({**parts, "ripple": (0.002, 0.002)}, {**limits, "ac": (nan, 0.050)})
+    assert over["ac"].allowed_below_v is None and over["ac"].passed is True     # the other side holds
+    nolimit = stack({**parts, "ripple": (0.002, 0.002)}, {**limits, "ac": (nan, float("inf"))})
+    assert nolimit["ac"].passed is None and not nolimit["ac"].has_limit
+
+
+def test_a_ripple_of_nans_is_not_judged_never_passes():
+    nan = float("nan")
+    project = _comp_project(**COMPLETE, aggressors=[("A1", True)])
+    row = _compose(project, noise=[_noise_result("A1", (nan, nan, nan, nan))]).rows[0]
+    assert row.parts["ripple"] is None and row.verdict == "not_judged"
+    assert "is not a finite number" in row.hints["ripple"]

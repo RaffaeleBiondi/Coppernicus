@@ -243,8 +243,15 @@ def _judge_row(row: ToleranceRow, load: Load) -> None:
             continue
         if not c.has_limit:
             c.passed = None
-            c.reason = ("no source drives its rail, so the tolerance has no nominal" if row.nominal_v is None
-                        else f"{key} is a % of 0 V, which places nothing: enter {key[:-len('_pct')]}_mv")
+            if row.nominal_v is None:
+                c.reason = "no source drives its rail, so the tolerance has no nominal"
+            elif not math.isfinite(row.nominal_v):
+                c.reason = f"the nominal ({row.nominal_v:g} V) is not a finite number: {key} places nothing"
+            elif key.endswith("_pct") and row.nominal_v == 0:
+                c.reason = f"{key} is a % of 0 V, which places nothing: enter {key[:-len('_pct')]}_mv"
+            else:
+                c.reason = f"{key} places no finite limit"
+
         elif c.passed is None:
             c.reason = "; ".join(f"{m}: {row.hints.get(m, 'not known')}" for m in c.missing)
     judged = [c for c in row.checks.values() if c.limit]
@@ -288,8 +295,13 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
     part, hint, row.stand_ins = _ripple(project, load, probe, source, driver or "", noise, noise_notes)
     found["ripple"] = (part, hint)
     for kind in PARTS:
-        row.parts[kind], text = found[kind]
-        if row.parts[kind] is None:
+        part, text = found[kind]
+        if part is not None and not all(math.isfinite(x) for x in (part.below_v, part.above_v)):
+            text = (f"{PART_NAMES[kind]} is not a finite number ({part.below_v:g} / {part.above_v:g} V "
+                    f"from {part.source})")
+            part = None
+        row.parts[kind] = part
+        if part is None:
             row.hints[kind] = text
     row.checks = stack({k: None if p is None else (p.below_v, p.above_v) for k, p in row.parts.items()},
                        load_limits(load, row.nominal_v))

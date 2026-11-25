@@ -13,6 +13,7 @@ tolerance; total = DC + AC, against the tolerance. Field by field: ``docs/engine
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional, Tuple
 
 from kipi.dc.pi.model import Load as KipiLoad
@@ -85,21 +86,31 @@ def accuracy_sides(nominal: float, source: Source) -> Optional[Pair]:
 
 # ---------------------------------------------------------------------- stack and judge
 
+def finite_pair(p: Optional[Pair]) -> bool:
+    """Whether ``p`` is a pair of finite numbers (NaN makes every comparison false)."""
+    return p is not None and all(math.isfinite(float(x)) for x in p)
+
+
+def _finite(x: Optional[float]) -> Optional[float]:
+    return x if x is not None and math.isfinite(x) else None
+
+
 def stack(parts: Dict[str, Optional[Pair]], limits: Dict[str, Limit]) -> Dict[str, ToleranceCheck]:
     """The three checks from the parts (``None``: missing), a thin copy of KiPI's ``stack()``
     loop (evaluate.py:123-129) with KiPI's ``judge`` (:96-102, +1e-12 V): a check adds the
     parts it knows, each side apart, and is complete only when it knows them all, so it can
-    fail before it is complete but pass only once it is."""
+    fail before it is complete but pass only once it is. A part that is not finite counts as
+    missing and a limit that is not finite places nothing (NaN would pass any comparison)."""
     out = {}
     for kind, names in CHECK_PARTS.items():
-        known = [parts.get(n) for n in names if parts.get(n) is not None]
+        known = [parts[n] for n in names if finite_pair(parts.get(n))]
         below = sum(p[0] for p in known)
         above = sum(p[1] for p in known)
         complete = len(known) == len(names)
-        lo, hi = limits.get(kind, (None, None))
+        lo, hi = (_finite(x) for x in limits.get(kind, (None, None)))
         out[kind] = ToleranceCheck(kind, float(below), float(above), lo, hi, complete,
                                    judge(below, above, (lo, hi), complete),
-                                   missing=[n for n in names if parts.get(n) is None])
+                                   missing=[n for n in names if not finite_pair(parts.get(n))])
     return out
 
 
