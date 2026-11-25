@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app.copper_thickness import CopperThicknessDialog, thickness_summary
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.problems import FAIL, Problem
 from coppernicus.project import (
@@ -529,10 +531,20 @@ class RailPanel(QWidget):
                                 "table (micro 12, buried 13, others 20 µm). Ask your fabricator.")
         self.temp = DecimalSpinBox(decimals=1, minimum=-55.0, maximum=250.0, suffix=" °C")
         self.temp.setToolTip("Copper temperature; resistivity is referenced to 20 °C")
+        self.copper_summary = QLabel("board file")
+        self.copper_summary.setWordWrap(True)            # many layers: wrap, never widen the panel
+        self.copper_summary.setToolTip("What-if copper thickness by layer, for every solve. "
+                                       "The board file is never changed.")
+        self.copper_edit = QPushButton("Edit…")
+        copper = QHBoxLayout()
+        copper.setContentsMargins(0, 0, 0, 0)
+        copper.addWidget(self.copper_summary, 1)
+        copper.addWidget(self.copper_edit)
         sform = QFormLayout(settings)
         sform.addRow("Largest mesh edge", self.max_edge)
         sform.addRow("Via plating (µm)", self.plating)
         sform.addRow("Copper temperature", self.temp)
+        sform.addRow("Copper thickness", copper)
 
         self.solve = QPushButton("Solve  (F5)")
         self.solve.setMinimumHeight(34)
@@ -557,6 +569,7 @@ class RailPanel(QWidget):
         self.max_edge.valueChanged.connect(self._write_settings)
         self.temp.valueChanged.connect(self._write_settings)
         self.plating.editingFinished.connect(self._write_settings)
+        self.copper_edit.clicked.connect(self._edit_copper)
         self.solve.clicked.connect(self.solve_requested.emit)
         self._settings: Optional[Settings] = None
         self.setEnabled(False)
@@ -588,6 +601,7 @@ class RailPanel(QWidget):
         self.max_edge.setValue(settings.max_edge_mm)
         self.plating.setText("" if settings.via_plating_um is None else f"{settings.via_plating_um:g}")
         self.temp.setValue(settings.copper_temp_c)
+        self.copper_summary.setText(thickness_summary(settings.copper_thickness_mm))
         self._loading = False
 
     def set_rail(self, board: Board, rail: Rail, ties: List[NetTie]):
@@ -736,6 +750,19 @@ class RailPanel(QWidget):
         self._settings.via_plating_um = _optional_float(self.plating)
         self._settings.copper_temp_c = self.temp.value()
         self.settings_changed.emit()
+
+    def _edit_copper(self):
+        """Edit…: the copper thickness by layer of the board shown, in a dialog. Only a change
+        reaches the settings (and drops the results)."""
+        if self._settings is None or self._board is None:
+            return
+        now = self._settings.copper_thickness_mm
+        dialog = CopperThicknessDialog(self._board.file_thickness_mm, now, self)
+        if dialog.exec() != QDialog.Accepted or dialog.values() == now:
+            return
+        self._settings.copper_thickness_mm = dialog.values()        # checked by the dialog
+        self.copper_summary.setText(thickness_summary(self._settings.copper_thickness_mm))
+        self._write_settings()
 
 
 # ---------------------------------------------------------------------- problems
