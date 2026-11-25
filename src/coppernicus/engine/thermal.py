@@ -475,8 +475,9 @@ def thermal_ram_estimate(unknowns: float, layers: int, total_bytes: Optional[flo
     outside = not (MEM_UNKNOWNS[0] <= unknowns <= MEM_UNKNOWNS[1]
                    and MEM_LAYERS[0] <= layers <= MEM_LAYERS[1])
     how = (f"estimated from a fit measured on synthetic square boards of {MEM_LAYERS[0]} to {MEM_LAYERS[1]} "
-           f"copper layers and {MEM_UNKNOWNS[0]:,} to {MEM_UNKNOWNS[1]:,} unknowns (SuperLU), within about "
-           "-30 % / +20 % of each" + ("; this solve is outside the measured range" if outside else "")
+           f"copper layers and {MEM_UNKNOWNS[0]:,} to {MEM_UNKNOWNS[1]:,} unknowns with SuperLU, "
+           "within about -30 % / +20 % of each"
+           + ("; this solve is outside the measured range" if outside else "")
            + "; other boards may need more or less")
     head = (f"The board temperature's model ({int(unknowns):,} unknowns: its grid and one factorization) "
             f"needs about {_size_text(need)}")
