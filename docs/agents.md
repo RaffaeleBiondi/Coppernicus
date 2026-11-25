@@ -80,6 +80,7 @@ input.
 | `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. The board temperature is a power-tree solve: when the project sets `thermal.max_temp_c` or `max_rise_c`, each is a top-level `not_judged` entry (`rail: null`, `item: "board temperature"`, "solved with the power tree only…"), so the verdict is `not_judged` (CLI and CI exit 3) unless something fails; use `solve_tree` to judge it. |
 | `solve_tree` | `project_path`, `top`?, `use_board_fields`?, `thermal`?, `thermal_options`?, `confirm_large`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. With `thermal` (or the project's `thermal.enabled`) it also solves the board temperature: see [Board temperature](#board-temperature). |
 | `solve_ac` | `project_path`, `rails`?, `confirm_large`?, `use_board_fields`? | The open-loop PDN impedance \|Z\|(f) at the project's probes, rail by rail: the document of `coppernicus ac --json`, with each rail's CSV and PNG of \|Z\|(f), sized first. See [AC impedance](#ac-impedance). |
+| `solve_noise` | `project_path`, `aggressors`?, `confirm_large`?, `use_board_fields`? | The DC-DC ripple and the noise each switching regulator (aggressor) couples into the victim nets: the document of `coppernicus noise --json`, with each aggressor's CSV, waveforms PNG and field-map PNGs, sized first. Judged only against the victims' noise margins; the ripple and the radiated estimate are never judged. See [Ripple and coupled noise](#ripple-and-coupled-noise). |
 | `propose_fields` | `project_path` or `result_id` | The KiCad `PI_*` field text that describes a project's rails and links (or one solved rail), part by part, to paste into KiCad. See [Proposing fields](#proposing-fields). |
 | `read_project` | `project_path` | A project file as written (rails, sources, loads, limits, links, settings; unknown keys included), checked by the project loader, with the board it names. |
 | `write_project` | `project_path`, `board_path`?, `rails`?, `remove_rails`?, `links`?, `remove_links`?, `settings`?, `use_board_fields`?, `from_project`?, `overwrite`? | Creates or edits a project file for the user. See [Editing projects](#editing-projects). |
@@ -540,6 +541,47 @@ rail, as `coppernicus ac PROJECT --json` does. Its project keys and the physics 
   before each rail, and `--html [PATH]` writes one offline page with each rail's |Z|(f) and
   its probes. In CI, the Action's `ac: true` input runs it (see [CI](ci.md)).
 
+### Ripple and coupled noise
+
+`solve_noise(project_path)` computes, for each switching regulator the project marks as an
+aggressor (`aggressors:`), its hot loops, its waveforms, the ripple at its pins and at the
+probes it names, the near field and a radiated estimate, and the noise it couples into each
+victim net (`victims:`), as `coppernicus noise PROJECT --json` does. What it computes and what
+the user enters: [Ripple and coupled noise](noise.md); every key:
+[engine-mapping.md](engine-mapping.md#task-10-dc-dc-ripple-and-coupled-noise--kipinoise-kipinoisesolverpy-kipinoisemodelpy).
+
+- The document: `kind: "noise"`, `verdict` and `verdict_note`, `failed` and `not_judged`
+  (each entry `{item, net, limit, reason, aggressor}`), `warnings`, `summary_file`, and
+  `aggressors`: each with its operating point (`vin_v`, `vout_v`, `iout_a`, `duty`, `fsw_hz`,
+  edges), `hot_loops`, `ripple` (`pp_20mhz_mv`, `below_20mhz_mv`, `above_20mhz_mv`, `pp_mv`,
+  `rms_mv`…), `victims` (`peak_mv`, `peak_by_mv` per mechanism, `dominant`, `margin_mv`,
+  `margin_from`, `ratio`, `passed`, `not_judged`, `stand_ins`…), `emi` (hotspots and the
+  radiated estimate), `stand_ins`, `assumptions`, `warnings`, `csv_file`, `png_files` (the
+  waveforms, then the H and E field maps), `stats` with `memory_peak_mb`, and `estimate`. The
+  files go into the server's output folder.
+- **The verdict comes only from the noise margins the user set**: a victim's
+  `noise_margin_v`, else its preset's own (lvds, analog), else the JESD8 levels of an entered
+  `logic_v`. A victim without one is ranked (`passed: null`, no entry). A KiPI default
+  standing in for a value the user did not give (Coss, Qrr, a capacitor without a model,
+  guessed ends, a coupling left out: listed in `stand_ins`) makes the victim **not judged,
+  never a pass**, whatever its peak; so does a `logic_v` off KiPI's table. Report each
+  `not_judged` reason and what the user can enter to remove it. **The ripple and the radiated
+  estimate are never judged**: give their numbers, never a pass or fail. Never invent a margin.
+- **Cost first.** It is heavy: minutes and gigabytes on a large board. Each aggressor is
+  first checked and sized, in `estimate`: `harmonics`, `f_max_hz`, `board_model` (with `note`
+  when the board model is off or left out), `triangles`, `ports`, `field_solves`, `unknowns`,
+  `memory_bytes` (an upper bound of the whole solve) against `machine_memory_bytes`,
+  `exceeds_memory`, and a `text`. When an aggressor would exceed this machine's memory,
+  nothing is solved and the call is refused with `solve_too_large`: tell the user the
+  estimate, and call again with `confirm_large: true` only if they agree (or after a coarser
+  `ac: max_edge_mm` or fewer `noise: field_per_decade`).
+- `aggressors` picks the aggressors by name (every one by default). Exit codes as the others:
+  1 a margin exceeded, 3 a margin that could not judge.
+- On the command line, `coppernicus noise PROJECT` prints "Noise of <aggressor>: <estimate>"
+  before each aggressor (on stderr with `--json`), and `--html [PATH]` writes one offline page
+  with each aggressor's waveforms, field maps, ripple and victims. In CI, the Action's
+  `noise: true` input runs it (see [CI](ci.md)).
+
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;
 - `max_current_density_a_mm2`;
@@ -730,8 +772,8 @@ limit. The map is still the copper drop below the group's source output, as its 
 
 ## Without MCP: the CLI with `--json`
 
-`nets`, `parts` and `solve` take `--json`. Each prints one JSON document on stdout (the same
-data as the tools) and nothing else; progress from `-v` goes to stderr.
+`nets`, `parts`, `solve`, `ac` and `noise` take `--json`. Each prints one JSON document on
+stdout (the same data as the tools) and nothing else; progress from `-v` goes to stderr.
 
 ```sh
 uv run coppernicus nets board.kicad_pcb --json [--all]
@@ -740,6 +782,8 @@ uv run coppernicus solve project.coppernicus.yml --out results --json [--rail NE
   [--top N] [--html [PATH]] [--open] [--no-board-fields] [--tree]
 # --tree --html writes <project>_tree_report.html: every group, the VRM, load and link tables
 uv run coppernicus fields board.kicad_pcb --json
+uv run coppernicus ac project.coppernicus.yml --out results --json [--rail NET] [--html [PATH]]
+uv run coppernicus noise project.coppernicus.yml --out results --json [--aggressor NAME] [--html [PATH]]
 ```
 
 `fields` lists a board's KiCad footprint fields and the rails they make, as the `board_fields`
@@ -755,8 +799,8 @@ Exit codes:
 | Code | Meaning |
 |---|---|
 | 0 | Done, and no limit you set was exceeded (or none was set). |
-| 1 | `solve` only: a limit you set was exceeded on some rail. |
-| 3 | `solve` only: a limit you set could not judge something (the `not_judged` items). Precedence: 2, 1, 3, 0. |
+| 1 | `solve`, `ac`, `noise`: a limit you set was exceeded (a drop, a target, a noise margin). |
+| 3 | `solve`, `ac`, `noise`: a limit you set could not judge something (the `not_judged` items). Precedence: 2, 1, 3, 0. |
 | 2 | Error, including a crash (a bug: code `internal_error`). stdout holds `{"error": {"code", "message", "hint"}}` with `--json`, and stderr a one-line message. A crash never exits 1. |
 
 `solve` writes the PNG maps and `<project>_summary.json` to `--out`, with or without `--json`.
@@ -800,9 +844,10 @@ setting with the others.
   used results, within `--max-result-mb`, keep their fields. An older result keeps its summary,
   so `compare_results` still works on it. Maps, probes and cuts on it return `result_evicted`,
   whose hint says which rail to solve again.
-- **DC only.** A single-rail solve does not include the ground return; solve the ground net as
-  its own rail, or the whole project with `solve_tree`. Thermal, AC impedance and DC-DC
-  ripple, which KiPI's engine has, are not exposed yet.
+- **Ground return.** A single-rail solve does not include the ground return; solve the ground
+  net as its own rail, or the whole project with `solve_tree`. The board temperature
+  (`solve_tree` with `thermal`), the AC impedance (`solve_ac`) and the DC-DC ripple and coupled
+  noise (`solve_noise`) are solved from a project file only, with no result ids.
 - **No maps of tree groups.** `solve_tree` returns tables and problems with their x/y, not
   result ids.
 - **What-ifs are settings only:** copper thickness, via plating and temperature, in `solve_rail`

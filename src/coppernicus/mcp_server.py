@@ -42,8 +42,10 @@ solve_rail -> get_problems / render_map / probe / cut_current -> change settings
 most) and solve again -> compare_results.
 From a project file: solve_project (rails one by one, with maps) or solve_tree (the whole
 power tree at once, ground return included; tables only; the board temperature with thermal);
-solve_ac for the PDN impedance |Z|(f) at the project's probes (heavy: read its estimate, and
-ask the user before confirm_large). Set up a project for the user with
+solve_ac for the PDN impedance |Z|(f) at the project's probes; solve_noise for a switcher's
+ripple and the noise it couples into victim nets, judged only against the user's noise
+margins (ripple and radiated estimate never judged). Both are heavy: read the estimate, and
+ask the user before confirm_large. Set up a project for the user with
 write_project (read_project to see one); describe it as KiCad fields with propose_fields (the
 user pastes them; KiCad files are never written). Before/after a change in KiCad:
 compare_revisions. One standard copper weight up or down on a layer: copper_step.
@@ -436,6 +438,36 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         return _call("solve_ac", session.solve_ac, project_path, rails, progress=bridge.progress,
                      cancelled=bridge.cancelled, confirm_large=confirm_large,
                      use_board_fields=use_board_fields)
+
+    @mcp.tool(annotations=WRITES_FILE)
+    def solve_noise(project_path: Annotated[str, Field(description="Absolute path to a *.coppernicus.yml "
+                                                                    "project file with aggressors.")],
+                    ctx: Context,
+                    aggressors: Annotated[Optional[list[str]], Field(
+                        description="Names of the aggressors to solve (default: every one).")] = None,
+                    confirm_large: Annotated[bool, Field(
+                        description="Solve even when the estimate exceeds this machine's memory "
+                                    "(otherwise refused with the estimate: solve_too_large). Ask the "
+                                    "user first.")] = False,
+                    use_board_fields: Annotated[Optional[bool], Field(
+                        description="false: ignore the board's KiCad footprint fields.")] = None,
+                    ) -> dict[str, Any]:
+        """The DC-DC ripple and coupled noise of the project's switching regulators (aggressors:,
+        victims:, noise: in the project file), aggressor by aggressor: the same document as
+        `coppernicus noise --json` (kind noise, verdict, failed and not_judged with each entry's
+        aggressor; per aggressor its hot loops, ripple, victims with peak, margin and reason,
+        stand_ins, assumptions, warnings, csv_file and png_files). The verdict comes only from
+        the noise margins the user set (noise_margin_v, a preset's own, or the JESD8 levels of
+        an entered logic_v); a KiPI default standing in for a value (stand_ins) makes a victim
+        not judged, never a pass. The ripple and the radiated estimate are never judged. Heavy
+        (minutes and GBs on a large board): each aggressor is sized first, in `estimate`
+        (harmonics, board model mesh, ports, field solves, unknowns, memory against this
+        machine's); over this machine's memory nothing is solved and the call is refused
+        (solve_too_large) unless confirm_large. Files go to this server's output folder."""
+        bridge = _Bridge(ctx)
+        return _call("solve_noise", session.solve_noise, project_path, aggressors,
+                     progress=bridge.progress, cancelled=bridge.cancelled,
+                     confirm_large=confirm_large, use_board_fields=use_board_fields)
 
     @mcp.tool(annotations=WRITES_FILE)
     def compare_revisions(result_a: Annotated[str, Field(description="The result before the change.")],

@@ -95,6 +95,22 @@ def noise_verdict(results: Sequence[NoiseResult]) -> Tuple[str, str, List[Dict[s
     return verdict, _note(verdict, failed, not_judged), failed, not_judged
 
 
+def victim_verdict_words(v: Dict[str, Any], failed: Sequence[Dict[str, Any]]) -> Tuple[str, str]:
+    """(verdict, reason) of one victim of a ``noise`` document, as :func:`noise_text` words
+    them: "FAIL" with its reason from the aggressor's ``failed`` list, "PASS", "not judged"
+    with its reason (a stand-in, or a margin that cannot be had), or "no margin set" (ranked).
+    For the HTML page and the CI summary."""
+    passed = v.get("passed")
+    if passed is False:
+        reason = next((e.get("reason") for e in failed if e.get("item") == v.get("name")), None)
+        return "FAIL", reason or "the peak is above its margin"
+    if passed is True:
+        return "PASS", ""
+    if v.get("not_judged"):
+        return "not judged", str(v["not_judged"])
+    return "no margin set", "no noise margin set: ranked, not judged"
+
+
 def _num(x) -> Optional[float]:
     if x is None:
         return None
@@ -408,3 +424,15 @@ def write_field_png(r: NoiseResult, kind: str, path, outline: Sequence[Any] = ()
     fig.tight_layout()
     fig.savefig(path)
     return path
+
+
+def write_files(r: NoiseResult, base, outline: Sequence[Any] = ()) -> Tuple[str, List[str]]:
+    """One aggressor's files next to ``base`` (``<folder>/<project>_<aggressor>_noise``): the
+    CSV, the waveforms PNG and the H and E field-map PNGs (those the near field has).
+    Returns (CSV path, PNG paths), "/" on every system."""
+    base = Path(base)
+    pngs = [write_png(r, base.with_name(base.name + ".png"))]
+    maps = (r.emi.h_map, r.emi.e_map) if r.emi is not None else (None, None)
+    pngs += [write_field_png(r, kind, base.with_name(f"{base.name}_{kind.lower()}_field.png"), outline)
+             for kind, m in zip("HE", maps) if m is not None]
+    return (write_csv(r, base.with_name(base.name + ".csv")).as_posix(), [p.as_posix() for p in pngs])

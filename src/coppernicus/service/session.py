@@ -96,6 +96,35 @@ def ac_estimate(board: Board, project: Project, rail: str, progress: Progress = 
             "text": f"{cost.text}. {ram.text}"}
 
 
+def noise_estimate(board: Board, project: Project, aggressor: str, progress: Progress = None,
+                   cancelled: Cancel = None, fields_rails: Sequence[str] = ()) -> Dict[str, Any]:
+    """What a noise solve of ``aggressor`` will cost, before it runs, from the engine's own
+    figures (:func:`coppernicus.engine.noise.mesh_estimate`, which checks the setup and meshes
+    the board model as the solve does, :func:`~coppernicus.engine.noise.noise_cost_estimate`,
+    :func:`~coppernicus.engine.noise.noise_ram_estimate`): the harmonics, the board model's mesh,
+    ports and field solves (none when it is off or left out, with ``note`` saying why), the
+    unknowns, the whole solve's peak memory (an upper bound) against this machine's, and the
+    text, worded as the app's Ripple & noise tab words its estimate (without its "Before
+    solving: "). ``fields_rails`` as the solve's (``Merged.from_fields``)."""
+    from coppernicus.engine import ac
+    from coppernicus.engine.noise import mesh_estimate, noise_cost_estimate, noise_ram_estimate
+    from coppernicus.impedance import hz_text
+    size = mesh_estimate(board, project, aggressor, progress=progress,
+                         cancelled=cancelled or (lambda: False), fields_rails=fields_rails)
+    ram = noise_ram_estimate(size.unknowns, ac.total_memory_bytes())
+    reach = f"{size.harmonics} harmonics to {hz_text(size.f_max_hz)}"
+    if size.board_model:
+        risk = "It could exceed this machine's memory. " if ram.risk else ""
+        text = f"{noise_cost_estimate(size).text}; {reach}. {risk}{ram.text}"
+    else:
+        text = f"{reach}; no field solve: {size.note or 'board model off (noise.board_model)'}. {ram.text}"
+    return {"aggressor": size.aggressor, "board_model": size.board_model, "note": size.note,
+            "harmonics": size.harmonics, "f_max_hz": size.f_max_hz, "triangles": size.triangles,
+            "nodes": size.nodes, "ports": size.ports, "field_solves": size.field_solves,
+            "unknowns": size.unknowns, "memory_bytes": ram.bytes,
+            "machine_memory_bytes": ram.total_bytes, "exceeds_memory": ram.risk, "text": text}
+
+
 def thermal_with(options, overrides: Optional[Mapping[str, Any]]):
     """Thermal ``options`` with ``overrides`` (keys of :class:`ThermalOptions`) for one solve,
     checked as when loaded; the project file is not changed."""
@@ -1018,6 +1047,71 @@ class Session:
         for r in doc["rails"]:
             r["estimate"] = estimates.get(r["rail"])
         summary_path = folder / f"{stem}_ac_summary.json"
+        doc["summary_file"] = summary_path.resolve().as_posix()
+        text = json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False)
+        summary_path.write_text(text, encoding="utf-8")
+        return json.loads(text)
+
+    def solve_noise(self, project_path, aggressors: Optional[Sequence[str]] = None, out_dir=None,
+                    confirm_large: bool = False, progress: Progress = None, cancelled: Cancel = None,
+                    use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
+        """The DC-DC ripple and coupled noise of the project's aggressors (every one, or
+        ``aggressors``), as ``coppernicus noise --json`` does: the
+        ``<project>_noise_summary.json`` document (verdict only against the victims' noise
+        margins; ripple and the radiated estimate never judged), with each aggressor's CSV,
+        waveforms PNG and field-map PNGs and the summary written into ``out_dir`` (default:
+        this session's folder, never next to the board). Heavy: every aggressor is first sized
+        (:func:`noise_estimate`, in each aggressor as ``estimate``); when one would exceed this
+        machine's memory nothing is solved and the call is refused (``solve_too_large``)
+        unless ``confirm_large``."""
+        from coppernicus.coupled_noise import noise_summary, write_files
+        from coppernicus.engine.noise import solve_aggressor
+        from coppernicus.maps import safe_file_name, safe_name
+        path, project, _, entry = self._open_project(project_path)
+        merged = self._merge_board_fields(path, project, entry, use_board_fields)
+        project, board = merged.project, entry.board
+        hint = "fix the aggressors, victims or noise: block of the project file, then solve again"
+        if not project.aggressors:
+            raise ServiceError(E.INVALID_INPUT, f"{path.name}: no aggressor in the project: nothing "
+                               "to solve", "add an aggressor (aggressors: in the project file) on a "
+                               "switcher source")
+        known = [a.name for a in project.aggressors]
+        names = list(dict.fromkeys(str(n) for n in aggressors)) if aggressors else known
+        unknown = [n for n in names if n not in known]
+        if unknown:
+            raise ServiceError(E.INVALID_INPUT, f"{path.name}: no aggressor named {', '.join(unknown)}",
+                               f"the project's aggressors: {', '.join(known)}")
+        with self._solve_lock:
+            try:
+                estimates = {n: noise_estimate(board, project, n, progress, cancelled, merged.from_fields)
+                             for n in names}
+                big = [e for e in estimates.values() if e["exceeds_memory"]]
+                if big and not confirm_large:
+                    raise ServiceError(E.SOLVE_TOO_LARGE, f"{path.name}: noise of {big[0]['aggressor']}: "
+                                       f"{big[0]['text']}", "pass confirm_large: true to solve it anyway "
+                                       "(ask the user first), or a coarser AC mesh (the project's ac: "
+                                       "max_edge_mm), fewer field solves (noise: field_per_decade), or "
+                                       "fewer aggressors")
+                folder = Path(out_dir) if out_dir else self.out_dir() / "noise"
+                folder.mkdir(parents=True, exist_ok=True)
+                stem = safe_file_name(path.stem)
+                outline = board.outline()
+                results, files = [], {}
+                for name in names:
+                    res = solve_aggressor(board, project, name, progress=progress,
+                                          cancelled=cancelled or (lambda: False),
+                                          fields_rails=merged.from_fields)
+                    merged.annotate(res)
+                    files[name] = write_files(res, folder / f"{stem}_{safe_name(name)}_noise", outline)
+                    results.append(res)
+            except Cancelled:
+                raise ServiceError(E.CANCELLED, f"{path.name}: solve cancelled") from None
+            except EngineError as e:
+                raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}", hint) from None
+        doc = noise_summary(results, files)
+        for a in doc["aggressors"]:
+            a["estimate"] = estimates.get(a["aggressor"])
+        summary_path = folder / f"{stem}_noise_summary.json"
         doc["summary_file"] = summary_path.resolve().as_posix()
         text = json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False)
         summary_path.write_text(text, encoding="utf-8")
