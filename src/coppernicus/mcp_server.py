@@ -41,7 +41,9 @@ solve_rail -> get_problems / render_map / probe / cut_current -> change settings
 (via_plating_um, copper_temp_c; copper_thickness_mm one standard weight from the design at
 most) and solve again -> compare_results.
 From a project file: solve_project (rails one by one, with maps) or solve_tree (the whole
-power tree at once, ground return included; tables only). Set up a project for the user with
+power tree at once, ground return included; tables only; the board temperature with thermal);
+solve_ac for the PDN impedance |Z|(f) at the project's probes (heavy: read its estimate, and
+ask the user before confirm_large). Set up a project for the user with
 write_project (read_project to see one); describe it as KiCad fields with propose_fields (the
 user pastes them; KiCad files are never written). Before/after a change in KiCad:
 compare_revisions. One standard copper weight up or down on a layer: copper_step.
@@ -383,7 +385,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                                    "thermal.enabled.")] = None,
                    thermal_options: Annotated[Optional[ThermalSpec], Field(
                        description="Overrides of the project's thermal: block for this solve "
-                                   "(not saved).")] = None,
+                                   "(not saved); given, they imply thermal: true.")] = None,
                    confirm_large: Annotated[bool, Field(
                        description="Solve even when the estimate exceeds this machine's memory "
                                    "(otherwise refused with the estimate: solve_too_large). Ask "
@@ -407,6 +409,32 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                      thermal_options=(thermal_options.model_dump(exclude_none=True)
                                       if thermal_options is not None else None),
                      confirm_large=confirm_large)
+
+    @mcp.tool(annotations=WRITES_FILE)
+    def solve_ac(project_path: Annotated[str, Field(description="Absolute path to a *.coppernicus.yml "
+                                                                 "project file with probes.")],
+                 ctx: Context,
+                 rails: Annotated[Optional[list[str]], Field(
+                     description="Nets of the rails to solve (default: every rail a probe is on).")] = None,
+                 confirm_large: Annotated[bool, Field(
+                     description="Solve even when the estimate exceeds this machine's memory "
+                                 "(otherwise refused with the estimate: solve_too_large). Ask the "
+                                 "user first.")] = False,
+                 use_board_fields: Annotated[Optional[bool], Field(
+                     description="false: ignore the board's KiCad footprint fields.")] = None,
+                 ) -> dict[str, Any]:
+        """The open-loop PDN impedance |Z|(f) at the project's probes (probes:, capacitors: and
+        ac: in the project file), rail by rail: the same document as `coppernicus ac --json`
+        (kind ac_impedance, verdict against the probes' own targets only, rails with their
+        probes' worst |Z| and where, csv_file and png_file of |Z|(f), assumptions, warnings,
+        stats with memory_peak_mb). Heavy (minutes and GBs on a large board): each rail is
+        sized first, in `estimate` (mesh, ports, frequencies, unknowns, memory against this
+        machine's); over this machine's memory nothing is solved and the call is refused
+        (solve_too_large) unless confirm_large. Files go to this server's output folder."""
+        bridge = _Bridge(ctx)
+        return _call("solve_ac", session.solve_ac, project_path, rails, progress=bridge.progress,
+                     cancelled=bridge.cancelled, confirm_large=confirm_large,
+                     use_board_fields=use_board_fields)
 
     @mcp.tool(annotations=WRITES_FILE)
     def compare_revisions(result_a: Annotated[str, Field(description="The result before the change.")],

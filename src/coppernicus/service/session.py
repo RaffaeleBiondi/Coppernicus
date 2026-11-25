@@ -78,6 +78,24 @@ def thermal_estimate(board: Board, options) -> Dict[str, Any]:
             "text": f"{thermal_cost_text(size)}. {ram.text}"}
 
 
+def ac_estimate(board: Board, project: Project, rail: str, progress: Progress = None,
+                cancelled: Cancel = None) -> Dict[str, Any]:
+    """What an AC solve of ``rail`` will cost, before it runs, from the engine's own figures
+    (:func:`coppernicus.engine.ac.ac_size`, which meshes the rail as the solve does,
+    :func:`~coppernicus.engine.ac.cost_estimate`, :func:`~coppernicus.engine.ac.ram_estimate`:
+    the app's): the mesh, the ports, the frequencies, the unknowns, the memory of one
+    factorization against this machine's, and the text."""
+    from coppernicus.engine import ac
+    size = ac.ac_size(board, project, rail, progress=progress, cancelled=cancelled or (lambda: False))
+    cost = ac.cost_estimate(size.triangles, size.ports, size.field_frequencies)
+    ram = ac.ram_estimate(size.unknowns, ac.total_memory_bytes(), ac.free_memory_bytes())
+    return {"rail": size.rail, "triangles": size.triangles, "nodes": size.nodes, "ports": size.ports,
+            "field_frequencies": size.field_frequencies, "sweep_points": size.sweep_points,
+            "unknowns": size.unknowns, "memory_bytes": ram.bytes,
+            "machine_memory_bytes": ram.total_bytes, "exceeds_memory": ram.risk,
+            "text": f"{cost.text}. {ram.text}"}
+
+
 def thermal_with(options, overrides: Optional[Mapping[str, Any]]):
     """Thermal ``options`` with ``overrides`` (keys of :class:`ThermalOptions`) for one solve,
     checked as when loaded; the project file is not changed."""
@@ -884,8 +902,9 @@ class Session:
         the project's limits only. The groups are not kept as results: no maps or probes.
 
         The board temperature (electro-thermal): ``thermal`` True solves it, False not, None
-        as the project's ``thermal.enabled``; ``thermal_options`` override the project's
-        ``thermal:`` keys for this solve. Before it, its cost is estimated
+        as the project's ``thermal.enabled``, or True when ``thermal_options`` are given (they
+        override the project's ``thermal:`` keys for this solve; with False they are refused).
+        Before it, its cost is estimated
         (:func:`thermal_estimate`, in the document as ``thermal_estimate``); when that exceeds
         this machine's memory the solve is refused (``solve_too_large``) unless
         ``confirm_large``: never a silent multi-GB solve."""
@@ -894,9 +913,14 @@ class Session:
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
         project = merged.project
+        if thermal_options and thermal is False:
+            raise ServiceError(E.INVALID_INPUT, "thermal_options with thermal: false: the options "
+                               "would not be used", "drop thermal: false to solve the board "
+                               "temperature with them, or drop thermal_options")
         if thermal_options:
             project = dataclasses.replace(project, thermal=thermal_with(project.thermal, thermal_options))
-        heat = bool(project.thermal.enabled) if thermal is None else bool(thermal)
+        # thermal_options imply the temperature: never ignored silently.
+        heat = (bool(project.thermal.enabled) or bool(thermal_options)) if thermal is None else bool(thermal)
         estimate = thermal_estimate(entry.board, project.thermal) if heat else None
         if estimate is not None and estimate["exceeds_memory"] and not confirm_large:
             raise ServiceError(E.SOLVE_TOO_LARGE, f"{path.name}: board temperature: {estimate['text']}",
@@ -922,6 +946,76 @@ class Session:
             doc["thermal_estimate"] = estimate
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
         return json.loads(json.dumps(doc, allow_nan=False))
+
+    def solve_ac(self, project_path, rails: Optional[Sequence[str]] = None, out_dir=None,
+                 confirm_large: bool = False, progress: Progress = None, cancelled: Cancel = None,
+                 use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
+        """The open-loop PDN impedance |Z|(f) at the project's probes, rail by rail (every rail
+        a probe is on, or ``rails``), as ``coppernicus ac --json`` does: the
+        ``<project>_ac_summary.json`` document, with each rail's CSV and PNG of |Z|(f) and the
+        summary written into ``out_dir`` (default: this session's folder, never next to the
+        board). Heavy: every rail is first sized (:func:`ac_estimate`, in each rail as
+        ``estimate``); when one would exceed this machine's memory nothing is solved and the
+        call is refused (``solve_too_large``) unless ``confirm_large``."""
+        from coppernicus.engine.ac import probe_rails, resolve_rail, solve_ac_rail
+        from coppernicus.impedance import ac_summary, unsolved_entries, write_csv, write_png
+        from coppernicus.maps import safe_file_name, safe_name
+        path, project, _, entry = self._open_project(project_path)
+        merged = self._merge_board_fields(path, project, entry, use_board_fields)
+        project, board = merged.project, entry.board
+        hint = "fix the probes, capacitor models or ac: block of the project file, then solve again"
+        if not project.probes:
+            raise ServiceError(E.INVALID_INPUT, f"{path.name}: no probe in the project: nothing to solve",
+                               "add a probe (probes: in the project file) on a rail that has a source")
+        not_solved: List[Dict[str, Any]] = []
+        warnings: List[str] = []
+        try:
+            rails_of = probe_rails(board, project)
+            if rails:
+                nets = list(dict.fromkeys(resolve_rail(board, project, str(n)) for n in rails))
+            else:
+                reached = set(rails_of.values())
+                nets = [r.net for r in project.rails if r.net in reached]
+                if not nets:
+                    raise ServiceError(E.INVALID_INPUT, f"{path.name}: no rail with a source reaches the "
+                                       "probes", "add the source of their rail, or a link joining "
+                                       "their net to a rail that has one")
+                not_solved, warnings = unsolved_entries(project.probes, rails_of)
+        except EngineError as e:
+            raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}", hint) from None
+        with self._solve_lock:
+            try:
+                estimates = {net: ac_estimate(board, project, net, progress, cancelled) for net in nets}
+                big = [e for e in estimates.values() if e["exceeds_memory"]]
+                if big and not confirm_large:
+                    raise ServiceError(E.SOLVE_TOO_LARGE, f"{path.name}: impedance of {big[0]['rail']}: "
+                                       f"{big[0]['text']}", "pass confirm_large: true to solve it anyway "
+                                       "(ask the user first), or a coarser AC mesh (the project's ac: "
+                                       "max_edge_mm), or fewer rails")
+                folder = Path(out_dir) if out_dir else self.out_dir() / "ac"
+                folder.mkdir(parents=True, exist_ok=True)
+                stem = safe_file_name(path.stem)
+                results, files = [], {}
+                for net in nets:
+                    res = solve_ac_rail(board, project, net, progress=progress,
+                                        cancelled=cancelled or (lambda: False))
+                    merged.annotate(res)
+                    csv_path = folder / f"{stem}_{safe_name(res.rail)}_impedance.csv"
+                    files[res.rail] = (write_csv(res, csv_path).as_posix(),
+                                       write_png(res, csv_path.with_suffix(".png")).as_posix())
+                    results.append(res)
+            except Cancelled:
+                raise ServiceError(E.CANCELLED, f"{path.name}: solve cancelled") from None
+            except EngineError as e:
+                raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}", hint) from None
+        doc = ac_summary(results, files, not_solved, warnings)
+        for r in doc["rails"]:
+            r["estimate"] = estimates.get(r["rail"])
+        summary_path = folder / f"{stem}_ac_summary.json"
+        doc["summary_file"] = summary_path.resolve().as_posix()
+        text = json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False)
+        summary_path.write_text(text, encoding="utf-8")
+        return json.loads(text)
 
     # ================================================================== result queries
     def _record(self, result_id: str, heavy: bool = True) -> _ResultRecord:

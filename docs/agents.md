@@ -79,6 +79,7 @@ input.
 | `copper_step` | `result_id`, `layer`, `step` (`up`/`down`) | What-if: the result re-solved with one copper layer **one** standard weight up or down (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness (the project's `copper_thickness_mm`, else the board file's), with the comparison against that result and the new `result_id`. A project rail keeps its estimated draws. Bigger jumps, a non-standard start (more than 3 % off a standard weight) and a result that is already a what-if (any layer off the design's copper) are refused: real changes are made in KiCad. The assumptions carry the via-barrel note. |
 | `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. The board temperature is a power-tree solve: when the project sets `thermal.max_temp_c` or `max_rise_c`, each is a top-level `not_judged` entry (`rail: null`, `item: "board temperature"`, "solved with the power tree only…"), so the verdict is `not_judged` (CLI and CI exit 3) unless something fails; use `solve_tree` to judge it. |
 | `solve_tree` | `project_path`, `top`?, `use_board_fields`?, `thermal`?, `thermal_options`?, `confirm_large`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. With `thermal` (or the project's `thermal.enabled`) it also solves the board temperature: see [Board temperature](#board-temperature). |
+| `solve_ac` | `project_path`, `rails`?, `confirm_large`?, `use_board_fields`? | The open-loop PDN impedance \|Z\|(f) at the project's probes, rail by rail: the document of `coppernicus ac --json`, with each rail's CSV and PNG of \|Z\|(f), sized first. See [AC impedance](#ac-impedance). |
 | `propose_fields` | `project_path` or `result_id` | The KiCad `PI_*` field text that describes a project's rails and links (or one solved rail), part by part, to paste into KiCad. See [Proposing fields](#proposing-fields). |
 | `read_project` | `project_path` | A project file as written (rails, sources, loads, limits, links, settings; unknown keys included), checked by the project loader, with the board it names. |
 | `write_project` | `project_path`, `board_path`?, `rails`?, `remove_rails`?, `links`?, `remove_links`?, `settings`?, `use_board_fields`?, `from_project`?, `overwrite`? | Creates or edits a project file for the user. See [Editing projects](#editing-projects). |
@@ -455,7 +456,8 @@ power-tree solve only: `solve_tree` with `thermal: true`, or the project's `ther
 `enabled: true` (`coppernicus solve PROJECT --thermal` on the command line).
 
 - `thermal`: true solves it, false not, omitted follows the project's `thermal.enabled`.
-- `thermal_options`: for this solve only (the file is not changed), any of the project's
+- `thermal_options` imply `thermal: true` when `thermal` is omitted (with `thermal: false` they
+  are refused, `invalid_input`). For this solve only (the file is not changed), any of the project's
   `thermal:` keys: `ambient_c` (default 25), `iterations` (3), `airflow_m_s` (0), `grid_mm`
   (0 = automatic, about 250 cells across), `load_heat`, `regulator_heat` (`output_pads` or
   `part_pads`), and the limits `max_temp_c` and `max_rise_c`. Unknown keys are refused.
@@ -477,6 +479,32 @@ power-tree solve only: `solve_tree` with `thermal: true`, or the project's `ther
 - `coppernicus solve PROJECT --thermal --html` adds a "Board temperature" section to the tree
   report: the verdict, the grid peak, the per-layer rows, the load drops at the ambient and
   electro-thermal, the assumptions, and each copper layer's temperature map inside the page.
+
+### AC impedance
+
+`solve_ac(project_path)` computes the open-loop PDN impedance |Z|(f) seen at each probe of the
+project (`probes:`, with the capacitor models of `capacitors:` and the sweep of `ac:`), rail by
+rail, as `coppernicus ac PROJECT --json` does. Its project keys and the physics are in
+[engine-mapping.md](engine-mapping.md#task-9-ac-pdn-impedance-zf--kipiac-kipiacsolversweeppy-kipiacmodelpy).
+
+- The document: `kind: "ac_impedance"`, `verdict` and `verdict_note` (only against each
+  probe's own `target_ohm`, or the target KiPI computes from the probe's step and tolerance;
+  below the source's control-loop bandwidth nothing is judged), `failed`, `not_judged`,
+  `warnings`, `summary_file`, and `rails`: each with its probes (`worst_z_ohm`, `worst_hz`,
+  `target_ohm`, `passed`…), `bandwidth_hz`, `bandwidth_assumed` and `assumed_bandwidth_hz`
+  (50 kHz when no bandwidth is given), `csv_file` and `png_file` of |Z|(f), `assumptions`,
+  `warnings`, and `stats` with `memory_peak_mb` and `memory_peak_raised`. The files go into
+  the server's output folder.
+- **Cost first.** It is heavy: minutes and gigabytes on a large board. Each rail is first
+  meshed and sized, in `estimate`: `triangles`, `ports`, `field_frequencies`, `unknowns`,
+  `memory_bytes` of one factorization against `machine_memory_bytes`, `exceeds_memory`, and a
+  `text` (the app's figures). When a rail would exceed this machine's memory, nothing is
+  solved and the call is refused with `solve_too_large`: tell the user the estimate, and call
+  again with `confirm_large: true` only if they agree (or after a coarser `ac: max_edge_mm`).
+- `rails` picks the rails (every rail a probe is on by default). Exit codes as the others.
+- On the command line, `coppernicus ac PROJECT` prints "Impedance of <rail>: <estimate>"
+  before each rail, and `--html [PATH]` writes one offline page with each rail's |Z|(f) and
+  its probes. In CI, the Action's `ac: true` input runs it (see [CI](ci.md)).
 
 Limits, all optional:
 - `max_drop_pct`: the largest allowed load drop, in % of the source voltage;

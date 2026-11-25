@@ -91,7 +91,8 @@ setting out to check the board as designed.
 | `top` | `5` | Current-crowding spots and vias listed per rail. Every load is always listed. |
 | `fail-on-limit` | `true` | Fail when a limit is exceeded. Set it to `false` to report only. A project that cannot be solved fails the step either way. |
 | `fail-on-not-judged` | `true` | Fail when a limit that was set could not judge something (NOT JUDGED in the summary). Set it to `false` to report only. |
-| `tree` | `false` | Also solve each project's whole power tree (`coppernicus solve --tree`) and add its VRM and load tables to the job summary. The tree's verdict is shown there; it does not set the exit code. |
+| `tree` | `false` | Also solve each project's whole power tree (`coppernicus solve --tree`) and add its VRM and load tables to the job summary. The tree's verdict is shown there; it does not set the exit code, except for the board temperature of a project that enables it (see Notes). |
+| `ac` | `false` | Also solve the AC PDN impedance \|Z\|(f) of each project that has probes (`coppernicus ac`). Heavy: minutes and gigabytes on a large board; its size and memory estimate is printed in the log first. Its verdict, only against the probes' own targets, sets the step's result (1 fail, 3 not judged), and the summary adds each probe's worst \|Z\| against its target. The CSV and PNG of \|Z\|(f) go into the results. |
 | `python-version` | `3.12` | Python used to run Coppernicus (3.12 or 3.13). |
 | `uv-version` | latest | uv version to install. |
 | `upload-artifact` | `true` | Upload the results folder as an artifact. |
