@@ -1289,6 +1289,7 @@ def run_hover(window, check: Checks, args, out: Path):
     nothing off the copper, "not connected" on a copper island and, on a ground group of the
     power tree, the rise the double-click reads. Hidden after the pointer leaves and while
     panning. Times 200 moves."""
+    import numpy as np
     from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
     from PySide6.QtGui import QWheelEvent
     from PySide6.QtTest import QTest
@@ -1373,6 +1374,29 @@ def run_hover(window, check: Checks, args, out: Path):
         check("... a zoom under a still pointer reads the point now under it",
               view.plotter.camera.parallel_scale < scale and label.isVisible() and label.text() == under
               and under != before, f"{before!r} -> {label.text()!r} (under it: {under!r})")
+        # A camera move from code under a still pointer (Enter on a Problems row zooms, Fit
+        # resets): the readout follows the board point now under the pointer, or hides.
+        def shown():
+            return label.text() if label.isVisible() else ""
+        cents = view._layer.centroids()[np.isfinite(view._layer.voltage[view._layer.tris]).all(axis=1)]
+        far = cents[np.argmax(np.hypot(cents[:, 0] - 22.0, cents[:, 1] - 12.0))]   # B.Cu copper
+        mid = QPoint(widget.width() // 2, widget.height() // 2)
+        view.zoom_to(22.0, 12.0)
+        mouse_move(window, mid)
+        hover_settle(window)
+        before = shown()
+        view.zoom_to(float(far[0]), float(far[1]))
+        hover_settle(window)
+        under = view.hover_at(*board_point(window, mid))
+        check("... a zoom from code (a Problems row) under a still pointer reads the point now under it",
+              before != "" and under != "" and shown() == under and under != before,
+              f"{before!r} -> {shown()!r} (under it: {under!r})")
+        zoomed = shown()
+        view.reset_view()
+        hover_settle(window)
+        under = view.hover_at(*board_point(window, mid))
+        check("... and so does Fit", shown() == under and under != zoomed,
+              f"{zoomed!r} -> {shown()!r} (under it: {under!r})")
         window.view.reset_view()
         QApplication.processEvents()
         mouse_move(window, view_point(window, 22.0, 12.0))

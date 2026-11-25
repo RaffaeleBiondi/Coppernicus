@@ -386,11 +386,13 @@ class BoardView(QWidget):
         cam.position = (x, -y, pz)
         cam.parallel_scale = half_width_mm
         self.plotter.render()
+        self._rearm_hover()
 
     def reset_view(self):
         self.plotter.view_xy()
         self.plotter.reset_camera()
         self.plotter.render()
+        self._rearm_hover()
 
     def screenshot(self, path) -> None:
         self.plotter.screenshot(str(path))
@@ -572,9 +574,15 @@ class BoardView(QWidget):
                         self._hover_timer.start()
             elif kind in (QEvent.Leave, QEvent.MouseButtonPress, QEvent.MouseButtonDblClick):
                 self._hide_hover()
-            elif kind == QEvent.Wheel and self._hover_at is not None and not self._hover_timer.isActive():
-                self._hover_timer.start()                   # a zoom moves the board under it
+            elif kind == QEvent.Wheel:
+                self._rearm_hover()                         # a zoom moves the board under it
         return super().eventFilter(watched, event)
+
+    def _rearm_hover(self):
+        """After the board moved under a still pointer (a wheel zoom, or a camera move from
+        code: a Problems row, Fit), read the point now under it, so the readout is never stale."""
+        if self._hover_at is not None and not self._hover_timer.isActive():
+            self._hover_timer.start()
 
     def _hover_tick(self):
         if self._hover_at is None or self.plotter.iren is None:     # None: the view has closed
