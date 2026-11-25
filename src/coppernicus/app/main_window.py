@@ -721,6 +721,14 @@ class MainWindow(QMainWindow):
             return
         try:
             size = bootstrap_triangle.remove(site)
+        except bootstrap_triangle.RemovalDeferred:
+            # In use (mostly on Windows: this app has it loaded): not a failure, the next start
+            # deletes it before using it.
+            self.statusBar().showMessage("The mesher is in use: Coppernicus removes it at its next start")
+            QMessageBox.information(self, "Remove downloaded mesher",
+                                    f"The downloaded Triangle mesher in {site} is in use: Coppernicus "
+                                    "removes it at its next start, then downloads it again.")
+            return
         except bootstrap_triangle.BootstrapError as e:
             self.statusBar().showMessage("The downloaded mesher could not be removed")
             QMessageBox.warning(self, "Cannot remove the mesher", f"{e.message}\n{e.hint}")
