@@ -9,8 +9,9 @@ description: Use when asked whether a PCB power rail "is OK" or "holds", about I
 
 Coppernicus solves DC current flow on the real copper (planes, tracks, pads, vias) of one net
 and returns drops, current density, via currents and losses. **It gives facts, not verdicts.**
-A verdict exists only against limits the user gave. Your job is to measure, explain where and
-why, and ask for what is missing.
+A verdict exists only against limits the user gave. Coppernicus's documented current-density
+default raises attention items, never a verdict (below). Your job is to measure, explain where
+and why, and ask for what is missing.
 
 ## Workflow (MCP tools)
 
@@ -140,11 +141,20 @@ follow the hint. `result_evicted` means you must solve again.
 
 ## Limits: never invent them
 
-The tool has no default thresholds, and neither do you. If the user gave no limit:
+Verdicts come only from the user's limits, and so do yours. If the user gave no limit:
 - solve **without** `limits`, so the verdict is `not_judged`;
 - report the numbers, with what each must be compared against (the regulator's tolerance
   budget, the fab's via-current rule, the design's temperature-rise budget);
 - ask the user for the limit.
+
+**The one built-in default: current density.** Without a `max_current_density`, every spot
+whose mean |J| is above 60 A/mm² at 1 oz, scaled ×√(35 µm / t) for its layer's thickness
+(42.4 at 2 oz), comes back with `severity: "attention"`, with `default_j_a_mm2` and
+`thickness_mm`. It is never a verdict: the verdict, `not_judged` and the exit code ignore it.
+Report it as "above Coppernicus's current-density default, not a verdict", with the value,
+layer, default and thickness, and suggest the board temperature (`thermal: max_rise_c`) or a
+user limit to judge it. A `max_current_density` the user sets replaces it (a fail when
+exceeded, no attention items). Never pass the default as a limit.
 
 | Rationalization | Reality |
 |---|---|
@@ -152,7 +162,8 @@ The tool has no default thresholds, and neither do you. If the user gave no limi
 | "2 % / 3 % / 5 % drop is typical" | The budget depends on the regulator's accuracy and the chip's supply tolerance. Ask. |
 | "1 A per 0.3 mm via is a common rule" | It is folklore, not a standard. Report the via current; the limit is the user's or the fab's. |
 | "I'll pass my limit to the tool and label it as mine" | It writes FAIL/PASS into the result and its files. Do not pass limits the user did not give. |
-| "50 A/mm² is a safe screening value" | No such universal value exists. Heating depends on width, layer, board and airflow. |
+| "50 A/mm² is a safe screening value" | No such universal value exists. Heating depends on width, layer, board and airflow. Coppernicus's own default only raises attention items; it is not a limit. |
+| "It is over the 60 A/mm² default, so it fails" | The default is attention only. Short necks often carry more without trouble, and wide copper can heat a lot below it. Give the number; the board temperature or the user's limit judges. |
 | "10 % of VDD is a fine noise margin" | The margin is the receiver's. Ask, or let the user enter the victim's `logic_v` (JESD8 levels) or `noise_margin_v`. |
 
 **Red flags:** a headline "sì, regge" or "OK" with no user limit; a table column "Soglia
@@ -177,7 +188,7 @@ to a measured cross-section (`cut_current`).
    A `not_judged` verdict with items listed means a limit was set but could not judge them
    (a % drop limit on a load of a 0 V net, a load with no voltage, a limit of the wrong kind
    for the net, a rail that was not solved): name each item and its reason; never report it as
-   a pass.
+   a pass. List attention items (the current-density default) apart from the verdict.
 4. **Where and why:** the layer, the location in mm, and the cause (a neck, a slot, a single via,
    a thin track), with the cut that proves it.
 5. **Assumptions** from the `assumptions` field: plating, temperature, mesh, the equal split

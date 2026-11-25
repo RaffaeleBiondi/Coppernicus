@@ -40,7 +40,11 @@ The results (PNG maps, HTML report, JSON) are attached to the run as the
 `coppernicus-results` artifact.
 
 Without limits in the project file, nothing is judged: the numbers are reported and the check
-passes. Coppernicus has no built-in thresholds. The limits are `max_drop_pct`,
+passes. Verdicts are only against the limits you write: Coppernicus's documented
+current-density default (60 A/mm² at 1 oz, scaled with the copper thickness; see
+[technical.md](technical.md#current-density-default)) raises **ATTENTION** items, which the
+summary counts and lists with the top problems, but it never fails the check or changes the
+exit code. A `max_current_density` you write replaces it. The limits are `max_drop_pct`,
 `max_current_density`, `max_via_current` and, for a net at 0 V (a ground),
 `max_ground_rise_mv`; the summary names the ones that were set ("ground rise ≤ 10 mV").
 

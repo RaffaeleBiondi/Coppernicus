@@ -41,7 +41,9 @@ For each rail, chosen at the top of the page:
   board; toggles show or hide the sources, the loads and the crowding spots. Point at the map
   for the voltage, the drop and |J| under the pointer.
 - **Problems**, fails first: click a row to zoom to it. *FAIL* appears only against the limits
-  you set.
+  you set. An amber *ATTENTION* badge marks a crowding spot above Coppernicus's
+  current-density default ([why](technical.md#current-density-default)): never a verdict, and
+  the verdict line counts them apart.
 - **Loads and sources**, with each load's voltage at its worst pin, its drop and how it
   compares with the drop limit; **where the power is lost**, per layer, in the vias and in the
   links; the **settings**, the **assumptions** and the **warnings**.

@@ -51,9 +51,12 @@ user pastes them; KiCad files are never written). Before/after a change in KiCad
 compare_revisions. One standard copper weight up or down on a layer: copper_step.
 Units are in every key name (_v, _mv, _a, _a_mm2, _mm, _w, _pct). Coordinates are mm in
 KiCad's frame (y down); layer names as in KiCad. Board files are only read.
-A verdict (pass/fail) exists only against limits the user gives; without limits results are
-ranked, never judged: do not invent thresholds. Read 'assumptions' and 'warnings' in every
-result. Errors come back as {"error": {code, message, hint}}; the hint says what to do.
+Verdicts (pass/fail) only against the limits the user gives; without limits results are
+ranked: do not invent thresholds. Coppernicus's documented current-density default (60 A/mm²
+at 1 oz, scaled with each layer's copper thickness) raises attention items (severity
+"attention"), never a verdict: report them as such, never as a fail; a max_current_density
+the user sets replaces it. Read 'assumptions' and 'warnings' in every result. Errors come
+back as {"error": {code, message, hint}}; the hint says what to do.
 """
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -99,7 +102,9 @@ class LimitsSpec(BaseModel):
     max_drop_pct: Optional[float] = Field(None, gt=0, description="Largest allowed load drop, % "
                                                                   "of the source voltage.")
     max_current_density_a_mm2: Optional[float] = Field(None, gt=0, description="Largest allowed "
-                                                       "current density, A/mm².")
+                                                       "current density (mean |J| of a spot), "
+                                                       "A/mm². Replaces Coppernicus's "
+                                                       "current-density default (attention only).")
     max_via_current_a: Optional[float] = Field(None, gt=0, description="Largest allowed current "
                                                                        "per via, A.")
     max_ground_rise_mv: Optional[float] = Field(None, gt=0, description="For a net at 0 V (a ground "
@@ -301,8 +306,10 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
     def get_problems(result_id: str, limits: Optional[LimitsSpec] = None,
                      top: Annotated[int, Field(ge=1, le=50)] = 5) -> dict[str, Any]:
         """Ranked problems of a result (loads by drop, current-crowding spots by mean |J|,
-        vias by current), each with layer and x/y in mm. Pass limits to re-judge without
-        solving again (default: the limits given at solve time)."""
+        vias by current), each with layer and x/y in mm and a severity: fail (over a limit
+        given), attention (a spot above Coppernicus's current-density default: never a
+        verdict) or info. Pass limits to re-judge without solving again (default: the limits
+        given at solve time)."""
         return _call("get_problems", session.get_problems, result_id,
                      None if limits is None else _dump(limits), top)
 

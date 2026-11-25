@@ -10,7 +10,8 @@ runs the same DC analyses as the app and reasons about the results. There are tw
 Both go through the same service layer (`src/coppernicus/service/`) and return the same data.
 
 The Claude Code skill [`skills/analyzing-pdn-with-coppernicus`](../skills/analyzing-pdn-with-coppernicus/SKILL.md)
-teaches an agent the workflow and the rules (no invented limits, mean |J| rather than peaks).
+teaches an agent the workflow and the rules (verdicts only against the user's limits, the
+current-density default as attention only, mean |J| rather than peaks).
 Install it with `cp -r skills/analyzing-pdn-with-coppernicus ~/.claude/skills/`.
 
 ## Register the server
@@ -598,7 +599,9 @@ passed or failed. **Behaviour change:** a rise limit on a supply rail used to fa
 
 Problem kinds, in `problems` of every summary and of `get_problems`:
 - `load`: a load's drop at its worst pin (`drop_mv`, `drop_pct`);
-- `hotspot`: a current-crowding spot (`mean_j_a_mm2`, `peak_j_a_mm2`, `area_mm2`);
+- `hotspot`: a current-crowding spot (`mean_j_a_mm2`, `peak_j_a_mm2`, `area_mm2`); one above
+  the current-density default has `severity: "attention"`, `default_j_a_mm2` and
+  `thickness_mm` (see Conventions);
 - `via`: a via or plated hole by barrel current (`current_a`);
 - `rise`: only with `max_ground_rise_mv` set on a net at 0 V, the copper furthest from 0 V
   (`rise_mv`, signed: negative below 0 V; judged by its magnitude), with its layer and x/y;
@@ -641,7 +644,22 @@ Problem kinds, in `problems` of every summary and of `get_problems`:
   "NOT JUDGED …". `coppernicus solve` (and `--tree`) exits 3 then, so CI fails on it (the
   Action's `fail-on-not-judged`); with no limit at all it exits 0.
 
-  Coppernicus invents no thresholds, and an agent should not either.
+  Verdicts only against the user's limits: Coppernicus invents no thresholds for them, and
+  an agent should not either. Coppernicus's documented current-density default raises
+  attention items, never a verdict (next item).
+- **Attention: the current-density default.** Without a `max_current_density_a_mm2`, every
+  current-crowding spot whose mean |J| is above 60 A/mm² at 1 oz, scaled ×√(35 µm / t) with
+  its layer's copper thickness as solved (85 at 0.5 oz, 42.4 at 2 oz, 34.6 at 3 oz), is a
+  `hotspot` problem with `severity: "attention"` (between `"fail"` and `"info"`). It has
+  `default_j_a_mm2` (the default used) and `thickness_mm` besides `mean_j_a_mm2`,
+  `peak_j_a_mm2` and `area_mm2`, and is measured as a limit is, on the spot's mean |J|. Every
+  one is listed, on top of the ranked spots, so a ranked `info` spot can sit on the same
+  copper. It changes no verdict, no `not_judged` list and no exit code; a rail summary, each
+  tree group and the tree and project documents count them in `attention`. A
+  `max_current_density_a_mm2` the user sets replaces the default on that rail or group (a
+  `fail` when exceeded, no attention items). Every rail and power-tree result has an
+  assumption line with each layer's value. Why it is attention only, and the sources:
+  [technical.md](technical.md#current-density-default).
 - **`assumptions` and `warnings` come with every answer.** Read them. They say:
   - the via plating, ρ(T) and mesh that were used;
   - that loads split their current equally across their pins;

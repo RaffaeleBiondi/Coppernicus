@@ -92,7 +92,9 @@ It belongs in the service layer.
    boards live in the git-ignored `boards_local/`. Any `boards_local/**/*.coppernicus.yml` is
    solved by `tests/test_local_boards.py`, which is skipped when absent.
 4. **No invented thresholds.** A verdict exists only against limits the user set. Without
-   limits, rank. Every result carries its assumptions; tools must return them.
+   limits, rank. Coppernicus's documented current-density default
+   ([technical.md](technical.md#current-density-default)) raises attention items, never a
+   verdict. Every result carries its assumptions; tools must return them.
 5. **Multiprocessing:** large nets mesh in a process pool, so entry points need the
    `__main__` guard and `multiprocessing.freeze_support()`.
 6. **stdio hygiene:** under the MCP stdio transport nothing may print to stdout. Route the

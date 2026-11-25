@@ -146,7 +146,9 @@ listed: via plating, copper temperature and mesh size.
 </p>
 
 > The two FAIL rows come from the demo project's own limit, a 0.25 % maximum drop, which is
-> deliberately tight. Coppernicus has no built-in thresholds.
+> deliberately tight. Verdicts are only against your limits. The one built-in default, on
+> current density, adds amber ATTENTION rows and never a verdict
+> ([why](docs/technical.md#current-density-default)).
 
 **Loss by layer** draws the copper loss of each layer as a bar chart.
 
@@ -246,7 +248,8 @@ tools, conventions and a worked example are in [docs/agents.md](docs/agents.md).
 
 For Claude Code there is also a skill that teaches the agent how to use these tools well. It
 shows the order of the calls and the answer to give: numbers, then a verdict only against your
-limits, then where and why. It also tells the agent never to invent thresholds. Install it
+limits, then where and why. It also tells the agent never to invent thresholds, and to report
+the current-density default's attention items as attention, never as a fail. Install it
 once:
 
 ```sh
