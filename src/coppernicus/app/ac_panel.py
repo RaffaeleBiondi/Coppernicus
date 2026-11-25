@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app.panels import without_tolerances
 from coppernicus.impedance import ac_summary, ac_text, draw_impedance, hz_text, ohm_text, rail_verdict
 from coppernicus.project import (
     AcOptions,
@@ -469,9 +470,10 @@ def result_rows(r) -> List[Tuple[str, ...]]:
 def _project_key(project: Project) -> Dict[str, Any]:
     """What a solve depends on, to tell when a result no longer matches the project: not the
     board's path (a save rewrites it; another board clears the results), the nets marked as
-    rails, the rails' DC limits, or the aggressors, victims and noise options (no AC solve
-    reads them)."""
-    d = project.to_dict()
+    rails, the rails' DC limits, the aggressors, victims and noise options, or the tolerances,
+    entered parts and accuracies (no AC solve reads them). Taken of the merged project, what is
+    solved: a project rail ignored for the KiCad fields' changes nothing."""
+    d = without_tolerances(project.to_dict())
     for key in ("marked_rails", "board", "aggressors", "victims", "noise"):
         d.pop(key, None)
     for rail in d.get("rails", []):
@@ -530,6 +532,7 @@ class AcWorker(QThread):
     def __init__(self, board, merged, rail: str, phase: str, parent=None):
         super().__init__(parent)
         self._board, self.merged, self.rail, self.phase = board, merged, rail, phase
+        self.transient = False               # KiPI's transient estimate too (the Tolerance tab asks)
         self._cancel = False
         self.generation = 0
 
@@ -548,7 +551,8 @@ class AcWorker(QThread):
                 self.sized.emit(size)
             else:
                 res = solve_ac_rail(self._board, self.merged.project, self.rail, progress=self.message.emit,
-                                    cancelled=lambda: self._cancel, fraction=self.fraction.emit)
+                                    cancelled=lambda: self._cancel, fraction=self.fraction.emit,
+                                    transient=self.transient)
                 self.merged.annotate(res)
                 self.succeeded.emit(res)
         except Cancelled:
@@ -581,6 +585,7 @@ CHART_SURFACE = "#fcfcfb"
 class AcPanel(QWidget):
     """The Impedance results tab (see the module docstring)."""
     estimated = Signal(str)          # the estimate, shown before the solve starts
+    results_changed = Signal()       # a result kept, or the results dropped (the Tolerance tab reads them)
 
     def __init__(self, window):
         super().__init__(window)
@@ -588,6 +593,7 @@ class AcPanel(QWidget):
         self.results: Dict[str, Tuple[Any, Dict[str, Any]]] = {}   # rail -> (result, project it solved)
         self.worker: Optional[AcWorker] = None
         self._busy = False
+        self._transient = False                    # the running solve adds KiPI's transient estimate
         self._cancel_requested = False             # Cancel pressed: no phase starts after it
         self._generation = 0
         self._loading = False
@@ -1237,13 +1243,13 @@ class AcPanel(QWidget):
         verdict = {"fail": "<span style='color:#c0392b'><b>FAIL</b></span>", "pass": "<b>pass</b>",
                    "not_judged": "<span style='color:#b9770e'><b>not judged</b></span>"}[rail_verdict(r)[0]]
         stale = ("<br><span style='color:#b9770e'><b>Setup changed since this solve</b>: solve "
-                 "again</span>" if _project_key(self.project) != solved else "")
+                 "again</span>" if _project_key(self.merged_project) != solved else "")
         self.header.setText(f"<b>{r.rail}</b> against {r.ground}: {verdict}{stale}")
 
     @property
     def stale(self) -> bool:
         entry = self.results.get(self.rail_box.currentText())
-        return entry is not None and _project_key(self.project) != entry[1]
+        return entry is not None and _project_key(self.merged_project) != entry[1]
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -1419,6 +1425,23 @@ class AcPanel(QWidget):
     def solve(self):
         """Size the shown rail (KiPI's AC mesh), show the estimate, ask when the memory could
         be exceeded, then solve; all off the UI thread, with progress and Cancel."""
+        self._solve(False)
+
+    def solve_rail(self, rail: str, transient: bool = False):
+        """Show this tab with ``rail`` chosen and solve it as :meth:`solve` does; ``transient``
+        adds KiPI's transient estimate at each probe with a load step (the Tolerance tab's
+        Solve button: shown there, never judged; |Z| is the same)."""
+        self._win.results_tabs.setCurrentWidget(self)
+        if self.rail_box.findText(rail) < 0:
+            self.refresh_rails()
+        i = self.rail_box.findText(rail)
+        if i < 0:
+            self._report(f"{rail} cannot be solved in AC: no source reaches it")
+            return
+        self.rail_box.setCurrentIndex(i)
+        self._solve(transient)
+
+    def _solve(self, transient: bool):
         win = self._win
         rail = self.rail_box.currentText()
         if win.board is None:
@@ -1440,9 +1463,11 @@ class AcPanel(QWidget):
         self.last_estimate = ""
         self.estimate.setText("Estimating: meshing the rail as the AC solve will…")
         # What is solved: a copy of the merged project as it is now (the user may edit on).
-        self._solving = (rail, _project_key(self.project), copy.deepcopy(win.merged))
+        self._solving = (rail, _project_key(self.merged_project), copy.deepcopy(win.merged))
+        self._transient = transient
         self._start(AcWorker(win.board, self._solving[2], rail, "size", parent=self))
-        self._report(f"{rail}: meshing it as the AC solve will, for the estimate…")
+        self._report(f"{rail}: meshing it as the AC solve will, for the estimate…"
+                     + (" (with KiPI's transient estimate, for the Tolerance tab)" if transient else ""))
 
     def add_solve_action(self, toolbar) -> QAction:
         """A "Solve impedance" action (Ctrl+I) on the window's toolbar: shows this tab, then
@@ -1525,13 +1550,16 @@ class AcPanel(QWidget):
         self.solve_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
-        self._start(AcWorker(self._win.board, self._solving[2], size.rail, "solve", parent=self))
+        worker = AcWorker(self._win.board, self._solving[2], size.rail, "solve", parent=self)
+        worker.transient = self._transient
+        self._start(worker)
 
     def _solved(self, res):
         if not self._current():
             return
         _rail, solved, _merged = self._solving
         self.results[res.rail] = (res, solved)
+        self.results_changed.emit()
         st = res.stats
         try:
             _settings().setValue(LAST_SOLVE_SETTING, json.dumps(
@@ -1604,6 +1632,7 @@ class AcPanel(QWidget):
             self.solve_button.setEnabled(True)
             self.cancel_button.setEnabled(False)
         self.results.clear()
+        self.results_changed.emit()
         self.last_estimate = ""
         self.estimate.setText("")
         self._say("")

@@ -65,7 +65,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from coppernicus.app.panels import FieldComboBox, OptionalDecimalValidator, WheelWhenFocused
+from coppernicus.app.panels import (
+    FieldComboBox,
+    OptionalDecimalValidator,
+    WheelWhenFocused,
+    without_tolerances,
+)
 from coppernicus.engine.pisetup import terminal_names  # engine names; fsw_default mirrors the engine
 from coppernicus.impedance import hz_text
 from coppernicus.project import (
@@ -719,8 +724,10 @@ def header_html(r, stale: bool) -> str:
 def project_key(project: Project) -> Dict[str, Any]:
     """What a noise solve depends on, to tell when a result no longer matches the project:
     not the board's path (a save rewrites it; another board clears the results), the nets
-    marked as rails, the rails' DC limits or the board temperature (no noise solve reads them)."""
-    d = project.to_dict()
+    marked as rails, the rails' DC limits, the board temperature, or the tolerances, entered
+    parts and accuracies (no noise solve reads them). Taken of the merged project, what is
+    solved: a project rail ignored for the KiCad fields' changes nothing."""
+    d = without_tolerances(project.to_dict())
     for key in ("marked_rails", "board", "thermal"):
         d.pop(key, None)
     for rail in d.get("rails", []):
@@ -841,6 +848,7 @@ def _row_bg(why: str) -> QBrush:
 class NoisePanel(QWidget):
     """The Ripple & noise results tab (see the module docstring)."""
     estimated = Signal(str)          # the estimate, shown before the solve starts
+    results_changed = Signal()       # a result kept, or the results dropped (the Tolerance tab reads them)
 
     def __init__(self, window):
         super().__init__(window)
@@ -1803,7 +1811,7 @@ class NoisePanel(QWidget):
             self.header.setText("")
             return
         r, solved = entry
-        stale = project_key(self.project) != solved
+        stale = project_key(self.merged_project) != solved
         self.header.setText(header_html(r, stale))
         col = VICTIM_HEADERS.index("Verdict")
         for k, row in enumerate(victim_rows(r, stale)):
@@ -1819,7 +1827,7 @@ class NoisePanel(QWidget):
     def stale(self) -> bool:
         i = self._index()
         entry = self.results.get(self._agg_rows[i].name) if i >= 0 else None
-        return entry is not None and project_key(self.project) != entry[1]
+        return entry is not None and project_key(self.merged_project) != entry[1]
 
     def _setup_changed(self):
         """The setup changed elsewhere (the rail setup; the Impedance tab's probes, seen when
@@ -1848,7 +1856,7 @@ class NoisePanel(QWidget):
         if not kept:
             self._report("Nothing to export: solve an aggressor first")
             return []
-        key = project_key(self.project)
+        key = project_key(self.merged_project)
         stale = [n for n, (_r, solved) in kept.items() if solved != key]
         if stale:
             answer = QMessageBox.question(
@@ -1924,6 +1932,16 @@ class NoisePanel(QWidget):
         self._win.results_tabs.setCurrentWidget(self)
         self.solve()
 
+    def solve_aggressor(self, name: str):
+        """Show this tab with aggressor ``name`` chosen and solve it as :meth:`solve` does (the
+        Tolerance tab's Solve button)."""
+        i = next((k for k, a in enumerate(self._agg_rows) if a.name == name), -1)
+        if i < 0:
+            self._report(f"No aggressor {name} in the Ripple & noise tab")
+            return
+        self.aggressor_box.setCurrentIndex(i)
+        self.solve_shown()
+
     def solve(self):
         """Mesh the aggressor's rails and ground as the solve will, show the estimate, ask when
         the memory could be exceeded, then solve; all off the UI thread, with progress and Cancel."""
@@ -1950,7 +1968,7 @@ class NoisePanel(QWidget):
         self.estimate.setText("Estimating: meshing the aggressor's rails and ground as the noise solve "
                               "will…")
         # What is solved: a copy of the merged project as it is now (the user may edit on).
-        self._solving = (name, project_key(self.project), copy.deepcopy(win.merged))
+        self._solving = (name, project_key(self.merged_project), copy.deepcopy(win.merged))
         self._solving_note = unsolved_text(self._agg_rows[i], self._victim_rows)
         self._start(NoiseWorker(win.board, self._solving[2], name, "size", parent=self))
         self._report(f"{name}: meshing its rails and ground as the noise solve will, for the estimate…"
@@ -2053,6 +2071,7 @@ class NoisePanel(QWidget):
             return
         self.results[res.aggressor] = (res, solved)
         self._result_notes[res.aggressor] = self._solving_note
+        self.results_changed.emit()
         # Never a change of selection, nor a refill of the editor the user may be in: the result
         # shows only where its aggressor is the one shown.
         i = self._index()
@@ -2125,6 +2144,7 @@ class NoisePanel(QWidget):
             self.cancel_button.setEnabled(False)
         self.results.clear()
         self._result_notes.clear()
+        self.results_changed.emit()
         self._outline = None
         self.last_estimate = ""
         self.estimate.setText("")

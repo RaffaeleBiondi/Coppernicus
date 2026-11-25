@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import yaml
 
 from coppernicus import board_fields
-from coppernicus.project import LOAD_TOLERANCE_KEYS, SOURCE_ACCURACY_KEYS, Load, Project
+from coppernicus.project import Project
 
 Progress = Optional[Callable[[str], None]]
 Cancel = Optional[Callable[[], bool]]
@@ -35,45 +35,16 @@ def project_inputs(project_file, loaded: Project, merged: board_fields.Merged
     accuracy and entered parts that no part of the fields' rail takes
     (:func:`coppernicus.board_fields.carried_by_ref`): a warning, each lost tolerance a
     not-judged entry, and per rail net why the accuracy entered for its source was lost."""
-    from coppernicus.tolerance import misspelt_keys
-    project = merged.project
-    warnings, dropped, lost_accuracy = list(merged.warnings), [], {}
+    from coppernicus.tolerance import fields_losses, misspelt_keys
+    warnings, dropped = list(merged.warnings), []
     try:                                  # a misspelt tolerance key must never end in a silent pass
         with open(project_file, encoding="utf-8") as fh:
             typos, dropped = misspelt_keys(yaml.safe_load(fh))
         warnings += typos
     except (OSError, yaml.YAMLError):     # Project.load read it a moment ago
         pass
-    for net in merged.from_fields:        # the fields' rail keeps by ref what the project gives
-        own, kept = loaded.rail(net), project.rail(net)
-        if own is None:
-            continue
-        sides = ((kept.sources if kept else [], own.sources, SOURCE_ACCURACY_KEYS),
-                 (kept.loads if kept else [], own.loads, board_fields.TOLERANCE_KEYS))
-        lost = [t for ts, own_ts, keys in sides for t in board_fields.carried_by_ref(ts, own_ts, keys)[1]]
-        if not lost:
-            continue
-        others = ", ".join(s.label for s in kept.sources) if kept is not None and kept.sources else "none"
-        names = ", ".join(t.label for t in lost)
-        warnings.append(f"Rail {net} comes from the board's KiCad footprint fields: the tolerances, accuracy "
-                        f"and entered parts of {names} in the project file are not used (no part of the "
-                        "fields' rail takes them); set override_board_fields: true on the rail to use the "
-                        "project's")
-        # A tolerance the user set that cannot be judged: not judged (exit 3), never a pass.
-        dropped += [{"item": t.label, "net": net, "limit": key,
-                     "reason": f"rail {net} comes from the board's KiCad footprint fields, where no part "
-                               f"takes {t.label}'s tolerances: set override_board_fields: true on the rail "
-                               "to use the project's"}
-                    for t in lost if isinstance(t, Load) for key in LOAD_TOLERANCE_KEYS
-                    if getattr(t, key) is not None]
-        for t in lost:                    # an accuracy entered, then lost: say so, not "enter it"
-            key = next((k for k in SOURCE_ACCURACY_KEYS if getattr(t, k, None) is not None), None)
-            if key is not None:
-                lost_accuracy[net] = (f"{t.label}'s {key} in the project file was lost: rail {net} comes "
-                                      f"from the board's KiCad footprint fields, whose source is {others} "
-                                      "(set override_board_fields: true on the rail to use the project's, "
-                                      "or give that source its accuracy in KiCad field PI_ACC)")
-    return warnings, dropped, lost_accuracy
+    lost_warnings, lost, lost_accuracy = fields_losses(loaded, merged.project, merged.from_fields)
+    return warnings + lost_warnings, dropped + lost, lost_accuracy
 
 
 @dataclass

@@ -50,6 +50,7 @@ from coppernicus.app.panels import (
 )
 from coppernicus.app.picking import add_picked_pin, pick_nets
 from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel, record_solve
+from coppernicus.app.tolerance_panel import TolerancePanel, read_misspelt
 from coppernicus.app.worker import CANCELLED, ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
@@ -66,7 +67,7 @@ from coppernicus.power_tree import (
     unsolved_limits,
 )
 from coppernicus.problems import ATTENTION, FAIL, find_problems, max_drop_text
-from coppernicus.project import Limits, Project, ProjectError, Rail
+from coppernicus.project import SOURCE_ACCURACY_KEYS, Limits, Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
 from coppernicus.service.convert import not_judged_items
 from coppernicus.service.session import FIELD_HINT
@@ -225,6 +226,9 @@ class MainWindow(QMainWindow):
         self.merged = BF.Merged(self.project)
         self.last_remerge_s = 0.0
         self.last_fields_read_s = 0.0
+        # The misspelt tolerance keys of the project file as loaded, (warning, not-judged entry)
+        # each: loading ignores them and a save drops them, so the Tolerance tab keeps them.
+        self.misspelt: List[Tuple[str, dict]] = []
 
         # Centre: pickers + view.
         self.view = BoardView()
@@ -299,6 +303,10 @@ class MainWindow(QMainWindow):
         self.results_tabs.addTab(self.ac_panel, "Impedance")
         self.noise_panel = NoisePanel(self)              # DC-DC ripple and coupled noise
         self.results_tabs.addTab(self.noise_panel, "Ripple & noise")
+        self.tolerance_panel = TolerancePanel(self)      # each load's stack-up, from the results held
+        self.results_tabs.addTab(self.tolerance_panel, "Tolerance")
+        for panel in (self.ac_panel, self.noise_panel):
+            panel.results_changed.connect(self.tolerance_panel.schedule_refresh)
         self._dock("Nets", self.nets, Qt.LeftDockWidgetArea)
         rail_scroll = QScrollArea()             # the rail setup is taller than a laptop screen
         rail_scroll.setWidget(self.rail_panel)
@@ -437,7 +445,10 @@ class MainWindow(QMainWindow):
             return not self.dirty
         return True
 
-    def open_board(self, path, project: Optional[Project] = None) -> bool:
+    def open_board(self, path, project: Optional[Project] = None,
+                   misspelt: Optional[List[Tuple[str, dict]]] = None) -> bool:
+        """Open the board at ``path``, with ``project`` (None: a new one). ``misspelt``: the
+        project file's misspelt tolerance keys (None with a project: kept, as a reload does)."""
         self.statusBar().showMessage(f"Reading {Path(path).name}…")
         self.repaint()
         try:
@@ -446,6 +457,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Cannot open board", str(e))
             return False
         self.board = board
+        if project is None or misspelt is not None:
+            self.misspelt = list(misspelt or [])
         self.project = project or Project(board=str(Path(path).resolve()))
         self._read_board_fields(board)
         self._remerge()
@@ -483,6 +496,7 @@ class MainWindow(QMainWindow):
         self.nets.set_board(board, self._configured_nets(), self.project.marked_rails, self._kicad_nets())
         self.problems.clear()
         self.ac_panel.board_changed()
+        self.tolerance_panel.board_changed()
         self.dirty = project is None
         self._update_title()
         warn = f" — {len(board.warnings)} import warning(s), see Problems notes" if board.warnings else ""
@@ -544,7 +558,7 @@ class MainWindow(QMainWindow):
         except (OSError, ProjectError) as e:
             QMessageBox.critical(self, "Cannot open project", str(e))
             return False
-        return self.open_board(project.board_path(), project)
+        return self.open_board(project.board_path(), project, misspelt=read_misspelt(path))
 
     # ------------------------------------------------------------------ KiCad footprint fields
     def _read_board_fields(self, board: Board):
@@ -578,6 +592,14 @@ class MainWindow(QMainWindow):
                 self.fields_error = f"{where}{e} ({FIELD_HINT})"
         self.merged = merged
         self.last_remerge_s = time.perf_counter() - t0
+        self._tolerance_stale()
+
+    def _tolerance_stale(self):
+        """The project, the power tree or a result held changed: the Tolerance tab recomposes
+        (once, after the events queued; at once while shown, else when shown)."""
+        panel = getattr(self, "tolerance_panel", None)
+        if panel is not None:
+            panel.schedule_refresh()
 
     def _merge_again(self, reshow: bool = False):
         """Merge again after the project changed (or its file name, which the red line
@@ -907,12 +929,46 @@ class MainWindow(QMainWindow):
         if own is None or not own.override_board_fields:
             return False
         sensed = [s.ref for s in own.sources if s.sense_net or s.ground_sense_net]    # as the merge
-        if not fields_view.confirm_use_fields(self, net, sensed):
+        kept, lost = self._tolerance_holders(net)
+        if not fields_view.confirm_use_fields(self, net, sensed, lost):
             return False
         own.override_board_fields = False
-        own.sources, own.loads = [], []
+        own.sources, own.loads = kept if kept is not None else ([], [])
         self._origin_changed(net)
         return True
+
+    def _tolerance_holders(self, net: str) -> Tuple[Optional[Tuple[list, list]], List[str]]:
+        """Before Use KiCad fields on ``net``: the project rail's tolerances, entered parts and
+        accuracies (where the parts' KiCad fields give none) kept by ref in a copy of the fields' sources
+        and loads, which the merge sees as no difference (None when there is nothing to keep),
+        and the parts whose ones go (the fields' rail has no part of their reference)."""
+        own = self.project.rail(net)
+        sides = ((own.sources, SOURCE_ACCURACY_KEYS), (own.loads, BF.TOLERANCE_KEYS))
+        holding = [t for ts, keys in sides for t in ts if any(getattr(t, k) is not None for k in keys)]
+        if not holding:
+            return None, []
+        trial = copy.deepcopy(self.project)       # the merge as it will be, the rail emptied
+        rail = trial.rail(net)
+        rail.override_board_fields, rail.sources, rail.loads = False, [], []
+        try:
+            merged = (BF.apply(trial, lambda: self.board_fields, ties=self._tie_pairs)
+                      if self.board_fields is not None else BF.Merged(trial))
+        except BF.FieldError:
+            return None, [t.label for t in holding]
+        origin, fields = merged.origins.get(net), merged.project.rail(net)
+        if origin is None or origin.source != "fields" or fields is None:
+            return None, [t.label for t in holding]
+        out, lost = [], []
+        for terms, (own_terms, keys) in ((copy.deepcopy(fields.sources), sides[0]),
+                                         (copy.deepcopy(fields.loads), sides[1])):
+            pairs, gone = BF.carried_by_ref(terms, own_terms, keys)
+            for t, p in pairs:
+                i = next(i for i, x in enumerate(terms) if x is t)
+                carried = {k: getattr(p, k) for k in keys if getattr(p, k) is not None}
+                terms[i] = dataclasses.replace(t, **carried)        # its own checks run
+            out.append(terms)
+            lost += [t.label for t in gone]
+        return (out[0], out[1]), lost
 
     def _origin_changed(self, net: str):
         """The project now says otherwise where the rail of ``net`` comes from: merge again,
@@ -1258,6 +1314,7 @@ class MainWindow(QMainWindow):
             record_solve(tree)                           # its time, for the next estimate
         self.tree = tree
         self.tree_i_max = tree_i_max(tree)
+        self._tolerance_stale()
         self._show_tree()
         self.thermal_panel.set_tree(tree, self._thermal_verdict_html())
         self.group_box.blockSignals(True)
@@ -1313,6 +1370,7 @@ class MainWindow(QMainWindow):
         """The power-tree result no longer matches the project (or the board)."""
         had = self.tree is not None
         self.tree = None
+        self._tolerance_stale()
         shown = self.group_box.currentData() is not None
         self.group_box.blockSignals(True)
         while self.group_box.count() > 1:

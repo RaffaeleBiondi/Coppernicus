@@ -1205,7 +1205,8 @@ the user set on such a load is a not-judged entry (exit 3, never a silent pass),
 entered for a source it lacks is said lost ("J5's accuracy_pct in the project file was lost:
 rail VCC comes from the board's KiCad footprint fields, whose source is J1 …"), not "enter it".
 MCP `solve_tolerance` does the same, through the same code (`service.tolerance.project_inputs`).
-The app (it replaces a project rail's terminals with KiCad's itself) does not do this yet.
+The lost-parts block is `tolerance.fields_losses`, which `project_inputs` and the app's
+Tolerance tab both call (§ The app's Tolerance tab).
 
 Limits: KiPI's `deviation_limits` (evaluate.py:28-36) through `range_volts` (model.py:276):
 a % of a negative rail is of its magnitude (`pct_to_volts`, model.py:254-259, swaps the ends:
@@ -1407,6 +1408,38 @@ solves), 0.70 GB peak RSS.
   transient ±30 mV (KiPI's estimate 25.99 / 25.98 mV), total 82.94 / 58.57 mV: ±6 % holds,
   ±3 % fails.
 
+### The app's Tolerance tab (T11b, `app/tolerance_panel.py`)
+
+- After "Ripple & noise". It composes (`compose_held` → `tolerance.compose`) **only from what
+  the window holds**: `window.tree`, the Impedance tab's results, the Ripple & noise tab's. A
+  result whose key no longer matches the merged project is stale, so its part is missing
+  ("the setup changed since its solve: …"); with no tree, `compose(tree=None, tree_note=…)`
+  leaves every DC part missing ("solve the power tree (Ctrl+T)") and takes each nominal from
+  its rail's own source. It never starts a solve: its Solve button runs the selected load's
+  next missing one through the tab that owns it (power tree; the noise of a listing aggressor;
+  the impedance with `solve_ac_rail(…, transient=True)`, `AcPanel.solve_rail`), so the estimate
+  line and "Solve anyway?" apply. The Impedance tab's own solve keeps `transient=False`: its
+  result says "estimate not available: solve the impedance of R with the transient".
+- The Impedance and Ripple & noise keys leave out the tolerances, entered parts, accuracies
+  and the `tolerance:` block (`panels.without_tolerances`) and are taken of the merged
+  project: typing a tolerance never makes a held result stale, nor drops the power tree.
+- Editors: per load `tol` / `dc_tol` / `ac_tol` in % and in mV, `ripple_mv`, `transient_mv`;
+  per source the accuracy; the options. A cell is a number (± n) or `below, above` (also
+  `[-3, 2]`, `-3 / +2`; `3,3` reads 3.3); empty is unset, 0 a value; the new terminal is
+  built by `dataclasses.replace` (its checks run: a `_pct` beside its `_mv` is refused).
+- A rail from the KiCad fields is editable (no field holds a tolerance): the edit goes to the
+  project's part of the same ref (`carried_by_ref`'s pairing); with no project rail of its own
+  there, that rail becomes a copy of the fields' sources and loads, which `_differences` sees
+  as no difference (no warning; KiCad still gives the values). Read-only only where the
+  project's own rail differs from the fields and has no part of that ref ("Override in
+  project"). Use KiCad fields keeps the tolerances by ref the same way, and names the parts
+  whose go; Override → start from the KiCad values keeps them (the merged rail carried them).
+- Misspelt keys: read from the file at open (`read_misspelt`), kept through a reload and a
+  save (the save drops the key while the tolerance stays unset), settled only once the part
+  has the key meant set (either unit; `tolerance.meant_key`).
+- Clicking a row selects its rail and zooms to its pads; Export writes
+  `<stem>_tolerance.csv` and `<stem>_tolerance_summary.json`, as the CLI.
+
 ### Known limitations
 
 KiPI's false passes Coppernicus does not inherit (each a missing part, so not judged; recorded
@@ -1427,11 +1460,11 @@ Also:
 - KiCad fields `PI_TOL`, `PI_DC_TOL`, `PI_AC_TOL` and `PI_ACC` give a part's tolerances and
   accuracy (merged in `board_fields.merge`, so every caller gets them); a rail from the board's
   fields carries the project's by ref where the part's fields give none; a part it lacks loses
-  them (a warning; each lost tolerance not judged). `coppernicus tolerance` and MCP
-  `solve_tolerance` report the lost ones; the app does not yet.
+  them (a warning; each lost tolerance not judged). `coppernicus tolerance`, MCP
+  `solve_tolerance` and the app's Tolerance tab report the lost ones.
 - Loads and sources still ignore unknown keys when loading; only `coppernicus tolerance` (and
-  MCP `solve_tolerance`, CI's `--tolerance`) warns about one that looks like a tolerance (and
-  does not judge its load).
+  MCP `solve_tolerance`, CI's `--tolerance`, the app's Tolerance tab) warns about one that looks
+  like a tolerance (and does not judge its load).
 - KiPI's estimate is shown even when its AC result hangs on something assumed (capacitors
   without a model, an assumed εr); it is never judged.
 - One-sided tolerances (a `null` end) are not offered: both ends are entered.
