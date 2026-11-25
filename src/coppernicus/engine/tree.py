@@ -37,7 +37,6 @@ from coppernicus.results import (
     TreeResult,
     VrmReport,
 )
-from coppernicus.temperature import apply_thermal_limits
 
 REGULATING = ("ldo", "smps")
 
@@ -180,9 +179,7 @@ def solve_project_tree(board: Board, project: Project,
     except SolveError as e:
         raise EngineError(f"Power tree: {e}") from e
     seconds = time.perf_counter() - t0
-    out = convert_tree(board, project, setup, kt, seconds, thickness)
-    apply_thermal_limits(out, project.thermal)       # listed as not judged, if any is set
-    return out
+    return convert_tree(board, project, setup, kt, seconds, thickness)
 
 
 def group_keys(project: Project, kt) -> Dict[str, str]:

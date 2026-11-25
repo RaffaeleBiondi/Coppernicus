@@ -515,3 +515,19 @@ def test_an_unsettled_solve_warns_in_the_tree_too(demo):
     assert tree.thermal.settled is False
     warning = next(w for w in tree.thermal.warnings if w.startswith("Board temperature may not have settled"))
     assert warning in tree.warnings and warning in tree_summary(tree)["warnings"]
+
+
+def test_apply_limits_rereads_the_board_temperature_limits_too(strip, demo_tree):
+    """Every re-judge path (the app's included) goes through power_tree.apply_limits."""
+    from coppernicus.power_tree import apply_limits
+    project = strip_project()
+    project.thermal.enabled = False
+    tree = solve_project_tree(strip, project)
+    project.thermal.max_temp_c = 50.0
+    apply_limits(tree, project)
+    assert tree.thermal_limits == {"max_temp_c": 50.0} and tree_summary(tree)["verdict"] == "not_judged"
+    tree = copy.deepcopy(demo_tree)
+    project = demo_thermal_project(max_rise_c=None, max_temp_c=100.0)
+    apply_limits(tree, project)
+    assert tree.thermal_limits == {"max_temp_c": 100.0} and all(r.passed for r in tree.thermal.copper)
+    assert tree_summary(tree)["verdict"] == "pass"

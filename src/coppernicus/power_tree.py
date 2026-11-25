@@ -187,12 +187,15 @@ def group_limits(tree, key: str) -> Tuple[Limits, Dict[str, str]]:
 def apply_limits(tree, project: Project) -> None:
     """Read the project's current limits into ``tree.limits`` (every solved net the project
     has a rail for, and every net with a limit set that the tree did not solve: that limit
-    is not judged) and judge the loads and regulator inputs again; no solve needed."""
+    is not judged) and judge the loads and regulator inputs again; no solve needed. The
+    board temperature's limits too (:func:`coppernicus.temperature.apply_thermal_limits`)."""
+    from coppernicus.temperature import apply_thermal_limits
     tree.limits = {}
     for rail in project.rails:
         if tree.group_of(rail.net) is not None or any(v is not None for v in vars(rail.limits).values()):
             tree.limits[rail.net] = copy.copy(rail.limits)
     judge_loads(tree)
+    apply_thermal_limits(tree, getattr(project, "thermal", None))   # the board temperature's
 
 
 def unjudged(item: str, net: str, limit: str, reason: str) -> Dict[str, str]:
