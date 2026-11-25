@@ -111,8 +111,8 @@ Verdict: not_judged. No limits set: nothing is judged, problems are ranked only.
 - **VRMs:** each source and regulator, with its set voltage, the voltage it actually holds at
   its output (V out), its output and input currents and its loss. A regulator's input is also
   judged as a load on the rail that feeds it: *input drop on +3V3_F*. When a source has a rated
-  output current (`PI_IMAX`, `current_limit_a`), an **I max** column shows it next to I out;
-  it is not judged yet.
+  output current (`PI_IMAX`, `current_limit_a`), an **I max** column shows it next to I out,
+  and the regulator is judged against it (Verdicts, below).
 - **Loads:** the voltage **across** each load's supply and ground pins, and its drop from the
   nominal voltage: nominal − (lowest supply pin − highest ground pin). The ground's rise counts
   in the drop, since that is what the part sees. U3 sits at exactly 1.8 V because U2 holds it
@@ -160,6 +160,12 @@ There are no built-in limits. Without limits the tree ranks what it finds and sa
   as *not judged*, and so is a limit that has nothing to judge or is of the wrong kind (a rise
   limit on a supply rail). A group passes only when everything its limits apply to was judged
   and passed.
+- **Regulator ratings.** A source's rated output current (`PI_IMAX`, or `current_limit_a` in
+  the project file) is a limit you wrote: an I out above it fails the group the regulator
+  drives, "U1: 2.502 A out, over its rated 2 A (from the project file)", in its problems and
+  the verdict line. It is not judged while the solve has not settled there (the regulator's
+  group, a group it feeds, or the tree's iteration did not converge), nor on a rail the tree
+  does not solve; a regulator out of regulation is still judged on its current, as KiPI does.
 
 For example, give the power chain a 1 % drop limit on +3V3 and on +1V8 and a 30 mV rise limit
 on GND (these numbers are only for the example; use your design's):
