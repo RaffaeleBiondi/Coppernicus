@@ -5,6 +5,11 @@ and, in a child process, what only a window shows. No solve runs here: the resul
 hand; the solves are in tools/gui_check.py (run_tolerance)."""
 
 import dataclasses
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -325,3 +330,327 @@ def test_part_and_check_cells_name_the_origin_and_never_a_clean_verdict_on_a_mis
     assert text.startswith("NOT JUDGED") and "parts missing" in text
     (cells,) = result_rows(r)
     assert cells[-2] == "NOT JUDGED" and "ripple" in cells[-1]
+
+
+# ---------------------------------------------------------------------- in a window (child process)
+
+TESTS = os.path.dirname(os.path.abspath(__file__))
+EXAMPLE = os.path.join(TESTS, "..", "examples", "tolerance", "tolerance.coppernicus.yml")
+
+PRELUDE = f'''
+import sys
+sys.path.insert(0, {TESTS!r})
+import dataclasses
+from PySide6 import QtCore, QtWidgets
+from coppernicus.app.main_window import MainWindow
+from coppernicus.app.ac_panel import _project_key as ac_key
+from coppernicus.app.noise_panel import project_key as noise_key
+from test_tolerance import _comp_tree, _impedance, _noise_result
+
+app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+window = MainWindow()
+window.dirty = False
+panel = window.tolerance_panel
+
+
+def held(tree=True, noise=True):
+    """A power tree holding U2 (10 mV below at worst) and U1's noise at LOAD, made by hand,
+    as the window holds them after the solves."""
+    window.tree = _comp_tree() if tree else None
+    if noise:
+        window.noise_panel.results["U1"] = (_noise_result("U1", (0.008, 0.011, 0.004, 0.006), probe="LOAD"),
+                                            noise_key(window.merged.project))
+    panel.refresh()
+
+
+def cells(r=0):
+    return [panel.table.item(r, c).text() for c in range(panel.table.columnCount())]
+'''
+
+
+def run_in_window(body: str) -> None:
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    out = subprocess.run([sys.executable, "-c", PRELUDE + textwrap.dedent(body)], env=env,
+                         capture_output=True, text=True, timeout=180)
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_the_tolerance_tab_follows_ripple_and_noise_and_opening_changes_nothing():
+    run_in_window(f'''
+        tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
+        assert tabs[tabs.index("Ripple & noise") + 1] == "Tolerance", tabs
+        assert window.results_tabs.widget(tabs.index("Tolerance")) is panel
+        window.show()
+        app.processEvents()
+        window.open_project({EXAMPLE!r})
+        window.results_tabs.setCurrentWidget(panel)
+        app.processEvents()
+        before = window.project.to_dict()
+        row = [panel.loads.item(0, c).text() for c in range(panel.loads.columnCount())]
+        assert row == ["U2", "VOUT", "6", "", "3", "", "", "50", "", "30"], row
+        assert [panel.sources.item(i, 0).text() for i in range(panel.sources.rowCount())] == ["J1", "U1"]
+        assert panel.sources.item(1, 2).text() == "1" and panel.sources.item(0, 2).text() == ""
+        assert panel.ripple_sum.currentText() == "linear" and not panel.bw_limit.isChecked()
+        for c in range(2, panel.loads.columnCount()):
+            item = panel.loads.item(0, c)
+            item.setText(item.text())                         # committed unchanged: no edit
+        assert window.dirty is False and window.project.to_dict() == before
+        assert "NOT JUDGED" in panel.header.text(), panel.header.text()
+        assert cells()[3].startswith("missing") and "Ctrl+T" in panel.table.item(0, 3).toolTip()
+        with_tab = window.minimumSizeHint()                  # the laptop fit: the tab grows nothing
+        window.results_tabs.removeTab(window.results_tabs.indexOf(panel))
+        app.processEvents()
+        without = window.minimumSizeHint()
+        assert with_tab.height() <= without.height() and with_tab.width() <= without.width(), (
+            with_tab, without)
+    ''')
+
+
+def test_an_edit_writes_the_project_merges_again_and_drops_no_solve():
+    run_in_window(f'''
+        window.open_project({EXAMPLE!r})
+        app.processEvents()
+        held()
+        assert panel.result.verdict == "pass", panel.header.text()
+        assert cells()[-2] == "PASS" and cells()[3].endswith("mV · tree") and "aggressor U1" in cells()[5]
+        tree, load = window.tree, window.project.rail("VOUT").loads[0]
+        panel.set_cell("load", "U2", "tol_pct", "3")
+        new = window.project.rail("VOUT").loads[0]
+        assert new is not load and new.tol_pct == (-3.0, 3.0) and new.dc_tol_pct == (-3.0, 3.0)
+        assert window.merged.project.rail("VOUT").loads[0].tol_pct == (-3.0, 3.0) and window.dirty
+        assert window.tree is tree and not window.noise_panel.stale, "a tolerance edit drops no solve"
+        assert panel.result.verdict == "fail" and cells()[-2] == "FAIL", cells()
+        panel.set_cell("load", "U2", "tol_mv", "50")          # beside tol_pct: refused, kept
+        assert window.project.rail("VOUT").loads[0].tol_mv is None
+        assert "Not applied" in panel.status.text() and "both set" in panel.status.text()
+        assert panel.loads.item(0, 3).text() == ""
+        panel.set_cell("load", "U2", "ripple_mv", "3, 2")     # below > 0: refused
+        assert window.project.rail("VOUT").loads[0].ripple_mv is None and panel.loads.item(0, 8).text() == ""
+        panel.set_cell("source", "U1", "accuracy_pct", "")    # cleared: missing, never 0
+        assert window.project.rail("VOUT").sources[0].accuracy_pct is None
+        assert cells()[4].startswith("missing") and cells()[-2] == "NOT JUDGED", cells()
+        assert "enter U1's DC accuracy" in panel.table.item(0, 4).toolTip()
+        panel.bw_limit.setChecked(True)
+        assert window.project.tolerance.bw_limit_20mhz and panel.result.options["bw_limit_20mhz"]
+    ''')
+
+
+def test_a_rail_edit_turns_a_pass_not_judged_without_a_tab_switch():
+    """The Results and Rail setup docks are on screen together: an edit there drops the power
+    tree and makes the noise stale, so the shown PASS must turn NOT JUDGED at once."""
+    run_in_window(f'''
+        window.show()
+        window.open_project({EXAMPLE!r})
+        window.results_tabs.setCurrentWidget(panel)
+        window.nets.select("VOUT")
+        app.processEvents()
+        held()
+        assert cells()[-2] == "PASS"
+        window.rail_panel.loads.table.cellWidget(0, 3).setValue(4.0)   # U2's current, in the Rail setup
+        app.processEvents()
+        assert window.tree is None and window.noise_panel.stale
+        assert cells()[-2] == "NOT JUDGED", cells()
+        assert cells()[3].startswith("missing") and cells()[5].startswith("missing")
+        assert "the setup changed since its solve" in panel.table.item(0, 5).toolTip()
+    ''')
+
+
+def test_a_row_click_shows_its_load_on_the_board():
+    run_in_window(f'''
+        window.show()
+        window.open_project({EXAMPLE!r})
+        window.results_tabs.setCurrentWidget(panel)
+        window.nets.select("VIN")
+        app.processEvents()
+        zoomed = []
+        window.view.zoom_to = lambda x, y, *a: zoomed.append((x, y))
+        text = panel.go_to_row(0)
+        app.processEvents()
+        assert window.net == "VOUT" and text.startswith("U2 on VOUT"), (window.net, text)
+        assert window.statusBar().currentMessage() == text and len(zoomed) == 1, zoomed
+    ''')
+
+
+def test_export_writes_the_clis_two_files(tmp_path):
+    run_in_window(f'''
+        import csv, json
+        from pathlib import Path
+        out = Path({str(tmp_path)!r})
+        window.open_project({EXAMPLE!r})
+        app.processEvents()
+        held()
+        names = sorted(p.name for p in panel.export_files(out))
+        stem = "tolerance.coppernicus"
+        assert names == [f"{{stem}}_tolerance.csv", f"{{stem}}_tolerance_summary.json"], names
+        doc = json.loads((out / names[1]).read_text(encoding="utf-8"))
+        assert doc["kind"] == "tolerance" and doc["verdict"] == "pass" and doc["csv_file"].endswith(names[0])
+        rows = list(csv.DictReader(open(out / names[0], encoding="utf-8")))
+        assert rows[0]["load"] == "U2" and rows[0]["verdict"] == "pass"
+        assert rows[0]["dc_source"] == "power tree"
+    ''')
+
+
+def test_a_misspelt_key_in_the_loaded_file_is_not_judged_until_the_key_it_meant_is_set(tmp_path):
+    text = Path(EXAMPLE).read_text(encoding="utf-8").replace("    accuracy_pct: 1.0", "    acuracy_pct: 1.0")
+    text = text.replace("board: tolerance.kipi.json.gz",
+                        f"board: {Path(EXAMPLE).with_name('tolerance.kipi.json.gz').resolve().as_posix()}")
+    typo = tmp_path / "typo.coppernicus.yml"
+    typo.write_text(text, encoding="utf-8")
+    run_in_window(f'''
+        window.open_project({str(typo)!r})
+        app.processEvents()
+        held()
+        notes = panel.notes.toPlainText()
+        assert panel.result.verdict == "not_judged", panel.header.text()
+        assert "acuracy_pct" in notes and "did you mean 'accuracy_pct'" in notes, notes
+        window._save(window.project.path)                     # the file loses the key; the tab never does
+        assert "acuracy_pct" not in open({str(typo)!r}, encoding="utf-8").read()
+        window.reload_board()
+        held()
+        assert any(e["limit"] == "acuracy_pct" for e in panel.result.not_judged)
+        panel.set_cell("source", "U1", "accuracy_pct", "1")   # what it meant
+        assert not any(e["limit"] == "acuracy_pct" for e in panel.result.not_judged)
+        assert panel.result.verdict == "pass", panel.header.text()
+        window.dirty = False
+        window.open_project({EXAMPLE!r})
+        app.processEvents()
+        assert window.misspelt == []
+    ''')
+
+
+def test_nothing_is_judged_while_the_setup_cannot_be_read():
+    run_in_window(f'''
+        from coppernicus.project import Load
+        window.open_project({EXAMPLE!r})
+        app.processEvents()
+        held()
+        window.fields_error = "strip.coppernicus.yml: bad field"
+        panel.refresh()
+        assert panel.result is None and panel.table.rowCount() == 0
+        assert "KiCad footprint field" in panel.header.text() and not panel.export_button.isEnabled()
+        window.fields_error = None
+        window.project.rail("VOUT").loads.append(Load("U99", 1.0))
+        window._remerge()
+        panel.refresh()
+        assert panel.result is None and "U99" in panel.header.text(), panel.header.text()
+    ''')
+
+
+def test_the_solve_button_runs_the_rows_next_solve_in_the_tab_that_owns_it():
+    run_in_window(f'''
+        import coppernicus.app.ac_panel as ac_panel
+        import coppernicus.app.noise_panel as noise_panel
+        started, asked = [], []
+        ac_panel.AcWorker.start = lambda self: started.append(self)
+        noise_panel.NoiseWorker.start = lambda self: started.append(self)
+        window.solve_tree = lambda: asked.append("tree")
+        window.open_project({EXAMPLE!r})
+        app.processEvents()
+        held(tree=False, noise=False)
+        assert panel.solve_button.text() == "Solve power tree" and panel.solve_button.isEnabled()
+        panel.solve_button.click()
+        assert asked == ["tree"]
+        held(noise=False)
+        assert panel.solve_button.text() == "Solve noise of U1"
+        panel.solve_button.click()
+        assert window.results_tabs.currentWidget() is window.noise_panel
+        assert started[-1].phase == "size" and started[-1].name == "U1"
+        window.noise_panel._busy = False
+        held()
+        assert panel.solve_button.text() == "Solve impedance of VOUT + transient", panel.solve_button.text()
+        panel.solve_button.click()
+        ac = window.ac_panel
+        assert window.results_tabs.currentWidget() is ac and ac.rail_box.currentText() == "VOUT"
+        assert started[-1].phase == "size" and ac._transient
+        from coppernicus.engine.ac import AcSize
+        ac._current = lambda: True                             # the sizing ends: the solve starts
+        ac._sized(AcSize("VOUT", 1000, 500, 2, 111, 278, 0.1))
+        assert started[-1].phase == "solve" and started[-1].transient is True
+        ac._busy = False
+        ac.solve()                                             # the Impedance tab's own: no transient
+        assert not ac._transient
+        ac._busy = False
+        window.ac_panel.results["VOUT"] = (_impedance(probe="LOAD"), ac_key(window.merged.project))
+        panel.refresh()
+        assert not panel.solve_button.isEnabled(), panel.solve_button.text()
+    ''')
+
+
+FIELDS_PRELUDE = '''
+import numpy as np
+from pathlib import Path
+from kicad_fixture import write_strip_board
+from coppernicus.app import fields_view
+from coppernicus.project import Load, Project, Rail, Source
+from coppernicus.results import ImpedanceResult
+FIELDS = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V"}, "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}}
+
+
+def strip_project(tmp, name, rails=()):
+    write_strip_board(tmp / "strip.kicad_pcb", FIELDS)
+    path = Project(board="strip.kicad_pcb", rails=list(rails)).save(tmp / name)
+    window.dirty = False
+    assert window.open_project(str(path))
+    app.processEvents()
+    return path
+'''
+
+
+def test_a_kicad_fields_rail_takes_a_tolerance_in_the_tab_with_no_warning_and_no_stale_result(tmp_path):
+    """No KiCad field holds a tolerance: typed on a rail from the fields, it is held by a copy
+    of the fields' parts in the project's own rail, which the merge sees as no difference, and
+    which changes nothing solved (the held impedance stays current)."""
+    run_in_window(FIELDS_PRELUDE + textwrap.dedent(f'''
+        tmp = Path({str(tmp_path)!r})
+        strip_project(tmp, "strip.coppernicus.yml")
+        assert window.merged.origins["VCC"].source == "fields" and window.project.rails == []
+        f = np.array([1e3, 1e6])
+        window.ac_panel.results["VCC"] = (ImpedanceResult("VCC", ["VCC"], "", "J1", None, f, f),
+                                          ac_key(window.merged.project))
+        assert window.ac_panel.rail_box.currentText() == "VCC" and not window.ac_panel.stale
+        panel.refresh()
+        assert [panel.loads.item(0, c).text() for c in (0, 1)] == ["U1", "VCC"]
+        assert panel.loads.item(0, 2).flags() & QtCore.Qt.ItemIsEditable
+        panel.set_cell("load", "U1", "tol_pct", "5")
+        own = window.project.rail("VCC")
+        assert [s.ref for s in own.sources] == ["J1"] and own.loads[0].tol_pct == (-5.0, 5.0)
+        assert window.merged.origins["VCC"].source == "fields" and window.merged.warnings == []
+        assert window.merged.project.rail("VCC").loads[0].tol_pct == (-5.0, 5.0)
+        assert "KiCad footprint fields" in window.statusBar().currentMessage()
+        assert window.ac_panel.rail_box.currentText() == "VCC" and not window.ac_panel.stale
+        assert any("tol_pct of U1 from the project file" in a for a in panel.result.assumptions)
+    '''))
+
+
+def test_the_way_back_to_the_kicad_fields_keeps_the_tolerances_by_ref(tmp_path):
+    """Use KiCad fields empties the project rail's sources and loads: their tolerances stay, by
+    ref, in a copy of the fields' parts; a part the fields lack is named before it goes. And
+    Override → start from the KiCad values keeps them too (the merged rail carried them)."""
+    run_in_window(FIELDS_PRELUDE + textwrap.dedent(f'''
+        tmp = Path({str(tmp_path)!r})
+        own = Rail("VCC", [Source("J1", 3.3, accuracy_pct=1)],
+                   [Load("U1", 2.0, tol_pct=4), Load("U9", 1.0, tol_pct=3)], override_board_fields=True)
+        strip_project(tmp, "over.coppernicus.yml", [own])
+        asked = []
+        fields_view.confirm_use_fields = lambda _w, net, *rest: asked.append((net, rest)) or True
+        assert window.use_fields("VCC")
+        assert asked and asked[0][0] == "VCC" and "U9" in str(asked[0][1]), asked
+        own = window.project.rail("VCC")
+        assert not own.override_board_fields
+        assert [(t.ref, t.accuracy_pct) for t in own.sources] == [("J1", (-1.0, 1.0))], own.sources
+        assert [(t.ref, t.current, t.tol_pct) for t in own.loads] == [("U1", 1.0, (-4.0, 4.0))], own.loads
+        assert window.merged.origins["VCC"].source == "fields" and window.merged.warnings == []
+        assert window.merged.project.rail("VCC").loads[0].tol_pct == (-4.0, 4.0)
+
+        plain = Rail("VCC", [Source("J1", 3.3)], [Load("U1", 2.0)], override_board_fields=True)
+        strip_project(tmp, "plain.coppernicus.yml", [plain])
+        assert window.use_fields("VCC")                      # nothing to keep: emptied, as before
+        assert window.project.rail("VCC").sources == [] and window.project.rail("VCC").loads == []
+
+        ignored = Rail("VCC", [Source("J1", 3.3)], [Load("U1", 2.0, tol_pct=4)])
+        strip_project(tmp, "ignored.coppernicus.yml", [ignored])
+        fields_view.ask_override = lambda *a: fields_view.START_FROM_KICAD
+        assert window.override_fields("VCC")
+        loads = window.project.rail("VCC").loads
+        assert [(t.ref, t.current, t.tol_pct) for t in loads] == [("U1", 1.0, (-4.0, 4.0))], loads
+    '''))
