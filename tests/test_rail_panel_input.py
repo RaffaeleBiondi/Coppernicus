@@ -125,3 +125,42 @@ def test_the_wheel_over_an_unfocused_spin_box_changes_nothing_and_goes_on_to_the
         assert wheel(rp.temp, 1)                                         # focused: the wheel steps it
         assert rp.temp.value() == 21.0 and settings.copper_temp_c == 21.0, rp.temp.value()
     ''', tmp_path)
+
+
+def test_the_wheel_over_an_unfocused_combo_box_changes_nothing(tmp_path):
+    """The part of a load, the kind of a source and the net of its pins: one wheel notch used to
+    pick the next item while the user scrolled the panel."""
+    run_in_window('''
+        window.show()
+        rp.sources.table.setCurrentCell(0, 0)                # the source box shows the source
+        rp.source_box.kind.setCurrentIndex(rp.source_box.kind.findData("ldo"))
+        app.processEvents()
+
+        def wheel(widget, notches):
+            at = QPointF(widget.width() / 2, widget.height() / 2)
+            event = QWheelEvent(at, QPointF(widget.mapToGlobal(at.toPoint())), QPoint(),
+                                QPoint(0, 120 * notches), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+            QApplication.sendEvent(widget, event)
+            app.processEvents()
+            return event.isAccepted()
+
+        rail = window.project.rail("+3V3")
+        combos = {"load part": rp.loads.table.cellWidget(0, 1), "source kind": rp.source_box.kind,
+                  "input net": rp.source_box.input.net}
+        before = {name: combo.currentIndex() for name, combo in combos.items()}
+        setup = (rail.loads[0].ref, rail.sources[0].kind, rail.sources[0].input_net)
+        for name, combo in combos.items():
+            assert combo.isEnabled() and combo.count() > 1 and not combo.hasFocus(), name
+            for widget in filter(None, (combo, combo.lineEdit())):         # the net is editable
+                assert widget.focusPolicy().value & Qt.WheelFocus.value != Qt.WheelFocus.value, name
+            assert not wheel(combo, -1), f"{name}: took the wheel instead of passing it on"
+        assert {name: combo.currentIndex() for name, combo in combos.items()} == before
+        assert (rail.loads[0].ref, rail.sources[0].kind, rail.sources[0].input_net) == setup
+
+        window.activateWindow()
+        rp.source_box.kind.setFocus()
+        app.processEvents()
+        assert wheel(rp.source_box.kind, -1)                  # focused: the wheel picks
+        assert rail.sources[0].kind != "ldo", rail.sources[0].kind
+    ''', tmp_path)
+

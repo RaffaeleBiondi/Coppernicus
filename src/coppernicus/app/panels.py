@@ -85,6 +85,15 @@ class DecimalSpinBox(WheelWhenFocused, QDoubleSpinBox):
         return super().valueFromText(text.replace(",", "."))
 
 
+class FieldComboBox(WheelWhenFocused, QComboBox):
+    """A combo box of the Rail setup: it takes the wheel only when focused
+    (:class:`WheelWhenFocused`)."""
+
+    def setEditable(self, editable: bool):
+        super().setEditable(editable)
+        self.setFocusPolicy(Qt.StrongFocus)          # Qt on macOS gives an editable one WheelFocus
+
+
 class DecimalValidator(QDoubleValidator):
     """A validator for decimal fields that reads a typed comma as the decimal sign (see
     :class:`DecimalSpinBox`)."""
@@ -404,7 +413,7 @@ class TerminalTable(QWidget):
         item = QTableWidgetItem(name)
         item.setData(Qt.UserRole, origin)
         self.table.setItem(r, 0, item)
-        part = QComboBox()
+        part = FieldComboBox()
         for p in self._parts:
             part.addItem(f"{p.ref}  {p.value}".strip(), p.ref)
             part.setItemData(part.count() - 1, f"pins on this net: {', '.join(p.pins)}", Qt.ToolTipRole)
@@ -448,7 +457,7 @@ class PinRefEdit(QWidget):
         super().__init__(parent)
         self.part = QLineEdit(placeholderText="this part")
         self.part.setToolTip("Part reference; empty means the part of the selected row")
-        self.net = QComboBox()
+        self.net = FieldComboBox()
         self.net.setEditable(True)
         self.net.setInsertPolicy(QComboBox.NoInsert)
         self.net.setToolTip("Net of these pins; empty means not set")
@@ -501,7 +510,7 @@ class RegulatorBox(QGroupBox):
 
     def __init__(self, parent=None):
         super().__init__("Regulator: selected source (used by Solve power tree)", parent)
-        self.kind = QComboBox()
+        self.kind = FieldComboBox()
         for k in SOURCE_KINDS:
             self.kind.addItem(KIND_LABELS[k], k)
         self.efficiency = QLineEdit(placeholderText="switcher: a fraction 0–1, e.g. 0.9")
