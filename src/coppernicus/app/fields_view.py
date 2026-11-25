@@ -33,6 +33,13 @@ def row_tip(entry: Mapping[str, Any]) -> str:
             f"({entry.get('from', '')}). Override in project to edit it.")
 
 
+def drop_tip(limit: Mapping[str, Any]) -> str:
+    """The locked max drop's tooltip (``limit``: the ``limits`` of a ``board_fields`` listing:
+    its ``max_drop_pct`` and ``from``, which names the field and the part)."""
+    return (f"Max drop {limit['max_drop_pct']:g} % {limit.get('from', '')}: a KiCad limit always "
+            "applies to its net, even to a project rail; change it in KiCad.")
+
+
 @dataclass
 class Banner:
     """What the banner says about one rail."""

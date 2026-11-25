@@ -506,6 +506,7 @@ class MainWindow(QMainWindow):
             rail = self._show_rail(self.net)
             self.rail_panel.set_net_kind(self._net_at_0v(rail))
         else:
+            self._lock_drop(self.net)             # after a pad picked, the panel was filled again
             self._show_banner(self.net)
 
     def _shown_origin(self) -> Optional[str]:
@@ -696,15 +697,25 @@ class MainWindow(QMainWindow):
         self._rail_draft = rail
         if self._kicad_shown:
             listing = origin.board_fields or {}
-            limit = listing.get("limits", {})
             self.rail_panel.set_read_only(
                 fields_view.read_only_reason(net),
                 [fields_view.row_tip(e) for e in listing.get("sources", [])],
-                [fields_view.row_tip(e) for e in listing.get("loads", [])],
-                (f"Max drop {limit['max_drop_pct']:g} % {limit['from']}: change it in KiCad, or "
-                 "Override in project" if limit else ""))
+                [fields_view.row_tip(e) for e in listing.get("loads", [])])
+        self._lock_drop(net)
         self._show_banner(net)
         return rail
+
+    def _lock_drop(self, net: str):
+        """A drop limit from a KiCad field (PI_LIMIT_DROP) applies to its net whatever its
+        origin (the merge keeps it under an override and over incomplete fields): the rail
+        panel shows it read-only, at the merged value, and never writes it to the project."""
+        origin = self.merged.origins.get(net)
+        limit = (origin.board_fields or {}).get("limits") if origin is not None else None
+        merged = self.merged.project.rail(net)
+        if limit and merged is not None:
+            self.rail_panel.lock_drop(merged.limits.max_drop_pct, fields_view.drop_tip(limit))
+        else:
+            self.rail_panel.lock_drop(None)
 
     def _show_banner(self, net: Optional[str]):
         """The banner of the rail panel: where the shown rail comes from, its warnings."""

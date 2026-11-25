@@ -357,7 +357,7 @@ def test_a_kicad_rail_is_read_only_each_value_naming_its_field(tmp_path):
         assert not rp.source_box.isEnabled() and not rp.load_box.isEnabled()
         assert rp.max_drop.text() == "2" and rp.max_drop.isReadOnly(), rp.max_drop.text()
         tip = rp.max_drop.toolTip()
-        assert "PI_LIMIT_DROP" in tip and "U1" in tip, tip
+        assert "PI_LIMIT_DROP" in tip and "U1" in tip and "Override" not in tip, tip
         assert not rp.max_j.isReadOnly() and not rp.max_via.isReadOnly()
         rp.set_pick("load")                                  # a click on a pad picks nothing
         assert window.pick_pad(40.0, 0.0) == READ_ONLY and window.project.rails == []
@@ -442,7 +442,8 @@ def test_override_copies_the_kicad_rail_into_the_project_and_the_way_back_keeps_
         assert [(ld.ref, ld.current, ld.pins) for ld in own.loads] == [("U1", 1.0, ["1"])], own.loads
         assert own.limits == Limits(max_via_current=2.0), own.limits          # its own limits, kept
         assert window.merged.origins["VCC"].source == "overridden" and "VCC" not in window.results
-        assert not rp.read_only and rp.loads.add_button.isEnabled() and not rp.max_drop.isReadOnly()
+        assert not rp.read_only and rp.loads.add_button.isEnabled()
+        assert rp.max_drop.text() == "2" and rp.max_drop.isReadOnly(), rp.max_drop.text()   # still in force
         text = rp.banner.text.text()
         assert text.startswith('Project rail overrides the KiCad fields (KiCad: source J1 1 V '
                                '(from KiCad field PI_SOURCE "1V"'), text
@@ -472,6 +473,55 @@ def test_override_copies_the_kicad_rail_into_the_project_and_the_way_back_keeps_
         fields_view.confirm_use_fields = lambda _w, _net: False
         rp.banner.button.click()
         assert window.project.rails == [own] and not window.dirty, window.project.rails
+    ''', tmp_path)
+
+
+def test_a_kicad_drop_limit_stays_locked_under_override_and_over_incomplete_fields(tmp_path):
+    """PI_LIMIT_DROP applies to its net whatever the project says: shown read-only, at the
+    merged value, under Override in project and over incomplete fields too; the project
+    rail's own max_drop_pct is never overwritten with it."""
+    run_in_window('''
+        def locked(tip_part="PI_LIMIT_DROP"):
+            tip = rp.max_drop.toolTip()
+            assert rp.max_drop.text() == "2" and rp.max_drop.isReadOnly(), (rp.max_drop.text(), tip)
+            assert tip_part in tip and "U1" in tip, tip
+
+        # Overridden, the project saying 5 %: 2 % shown and judged; 5 % kept and saved.
+        own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0, ["1"])], limits=Limits(max_drop_pct=5.0),
+                   override_board_fields=True)
+        project = strip(TMP / "a", rails=[own])
+        open_net(project)
+        assert window.merged.origins["VCC"].source == "overridden" and not rp.read_only
+        locked()
+        assert window.merged.project.rail("VCC").limits.max_drop_pct == 2.0
+        rp.max_via.setText("2")
+        rp.max_via.editingFinished.emit()
+        assert window.project.rail("VCC").limits == Limits(max_drop_pct=5.0, max_via_current=2.0)
+        locked()
+        rp.set_pick("source")
+        window.pick_pad(0.0, 0.0)                    # J1: the panel is filled again
+        rp.set_pick("")
+        locked()
+        window.save_project()
+        saved = Project.load(project).rail("VCC")
+        assert saved.limits == Limits(max_drop_pct=5.0, max_via_current=2.0), saved.limits
+
+        # A project rail over incomplete fields: locked too.
+        incomplete = {"U1": {"PI_RAIL": "VCC", "PI_LOAD": "2A", "PI_LIMIT_DROP": "2%"}}
+        open_net(strip(TMP / "b", incomplete, rails=[Rail("VCC", [Source("J1", 1.0)], [Load("U1", 1.0)])]))
+        assert window.merged.origins["VCC"].source == "project" and not rp.read_only
+        locked()
+        rp.max_via.setText("3")
+        rp.max_via.editingFinished.emit()
+        assert window.project.rail("VCC").limits == Limits(max_via_current=3.0), window.project.rail("VCC")
+
+        # ... also when the rail that completes them is typed in: the field error goes, the lock comes.
+        open_net(strip(TMP / "c", incomplete))
+        assert window.fields_error and not rp.max_drop.isReadOnly(), window.fields_error
+        rp.sources.add_row()                         # J1, the first part of the net
+        assert window.fields_error is None and window.merged.origins["VCC"].source == "project"
+        locked()
+        assert window.project.rail("VCC").limits == Limits(), window.project.rail("VCC")
     ''', tmp_path)
 
 

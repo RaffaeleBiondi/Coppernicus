@@ -691,6 +691,9 @@ class RailPanel(QWidget):
             edit.setText("" if value is None else f"{value:g}")
         self._loading = False
         self.set_read_only()
+        self._drop_tip = ""                       # editable again, until lock_drop says otherwise
+        self.max_drop.setReadOnly(False)
+        self.max_drop.setToolTip(self._tips[self.max_drop])
         # The first row of each table is the current one, so the boxes below edit it.
         for table, items in ((self.sources, rail.sources), (self.loads, rail.loads)):
             if items:
@@ -702,12 +705,11 @@ class RailPanel(QWidget):
     def read_only(self) -> bool:
         return self._read_only
 
-    def set_read_only(self, why: str = "", source_tips: List[str] = (), load_tips: List[str] = (),
-                      drop_tip: str = ""):
+    def set_read_only(self, why: str = "", source_tips: List[str] = (), load_tips: List[str] = ()):
         """Show the rail read-only (``why``: the reason; "" to edit it again): sources, loads
-        and their regulator and ground pins; the limits and the net-tie option stay editable,
-        except the drop limit when ``drop_tip`` says which KiCad field gives it. Call it
-        after :meth:`set_rail`, which makes everything editable again."""
+        and their regulator and ground pins; the limits and the net-tie option stay editable
+        (see :meth:`lock_drop`). Call it after :meth:`set_rail`, which makes everything
+        editable again."""
         self._read_only = bool(why)
         self.sources.set_read_only(why, source_tips)
         self.loads.set_read_only(why, load_tips)
@@ -715,9 +717,19 @@ class RailPanel(QWidget):
             box.setToolTip(why)
             if why:
                 box.setEnabled(False)
-        self._drop_tip = drop_tip
-        self.max_drop.setReadOnly(bool(drop_tip))
-        self.max_drop.setToolTip(drop_tip or self._tips[self.max_drop])
+
+    def lock_drop(self, pct: Optional[float], tip: str = ""):
+        """The drop limit given by a KiCad field (``tip`` says which; "" for none): shown at
+        ``pct``, read-only, and never written to the rail, which keeps its own value. Call it
+        after :meth:`set_rail`, which unlocks it."""
+        if not tip and not self._drop_tip:
+            return                                # nothing locked: as set_rail and set_net_kind left it
+        own = self._rail.limits.max_drop_pct if self._rail is not None else None
+        value = pct if tip else own
+        self.max_drop.setText("" if value is None else f"{value:g}")
+        self._drop_tip = tip
+        self.max_drop.setReadOnly(bool(tip))
+        self.max_drop.setToolTip(tip or self._tips[self.max_drop])
 
     def set_net_kind(self, at_0v: Optional[bool]):
         """Disable the limit that does not apply to the shown net (one rule, by its reference
@@ -804,6 +816,7 @@ class RailPanel(QWidget):
         self.ties.setVisible(False)
         self.follow_ties.setVisible(False)
         self.set_read_only()
+        self.lock_drop(None)
         self.setEnabled(False)
         self._loading = False
 
@@ -832,8 +845,10 @@ class RailPanel(QWidget):
     def _write_limits(self, *_):
         if self._loading or self._rail is None:
             return
-        limits = Limits(_optional_float(self.max_drop), _optional_float(self.max_j),
-                        _optional_float(self.max_via), _optional_float(self.max_rise))
+        # A drop limit locked by a KiCad field is shown, not the rail's: the rail keeps its own.
+        drop = self._rail.limits.max_drop_pct if self._drop_tip else _optional_float(self.max_drop)
+        limits = Limits(drop, _optional_float(self.max_j), _optional_float(self.max_via),
+                        _optional_float(self.max_rise))
         if limits != self._rail.limits:
             self._rail.limits = limits
             self.limits_changed.emit()
