@@ -544,16 +544,10 @@ class AcPanel(QWidget):
         self.bandwidth.setPlaceholderText("not given")
         self.bandwidth.setMaximumWidth(90)
         self.source_label = QLabel()
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Rail"))
-        top.addWidget(self.rail_box, 1)
-        top.addWidget(QLabel("Bandwidth (Hz)"))
-        top.addWidget(self.bandwidth)
-        top.addWidget(self.source_label)
 
         self.probes = _table([h for h, _ in PROBE_COLUMNS], [PROBE_TIPS[k] for _, k in PROBE_COLUMNS])
-        self.pick_supply = QPushButton("Pick supply pins")
-        self.pick_ground = QPushButton("Pick ground pins")
+        self.pick_supply = QPushButton("Pick supply")
+        self.pick_ground = QPushButton("Pick ground")
         add_p, rem_p = QPushButton("Add"), QPushButton("Remove")
         pb = QHBoxLayout()
         for w in (add_p, rem_p, self.pick_supply, self.pick_ground):
@@ -575,14 +569,15 @@ class AcPanel(QWidget):
         imp, exp = QPushButton("Import…"), QPushButton("Export…")
         imp.setToolTip("A KiPI capacitor model file (kind: kipi-capacitor-model)")
         exp.setToolTip("The selected model as a KiPI capacitor model file (without its parts)")
-        cb = QHBoxLayout()
-        for w in (add_c, rem_c, self.pick_parts, from_values, imp, exp):
-            cb.addWidget(w)
-        cb.addStretch(1)
         cap_tab = QWidget()
         cl = QVBoxLayout(cap_tab)
         cl.setContentsMargins(2, 2, 2, 2)
-        cl.addLayout(cb)
+        for buttons in ((add_c, rem_c, self.pick_parts), (from_values, imp, exp)):   # two rows: narrow
+            cb = QHBoxLayout()
+            for w in buttons:
+                cb.addWidget(w)
+            cb.addStretch(1)
+            cl.addLayout(cb)
         cl.addWidget(self.caps, 1)
 
         self._pick_buttons = {"supply": self.pick_supply, "ground": self.pick_ground,
@@ -607,20 +602,21 @@ class AcPanel(QWidget):
         self.opt["field_points_per_decade"].setToolTip(
             "The copper is solved at this many frequencies per decade and interpolated between "
             "them (KiPI's default 20); the run time grows with it")
-        form.addRow("Points per decade", self.opt["points_per_decade"])
-        self.quick = QPushButton(f"Quick: {QUICK_FIELD_POINTS} per decade")
+        form.addRow("Points / decade", self.opt["points_per_decade"])
+        self.quick = QPushButton(f"Quick ({QUICK_FIELD_POINTS})")
         self.quick.setToolTip(f"Solve the copper at {QUICK_FIELD_POINTS} frequencies per decade instead "
                               "of KiPI's 20, as KiPI's own decoupling and ferrite validation boards; "
                               "about half the time. Set here, visible and saved: never applied by itself.")
         kipi_default = QPushButton("KiPI's 20")
         kipi_default.setToolTip("Back to KiPI's default, 20 copper solves per decade")
+        form.addRow("Copper solves / decade", self.opt["field_points_per_decade"])
         row = QHBoxLayout()
-        row.addWidget(self.opt["field_points_per_decade"], 1)
         row.addWidget(self.quick)
         row.addWidget(kipi_default)
-        form.addRow("Copper solves per decade", row)
-        for key, label, tip in (("max_edge_mm", "AC mesh largest edge (mm)", "The AC mesh's own; a "
-                                 "coarser one needs less memory"),
+        row.addStretch(1)
+        form.addRow("", row)
+        for key, label, tip in (("max_edge_mm", "AC mesh edge (mm)", "The AC mesh's largest edge (its "
+                                 "own; settings.max_edge_mm is DC's): a coarser one needs less memory"),
                                 ("loss_tangent", "Loss tangent", "Of the dielectric (KiPI's default 0.02)"),
                                 ("default_er", "Default εr", "Used where the stackup gives no εr")):
             self.opt[key] = QLineEdit()
@@ -648,26 +644,32 @@ class AcPanel(QWidget):
         self.progress.setValue(0)
         self.progress.setTextVisible(False)
         self.progress.setMaximumHeight(14)
+        top = QHBoxLayout()                       # two short rows: the editor fits a narrow column
+        top.addWidget(QLabel("Rail"))
+        top.addWidget(self.rail_box, 1)
+        top.addWidget(self.solve_button)
+        top.addWidget(self.cancel_button)
         run = QHBoxLayout()
-        run.addWidget(self.solve_button)
-        run.addWidget(self.cancel_button)
+        run.addWidget(self.source_label)
+        run.addWidget(self.bandwidth)
         run.addWidget(self.progress, 1)
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # Editor: rail, Solve and progress on top (always in sight in a short dock), then the tabs.
         editor = QWidget()
         el = QVBoxLayout(editor)
         el.setContentsMargins(4, 4, 4, 4)
         el.addLayout(top)
-        el.addWidget(self.tabs, 1)
         el.addLayout(run)
         el.addWidget(self.status)
+        el.addWidget(self.tabs, 1)
         scroll = QScrollArea()
         scroll.setWidget(editor)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
 
-        # Results.
+        # Results: the plot with the dock's full height beside the verdict, rows, stats and notes.
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         from matplotlib.figure import Figure
         self.figure = Figure(figsize=(6, 3), facecolor=CHART_SURFACE, layout="constrained")
@@ -680,35 +682,30 @@ class AcPanel(QWidget):
         self.stats = QLabel()
         self.stats.setWordWrap(True)
         self.notes = QPlainTextEdit(readOnly=True)
+        self.notes.setMinimumHeight(40)
         self.export_button = QPushButton("Export CSV and PNG…")
         self.export_button.setEnabled(False)
-        lower = QWidget()
-        ll = QVBoxLayout(lower)
-        ll.setContentsMargins(0, 0, 0, 0)
-        ll.addWidget(self.table, 1)
-        ll.addWidget(self.stats)
-        ll.addWidget(self.notes, 1)
-        ex = QHBoxLayout()
-        ex.addStretch(1)
-        ex.addWidget(self.export_button)
-        ll.addLayout(ex)
-        right_split = QSplitter(Qt.Vertical)
-        right_split.addWidget(self.canvas)
-        right_split.addWidget(lower)
-        right = QWidget()
-        rl = QVBoxLayout(right)
+        results = QWidget()
+        rl = QVBoxLayout(results)
         rl.setContentsMargins(4, 4, 4, 4)
-        rl.addWidget(self.header)
-        rl.addWidget(right_split, 1)
-        right_scroll = QScrollArea()             # the dock is short on a laptop: scroll, never grow it
-        right_scroll.setWidget(right)
-        right_scroll.setWidgetResizable(True)
-        right_scroll.setFrameShape(QScrollArea.NoFrame)
+        head = QHBoxLayout()
+        head.addWidget(self.header, 1)
+        head.addWidget(self.export_button, 0, Qt.AlignTop)
+        rl.addLayout(head)
+        rl.addWidget(self.table, 1)
+        rl.addWidget(self.stats)
+        rl.addWidget(self.notes, 1)
+        results_scroll = QScrollArea()           # the dock is short on a laptop: scroll, never grow it
+        results_scroll.setWidget(results)
+        results_scroll.setWidgetResizable(True)
+        results_scroll.setFrameShape(QScrollArea.NoFrame)
         split = QSplitter(Qt.Horizontal)
         split.addWidget(scroll)
-        split.addWidget(right_scroll)
-        split.setStretchFactor(0, 1)
-        split.setStretchFactor(1, 1)
+        split.addWidget(self.canvas)
+        split.addWidget(results_scroll)
+        for i, stretch in enumerate((2, 3, 2)):
+            split.setStretchFactor(i, stretch)
+        split.setSizes([430, 560, 300])           # the editor at its natural width, the plot widest
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(split)
@@ -1084,10 +1081,10 @@ class AcPanel(QWidget):
         self._shown["bandwidth"] = self.bandwidth.text()
         self.bandwidth.blockSignals(False)
         if src is None:
-            self.source_label.setText("")
+            self.source_label.setText("Bandwidth (Hz)")
             self.bandwidth.setToolTip("No source reaches this net in the project")
         else:
-            self.source_label.setText(f"of {src.label}")
+            self.source_label.setText(f"Bandwidth of {src.label} (Hz)")
             self.bandwidth.setToolTip(
                 f"The control loop bandwidth of {src.label} (ac.bandwidth_hz). Empty: not given; "
                 "the curve is shown, nothing is judged. " + SI_TIP)
@@ -1113,7 +1110,9 @@ class AcPanel(QWidget):
             return
         r = entry[0]
         self.figure.clear()
-        draw_impedance(self.figure.add_subplot(), r)
+        ax = self.figure.add_subplot()
+        draw_impedance(ax, r)
+        ax.title.set_wrap(True)                    # the core's title, wrapped in a narrow column
         self.canvas.draw_idle()
         rows = result_rows(r)
         self.table.setRowCount(len(rows))
