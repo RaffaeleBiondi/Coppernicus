@@ -323,6 +323,10 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Each limit judges its own kind of net: `max_ground_rise_mv` nets at 0 V (grounds), `max_drop_pct` nets with a nonzero nominal; one set on the other kind is reported as not judged, and the rail panel disables the field that does not apply | ✅ |
 | Negative rails (type a negative source voltage) and nets at 0 V solved alone show their real voltages: a negative rail's loads sit toward 0 V, a ground rises above 0 V, as in the power tree | ✅ |
 | Verdicts list what a set limit could not judge (`not_judged`, with the reason), in JSON, CLI text, report and CI summary | ✅ |
+| AI agents can set up and edit project files (`write_project`, `read_project`) | ✅ explicit path, no overwrite without `overwrite: true`, checked before saving |
+| KiCad field proposals for a project (`propose_fields`, `coppernicus fields --propose`) | ✅ text to paste into KiCad (library symbol vs schematic instance); KiCad files are never written |
+| Compare two revisions of a board (`compare_revisions`) | ✅ per-load and per-layer deltas, via currents, where the drop changed, a Δ map |
+| One-step copper weight what-if for agents (`copper_step`) | ✅ 0.5 / 1 / 2 / 3 oz, one step from the design |
 | Power-tree verdicts: a group passes only when everything its limits apply to was judged. Items that cannot be judged (disconnected, behind a regulator out of regulation, not converged, 0 V nominal, a limit on a net the tree does not solve) give "not judged" and are named | ✅ |
 | Regulator inputs judged as loads on the rail feeding them (across input and ground pins); limits per net, a net without its own limit takes its group's main rail's; copper judged against the strictest limit in the group, and a fail names whose limit it used | ✅ |
 | What-if copper thickness per layer (`copper_thickness_mm`, optional, at most 1 mm per layer) | ✅ (project file, MCP, and the app: Solve settings → Copper thickness → Edit…; empty = board file) |
