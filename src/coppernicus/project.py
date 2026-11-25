@@ -28,6 +28,12 @@ loop bandwidth, each link's series inductance), each omitted while empty or at i
 The DC-DC noise solve (Task 10) adds ``aggressors`` (switchers: switching frequency, edges,
 phases, ripple probes), ``victims`` (signal nets, their driver, receiver, type and noise
 margin) and ``noise`` (the solve's options), each omitted while empty or at its default.
+
+The tolerance stack-up (Task 11) adds a load's tolerances (``tol_pct``, ``dc_tol_pct``,
+``ac_tol_pct``, or the same in mV from nominal as ``_mv``) and entered parts (``ripple_mv``,
+``transient_mv``), a source's DC accuracy (``accuracy_pct`` or ``accuracy_mv``), each a number
+(± that) or a signed ``[below, above]`` as datasheets write it, and ``tolerance`` (how ripple
+adds, full band or 20 MHz), each omitted while unset or at its default.
 """
 
 from __future__ import annotations
@@ -47,10 +53,69 @@ SOURCE_KINDS = ("source", "ldo", "smps")     # ideal supply, linear regulator, s
 # A source's pin references (input, ground and sense pins) and a load's.
 SOURCE_PIN_REFS = ("input", "ground", "sense", "ground_sense")
 LOAD_PIN_REFS = ("ground",)
+# Task 11: a load's tolerances (each a % of nominal or mV from it, never both), its entered
+# parts, a source's DC accuracy; and how several aggressors' ripple adds.
+LOAD_TOLERANCE_KEYS = ("tol_pct", "tol_mv", "dc_tol_pct", "dc_tol_mv", "ac_tol_pct", "ac_tol_mv")
+LOAD_PART_KEYS = ("ripple_mv", "transient_mv")
+SOURCE_ACCURACY_KEYS = ("accuracy_pct", "accuracy_mv")
+RIPPLE_SUMS = ("linear", "rss")
 
 
 class ProjectError(ValueError):
     """The project file is malformed."""
+
+
+def tolerance_pair(value: Any, what: str) -> Optional[Tuple[float, float]]:
+    """A tolerance, an accuracy or an entered part as ``(below, above)``, signed as datasheets
+    write it: a number ``n`` is ± n, ``(-n, n)``; a pair ``[below, above]`` needs below ≤ 0 and
+    above ≥ 0 (Coppernicus's rule; KiPI has none). 0 is a value; None stays None. Raises
+    :class:`ProjectError` naming ``what``."""
+    if value is None:
+        return None
+    shape = f"{what} must be a number (± that) or [below, above], not {value!r}"
+
+    def number(x) -> float:
+        if isinstance(x, bool) or not isinstance(x, (int, float)):
+            raise ProjectError(shape)
+        if not math.isfinite(x):
+            raise ProjectError(f"{what} must be finite, not {value!r}")
+        return float(x)
+    if isinstance(value, (list, tuple)):
+        if len(value) != 2:
+            raise ProjectError(shape)
+        below, above = number(value[0]), number(value[1])
+    else:
+        x = number(value)
+        if x < 0:
+            raise ProjectError(f"{what}: one number is ± that, so it cannot be negative; give "
+                               f"[below, above] (e.g. [{x:g}, 0])")
+        below, above = -x, x
+    if below > 0:
+        raise ProjectError(f"{what}: below ({below:g}) must be ≤ 0 and above ≥ 0, as datasheets "
+                           "write −5 / +3: [-5, 3]")
+    if above < 0:
+        raise ProjectError(f"{what}: above ({above:g}) must be ≥ 0 and below ≤ 0, as datasheets "
+                           "write −5 / +3: [-5, 3]")
+    return below, above
+
+
+def _check_tolerances(terminal, keys: Sequence[str], owner: str) -> None:
+    """Each of ``keys`` on ``terminal`` as a ``(below, above)`` pair (:func:`tolerance_pair`),
+    and never a ``_pct`` with its ``_mv``."""
+    for key in keys:
+        setattr(terminal, key, tolerance_pair(getattr(terminal, key), f"{owner}: {key}"))
+    for key in keys:
+        if key.endswith("_pct"):
+            mv = key[:-len("_pct")] + "_mv"
+            if mv in keys and getattr(terminal, key) is not None and getattr(terminal, mv) is not None:
+                raise ProjectError(f"{owner}: {key} and {mv} are both set: give one of them (a % of "
+                                   "nominal, or mV from nominal)")
+
+
+def _pair_out(pair: Tuple[float, float]):
+    """A pair as written to the file: one number when symmetric (± that), else [below, above]."""
+    below, above = pair
+    return above if below == -above else [below, above]
 
 
 def parse_pins(value: Any) -> PinSpec:
@@ -111,6 +176,13 @@ class Source:
     # (a battery of cell holders in parallel). "REF.PAD" entries, the pad may be a glob
     # ("BT5.*": every pad of BT5 on the rail). None: the source's own pads only.
     extra_pins: Optional[List[str]] = None
+    # Task 11: the DC accuracy of its set voltage, as (below, above) in % of it or in mV from
+    # it (one of the two; None: not entered, and the tolerance stack-up is then not judged).
+    accuracy_pct: Optional[Tuple[float, float]] = None
+    accuracy_mv: Optional[Tuple[float, float]] = None
+
+    def __post_init__(self):
+        _check_tolerances(self, SOURCE_ACCURACY_KEYS, f"source {self.ref}")
 
     @property
     def label(self) -> str:
@@ -120,7 +192,12 @@ class Source:
 @dataclass
 class Load:
     """Pins of ``ref`` drawing ``current`` amps in total, split equally across the pins;
-    with ``ground_net`` set, the current returns through those ground pins."""
+    with ``ground_net`` set, the current returns through those ground pins.
+
+    Task 11: its tolerances, each (below, above) in % of nominal (the set voltage of the source
+    driving its rail) or in mV from it, never both: ``tol_*`` the whole band, ``dc_tol_*`` its
+    DC share, ``ac_tol_*`` its AC share; and parts entered from a datasheet or a measurement,
+    ``ripple_mv`` and ``transient_mv``, (below, above) mV from nominal. None: not set."""
     ref: str
     current: float
     pins: PinSpec = None
@@ -128,10 +205,25 @@ class Load:
     ground_ref: str = ""
     ground_pins: PinSpec = None
     ground_net: str = ""
+    tol_pct: Optional[Tuple[float, float]] = None
+    tol_mv: Optional[Tuple[float, float]] = None
+    dc_tol_pct: Optional[Tuple[float, float]] = None
+    dc_tol_mv: Optional[Tuple[float, float]] = None
+    ac_tol_pct: Optional[Tuple[float, float]] = None
+    ac_tol_mv: Optional[Tuple[float, float]] = None
+    ripple_mv: Optional[Tuple[float, float]] = None
+    transient_mv: Optional[Tuple[float, float]] = None
+
+    def __post_init__(self):
+        _check_tolerances(self, LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS, f"load {self.ref}")
 
     @property
     def label(self) -> str:
         return self.name or self.ref
+
+    def has_tolerance(self) -> bool:
+        """Whether any of its tolerances is set (else it is shown, never judged)."""
+        return any(getattr(self, k) is not None for k in LOAD_TOLERANCE_KEYS)
 
 
 @dataclass
@@ -300,6 +392,47 @@ def _thermal_in(data: Any) -> ThermalOptions:
 def _thermal_out(options: ThermalOptions) -> Dict[str, Any]:
     """The options not at their default, in field order (empty at the defaults)."""
     default = ThermalOptions()
+    return {k: v for k, v in vars(options).items() if v != getattr(default, k)}
+
+
+@dataclass
+class ToleranceOptions:
+    """The tolerance stack-up (``tolerance:`` in the project file; Task 11). ``ripple_sum``:
+    how several aggressors' ripple at one probe adds, "linear" (the sum of their peaks per
+    side: unsynchronised switchers drift through every relative phase, so their peaks line up
+    at times) or "rss" (the root sum of squares, KiPI's rule, kipi/tolerance/gather.py:201, for
+    such switchers on average). ``bw_limit_20mhz``: judge the ripple and the transient through
+    a 20 MHz bandwidth limit, as many datasheets measure, instead of the full band. Saved as a
+    block holding only the keys not at their default."""
+    ripple_sum: str = "linear"
+    bw_limit_20mhz: bool = False
+
+    def __post_init__(self):
+        if self.ripple_sum not in RIPPLE_SUMS:
+            raise ProjectError(f"tolerance: ripple_sum must be one of {', '.join(RIPPLE_SUMS)}, "
+                               f"not {self.ripple_sum!r}")
+        if not isinstance(self.bw_limit_20mhz, bool):
+            raise ProjectError(f"tolerance: bw_limit_20mhz must be true or false, not "
+                               f"{self.bw_limit_20mhz!r}")
+
+
+def _tolerance_in(data: Any) -> ToleranceOptions:
+    """The ``tolerance:`` block: unknown keys raise; the values are checked by
+    :class:`ToleranceOptions` itself."""
+    if data is None:
+        return ToleranceOptions()
+    if not isinstance(data, dict):
+        raise ValueError(f"tolerance must be a mapping of option names to values, not {data!r}")
+    known = [f.name for f in dataclasses.fields(ToleranceOptions)]
+    unknown = [str(k) for k in data if k not in known]
+    if unknown:
+        raise ValueError(f"tolerance: unknown option {', '.join(unknown)} (known: {', '.join(known)})")
+    return ToleranceOptions(**{str(k): v for k, v in data.items()})
+
+
+def _tolerance_out(options: ToleranceOptions) -> Dict[str, Any]:
+    """The options not at their default (empty at the defaults)."""
+    default = ToleranceOptions()
     return {k: v for k, v in vars(options).items() if v != getattr(default, k)}
 
 
@@ -999,6 +1132,8 @@ class Project:
     aggressors: List[Aggressor] = field(default_factory=list)
     victims: List[Victim] = field(default_factory=list)
     noise: NoiseOptions = field(default_factory=NoiseOptions)
+    # Tolerance stack-up (Task 11): how ripple adds, full band or 20 MHz. Saved only when set.
+    tolerance: ToleranceOptions = field(default_factory=ToleranceOptions)
 
     # ------------------------------------------------------------------ queries
     def board_path(self) -> Path:
@@ -1043,6 +1178,11 @@ class Project:
                 if getattr(t, f"{what}_net"):
                     d[what] = _pin_ref_out(getattr(t, f"{what}_ref"), getattr(t, f"{what}_pins"),
                                            getattr(t, f"{what}_net"))
+            # Task 11: tolerances, accuracy and entered parts, only when set (0 is a value).
+            for key in (SOURCE_ACCURACY_KEYS if value_key == "voltage"
+                        else LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS):
+                if getattr(t, key) is not None:
+                    d[key] = _pair_out(getattr(t, key))
             return d
 
         rails = []
@@ -1077,6 +1217,7 @@ class Project:
         if not self.use_board_fields:
             out["use_board_fields"] = False
         out.update(_noise_out(self))
+        out.update({"tolerance": t} if (t := _tolerance_out(self.tolerance)) else {})
         return out
 
     @classmethod
@@ -1106,11 +1247,12 @@ class Project:
             ac = _ac_in(data)
             use_fields = _flag(data, "use_board_fields", True)
             noise = _noise_in(data)
+            tolerance = _tolerance_in(data.get("tolerance"))
         except (KeyError, TypeError, ValueError) as e:
             raise ProjectError(f"invalid project file: {e}") from e
         return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path,
                    marked_rails=[str(n) for n in marked], links=links, engine_options=dict(options),
-                   use_board_fields=use_fields, thermal=thermal, **ac, **noise)
+                   use_board_fields=use_fields, thermal=thermal, tolerance=tolerance, **ac, **noise)
 
     @classmethod
     def load(cls, path) -> "Project":
@@ -1257,6 +1399,7 @@ def _source_in(s: Dict[str, Any]) -> Source:
     refs: Dict[str, Any] = {}
     for what in SOURCE_PIN_REFS:
         refs.update(_pin_ref_in(s, what, f"source {ref}"))
+    extra.update({k: s[k] for k in SOURCE_ACCURACY_KEYS if s.get(k) is not None})
     return Source(ref=ref, voltage=_number(s["voltage"], f"source {ref}: voltage"),
                   pins=parse_pins(s.get("pins")),
                   name=str(s.get("name", "")), kind=kind, efficiency=efficiency,
@@ -1268,9 +1411,10 @@ def _load_in(ld: Dict[str, Any]) -> Load:
     refs: Dict[str, Any] = {}
     for what in LOAD_PIN_REFS:
         refs.update(_pin_ref_in(ld, what, f"load {ref}"))
+    tolerances = {k: ld[k] for k in LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS if ld.get(k) is not None}
     return Load(ref=ref, current=_number(ld["current"], f"load {ref}: current"),
                 pins=parse_pins(ld.get("pins")),
-                name=str(ld.get("name", "")), **refs)
+                name=str(ld.get("name", "")), **refs, **tolerances)
 
 
 def _link_in(k: Dict[str, Any]) -> Link:
