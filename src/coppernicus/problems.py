@@ -261,6 +261,12 @@ def _limit_text(value: Optional[float], unit: str, origin: str, own: str) -> str
     return f"limit {value:g} {unit}" + (f" (from {origin})" if origin and origin != own else "")
 
 
+def _limit_data(value: Optional[float], key: str, origin: str) -> Dict[str, Any]:
+    """The limit that judged a pin, as data: ``key`` (``limit_pct``, ``limit_mv``) its value
+    and ``limit_from`` the net it came from, both None when no limit is set."""
+    return {key: value, "limit_from": (origin or None) if value is not None else None}
+
+
 def _share(pct: float) -> str:
     """", 1.23 %" after a drop in mV; nothing at 0 V nominal, where there is no %."""
     return f", {abs(pct):.2f} %" if np.isfinite(pct) else ""
@@ -301,7 +307,8 @@ def _tree_loads(tree: TreeResult, group: str, res: RailResult, per_net: NetLimit
             value, float(x), float(y),
             data={"name": ld.name, "drop_mv": ld.drop_v * 1e3, "drop_pct": ld.drop_pct,
                   "v_across_v": ld.v_across_v, "v_worst_v": ld.v_worst_v,
-                  "current_a": ld.current_a, "status": ld.status}))
+                  "current_a": ld.current_a, "status": ld.status,
+                  **_limit_data(lim.max_drop_pct, "limit_pct", org.get("max_drop_pct", ""))}))
     return out
 
 
@@ -331,7 +338,8 @@ def _tree_inputs(tree: TreeResult, group: str, res: RailResult, per_net: NetLimi
             value, float(x), float(y),
             data={"name": name, "drop_mv": None if v.input_drop_v is None else v.input_drop_v * 1e3,
                   "drop_pct": v.input_drop_pct, "v_across_v": v.v_in_worst_v,
-                  "v_worst_v": v.v_in_worst_v, "current_a": v.i_in_a, "status": v.input_status}))
+                  "v_worst_v": v.v_in_worst_v, "current_a": v.i_in_a, "status": v.input_status,
+                  **_limit_data(lim.max_drop_pct, "limit_pct", org.get("max_drop_pct", ""))}))
     return out
 
 
@@ -355,7 +363,8 @@ def _returns(res: RailResult, limits: Optional[Limits] = None,
             FAIL if fail else INFO, "return", f"{t.name}: ground {from_0v(rise)}",
             f"{t.ref}, {len(t.pad_ids)} pin(s), {abs(t.current):g} A; {note}.",
             abs(rise) * 1e3, float(x), float(y),
-            data={"name": t.name, "ref": t.ref, "rise_mv": rise * 1e3, "current_a": t.current}))
+            data={"name": t.name, "ref": t.ref, "rise_mv": rise * 1e3, "current_a": t.current,
+                  **_limit_data(limit, "limit_mv", org.get("max_ground_rise_mv", ""))}))
     return out
 
 

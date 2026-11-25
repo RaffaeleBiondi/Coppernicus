@@ -398,8 +398,8 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
             "verdict": gv.verdict, "limits": gv.limits, "failed": gv.failed,
             "limits_by_net": {n: d for n, d in by_net.items() if d},
             "not_judged": list(gv.not_judged),
-            "problems": [{"severity": p.severity, "kind": p.kind, "title": p.title, **p.data}
-                         for p in gv.problems],
+            "problems": [{"severity": p.severity, "kind": p.kind, "title": p.title,
+                          "detail": p.detail, **p.data} for p in gv.problems],
         })
     doc = {
         "kind": "power_tree",

@@ -1183,3 +1183,77 @@ def test_a_regulator_input_on_a_tied_net_is_judged_by_its_input_net_s_limit():
     assert 0.01 < u1.input_drop_pct < 5.0 and u1.input_passed is False, u1.input_drop_pct
     title = next(p for p in find_tree_problems(tree, "+5V") if p.data.get("name") == "U1 (input)")
     assert title.severity == FAIL and "limit 0.01 %." in title.detail, title.detail
+
+
+def _link_input_tree(**source_limits):
+    """J1 holds +5V (with ``source_limits``), FB1 links it to +5V_F, U1's input; U1's output
+    +3V3 feeds U2. No limit on +5V_F or +3V3."""
+    from coppernicus.engine.synthetic import SyntheticBoard, two_layer_stackup
+    from coppernicus.project import Link, Project, Rail
+    b = SyntheticBoard("link_input", two_layer_stackup())
+    b.square_pad("J1", "1", "+5V", 0.0, 0.0, 1.5)
+    b.square_pad("FB1", "1", "+5V", 9.5, 0.0, 0.5)
+    b.square_pad("FB1", "2", "+5V_F", 10.5, 0.0, 0.5)
+    b.square_pad("U1", "1", "+5V_F", 20.0, 0.0, 1.0)
+    b.square_pad("U1", "2", "+3V3", 20.0, 5.0, 1.0)
+    b.square_pad("U2", "1", "+3V3", 30.0, 5.0, 1.0)
+    for net, a, z in (("+5V", (0.0, 0.0), (9.5, 0.0)), ("+5V_F", (10.5, 0.0), (20.0, 0.0)),
+                      ("+3V3", (20.0, 5.0), (30.0, 5.0))):
+        b.track(net, 3, 0.5, a, z)
+    project = Project(
+        rails=[Rail("+5V", sources=[Source("J1", 5.0)], limits=Limits(**source_limits)),
+               Rail("+3V3", sources=[Source("U1", 3.3, ["2"], kind="ldo", input_pins=["1"],
+                                            input_net="+5V_F")], loads=[Load("U2", 1.0)])],
+        links=[Link("FB1", "FB1", ["1"], "+5V", ["2"], "+5V_F", 0.05)])
+    return solve_project_tree(Board(b.snapshot()), project)
+
+
+def test_a_tree_problem_says_which_net_s_limit_judged_it():
+    """A regulator input behind a link, with a drop limit only on the source net: its
+    problem in the tree document keeps the detail line ("limit 2 % (from +5V)") and says
+    the limit and its net as numbers; a load with no limit says none."""
+    from coppernicus.power_tree import tree_summary
+    doc = tree_summary(_link_input_tree(max_drop_pct=2.0))
+    [inp] = [p for p in _group_doc(doc, "+5V")["problems"] if p.get("name") == "U1 (input)"]
+    assert inp["limit_pct"] == 2.0 and inp["limit_from"] == "+5V", inp
+    assert "limit 2 % (from +5V)" in inp["detail"], inp["detail"]
+    [u2] = [p for p in _group_doc(doc, "+3V3")["problems"] if p.get("name") == "U2"]
+    assert u2["limit_pct"] is None and u2["limit_from"] is None and "no limit set" in u2["detail"]
+
+
+def test_a_ground_return_problem_says_which_net_s_limit_judged_it(board):
+    from coppernicus.power_tree import tree_summary
+    from coppernicus.project import Rail
+    project = power_chain_project()
+    project.rails.append(Rail("GND", limits=Limits(max_ground_rise_mv=10.0)))
+    doc = tree_summary(solve_project_tree(board, project))
+    returns = [p for p in _group_doc(doc, "GND")["problems"] if p["kind"] == "return"]
+    assert returns and all(p["limit_mv"] == 10.0 and p["limit_from"] == "GND" for p in returns)
+    assert all("limit 10 mV" in p["detail"] for p in returns)
+    unlimited = tree_summary(solve_project_tree(board, power_chain_project()))
+    returns = [p for p in _group_doc(unlimited, "GND")["problems"] if p["kind"] == "return"]
+    assert returns and all(p["limit_mv"] is None and p["limit_from"] is None for p in returns)
+
+
+def test_solve_tree_from_fields_says_which_net_s_limit_judged_a_regulator_input(tmp_path):
+    """The same from the KiCad fields alone, as a JSON consumer of solve_tree reads it:
+    PI_LIMIT_DROP 2 % on +5V (J1) only, FB1's PI_LINK to +5V_F, U1's PI_INPUT there."""
+    from kicad_fixture import write_board
+
+    from coppernicus.project import Project
+    from coppernicus.service import Session
+    parts = [("J1", [("1", 0.0, 0.0, "+5V")],
+              {"PI_RAIL": "+5V", "PI_SOURCE": "5V", "PI_LIMIT_DROP": "2%"}),
+             ("FB1", [("1", 9.5, 0.0, "+5V"), ("2", 10.5, 0.0, "+5V_F")], {"PI_LINK": "50mOhm"}),
+             ("U1", [("1", 20.0, 0.0, "+5V_F"), ("2", 20.0, 5.0, "+3V3")],
+              {"PI_RAIL": "+3V3", "PI_SOURCE": "3.3V", "PI_PINS": "2", "PI_KIND": "ldo",
+               "PI_INPUT": "+5V_F", "PI_INPUT_PINS": "1"}),
+             ("U2", [("1", 30.0, 5.0, "+3V3")], {"PI_RAIL": "+3V3", "PI_LOAD": "1A"})]
+    write_board(tmp_path / "b.kicad_pcb", parts,
+                [("+5V", (0.0, 0.0), (9.5, 0.0), 0.5), ("+5V_F", (10.5, 0.0), (20.0, 0.0), 0.5),
+                 ("+3V3", (20.0, 5.0), (30.0, 5.0), 0.5)])
+    doc = Session(out_dir=tmp_path / "out").solve_tree(
+        Project(board="b.kicad_pcb").save(tmp_path / "p.coppernicus.yml"))
+    [inp] = [p for p in _group_doc(doc, "+5V")["problems"] if p.get("name") == "U1 (input)"]
+    assert inp["limit_pct"] == 2.0 and inp["limit_from"] == "+5V", inp
+    assert "(from +5V)" in inp["detail"], inp["detail"]

@@ -342,7 +342,10 @@ and the agent interface will reuse it. It has:
   `max_rise_mv`, signed; its `max_drop_pct` is `null`). Each VRM has `input_net`,
   `input_drop_mv`, `input_drop_pct`, `input_status`, `input_exceeds_drop_limit`; each group
   has `limits` (the strictest of each kind), `limits_by_net` and `not_judged`. Regulator
-  inputs are among a rail group's problems as kind `"load"`, named `"U1 (input)"`;
+  inputs are among a rail group's problems as kind `"load"`, named `"U1 (input)"`. Each
+  problem has `severity`, `kind`, `title`, `detail` and its data; a `load` has `limit_pct`
+  and `limit_from` (the `max_drop_pct` that judged it and the net it came from, by
+  `net_limits`), a `return` has `limit_mv` and `limit_from`; `null` when no limit is set;
 - `assumptions` and `warnings`.
 
 ### Which way the load current flows (T7.1): negative rails and nets at 0 V
