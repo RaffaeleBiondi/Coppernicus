@@ -69,27 +69,27 @@ class CopperThicknessDialog(QDialog):
         form = QFormLayout()
         for layer, mm in file_mm.items():
             edit = QLineEdit(placeholderText=f"{mm:g} (board file)")
-            edit.setText(f"{values[layer]:g}" if layer in values else "")
+            edit.setText(repr(float(values[layer])) if layer in values else "")   # every digit
             self.fields[layer] = edit
             form.addRow(layer, edit)
         layout = QVBoxLayout(self)
         layout.addWidget(intro)
         layout.addLayout(form)
         self.remove_buttons: Dict[str, QPushButton] = {}
-        if self._kept:
-            box = QGroupBox("Not on this board (every solve stops on these)")
-            rows = QVBoxLayout(box)
-            for layer, mm in self._kept.items():
-                row = QWidget()
-                line = QHBoxLayout(row)
-                line.setContentsMargins(0, 0, 0, 0)
-                line.addWidget(QLabel(f"{layer} {mm:g} mm"), 1)
-                button = QPushButton("Remove")
-                button.clicked.connect(lambda _=False, layer=layer, row=row: self._remove(layer, row))
-                line.addWidget(button)
-                self.remove_buttons[layer] = button
-                rows.addWidget(row)
-            layout.addWidget(box)
+        self.off_board_box = QGroupBox("Not on this board (every solve stops on these)")
+        rows = QVBoxLayout(self.off_board_box)
+        for layer, mm in self._kept.items():
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            line.addWidget(QLabel(f"{layer} {mm:g} mm"), 1)
+            button = QPushButton("Remove")
+            button.clicked.connect(lambda _=False, layer=layer, row=row: self._remove(layer, row))
+            line.addWidget(button)
+            self.remove_buttons[layer] = button
+            rows.addWidget(row)
+        self.off_board_box.setVisible(bool(self._kept))
+        layout.addWidget(self.off_board_box)
         self.error = QLabel()
         self.error.setWordWrap(True)
         self.error.setStyleSheet("color: #c0392b")
@@ -103,6 +103,7 @@ class CopperThicknessDialog(QDialog):
     def _remove(self, layer: str, row: QWidget):
         self._kept.pop(layer, None)
         row.hide()
+        self.off_board_box.setVisible(bool(self._kept))
 
     def accept(self):
         try:

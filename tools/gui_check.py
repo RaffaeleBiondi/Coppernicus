@@ -712,9 +712,16 @@ def run_copper_thickness(window, check: Checks, args, out: Path):
     def remove(d):
         d.remove_buttons["In3.Cu"].click()
         d.accept()
-    edit_copper(window, remove)
-    check("... and removed", window.project.settings.copper_thickness_mm == {"B.Cu": 0.07},
-          str(window.project.settings.copper_thickness_mm))
+    dialog = edit_copper(window, remove)
+    check("... and removed", window.project.settings.copper_thickness_mm == {"B.Cu": 0.07}
+          and not dialog.off_board_box.isVisibleTo(dialog), str(window.project.settings.copper_thickness_mm))
+    window.project.settings.copper_thickness_mm = {"B.Cu": 0.0712345678}     # more digits than :g
+    panel.set_settings(window.project.settings)
+    window.dirty = False
+    dialog = edit_copper(window, lambda d: d.accept())
+    check("copper: OK keeps a value with many digits as it is (no change)",
+          window.project.settings.copper_thickness_mm == {"B.Cu": 0.0712345678} and not window.dirty,
+          dialog.fields["B.Cu"].text())
     long = {"F.Cu": 0.07, "B.Cu": 0.105, "In1.Cu": 0.035, "In2.Cu": 0.035, "In3.Cu": 0.0175,
             "In4.Cu": 0.0175}
     panel.set_settings(Settings(copper_thickness_mm=long))
