@@ -102,6 +102,31 @@ def test_help_remove_mesher_asks_first_then_says_the_next_start_downloads_it_aga
         assert kind == "warning" and "busy" in text and "close every Coppernicus window" in text, DIALOGS[-1]
     ''', env={"COPPERNICUS_SITE_PACKAGES": str(tmp_path / "site-packages")})
 
+def test_help_remove_mesher_in_use_says_the_next_start_removes_it_not_that_it_failed(tmp_path):
+    """A mesher in use (mostly on Windows, where the running app has it loaded) cannot be
+    deleted now: remove() defers it to the next start (RemovalDeferred). That is not a failure:
+    an information box says so, not a "Cannot remove" warning."""
+    run_in_window(f'''
+        sys.frozen = True
+        window = MainWindow()
+        window.dirty = False
+
+        def in_use(site):
+            raise bootstrap_triangle.RemovalDeferred(
+                "Triangle will be removed the next time Coppernicus starts (the running app has it "
+                "loaded)", "close every Coppernicus window: the next start deletes it before using it, "
+                "then downloads it again")
+        bootstrap_triangle.remove = in_use
+        ANSWERS["question"] = QMessageBox.Yes
+        items(window)[{ITEM!r}].trigger()
+        assert [d[0] for d in DIALOGS] == ["question", "information"], DIALOGS
+        _kind, title, text = DIALOGS[-1]
+        assert "in use" in text and "removes it at its next start" in text, text
+        assert str(bootstrap_triangle.site_dir()) in text, text
+        status = window.statusBar().currentMessage()
+        assert "in use" in status and "next start" in status, status
+    ''', env={"COPPERNICUS_SITE_PACKAGES": str(tmp_path / "site-packages")})
+
 @needs_posix_permissions
 def test_reports_go_to_a_per_user_folder_when_results_next_to_the_project_cannot_be_written(tmp_path):
     project_dir, home = tmp_path / "volume", tmp_path / "home"

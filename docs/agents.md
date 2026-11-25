@@ -214,7 +214,7 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
 | `PI_LINK` | `50mOhm` | a two-net part | A link (ferrite, sense resistor, fuse) of this resistance between the nets of its pads (`Ohm`, `mOhm`, `Ω`). Not with `PI_RAIL`. |
 | `PI_LINK_PINS` | `1,2;5` | a link part with more nets | The link's two sides on a part with more than two nets (load switch, MOSFET, 3-pin fuse): side A's pads `;` side B's, each side's pads on one net. A two-net part needs none. |
 | `PI_VOUT` | `3.3V` | source | A fixed-output part's voltage: the source voltage when the instance has `PI_RAIL` and no `PI_SOURCE` (the assumption says "from KiCad field PI_VOUT"). When both are given and differ, `PI_SOURCE` wins, with a warning. |
-| `PI_IMAX` | `2A`, `500mA` | source | Its rated output current: kept as the source's `current_limit_a` and shown next to I_out (rail summary `current_limit_a`, tree `vrms[].i_max_a`, the report and CI tables). **Not judged yet.** |
+| `PI_IMAX` | `2A`, `500mA` | source | Its rated output current: kept as the source's `current_limit_a` and shown next to I_out (rail summary `current_limit_a`, tree `vrms[].i_max_a`, the report and CI tables). **Judged in the power tree:** an I_out above it fails (see [Regulator ratings](#regulator-ratings-in-the-power-tree)); not judged while the solve is unsettled or its rail is not solved. |
 | `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its fixed switching frequency (`Hz`, `kHz`, `MHz`): kept as the source's `fsw_hz`. **Not used yet.** |
 | `PI_SOURCE_REF` | `L1`, `BT1,BT5` | source | The part whose pads hold the rail, when it is not this part: an external-inductor buck's inductor. `PI_PINS` then selects that part's pads; input, ground and kind stay on this part. A list of parts (`BT1,BT5`) makes **one terminal**: every listed part's pads on the rail, all held at the source voltage (cell holders in parallel), not parallel regulators; `PI_PINS` then takes `REF.PAD` entries (`BT1.1,BT5.1`), and a plain pad applies to every listed part. An error when a part has no pad on the rail. |
 | `PI_GND_REF` | `BT4` | source, load | The part whose pads are the ground pins on `PI_GND`, when not this part (`PI_GND_PINS` chooses them). One part. An error when it has no pad on that net. |
@@ -350,8 +350,8 @@ pin 1 on VIN and returning through U1 pin 3 on GND: in a project file, `ref: L1`
 `pins: ['2']`, `name: U1`, `input: {ref: U1, net: VIN, pins: ['1']}`,
 `ground: {ref: U1, net: GND, pins: ['3']}`. An adjustable buck gives its voltage on the
 instance (`PI_SOURCE`), since it depends on the board's divider; a fixed one can carry
-`PI_VOUT` on the library symbol instead. `PI_IMAX` is shown next to I_out and `PI_FSW` is
-stored; neither is judged or used yet.
+`PI_VOUT` on the library symbol instead. `PI_IMAX` is shown next to I_out and judged in the
+power tree (an I_out above it fails); `PI_FSW` is stored, not used yet.
 
 **A load switch** (input pins 1 and 2 on VIN, enable 3, ground 4, output 5 on VOUT), with
 an on-resistance of 20 mΩ: a link between its input and output pads.
@@ -423,11 +423,14 @@ ground net is solved, each regulator's and load's `ground` pins (see
   A tree's not-judged entry is `{"item", "net", "limit", "reason"}`: the item is a load,
   `"U2 (input)"`, a return pin, or the net itself for a net-level entry (a limit of the wrong
   kind, a net the tree does not solve, a group that did not converge, a `max_drop_pct` with
-  nothing to judge);
+  nothing to judge), or a rated regulator (`"limit": "current_limit_a"`, see below);
 - `vrms`: each source and regulator, with `v_set_v`, `v_out_v`, `i_out_a`, `v_in_v`, `i_in_a`,
   `p_loss_w` and `regulation` (why it cannot hold its voltage, if so). A regulator's input, as
   a load of the rail that feeds it: `input_net`, `input_drop_mv`, `input_drop_pct`,
-  `input_exceeds_drop_limit`, `input_status`;
+  `input_exceeds_drop_limit`, `input_status`. Its rating: `i_max_a` (the rated output current
+  judged, `null` where none is given; the key is there only when some VRM has a rating),
+  `exceeds_current_limit` (`true`/`false`; `null` without a rating or when not judged) and
+  `current_limit_from` (where the rating was written; `null` without one);
 - `loads`: each load's `v_supply_v`, `v_ground_v`, `v_across_v`, `drop_mv` and `drop_pct`
   (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`, `net`
   (the net its supply pins are on) and `rail` (the rail it is listed in; another net past a
@@ -438,7 +441,8 @@ ground net is solved, each regulator's and load's `ground` pins (see
   `limits` (the strictest of each kind over its nets), `limits_by_net` (the limits each net
   sets), `verdict`, `not_judged` and `problems`: `load` on a rail, the regulator inputs it
   feeds among them as `"U1 (input)"` (`current_a` is the input current; `drop_mv` can be
-  `null`); `rise` and `return` on a ground; `hotspot` and `via` on both. Each problem has
+  `null`), and `regulator` for a rated regulator driving it (below); `rise` and `return` on a
+  ground; `hotspot` and `via` on both. Each problem has
   `severity`, `kind`, `title`, `detail` (the line that says, among others, which limit
   judged it: "limit 2 % (from +5V)"), and its place as in a rail summary: `layer`, `x_mm`,
   `y_mm` (`null` when it has none). A `load` (a regulator input included) also has
@@ -446,6 +450,27 @@ ground net is solved, each regulator's and load's `ground` pins (see
   from: its own, the rail it is listed in, or the group's driving net); a `return` has
   `limit_mv` (`max_ground_rise_mv`) and `limit_from`; both `null` when no limit is set;
 - `assumptions` and `warnings`.
+
+#### Regulator ratings in the power tree
+
+A source's rated output current (KiCad field `PI_IMAX`, or `current_limit_a` in the project
+file) is a limit the user wrote: the regulator **fails** when |I_out| is above it (|I_out|
+within 1e-9, relative, of the rating counts as at it: the solve's round-off). It belongs to
+the group the regulator drives:
+- a `regulator` problem there, `"U1: 2.502 A out, over its rated 2 A (from KiCad field
+  PI_IMAX on U1)"` (or `"(from the project file)"`; `"within its rated"` when it passes, an
+  info row), with `name`, `i_out_a`, `current_limit_a`, `current_limit_from` and
+  `rating_used_pct`; a fail is also named in `verdict_note` ("Over a rated output current: …");
+- not judged, listed as `{"item": "U1", "net": "+3V3", "limit": "current_limit_a", "reason":
+  …}`, while I_out is not settled ("its iteration did not converge", "+1V8, which it feeds,
+  did not converge", "the power-tree iteration did not converge"), and for a rated source on a
+  rail the tree does not solve as a rail, excluded or used as a ground (`"reason": "not solved
+  in the power tree"`; the item is the source);
+- a regulator out of regulation is still judged on its current, as KiPI does;
+- a source without a rating is not judged and not listed.
+
+The rating stays out of a group's `limits`; a tree whose only limit is a rating passes or fails
+by it. An assumption line states the rule whenever a rating exists.
 
 Verdicts in the tree follow the rule above: a copper limit (via, current density, rise) with
 nothing to judge passes; a `max_drop_pct` with no load to judge is not judged; a limit set on

@@ -31,7 +31,7 @@ VIA_NOISE_SHARE = 1e-6        # vias below this share of the rail current carry 
 @dataclass
 class Problem:
     severity: str                 # FAIL or INFO
-    kind: str                     # "load", "hotspot" or "via"
+    kind: str                     # "load", "hotspot", "via"; in a tree also "rise", "return", "regulator"
     title: str
     detail: str
     value: float                  # the ranking: drop % (|mV| at 0 V nominal), mean A/mm^2, A or mV, by kind
@@ -216,7 +216,8 @@ def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = 
     """The problems of one group of a power-tree solve, fails first. On a rail: its loads
     and the inputs of the regulators it feeds, ranked by the drop across their supply (input)
     and ground pins. On a ground: its return pins, ranked by their rise from 0 V (no drop
-    limit applies to a ground). Then current-crowding spots and vias, as on a single rail.
+    limit applies to a ground). The regulators driving it that have a rated output current,
+    against it. Then current-crowding spots and vias, as on a single rail.
 
     Limits per net (:data:`coppernicus.power_tree.LIMITS_RULE`): each pin by its net's,
     the copper by the strictest of the group's. ``limits``, if given, stands for the limits
@@ -248,9 +249,9 @@ def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = 
         first = _tree_loads(tree, group, res, per_net) + _tree_inputs(tree, group, res, per_net)
         if not res.v_ref:                                   # a rail driven at 0 V
             first += _rise(res, glim, source("max_ground_rise_mv"))
-    out = (first + _hotspots(res, glim, top, source("max_current_density"))
+    out = (first + _ratings(tree, group, res) + _hotspots(res, glim, top, source("max_current_density"))
            + _vias(res, glim, top, source("max_via_current")))
-    order = {"rise": 0, "load": 0, "return": 0, "hotspot": 1, "via": 2}
+    order = {"rise": 0, "load": 0, "return": 0, "regulator": 0, "hotspot": 1, "via": 2}
     return sorted(out, key=lambda p: (p.severity != FAIL, order[p.kind], -p.value))
 
 
@@ -340,6 +341,28 @@ def _tree_inputs(tree: TreeResult, group: str, res: RailResult, per_net: NetLimi
                   "drop_pct": v.input_drop_pct, "v_across_v": v.v_in_worst_v,
                   "v_worst_v": v.v_in_worst_v, "current_a": v.i_in_a, "status": v.input_status,
                   **_limit_data(lim.max_drop_pct, "limit_pct", org.get("max_drop_pct", ""))}))
+    return out
+
+
+def _ratings(tree: TreeResult, group: str, res: RailResult) -> List[Problem]:
+    """The regulators driving this rail that have a rated output current, against it
+    (:func:`coppernicus.power_tree.judge_ratings`), at their output pins. One without a rating
+    is not listed: no limit was set."""
+    from coppernicus.power_tree import RATING_KEY, rated_from, rating_title, rating_why_not
+    terms = {t.name: t for t in res.sources}
+    out = []
+    for v in (v for v in tree.vrms if v.group == group and v.current_limit_a is not None):
+        t = terms.get(v.name)
+        x, y = t.positions[0] if t is not None and t.positions else (np.nan, np.nan)
+        used = 100.0 * abs(v.i_out_a) / v.current_limit_a
+        value = used if np.isfinite(used) else float("inf")
+        why = "" if v.current_passed is not None else f" Not judged: {rating_why_not(tree, v)}."
+        out.append(Problem(
+            FAIL if v.current_passed is False else INFO, "regulator", rating_title(v),
+            f"Output of {v.kind} {v.name} on {group}: {used:.1f} % of its rated output current.{why}",
+            value, float(x), float(y),
+            data={"name": v.name, "i_out_a": v.i_out_a, RATING_KEY: v.current_limit_a,
+                  "current_limit_from": rated_from(v), "rating_used_pct": used}))
     return out
 
 

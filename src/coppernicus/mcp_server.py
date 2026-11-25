@@ -126,7 +126,8 @@ class ProjectSourceSpec(BaseModel):
     efficiency: Optional[float] = Field(None, description="A switcher's efficiency, a fraction 0-1.")
     quiescent_a: Optional[float] = Field(None, description="A regulator's quiescent current, A.")
     current_limit_a: Optional[float] = Field(None, gt=0, description="Its rated output current, A "
-                                             "(shown next to I_out; not judged yet).")
+                                             "(shown next to I_out; in the power tree an I_out "
+                                             "above it fails).")
     fsw_hz: Optional[float] = Field(None, gt=0, description="A switcher's switching frequency, Hz "
                                     "(stored; not used yet).")
     extra_pins: Optional[list[str]] = Field(None, description="More pads held at the same voltage on "

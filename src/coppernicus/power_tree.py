@@ -7,6 +7,9 @@
 * :func:`apply_limits`, :func:`net_limits`, :func:`group_limits`, :func:`tree_verdicts`:
   which of the user's limits judge what in a power tree, and the verdicts (see
   :data:`LIMITS_RULE`).
+* :func:`judge_ratings`, :func:`rating_origins`: each regulator's output current against the
+  rated output current the user wrote for it (``Source.current_limit_a``: KiCad field PI_IMAX
+  or the project file), and where it was written.
 * :func:`tree_summary`: a power-tree result as a plain, JSON-ready dict (units in every
   key), for the CLI and the agent interface.
 """
@@ -198,7 +201,23 @@ def apply_limits(tree, project: Project) -> None:
     for rail in project.rails:
         if tree.group_of(rail.net) is not None or any(v is not None for v in vars(rail.limits).values()):
             tree.limits[rail.net] = copy.copy(rail.limits)
+    # A rating where no VRM row judges it: the rail excluded (KiPI makes its regulator a load
+    # on its input) or solved as a ground (its sources are left out of the setup).
+    tree.unsolved_ratings = [
+        unjudged(s.label, rail.net, RATING_KEY, "not solved in the power tree")
+        for rail in project.rails for s in rail.sources
+        if s.current_limit_a is not None and not _solved_as_rail(tree, rail.net)]
     judge_loads(tree)
+    judge_ratings(tree)                  # the ratings came with the solve (convert_tree)
+    rated_groups = {v.group for v in tree.vrms if v.current_limit_a is not None}
+    # The rule, once: on the tree, and on each group a rated regulator drives (the app shows a
+    # group's assumptions beside its problems).
+    for key, notes in [("", tree.assumptions)] + [(k, r.assumptions) for k, r in tree.groups.items()]:
+        rated = key in rated_groups if key else bool(rated_groups or tree.unsolved_ratings)
+        if rated and RATING_RULE not in notes:
+            notes.append(RATING_RULE)
+        elif not rated and RATING_RULE in notes:
+            notes.remove(RATING_RULE)
     apply_thermal_limits(tree, getattr(project, "thermal", None))   # the board temperature's
 
 
@@ -216,11 +235,18 @@ def not_judged_text(items: Sequence[Dict[str, str]]) -> str:
 
 def unsolved_limits(tree) -> List[Dict[str, str]]:
     """Each limit set on a net the power tree did not solve (excluded, or not set up), as a
-    not-judged entry."""
+    not-judged entry; then each rated source on a rail it did not solve as a rail
+    (``tree.unsolved_ratings``, see :func:`apply_limits`)."""
     from coppernicus.problems import LIMIT_KEYS
-    return [unjudged(net, net, key, "not solved in the power tree")
-            for net, lim in tree.limits.items() if tree.group_of(net) is None
-            for key, attr in LIMIT_KEYS.items() if getattr(lim, attr) is not None]
+    limits = [unjudged(net, net, key, "not solved in the power tree")
+              for net, lim in tree.limits.items() if tree.group_of(net) is None
+              for key, attr in LIMIT_KEYS.items() if getattr(lim, attr) is not None]
+    return limits + list(tree.unsolved_ratings)
+
+
+def _solved_as_rail(tree, net: str) -> bool:
+    key = tree.group_of(net)
+    return key is not None and tree.groups[key].kind != "ground"
 
 
 def judge_loads(tree) -> None:
@@ -241,6 +267,123 @@ def judge_loads(tree) -> None:
         v.input_passed = None if limit is None or not ok else bool(v.input_drop_pct <= limit)
 
 
+# ---------------------------------------------------------------------- regulator ratings
+
+RATING_KEY = "current_limit_a"           # the rating's key in not-judged entries and the note
+#: |I out| within this fraction of its rating counts as at it, not over: the solve's round-off
+#: (2.0000000000001 A out of a 2 A load) must not fail a part rated for what it delivers.
+RATING_ROUND_OFF = 1e-9
+RATING_FROM_EITHER = "KiCad field PI_IMAX or the project file"     # where, when it is not known
+#: The assumption line of a tree with a rating (:func:`apply_limits`): the rule as judged.
+RATING_RULE = ("Regulator ratings (a source's rated output current, current_limit_a: KiCad field "
+               "PI_IMAX or the project file): a regulator fails when |I out| is above its rating "
+               "(within 1e-9, relative, of it counts as at the rating: the solve's round-off); not "
+               "judged while its group, a group it feeds or the power-tree iteration has not "
+               "converged, nor on a rail the tree does not solve; a regulator out of regulation is "
+               "still judged on its current, as KiPI does.")
+
+
+def judge_ratings(tree) -> None:
+    """Judge each regulator's output current against the rated output current the user wrote
+    for it (``VrmReport.current_limit_a``), as KiPI's check does (|I out| <= the rating, within
+    :data:`RATING_ROUND_OFF`): ``current_passed`` True or False; None without a rating (no
+    limit was set: not judged, and not listed as not judged) or when it cannot be judged (I out
+    not settled, or not solved: see :func:`rating_why_not`)."""
+    for v in tree.vrms:
+        if (v.current_limit_a is None or v.group not in tree.groups or _unsettled(tree, v)
+                or not math.isfinite(v.i_out_a)):
+            v.current_passed = None
+            continue
+        amps = abs(v.i_out_a)
+        v.current_passed = bool(amps <= v.current_limit_a
+                                or math.isclose(amps, v.current_limit_a, rel_tol=RATING_ROUND_OFF))
+
+
+def _unsettled(tree, v) -> str:
+    """Why regulator ``v``'s output current is not settled ("" when it is). It includes what
+    every rail it feeds draws, through their regulators' inputs, so each of those groups must
+    have converged, and the tree's outer iteration (``tree.converged``; KiPI also marks a load
+    NOT CONVERGED then, or when its group's iteration did not settle)."""
+    fed, todo = [v.group], [v.group]
+    while todo:
+        key = todo.pop()
+        for u in tree.vrms:
+            if u.input_group == key and u.group not in fed:
+                fed.append(u.group)
+                todo.append(u.group)
+    for key in fed:
+        res = tree.groups.get(key)
+        if res is not None and not res.converged:
+            return ("its iteration did not converge" if key == v.group
+                    else f"{key}, which it feeds, did not converge")
+    if not tree.converged or any(ld.status == NOT_CONVERGED for ld in tree.loads if ld.group in fed):
+        return "the power-tree iteration did not converge"
+    return ""
+
+
+def rating_why_not(tree, v) -> str:
+    """Why rated regulator ``v``'s output current was not judged."""
+    return _unsettled(tree, v) or "its output current was not solved"
+
+
+def rated_from(v) -> str:
+    """Where regulator ``v``'s rating was written (:func:`rating_origins`), or
+    :data:`RATING_FROM_EITHER` when that is not known."""
+    return v.current_limit_from or RATING_FROM_EITHER
+
+
+def rating_origins(tree, merged) -> None:
+    """Name where each rated regulator's rating was written (``current_limit_from``), from
+    ``merged`` (:class:`coppernicus.board_fields.Merged`), the project the tree was solved
+    with: when its rail comes from the KiCad fields (origin ``"fields"``), "KiCad field PI_IMAX
+    on U1", the part carrying the field (a source held at another part's pads, through
+    PI_SOURCE_REF, keeps that part as its label); any other rail (the project file's, one that
+    overrides the fields, one the fields leave incomplete) or no KiCad fields at all: "the
+    project file"."""
+    for v in tree.vrms:
+        if v.current_limit_a is None:
+            continue
+        origin = merged.origins.get(v.group)
+        if origin is None or origin.source != "fields":
+            v.current_limit_from = "the project file"
+            continue
+        source = _rated_source(merged.project.rail(v.group), v.name)
+        v.current_limit_from = "KiCad field PI_IMAX" + (f" on {source.label}" if source else "")
+
+
+def _rated_source(rail, name: str) -> Optional[Source]:
+    """The source of ``rail`` the engine named ``name`` (its label, or "label (net)" when the
+    label is used on several rails), else its only rated source; None when neither is one."""
+    if rail is None:
+        return None
+    named = [s for s in rail.sources if name in (s.label, f"{s.label} ({rail.net})")]
+    rated = [s for s in rail.sources if s.current_limit_a is not None]
+    return named[0] if len(named) == 1 else rated[0] if len(rated) == 1 else None
+
+
+def _amps(i_out: float, limit: float) -> str:
+    """|I out| as text, with as many digits as it takes to read differently from the rating
+    (at least 4 significant): a fail never reads "2 A out, over its rated 2 A"."""
+    amps = abs(i_out)
+    for digits in range(4, 13):
+        text = f"{amps:.{digits}g}"
+        if text != f"{limit:.{digits}g}":
+            break
+    return text
+
+
+def rating_title(v) -> str:
+    """Rated regulator ``v`` against its rating, for problems and the verdict note: "U1: 2.502 A
+    out, over its rated 2 A (from KiCad field PI_IMAX on U1)"; "within its rated" when it
+    passed, "rated" when it was not judged."""
+    rated = f"{v.current_limit_a:g} A (from {rated_from(v)})"
+    if not math.isfinite(v.i_out_a):
+        return f"{v.name}: output current not solved, rated {rated}"
+    how = ("over its rated" if v.current_passed is False else
+           "within its rated" if v.current_passed else "rated")
+    return f"{v.name}: {_amps(v.i_out_a, v.current_limit_a)} A out, {how} {rated}"
+
+
 def _why_not(status: str, nominal: Optional[float]) -> str:
     if status:
         return status
@@ -258,6 +401,9 @@ class GroupVerdict:
     origin: Dict[str, str]                 # limit key -> the net it came from
     not_judged: List[Dict[str, str]] = field(default_factory=list)   # see unjudged()
     problems: list = field(default_factory=list)
+    # The regulators driving it that have a rated output current: name -> A (judged as one
+    # of its limits; kept out of ``limits``, which holds the net limits).
+    ratings: Dict[str, float] = field(default_factory=dict)
 
 
 def group_verdict(tree, key: str, top: int = 5) -> GroupVerdict:
@@ -293,14 +439,19 @@ def group_verdict(tree, key: str, top: int = 5) -> GroupVerdict:
                 if not (math.isfinite(t.v_max) and math.isfinite(t.v_min)):
                     missing.append(unjudged(t.name, t.net or key, "max_ground_rise_mv", "not solved"))
         judged += any(k != "max_drop_pct" for k in checked)       # the copper is judged
+    rated = [v for v in tree.vrms if v.group == key and v.current_limit_a is not None]
+    missing += [unjudged(v.name, key, RATING_KEY, rating_why_not(tree, v))
+                for v in rated if v.current_passed is None]
+    judged += sum(v.current_passed is not None for v in rated)
     verdict = "fail" if failed else "not_judged" if missing or not judged else "pass"
-    return GroupVerdict(verdict, failed, checked, origin, missing, problems)
+    return GroupVerdict(verdict, failed, checked, origin, missing, problems,
+                        ratings={v.name: v.current_limit_a for v in rated})
 
 
 def has_limits(gv: GroupVerdict) -> bool:
-    """Whether the user set a limit on this group: one that applies, or one that does not
-    (and is listed as not judged)."""
-    return bool(gv.limits or gv.not_judged)
+    """Whether the user set a limit on this group: one that applies, one that does not (and
+    is listed as not judged), or the rating of a regulator driving it."""
+    return bool(gv.limits or gv.not_judged or gv.ratings)
 
 
 def tree_verdicts(tree, top: int = 5) -> Tuple[str, Dict[str, GroupVerdict]]:
@@ -343,14 +494,19 @@ def verdict_note(tree, groups: Dict[str, GroupVerdict]) -> str:
     own = own_limits(tree)
     tv = thermal_verdict(tree)
     missing = [x for v in groups.values() for x in v.not_judged] + unsolved_limits(tree) + tv.not_judged
-    if not own and not tv.limits and not missing:
+    rated = [v for v in tree.vrms if v.current_limit_a is not None]
+    if not own and not tv.limits and not missing and not rated:
         return "No limits set: nothing is judged, problems are ranked only."
     judged = ([f"{net}: {k} = {v:g}" for net, d in own.items() for k, v in d.items()]
-              + [f"{ITEM}: {k} = {v:g}" for k, v in tv.limits.items()])
+              + [f"{ITEM}: {k} = {v:g}" for k, v in tv.limits.items()]
+              + [f"{v.name}: {RATING_KEY} = {v.current_limit_a:g} (from {rated_from(v)})" for v in rated])
     note = ("Judged only against the limits you set: " + ", ".join(judged)
             if judged else "No limit you set applies to what it is set on")
     if tv.failed_rows:                  # the board temperature's fails, named (the groups' are problems)
         note += f". Board temperature over a limit: {'; '.join(tv.failed_rows)}"
+    over = [rating_title(v) for v in rated if v.current_passed is False]
+    if over:                            # named here too: the CLI prints the note, not the problems
+        note += f". Over a rated output current: {'; '.join(over)}"
     if missing:
         note += ". Not judged: " + not_judged_text(missing)
     return note
@@ -383,6 +539,9 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
     overall, verdicts = tree_verdicts(tree, top)
     tv = thermal_verdict(tree)
     groups, failed = [], 0
+    # I max: each VRM's rated output current, the value judged (None where not given); only
+    # when some VRM has one, so a document without ratings stays as it was.
+    rated = any(v.current_limit_a is not None for v in tree.vrms)
     for key, res in tree.groups.items():
         gv = verdicts[key]
         failed += gv.failed
@@ -408,14 +567,19 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         "not_judged": [x for v in verdicts.values() for x in v.not_judged] + unsolved_limits(tree)
         + tv.not_judged,
         "vrms": [{"name": v.name, "kind": v.kind, "group": v.group, "v_set_v": v.v_set_v,
-                  "v_out_v": v.v_out_v, "i_out_a": v.i_out_a, "v_in_v": _num(v.v_in_v),
+                  "v_out_v": v.v_out_v, "i_out_a": v.i_out_a,
+                  **({"i_max_a": v.current_limit_a} if rated else {}), "v_in_v": _num(v.v_in_v),
                   "i_in_a": _num(v.i_in_a), "p_out_w": v.p_out_w, "p_in_w": _num(v.p_in_w),
                   "p_loss_w": _num(v.p_loss_w), "v_ground_v": _num(v.v_ground_v),
                   "v_sense_v": _num(v.v_sense_v), "v_ground_sense_v": _num(v.v_ground_sense_v),
                   "regulation": v.regulation, "input_net": v.input_net or None,
                   "input_drop_mv": None if _num(v.input_drop_v) is None else v.input_drop_v * 1e3,
                   "input_drop_pct": _num(v.input_drop_pct), "input_status": v.input_status,
-                  "input_exceeds_drop_limit": None if v.input_passed is None else not v.input_passed}
+                  "input_exceeds_drop_limit": None if v.input_passed is None else not v.input_passed,
+                  # |I out| over the rated output current the user wrote (None: no rating, or
+                  # not judged), and where that rating was written (None: no rating)
+                  "exceeds_current_limit": None if v.current_passed is None else not v.current_passed,
+                  "current_limit_from": rated_from(v) if v.current_limit_a is not None else None}
                  for v in tree.vrms],
         "loads": [{"name": ld.name, "group": ld.group, "current_a": ld.current_a,
                    "nominal_v": ld.nominal_v, "v_supply_v": _num(ld.v_supply_v),
@@ -453,6 +617,14 @@ def _input_text(v: Dict[str, Any]) -> str:
     return f"  input drop on {v['input_net']} {drop}: {verdict}"
 
 
+def _rating_text(v: Dict[str, Any]) -> str:
+    """A regulator's output current against its rating, for its VRM row ("" without one)."""
+    if v.get("current_limit_from") is None:
+        return ""
+    exceeds = v.get("exceeds_current_limit")
+    return f"  rated current: {'FAIL' if exceeds else 'pass' if exceeds is False else 'not judged'}"
+
+
 def _group_worst(gr: Dict[str, Any]) -> str:
     """A group's worst copper for its :func:`tree_text` line, worded as
     :func:`coppernicus.problems.max_drop_text`: "max drop 12.345 mV (0.374 %) below 3.3 V",
@@ -475,7 +647,7 @@ def _group_worst(gr: Dict[str, Any]) -> str:
 
 def tree_text(doc: Dict[str, Any]) -> List[str]:
     """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
-    # I max: a source's rated output current (PI_IMAX), shown, not judged; only when some VRM
+    # I max: a source's rated output current (PI_IMAX; judged: _rating_text); only when some VRM
     # has one, so the table is unchanged otherwise.
     rated = any(v.get("i_max_a") is not None for v in doc["vrms"])
     lines = ["VRMs (sources and regulators)",
@@ -487,7 +659,8 @@ def tree_text(doc: Dict[str, Any]) -> List[str]:
                      + (f"{_fmt(v.get('i_max_a'), 9, '.4f', 'A')} " if rated else "")
                      + f"{_fmt(v['v_in_v'], 9, '.5f', 'V')} {_fmt(v['i_in_a'], 9, '.4f', 'A')} "
                      f"{_fmt(v['p_loss_w'], 9, '.1f', 'mW', 1e3)}"
-                     + (f"  {v['regulation']}" if v["regulation"] else "") + _input_text(v))
+                     + (f"  {v['regulation']}" if v["regulation"] else "") + _rating_text(v)
+                     + _input_text(v))
     lines += ["Loads (the voltage across supply and ground pins)",
               f"  {'name':<14} {'group':<10} {'I':>8} {'nominal':>8} {'supply':>9} {'ground':>9} "
               f"{'across':>9} {'drop':>14}  verdict"]

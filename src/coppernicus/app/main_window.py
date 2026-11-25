@@ -52,6 +52,7 @@ from coppernicus.power_tree import (
     group_verdict,
     has_limits,
     not_judged_text,
+    rating_origins,
     tree_verdicts,
     unsolved_limits,
 )
@@ -100,6 +101,14 @@ def initial_size(avail_w: Optional[int], avail_h: Optional[int]) -> Tuple[int, i
     """The window's first size: 1500 × 920, shrunk to the screen's available area (a 1440 ×
     900 laptop) when one is known."""
     return (min(1500, avail_w) if avail_w else 1500, min(920, avail_h) if avail_h else 920)
+
+
+def tree_i_max(tree: TreeResult) -> Dict[str, Optional[float]]:
+    """Each VRM's rated output current (I max) by name: the value the tree judged
+    (``VrmReport.current_limit_a``, from the merged project's ``Source.current_limit_a``: KiCad
+    field PI_IMAX or the project file; None where not given), also for a label used on several
+    rails ("U1 (+3V3)")."""
+    return {v.name: v.current_limit_a for v in tree.vrms}
 
 
 def verdict_html(verdict: str, fails: int, not_judged, has_limits: bool) -> str:
@@ -182,6 +191,7 @@ class MainWindow(QMainWindow):
         self._diff_cache: Optional[Tuple] = None      # (baseline, run, layer, (Δ mV, note))
         self._fallback_reason = ""                     # why the Δ map was not shown, last draw
         self.tree: Optional[TreeResult] = None          # the last power-tree solve, if still valid
+        self.tree_i_max: Dict[str, Optional[float]] = {}    # its VRMs' I max (tree_i_max)
         self._revision = 0            # +1 per edit of the setup: a solve started before is stale
         self.tree_worker: Optional[TreeWorker] = None
         self._rail_draft: Optional[Rail] = None       # the shown net's rail while it is set up
@@ -721,6 +731,14 @@ class MainWindow(QMainWindow):
             return
         try:
             size = bootstrap_triangle.remove(site)
+        except bootstrap_triangle.RemovalDeferred:
+            # In use (mostly on Windows: this app has it loaded): not a failure, the next start
+            # deletes it before using it.
+            self.statusBar().showMessage("The mesher is in use: Coppernicus removes it at its next start")
+            QMessageBox.information(self, "Remove downloaded mesher",
+                                    f"The downloaded Triangle mesher in {site} is in use: Coppernicus "
+                                    "removes it at its next start, then downloads it again.")
+            return
         except bootstrap_triangle.BootstrapError as e:
             self.statusBar().showMessage("The downloaded mesher could not be removed")
             QMessageBox.warning(self, "Cannot remove the mesher", f"{e.message}\n{e.hint}")
@@ -942,7 +960,7 @@ class MainWindow(QMainWindow):
         self.rail_panel.set_net_kind(self._net_at_0v(rail))       # a cleared field may close
         if self.tree is not None:                                  # re-judge, no re-solve
             apply_limits(self.tree, self.merged.project)
-            self.tree_panel.set_tree(self.tree, self._tree_verdict())
+            self._show_tree()
         group = self.group_box.currentData()
         if group and self.tree is not None and group in self.tree.groups:
             self._show_tree_problems(group)                        # what the view shows
@@ -1207,13 +1225,15 @@ class MainWindow(QMainWindow):
         merged = getattr(self.sender(), "merged", None)
         if merged is not None:
             merged.annotate(tree)                   # where the rails came from, as the CLI says
+            rating_origins(tree, merged)            # ... and each regulator's rating
         # Limits do not change the solve: judge it by the ones set now (one may have been
         # edited while it solved, on the copy the worker took).
         apply_limits(tree, self.merged.project)         # the board temperature's too
         if tree.thermal is not None:
             record_solve(tree)                           # its time, for the next estimate
         self.tree = tree
-        self.tree_panel.set_tree(tree, self._tree_verdict())
+        self.tree_i_max = tree_i_max(tree)
+        self._show_tree()
         self.thermal_panel.set_tree(tree, self._thermal_verdict_html())
         self.group_box.blockSignals(True)
         while self.group_box.count() > 1:
@@ -1237,7 +1257,7 @@ class MainWindow(QMainWindow):
         # Cancel is expected (no box), but only its own report: an error after it is shown.
         cancelled = getattr(self.sender(), "cancelled", False) and message == CANCELLED
         if self.tree is not None:          # the previous tree is still in use: show it again
-            self.tree_panel.set_tree(self.tree, self._tree_verdict())
+            self._show_tree()
             self.thermal_panel.set_tree(self.tree, self._thermal_verdict_html())
             self.statusBar().showMessage(f"Power tree solve {'cancelled' if cancelled else 'failed'}: "
                                          "the previous result is shown")
@@ -1249,6 +1269,10 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Power tree solve cancelled")
         if not cancelled:
             QMessageBox.warning(self, "Cannot solve the power tree", message)
+
+    def _show_tree(self):
+        """The Power tree tab: the tree, its verdict and its VRMs' I max."""
+        self.tree_panel.set_tree(self.tree, self._tree_verdict(), self.tree_i_max)
 
     def _tree_verdict(self) -> str:
         if self.tree is None:
@@ -1353,7 +1377,7 @@ class MainWindow(QMainWindow):
         self._update_title()
         if self.tree is not None:
             apply_thermal_limits(self.tree, self.merged.project.thermal)
-            self.tree_panel.set_tree(self.tree, self._tree_verdict())
+            self._show_tree()
             self.thermal_panel.set_tree(self.tree, self._thermal_verdict_html())
 
     def _thermal_go(self) -> bool:

@@ -1204,16 +1204,29 @@ class TreePanel(QWidget):
 
     def clear(self, text: str = ""):
         self.summary.setText(text or "<i>No power-tree result</i>")
+        self.vrms.setColumnCount(len(self.VRM_HEADERS))       # no I max column left behind
+        self.vrms.setHorizontalHeaderLabels(self.VRM_HEADERS)
         self._fill(self.vrms, [])
         self._fill(self.loads, [])
         self.links.clear()
         self.notes.clear()
 
-    def set_tree(self, tree, verdict_html: str = ""):
-        vrms = [(v.name, v.kind, v.group, f"{v.v_set_v:g}", _cell(v.v_out_v, ".5f"),
-                 _cell(v.i_out_a, ".4f"), _cell(v.v_in_v, ".5f"), _cell(v.i_in_a, ".4f"),
-                 _cell(v.p_loss_w, ".1f", 1e3), _cell(v.v_ground_v, ".2f", 1e3), v.regulation)
+    def set_tree(self, tree, verdict_html: str = "", i_max: Optional[Mapping[str, Optional[float]]] = None):
+        """Show ``tree``. ``i_max``: each VRM's rated output current by name (I max, see
+        ``MainWindow``'s ``tree_i_max``), in a column after I out only when one has a value. A
+        regulator over its rating is in red, as a load over its limit."""
+        rated = any(a is not None for a in (i_max or {}).values())
+        headers = list(self.VRM_HEADERS)
+        if rated:
+            headers.insert(headers.index("I out (A)") + 1, "I max (A)")
+        self.vrms.setColumnCount(len(headers))
+        self.vrms.setHorizontalHeaderLabels(headers)
+        vrms = [(v.name, v.kind, v.group, f"{v.v_set_v:g}", _cell(v.v_out_v, ".5f"), _cell(v.i_out_a, ".4f"))
+                + ((_cell(i_max.get(v.name), ".4g"),) if rated else ())
+                + (_cell(v.v_in_v, ".5f"), _cell(v.i_in_a, ".4f"), _cell(v.p_loss_w, ".1f", 1e3),
+                   _cell(v.v_ground_v, ".2f", 1e3), v.regulation)
                 for v in tree.vrms]
+        over = {r for r, v in enumerate(tree.vrms) if v.current_passed is False}   # over its rating
         loads, fails = [], set()
         for ld in tree.loads:
             verdict = ld.status or ("FAIL" if ld.passed is False else "pass" if ld.passed else "not judged")
@@ -1234,7 +1247,7 @@ class TreePanel(QWidget):
                           _cell(v.input_nominal_v, "g"), _cell(v.v_in_v, ".5f"),
                           _cell(v.v_ground_v, ".2f", 1e3), _cell(across, ".5f"),
                           _cell(v.input_drop_v, ".2f", 1e3), _cell(v.input_drop_pct, ".2f"), verdict))
-        self._fill(self.vrms, vrms)
+        self._fill(self.vrms, vrms, over)
         self._fill(self.loads, loads, fails)
         self.links.setText("Links (edit them in the project file): " + "; ".join(
             f"{k['name']} {k['resistance_ohm']:g} Ω, {' ↔ '.join(k['nets'])}: {k['current_a']:.4f} A, "

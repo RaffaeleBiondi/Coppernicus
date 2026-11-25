@@ -299,7 +299,7 @@ if (M.tree) {                 // solve --tree --html: the tree's own tables, onc
   const T = M.tree, mw = (x) => (ok(x) ? sig(x * 1e3, 3) : "–");
   $("tree").hidden = false;
   $("tree-verdict").append(badge(T.verdict), " ", T.verdict_note || "");
-  // I max: a source's rated output current (PI_IMAX), shown beside I out, not judged yet.
+  // I max: a source's rated output current (PI_IMAX), beside I out; the tree judges it (verdict, problems).
   table("tree-vrms", [["VRM", ""], ["Kind", ""], ["Group", ""], ["V set (V)", "num"], ["V out (V)", "num"], ["I out (A)", "num"],
     ["I max (A)", "num"], ["V in (V)", "num"], ["I in (A)", "num"], ["Loss (mW)", "num"], ["", ""]],
     T.vrms.map((v) => [[v.name, ""], [v.kind, ""], [v.group, ""], [sig(v.v_set_v, 4), "num"], [sig(v.v_out_v, 6), "num"],

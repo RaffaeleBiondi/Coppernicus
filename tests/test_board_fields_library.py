@@ -80,7 +80,7 @@ def test_one_library_value_applies_to_every_source_rail_and_per_rail_values_stil
         field_rails({"U1": {**dual["U1"], "PI_IQ": "1mA;1mA;1mA"}})
 
 
-def test_pi_imax_and_pi_fsw_are_kept_on_the_source_shown_not_judged():
+def test_pi_imax_and_pi_fsw_are_kept_on_the_source():
     fields = {**VIN, "U1": {"PI_RAIL": "+3V3", "PI_VOUT": "3.3V", "PI_KIND": "smps", "PI_EFF": "90%",
                             "PI_INPUT": "VIN", "PI_IMAX": "2A", "PI_FSW": "1.2MHz"},
               "U4": {"PI_RAIL": "+3V3", "PI_LOAD": "500mA"}}
@@ -88,7 +88,8 @@ def test_pi_imax_and_pi_fsw_are_kept_on_the_source_shown_not_judged():
     [u1] = rails_of(merged)["+3V3"].sources
     assert (u1.current_limit_a, u1.fsw_hz) == (2.0, 1.2e6)
     note = " ".join(merged.origins["+3V3"].notes)
-    assert "not judged" in note and "not used" in note
+    assert 'I_max 2 A (from KiCad field PI_IMAX "2A" on U1)' in note, note   # judged in the tree
+    assert "not judged" not in note and "not used" in note, note
     for text, hz in (("500kHz", 5e5), ("2.2MHz", 2.2e6), ("800000Hz", 8e5)):
         rails = field_rails({"U1": {**fields["U1"], "PI_FSW": text}})
         assert rails["+3V3"].sources[0].term.fsw_hz == pytest.approx(hz, rel=1e-12)
@@ -227,10 +228,11 @@ def test_proposals_carry_the_new_fields_and_read_back():
     assert back.project.links == project.links
 
 
-def test_i_max_is_shown_next_to_i_out_and_not_judged(tmp_path, capsys):
+def test_i_max_is_shown_next_to_i_out_and_judged_in_the_tree(tmp_path, capsys):
     """PI_IMAX reaches the summaries beside the current delivered: the rail's sources
     (current_limit_a), the tree's VRM rows (i_max_a, in the CLI's --json too), and the tree
-    report's and the CI's VRM tables. It is not judged yet."""
+    report's and the CI's VRM tables. The tree judges it (tests/test_tree_ratings.py): U1
+    delivers 0.5 A of its rated 2 A."""
     import json
     from importlib.resources import files
 
@@ -252,8 +254,10 @@ def test_i_max_is_shown_next_to_i_out_and_not_judged(tmp_path, capsys):
     tree = session.solve_tree(project)
     rows = {v["name"]: v for v in tree["vrms"]}
     assert rows["U1"]["i_max_a"] == 2.0 and rows["J1"]["i_max_a"] is None
-    assert any("I_max" in a and "not judged" in a for a in tree["assumptions"])
-    assert tree["verdict"] == "not_judged"                         # shown, never a fail
+    from coppernicus.power_tree import RATING_RULE
+    assert RATING_RULE in tree["assumptions"], tree["assumptions"]
+    assert not any("not judged yet" in a for a in tree["assumptions"]), tree["assumptions"]
+    assert tree["verdict"] == "pass"                               # the rating, the only limit
     assert "I max (A)" in "\n".join(ci.tree_markdown("buck", tree))
     capsys.readouterr()
     main(["solve", str(project), "--tree", "--json", "--out", str(tmp_path / "cli")])
