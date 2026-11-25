@@ -5,6 +5,7 @@ stack-up its tolerances and accuracies. Never a default behind a verdict: a capa
 fields are partial has no model, and the reason names what it lacks. Synthetic data only."""
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -335,6 +336,26 @@ def test_pi_tol_and_pi_acc_give_the_tolerance_stack_up_its_limits(tmp_path, caps
     assert any("U1" in w and "PI_TOL" in w and "tol_pct" in w for w in doc["warnings"])
     code, doc = run("0.1%")                  # 3.3 mV allowed: the accuracy alone is 33 mV
     assert code == EXIT_LIMIT and doc["verdict"] == "fail"
+
+
+def test_ci_runs_the_tolerance_stack_up_for_a_tolerance_held_only_in_kicad_fields(tmp_path, monkeypatch):
+    """The project file sets no tolerance; U1's PI_TOL on the board does: CI's opt-in run
+    takes it, and skips it when the project turns the fields off."""
+    from coppernicus import ci
+    write_strip_kicad_pcb(tmp_path / "s.kicad_pcb", {
+        "J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V", "PI_ACC": "1%"},
+        "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A", "PI_TOL": "5%"}})
+    project = Project(board="s.kicad_pcb", rails=[Rail("VCC", sources=[Source("J1", 3.3)], loads=[
+        Load("U1", 1.0, ripple_mv=2, transient_mv=3)])])
+    project.save(tmp_path / "s.coppernicus.yml")
+    monkeypatch.chdir(tmp_path)
+    index = ci.solve_all(["s.coppernicus.yml"], Path("ci"), html=False, tolerance=True)
+    [entry] = index["projects"]
+    assert entry["tolerance"]["verdict"] == "pass" and index["exit_code"] == EXIT_OK
+    project.use_board_fields = False
+    project.save(tmp_path / "s.coppernicus.yml")
+    index = ci.solve_all(["s.coppernicus.yml"], Path("ci2"), html=False, tolerance=True)
+    assert "tolerance" not in index["projects"][0]
 
 
 # ------------------------------------------------------------------ listing and reading

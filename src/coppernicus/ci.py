@@ -74,8 +74,9 @@ def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool =
     its document goes into the entry's ``tree``, for the summary's tables; it does not set
     the exit code. With ``ac`` (``noise``), each project with probes (aggressors) is also
     solved with ``coppernicus ac`` (``coppernicus noise``); that verdict joins the project's.
-    With ``tolerance``, each project with a tolerance set (or a key that looks like a misspelt
-    one) is also run through ``coppernicus tolerance``; that verdict joins the project's."""
+    With ``tolerance``, each project with a tolerance set, in its file or its board's KiCad
+    fields (or a key that looks like a misspelt one), is also run through ``coppernicus
+    tolerance``; that verdict joins the project's."""
     out_dir = Path(out_dir)
     projects, unmatched = find_projects(patterns)
     boards = {p: _board_folder(p) for p in projects}
@@ -326,17 +327,24 @@ def _judge_noise(entry: Dict[str, Any]) -> None:
 
 
 def _has_tolerances(project: Path) -> bool:
-    """Whether a load sets a tolerance, or a load or source holds a key that looks like a
-    misspelt tolerance (``tol_pc``): ``coppernicus tolerance`` then says it is not judged,
-    never a silent pass."""
+    """Whether a load sets a tolerance, in the project file or in the board's KiCad fields
+    (``PI_TOL``, ``PI_DC_TOL``, ``PI_AC_TOL``, unless the project turns the fields off), or a
+    load or source holds a key that looks like a misspelt tolerance (``tol_pc``):
+    ``coppernicus tolerance`` then says it is not judged, never a silent pass."""
     try:
         import yaml
 
+        from coppernicus.board_fields import LOAD_FIELDS
+        from coppernicus.engine.kicad_fields import read_board_fields
         from coppernicus.project import Project
         from coppernicus.tolerance import misspelt_keys
-        if any(ld.has_tolerance() for r in Project.load(project).rails for ld in r.loads):
+        loaded = Project.load(project)
+        if any(ld.has_tolerance() for r in loaded.rails for ld in r.loads):
             return True
-        return bool(misspelt_keys(yaml.safe_load(project.read_text(encoding="utf-8")))[1])
+        if misspelt_keys(yaml.safe_load(project.read_text(encoding="utf-8")))[1]:
+            return True
+        fields = read_board_fields(loaded.board_path()).fields if loaded.use_board_fields else {}
+        return any((f.get(n) or "").strip() for f in fields.values() for n in LOAD_FIELDS)
     except Exception:                    # the rail-by-rail run reports a bad project
         return False
 
@@ -405,7 +413,8 @@ def tolerance_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
                        f"{_num(c.get('allowed_above_mv'), '.4g')} mV")
             check = f"{CHECK_NAMES.get(kind, kind)} ({c['limit']})"
             lines.append(f"| {_cell(ld['load'])} | {_cell(check)} | {allowed} | {_cell(total)} | {verdict} |")
-    lines += ["", "Below / above nominal. Judged only against the tolerances set in the project file, "
+    lines += ["", "Below / above nominal. Judged only against the tolerances set in the project file "
+              "or the KiCad fields, "
               "a check only when every part is known (a missing part is never 0); KiPI's transient "
               "estimate is shown, never judged."]
     return lines

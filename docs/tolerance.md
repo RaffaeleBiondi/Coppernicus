@@ -83,10 +83,16 @@ tolerance:                 # optional
   below = more negative).
 - The load's probe is the probe on its supply pins (and ground pins, where both have them),
   else on the same part and net.
-- No KiCad field holds these yet. A rail taken from the board's KiCad fields keeps the
-  project's tolerances by part reference ("tol_pct of U1 from the project file" in the
-  assumptions); a part the fields' rail does not have loses them, with a warning, and each lost
-  tolerance is **not judged**.
+- **In KiCad:** a load's tolerances can sit on its library symbol as `PI_TOL`, `PI_DC_TOL` and
+  `PI_AC_TOL`, a source's accuracy as `PI_ACC` (`5%`, `50mV`, or `-3%,+5%` below and above; see
+  [KiCad footprint fields](kicad-fields.md#tolerances-and-accuracy)). A field wins over the
+  project's value for the same part, with a warning when they differ, unless the rail sets
+  `override_board_fields: true`. What the fields do not give (`ripple_mv`, `transient_mv`, a
+  tolerance the part has no field for) is kept from the project by part reference ("ripple_mv
+  of U1 from the project file" in the assumptions); a part the fields' rail does not have loses
+  the project's values, with a warning, and each lost tolerance is **not judged**. A capacitor
+  model from KiCad fields counts in the AC and noise solves only when complete: a partial one
+  is no model, so what depends on it is not judged.
 - A key that looks like a misspelt tolerance (`tol_pc`, `acuracy_pct`) is a warning, "did you
   mean 'tol_pct'?", and the load is not judged: a typo never ends in a silent pass.
 

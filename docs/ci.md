@@ -152,11 +152,12 @@ uv run --project path/to/Coppernicus python -m coppernicus.ci summary --out resu
   ends, the board model left out) the victim is NOT JUDGED and the step exits 3, never a
   silent pass: enter the value to judge it. A project without aggressors is not run.
 - **Tolerance.** With `tolerance: true`, a load is judged only against the tolerance written
-  for it (`tol_*`, `dc_tol_*`, `ac_tol_*`), and a check passes only when every part is known:
+  for it (`tol_*`, `dc_tol_*`, `ac_tol_*` in the project file, or `PI_TOL`, `PI_DC_TOL`,
+  `PI_AC_TOL` in the KiCad fields), and a check passes only when every part is known:
   an accuracy not entered, a ripple no aggressor gives (and no `ripple_mv`), a `transient_mv`
   not entered, a misspelt key or a tolerance lost to a KiCad-fields rail make it NOT JUDGED
   (exit 3), never a silent pass. Its known parts alone can still fail it. A project without any
-  tolerance (or misspelt tolerance key) is not run.
+  tolerance, in its file or its board's KiCad fields (or a misspelt tolerance key), is not run.
 - **Privacy.** The board is processed on the runner of your repository's workflow. The results
   stay in that run's artifacts. Nothing is sent anywhere else.
 - **Self-test.** This repository runs the action on the synthetic demo at every push

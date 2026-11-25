@@ -71,7 +71,8 @@ def project_inputs(project_file, loaded: Project, merged: board_fields.Merged
             if key is not None:
                 lost_accuracy[net] = (f"{t.label}'s {key} in the project file was lost: rail {net} comes "
                                       f"from the board's KiCad footprint fields, whose source is {others} "
-                                      "(set override_board_fields: true on the rail to use the project's)")
+                                      "(set override_board_fields: true on the rail to use the project's, "
+                                      "or give that source its accuracy in KiCad field PI_ACC)")
     return warnings, dropped, lost_accuracy
 
 
