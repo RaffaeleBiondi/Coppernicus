@@ -207,6 +207,16 @@ def load_drop(ld) -> Tuple[float, float]:
     return sign * (ld.nominal - v_worst), v_worst
 
 
+#: KiPI's warning when its outer (ground-sense) iteration does not settle (kipi/dc/pi/tree.py:
+#: 707-711 sets ``tree_converged = False`` and appends it; its TreeResult carries no flag).
+OUTER_NOT_CONVERGED = "Ground-sense iteration did not converge"
+
+
+def outer_converged(kt) -> bool:
+    """Whether KiPI's outer iteration over the rails and grounds settled (its warning absent)."""
+    return not any(str(w).startswith(OUTER_NOT_CONVERGED) for w in kt.warnings)
+
+
 def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
                  thickness: Dict[str, float], rho_note: Optional[List[str]] = None) -> TreeResult:
     """KiPI's tree result ``kt`` as a :class:`TreeResult`, judged against the project's
@@ -227,7 +237,8 @@ def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
               for label, g in kt.groups.items() if g.kind == "rail"
               for net in [key_of[label]] if float(g.result.fields.v_ref) == 0.0]
     out = TreeResult(assumptions=assumptions, warnings=notes + list(kt.warnings),
-                     stats={"seconds": seconds, "groups": float(len(kt.groups))})
+                     stats={"seconds": seconds, "groups": float(len(kt.groups))},
+                     converged=outer_converged(kt))
     for label, g in kt.groups.items():
         res = out.groups[key_of[label]] = _group(board, key_of[label], g, assumptions)
         res.warnings += [w for w in notes if w.startswith(f"{res.net} is solved as a 0 V rail")]

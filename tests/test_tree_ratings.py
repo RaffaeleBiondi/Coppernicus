@@ -258,6 +258,27 @@ def test_a_rating_is_not_judged_while_a_rail_it_feeds_has_not_converged():
     assert doc["failed"] == 0, doc["failed"]
 
 
+def test_a_rating_is_not_judged_when_the_trees_outer_iteration_did_not_settle():
+    """KiPI's ground-sense (outer) iteration can fail to settle with every group converged
+    (KiPI tree.py:707-711: tree_converged False and its warning). The tree carries it, so a
+    rating is not judged even where no load would show it."""
+    from types import SimpleNamespace
+
+    from coppernicus.engine.tree import outer_converged
+    from coppernicus.power_tree import apply_limits, tree_summary
+    assert outer_converged(SimpleNamespace(warnings=["+3V3: something else"]))
+    assert not outer_converged(SimpleNamespace(
+        warnings=["Ground-sense iteration did not converge (last change 1.20e-04 V)"]))
+    tree, project = solved_chain({"+3V3": 2.0})
+    assert tree.converged
+    tree.converged = False
+    apply_limits(tree, project)
+    doc = tree_summary(tree)
+    assert {"item": "U1", "net": "+3V3", "limit": "current_limit_a",
+            "reason": "the power-tree iteration did not converge"} in doc["not_judged"], doc["not_judged"]
+    assert doc["failed"] == 0 and doc["verdict"] == "not_judged", doc["verdict"]
+
+
 def test_a_rating_on_a_rail_the_tree_does_not_solve_is_not_judged_not_dropped(tmp_path, capsys):
     """U2 (rated 1 A, delivers 2 A) on +1V8 left out with excluded_nets: KiPI turns it into a
     load on its input, so no VRM row judges it. Not judged, as a drop limit there is (exit 3).

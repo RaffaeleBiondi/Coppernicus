@@ -298,8 +298,8 @@ def judge_ratings(tree) -> None:
 def _unsettled(tree, v) -> str:
     """Why regulator ``v``'s output current is not settled ("" when it is). It includes what
     every rail it feeds draws, through their regulators' inputs, so each of those groups must
-    have converged; and KiPI marks a load NOT CONVERGED when its group's or the tree's outer
-    iteration did not settle."""
+    have converged, and the tree's outer iteration (``tree.converged``; KiPI also marks a load
+    NOT CONVERGED then, or when its group's iteration did not settle)."""
     fed, todo = [v.group], [v.group]
     while todo:
         key = todo.pop()
@@ -312,7 +312,7 @@ def _unsettled(tree, v) -> str:
         if res is not None and not res.converged:
             return ("its iteration did not converge" if key == v.group
                     else f"{key}, which it feeds, did not converge")
-    if any(ld.status == NOT_CONVERGED for ld in tree.loads if ld.group in fed):
+    if not tree.converged or any(ld.status == NOT_CONVERGED for ld in tree.loads if ld.group in fed):
         return "the power-tree iteration did not converge"
     return ""
 

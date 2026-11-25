@@ -344,6 +344,9 @@ class TreeResult:
     # A rated source (Source.current_limit_a) on a rail the tree does not solve as a rail
     # (excluded, or solved as a ground): not-judged entries (coppernicus.power_tree.apply_limits).
     unsolved_ratings: List[Dict[str, str]] = field(default_factory=list)
+    # KiPI's outer (ground-sense) iteration over the rails and grounds settled; a group's own
+    # iteration is RailResult.converged (coppernicus.engine.tree.outer_converged).
+    converged: bool = True
     assumptions: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     stats: Dict[str, float] = field(default_factory=dict)
