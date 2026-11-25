@@ -52,14 +52,18 @@ def test_thermal_forces_the_board_temperature_in_any_order(demo, tmp_path, capsy
     doc = _json(capsys)
     assert code == EXIT_LIMIT and doc["kind"] == "power_tree"
     assert doc["thermal"]["iterations"] == 3 and doc["thermal"]["verdict"] == "not_judged"
-    assert len(list(out.glob("*_temperature_*.png"))) == 2
+    pngs = sorted(out.glob("*_temperature_*.png"))
+    assert len(pngs) == 2 and sorted(doc["maps"]) == [p.as_posix() for p in pngs]    # as per-rail JSON
+    saved = json.loads(Path(doc["summary_file"]).read_text(encoding="utf-8"))
+    assert saved["maps"] == doc["maps"]
 
 
 def test_no_maps_and_plain_tree(demo, tmp_path, capsys):
     out = tmp_path / "out"
     main(["solve", str(demo / "demo-thermal.coppernicus.yml"), "--thermal", "--no-maps", "--json",
           "--out", str(out)])
-    assert "thermal" in _json(capsys) and not list(out.glob("*.png"))
+    doc = _json(capsys)
+    assert "thermal" in doc and "maps" not in doc and not list(out.glob("*.png"))
     main(["solve", str(demo / "demo.coppernicus.yml"), "--tree", "--json", "--out", str(out)])
     assert "thermal" not in _json(capsys) and not list(out.glob("*.png"))
 

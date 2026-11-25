@@ -347,6 +347,8 @@ def _cmd_solve_tree(args) -> int:
     for m, png in zip(maps, pngs):
         from coppernicus.temperature import write_png
         write_png(tree.thermal, m.layer_name, png, board.outline())
+    if pngs:                                   # as the per-rail document's "maps"
+        doc["maps"] = [png.as_posix() for png in pngs]
     if args.html is not None or args.open:     # one page: every group, the VRM and load tables
         from coppernicus.report import write_tree_report
         html_path = (Path(args.html) if args.html else

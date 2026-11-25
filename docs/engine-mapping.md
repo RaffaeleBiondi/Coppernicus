@@ -508,7 +508,8 @@ The text output adds a "Board temperature" block (grid peak with its nearest pad
 heat by kind, one row per layer with its nearest pad and verdict, load drops at the ambient
 → electro-thermal, the verdict, the thermal assumptions). One PNG per copper layer is written
 next to the summary (`<project>_temperature_<layer>.png`, every layer on one scale from the
-ambient to the board's peak), unless `--no-maps`. `--rail` is refused, as with `--tree`.
+ambient to the board's peak), unless `--no-maps`; the document (`--json` and the summary file)
+lists them in `maps`, as the per-rail document does. `--rail` is refused, as with `--tree`.
 
 Measured on `examples/demo/demo-thermal.coppernicus.yml` (the demo rail at 8 + 6 + 1.2 A,
 automatic 250 × 167 grid, 3 iterations, macOS arm64, SuperLU): grid peak 42.31 °C on J1.1;
