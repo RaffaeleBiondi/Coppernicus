@@ -247,9 +247,10 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
     holds only limits does not stop this: it stays, limits only. A `PI_LIMIT_DROP` on the
     tied net still wins over its `max_drop_pct`; with no project rail there, it stays on that
     net in a rail that holds only the limit. Per rail, that rail is skipped and its limits
-    are listed as not judged. In the power tree its copper limits count in the group's
-    strictest; the loads moved into the driven rail are judged by the driven net's
-    `max_drop_pct` for now, not by the tied net's;
+    are listed as not judged. In the power tree a load past a tie is judged by its own net's
+    limit, then the rail it is listed in's, then the group's driving net's (field by field);
+    the tied net's copper limits count in the group's strictest. The tree's load rows say
+    both: `net` (where its pins are) and `rail` (where it is listed);
   - loads behind a **link** (`PI_LINK`, a ferrite), on a net with no source of its own, make
     a loads-only rail, as in a project file. Per rail it is skipped ("its loads are drawn
     through link FB1 by rail +3V3", estimated there; its limits are listed as not judged),
@@ -406,7 +407,9 @@ ground net is solved, each regulator's and load's `ground` pins (see
   a load of the rail that feeds it: `input_net`, `input_drop_mv`, `input_drop_pct`,
   `input_exceeds_drop_limit`, `input_status`;
 - `loads`: each load's `v_supply_v`, `v_ground_v`, `v_across_v`, `drop_mv` and `drop_pct`
-  (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`;
+  (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`, `net`
+  (the net its supply pins are on) and `rail` (the rail it is listed in; another net past a
+  net tie);
 - `links` and `groups`. A rail group has `max_drop_mv` and `max_drop_pct`. A ground group has
   `max_rise_mv`, **signed**: negative when the ground sinks below 0 V (under a negative rail),
   judged by its magnitude; give it with its sign. Its `max_drop_pct` is `null`. Each group has

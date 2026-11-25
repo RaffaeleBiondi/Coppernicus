@@ -422,7 +422,10 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
                    "v_across_v": _num(ld.v_across_v), "v_worst_v": _num(ld.v_worst_v),
                    "drop_mv": None if _num(ld.drop_v) is None else ld.drop_v * 1e3,
                    "drop_pct": _num(ld.drop_pct), "status": ld.status,
-                   "exceeds_drop_limit": None if ld.passed is None else not ld.passed}
+                   "exceeds_drop_limit": None if ld.passed is None else not ld.passed,
+                   # the net its pins are on, and the rail it is listed in (they differ past
+                   # a net tie)
+                   "net": ld.net or None, "rail": ld.rail or ld.net or None}
                   for ld in tree.loads],
         "links": [dict(k) for k in tree.links],
         "groups": groups,
