@@ -174,8 +174,9 @@ def _ripple(project: Project, load: Load, probe: Optional[str], source: Optional
         for a in listing:
             r = noise.get(a.name)
             rp = _probe_ripple(r, probe) if r is not None else None
-            if r is None:
-                note = notes.get(a.name, "")
+            if r is None or r.partial:    # a result handed over during the solve is not solved
+                note = ("its result is partial: the solve did not finish" if r is not None
+                        else notes.get(a.name, ""))
                 problems.append(f"{a.name} not solved" + (f" ({note})" if note else ""))
             elif r.stand_ins:
                 stand_ins += [s for s in r.stand_ins if s not in stand_ins]

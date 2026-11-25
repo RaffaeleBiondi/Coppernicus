@@ -800,3 +800,14 @@ def test_a_ripple_of_nans_is_not_judged_never_passes():
     row = _compose(project, noise=[_noise_result("A1", (nan, nan, nan, nan))]).rows[0]
     assert row.parts["ripple"] is None and row.verdict == "not_judged"
     assert "is not a finite number" in row.hints["ripple"]
+
+
+def test_a_partial_noise_result_is_not_a_solved_ripple():
+    """A result handed over during the solve (partial=True, no stand-ins listed yet) is not
+    solved (I2): the app's held results can be partial."""
+    project = _comp_project(**COMPLETE, aggressors=[("A1", True)])
+    partial = _noise_result("A1", (0.001, 0.001, 0.001, 0.001))
+    partial.partial = True
+    row = _compose(project, noise=[partial]).rows[0]
+    assert row.parts["ripple"] is None and row.verdict == "not_judged"
+    assert row.hints["ripple"].startswith("A1 not solved (its result is partial")
