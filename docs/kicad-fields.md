@@ -161,7 +161,11 @@ values are the fields'. Hover a value to see the field it came from.
 ## Listing and proposing fields
 
 `coppernicus fields BOARD` lists a board's `PI_*` fields and the rails they make, as above
-(`--json` for scripts).
+(`--json` for scripts). A rail is listed complete exactly when a solve of the fields alone
+would take it, links and the board's net ties included: loads behind a ferrite, or a battery
+that only feeds links towards a regulator's input, are complete, and the note says what
+completes them ("Complete without a source of its own: link FB1 joins it to +3V3, driven by
+U1"). An incomplete rail says what is missing after its name.
 
 `coppernicus fields --propose PROJECT` goes the other way: it prints the fields that describe
 a project's rails, part by part, split between the library symbol and the schematic
