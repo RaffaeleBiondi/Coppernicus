@@ -17,6 +17,8 @@ def main() -> int:
     multiprocessing.freeze_support()          # a worker process stops here
     # Finder used to add a -psn_… argument to apps it starts; it is not a Coppernicus argument.
     argv = [a for a in sys.argv[1:] if not a.startswith("-psn_")]
+    if "--remove-triangle" in argv:
+        return remove_triangle()
     if not {"--version", "-h", "--help"} & set(argv):     # argparse answers those without KiPI
         code = ensure_triangle(argv)
         if code:
@@ -24,6 +26,24 @@ def main() -> int:
         keep_matplotlib_cache()
     from coppernicus.__main__ import main as coppernicus_main
     return coppernicus_main(argv)
+
+
+def remove_triangle() -> int:
+    """``--remove-triangle``: delete the downloaded Triangle mesher (the next start fetches it
+    again). 0 when done or nothing was there, 2 when it could not be deleted."""
+    from coppernicus import bootstrap_triangle as bt
+    site = bt.site_dir()
+    try:
+        size = bt.remove(site)
+    except bt.BootstrapError as e:
+        print(f"error: {e.message}\n  {e.hint}", file=sys.stderr)
+        return 2
+    if size:
+        print(f"Removed the downloaded Triangle mesher from {site} ({size / 1e6:.1f} MB). "
+              "Coppernicus downloads it again on its next start.")
+    else:
+        print(f"Nothing to remove: no downloaded Triangle mesher in {site}.")
+    return 0
 
 
 def keep_matplotlib_cache() -> None:

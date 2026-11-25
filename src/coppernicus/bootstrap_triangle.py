@@ -14,6 +14,13 @@ it free of charge, and that is what happens here, once, on the first start:
 3. the folder goes on ``sys.path`` before anything imports KiPI (:func:`activate`); later starts
    find it there and need no network.
 
+One copy only: every start checks the marker (version and wheel SHA-256) and the hash of every
+installed file against the wheel's ``RECORD`` (:func:`is_installed`, no network); the dialog and
+the download happen only when the pinned version is missing or fails that check. A new pin (an
+app update) replaces the folder, and the old version's files go with it. Anything else in or
+beside the folder (a stale or partial copy, a download interrupted) is deleted (:func:`tidy`).
+:func:`remove` deletes the download (``--remove-triangle`` in the packaged app).
+
 The folder is per user: ``~/Library/Application Support/Coppernicus/site-packages`` on macOS,
 ``%LOCALAPPDATA%\\Coppernicus\\site-packages`` on Windows (:func:`site_dir`). Two environment
 variables exist for tests, mirrors and offline machines: :data:`SITE_ENV` moves the folder and
@@ -30,6 +37,8 @@ it is called.
 
 from __future__ import annotations
 
+import base64
+import contextlib
 import csv
 import hashlib
 import http.client
@@ -46,8 +55,8 @@ import urllib.request
 import uuid
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Optional, Sequence, TextIO, Tuple
+from pathlib import Path, PurePosixPath
+from typing import Callable, List, Optional, Sequence, TextIO, Tuple
 
 PACKAGE = "triangle"
 #: Environment variable: the folder triangle is installed into (default: :func:`site_dir`).
@@ -56,8 +65,13 @@ SITE_ENV = "COPPERNICUS_SITE_PACKAGES"
 URL_ENV = "COPPERNICUS_TRIANGLE_URL"
 #: The pin the build writes into the bundle (beside the frozen app's modules).
 PIN_FILE = "triangle_pin.json"
-#: Written last into an installed folder: what was installed, from which verified file.
+#: The marker, written last into an installed folder: the version installed and the SHA-256 of
+#: the verified wheel it came from.
 STAMP_FILE = ".coppernicus-triangle.json"
+#: Beside the folder: the lock that lets one start of the app install at a time, and the
+#: prefix of the temporary folders an install works in.
+LOCK_FILE = ".triangle.lock"
+STAGING_PREFIX = ".triangle-download-"
 #: Shewchuk's notice, copied into the bundle by the build.
 NOTICE_FILE = Path("licenses") / "TRIANGLE_NOTICE.txt"
 
@@ -222,26 +236,160 @@ def _stamp(pin: Pin, wheel: Wheel) -> dict:
 
 
 def is_installed(site: Path, pin: Pin, wheel: Wheel) -> bool:
-    """Whether ``site`` holds exactly ``wheel`` of ``pin``, installed by :func:`install`, with
-    every file its wheel's ``RECORD`` lists still there."""
+    """Whether ``site`` holds ``wheel`` of ``pin`` as :func:`install` left it: the marker
+    (:data:`STAMP_FILE`) names that version and file, and every file the wheel's ``RECORD``
+    lists is there with the hash ``RECORD`` gives. Reads the files (about 4 MB), no network."""
     site = Path(site)
     try:
         stamp = json.loads((site / STAMP_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    return stamp == _stamp(pin, wheel) and _record_complete(site)
+    rows = _record(site)
+    return stamp == _stamp(pin, wheel) and rows is not None and all(
+        _file_ok(site / row[0], row[1] if len(row) > 1 else "") for row in rows)
 
 
-def _record_complete(site: Path) -> bool:
-    records = list(site.glob("*.dist-info/RECORD"))
+def _record(site: Path) -> Optional[List[List[str]]]:
+    """The rows (path, hash, size) of the one ``RECORD`` in ``site``, or ``None``."""
+    records = list(Path(site).glob("*.dist-info/RECORD"))
     if len(records) != 1:
-        return False
+        return None
     try:
         with open(records[0], newline="", encoding="utf-8") as f:
             rows = [row for row in csv.reader(f) if row]
     except (OSError, csv.Error, UnicodeDecodeError):
+        return None
+    return rows or None
+
+
+def _file_ok(path: Path, recorded: str) -> bool:
+    """Whether ``path`` is a file with the hash ``RECORD`` gives for it (``sha256=`` and the
+    digest in URL-safe base64; ``RECORD`` lists itself without a hash)."""
+    if not path.is_file():
         return False
-    return bool(rows) and all((site / row[0]).is_file() for row in rows)
+    if not recorded:
+        return True
+    algorithm, _, expected = recorded.partition("=")
+    if algorithm not in hashlib.algorithms_guaranteed:
+        return False
+    try:
+        digest = hashlib.new(algorithm, path.read_bytes()).digest()
+    except OSError:
+        return False
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode() == expected
+
+
+# --------------------------------------------------------------------------- one copy only
+def leftovers(site: Path) -> List[Path]:
+    """What an interrupted install left beside ``site``: its download folders, and a previous
+    version moved aside but not yet deleted."""
+    site = Path(site)
+    try:
+        entries = list(site.parent.iterdir())
+    except OSError:
+        return []
+    return sorted(p for p in entries if p.name.startswith((STAGING_PREFIX, f".{site.name}-old-")))
+
+
+def extraneous(site: Path) -> List[Path]:
+    """The files and folders in ``site`` that are not part of the installed wheel (its
+    ``RECORD``), the marker or Python's ``__pycache__`` folders."""
+    site = Path(site)
+    files = {row[0] for row in _record(site) or []} | {STAMP_FILE}
+    folders = set()
+    for name in files:
+        parent = PurePosixPath(name).parent
+        while str(parent) != ".":
+            folders.add(str(parent))
+            parent = parent.parent
+    extra = []
+    for root, dirnames, filenames in os.walk(site):
+        here = Path(root).relative_to(site)
+        for d in list(dirnames):
+            if d == "__pycache__" or (here / d).as_posix() not in folders:
+                dirnames.remove(d)
+                if d != "__pycache__":
+                    extra.append(Path(root) / d)
+        extra += [Path(root) / f for f in filenames if (here / f).as_posix() not in files]
+    return sorted(extra)
+
+
+@contextlib.contextmanager
+def _lock(folder: Path):
+    """Hold the per-user folder's lock: one start of the app installs, tidies or removes at a
+    time; another one waits."""
+    folder.mkdir(parents=True, exist_ok=True)
+    with open(folder / LOCK_FILE, "a+b") as f:
+        if sys.platform == "win32":
+            import msvcrt
+            while True:
+                try:
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+                    break
+                except OSError:                  # LK_LOCK gives up after 10 s: wait on
+                    continue
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if sys.platform == "win32":
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+
+def _delete(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _clean(paths) -> None:
+    """Delete ``paths``, as far as possible: what stays (a file in use on Windows) is tried
+    again at the next start."""
+    for path in paths:
+        try:
+            _delete(path)
+        except OSError:
+            pass
+
+
+def tidy(site: Path) -> None:
+    """Delete what does not belong beside or inside an installed ``site``
+    (:func:`leftovers`, :func:`extraneous`). Nothing is downloaded."""
+    site = Path(site)
+    with _lock(site.parent):
+        _clean([*leftovers(site), *extraneous(site)])
+
+
+def _size(path: Path) -> int:
+    if path.is_file() or path.is_symlink():
+        return path.lstat().st_size
+    return sum(p.lstat().st_size for p in path.rglob("*") if p.is_file() or p.is_symlink())
+
+
+def remove(site: Path) -> int:
+    """Delete the downloaded Triangle: the folder ``site`` and any :func:`leftovers`. Returns
+    the bytes deleted (0: there was nothing). The next start downloads it again."""
+    site = Path(site)
+    if not site.parent.is_dir():
+        return 0
+    with _lock(site.parent):
+        targets = ([site] if site.exists() else []) + leftovers(site)
+        size = sum(_size(p) for p in targets)
+        for path in targets:
+            try:
+                _delete(path)
+            except OSError as e:
+                raise BootstrapError(f"cannot delete {path}: {e}",
+                                     "close every Coppernicus window, then try again") from e
+    _unlink(site.parent / LOCK_FILE)
+    return size
 
 
 def activate(site: Path) -> None:
@@ -335,54 +483,66 @@ def _extract(wheel_file: Path, target: Path) -> None:
 def install(pin: Pin, site: Path, wheel: Optional[Wheel] = None, url: Optional[str] = None,
             progress: Optional[Progress] = None, opener: Callable = _open) -> Path:
     """Download ``wheel`` (default: the one for this platform) of ``pin`` from ``url`` (default:
-    the wheel's), verify it and install it as the folder ``site``, replacing whatever was there.
+    the wheel's), verify it and install it as the folder ``site``, replacing whatever was there
+    (an older version, a damaged copy): one copy only.
 
-    Everything happens in a temporary folder beside ``site``; the result is moved into place
-    by one rename, after the stamp is written. A failure at any step leaves ``site`` as it was
-    and removes the temporary folder."""
+    Everything happens in a temporary folder beside ``site``, under the per-user folder's lock;
+    the result is moved into place by one rename, after the marker is written, and the previous
+    folder is deleted. A failure at any step leaves ``site`` as it was and removes the
+    temporary folder. If another start of the app installed the same wheel meanwhile, nothing
+    is downloaded."""
     wheel = wheel or choose_wheel(pin)
     site = Path(site)
-    site.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".triangle-download-", dir=site.parent))
-    try:
-        wheel_file = staging / wheel.filename
-        download(url or wheel.url, wheel_file, wheel.sha256, wheel.size, progress, opener)
-        new = staging / "site-packages"
+    with _lock(site.parent):
+        if is_installed(site, pin, wheel):
+            _clean([*leftovers(site), *extraneous(site)])
+            return site
+        _clean(leftovers(site))                  # what an interrupted install left
+        staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=site.parent))
         try:
-            _extract(wheel_file, new)
-            (new / STAMP_FILE).write_text(json.dumps(_stamp(pin, wheel), indent=1) + "\n",
-                                          encoding="utf-8")
-        except zipfile.BadZipFile as e:
-            raise VerificationError(f"cannot unpack {wheel.filename}: {e}",
-                                    "report it: the file is not a normal wheel") from e
-        except OSError as e:
-            raise BootstrapError(f"cannot unpack {wheel.filename}: {e}",
-                                 f"check that {site.parent} is writable and has free space, "
-                                 "then start Coppernicus again") from e
-        _move_into_place(new, site, lambda: is_installed(site, pin, wheel))
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
+            wheel_file = staging / wheel.filename
+            download(url or wheel.url, wheel_file, wheel.sha256, wheel.size, progress, opener)
+            new = staging / "site-packages"
+            try:
+                _extract(wheel_file, new)
+                (new / STAMP_FILE).write_text(json.dumps(_stamp(pin, wheel), indent=1) + "\n",
+                                              encoding="utf-8")
+            except zipfile.BadZipFile as e:
+                raise VerificationError(f"cannot unpack {wheel.filename}: {e}",
+                                        "report it: the file is not a normal wheel") from e
+            except OSError as e:
+                raise BootstrapError(f"cannot unpack {wheel.filename}: {e}",
+                                     f"check that {site.parent} is writable and has free space, "
+                                     "then start Coppernicus again") from e
+            _replace(new, site)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
     return site
 
 
-def _move_into_place(new: Path, site: Path, already_done: Callable[[], bool]) -> None:
+def _replace(new: Path, site: Path) -> None:
+    """Rename ``new`` to ``site``; the folder that was there (another version's files and
+    dist-info) is moved aside first, then deleted."""
+    old = None
     if site.exists():
-        if already_done():                      # another start of the app got there first
-            return
         old = site.with_name(f".{site.name}-old-{uuid.uuid4().hex[:8]}")
         try:
             os.replace(site, old)
         except OSError as e:
             raise BootstrapError(f"cannot replace {site}: {e}",
                                  "close every Coppernicus window, then start it again") from e
-        shutil.rmtree(old, ignore_errors=True)
     try:
         os.replace(new, site)
     except OSError as e:
-        if already_done():
-            return
+        if old is not None:
+            try:
+                os.replace(old, site)            # put the previous folder back
+            except OSError:
+                pass
         raise BootstrapError(f"cannot write {site}: {e}",
                              f"check that {site.parent} is writable, then start Coppernicus again") from e
+    if old is not None:
+        _clean([old])                            # if a file is in use, the next start retries
 
 
 # --------------------------------------------------------------------------- the frozen app
@@ -397,8 +557,10 @@ def bundle_dir() -> Path:
 
 def needed(env=None) -> Optional[Plan]:
     """What the frozen app must fetch before it imports KiPI, or ``None``: not frozen
-    (triangle comes from the environment), or already installed (its folder is then put on
-    ``sys.path``). Raises :class:`BootstrapError` when this platform has no wheel."""
+    (triangle comes from the environment), or already installed and verified (its folder is
+    then put on ``sys.path``, after deleting whatever else is in or beside it). A normal start
+    downloads nothing and shows nothing. Raises :class:`BootstrapError` when this platform has
+    no wheel."""
     if not frozen():
         return None
     env = os.environ if env is None else env
@@ -410,6 +572,8 @@ def needed(env=None) -> Optional[Plan]:
     wheel = choose_wheel(pin)
     site = site_dir(env)
     if is_installed(site, pin, wheel):
+        if leftovers(site) or extraneous(site):
+            tidy(site)
         activate(site)
         return None
     return Plan(pin, wheel, site, env.get(URL_ENV) or wheel.url)

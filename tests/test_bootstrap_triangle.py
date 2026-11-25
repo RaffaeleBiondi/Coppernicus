@@ -3,6 +3,7 @@
 No network: wheels are small zips built here and served from ``file://`` URLs, or fake openers
 that fail as an offline machine does."""
 
+import base64
 import hashlib
 import importlib.metadata
 import importlib.util
@@ -35,18 +36,26 @@ def _here_platform_tag() -> str:
     return f"manylinux_2_17_{machine}"
 
 
+def _record_hash(text: str) -> str:
+    digest = hashlib.sha256(text.encode()).digest()
+    return "sha256=" + base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
 def make_wheel(folder: Path, module: str, version: str = "1.0", members=None) -> Path:
-    """A small wheel of ``module`` for this Python and platform: ``VALUE = 42`` and a RECORD."""
+    """A small wheel of ``module`` for this Python and platform: ``VALUE = 42``, a data file
+    in a subfolder, and a RECORD with each file's hash, as a real wheel has."""
     py = f"cp{sys.version_info[0]}{sys.version_info[1]}"
     path = folder / f"{module}-{version}-{py}-{py}-{_here_platform_tag()}.whl"
     info = f"{module}-{version}.dist-info"
     files = members if members is not None else {
         f"{module}/__init__.py": "VALUE = 42\n",
+        f"{module}/data/sample.txt": f"version {version}\n",
         f"{info}/METADATA": f"Metadata-Version: 2.1\nName: {module}\nVersion: {version}\n",
         f"{info}/WHEEL": "Wheel-Version: 1.0\n",
     }
     if members is None:
-        files[f"{info}/RECORD"] = "".join(f"{name},,\n" for name in files) + f"{info}/RECORD,,\n"
+        files[f"{info}/RECORD"] = "".join(f"{name},{_record_hash(text)},{len(text)}\n"
+                                          for name, text in files.items()) + f"{info}/RECORD,,\n"
     with zipfile.ZipFile(path, "w") as z:
         for name, text in files.items():
             z.writestr(name, text)
@@ -60,7 +69,12 @@ def pin_for(wheel_file: Path, module: str, version: str = "1.0", sha256=None) ->
 
 
 def leftovers(folder: Path):
-    return sorted(p.name for p in folder.iterdir()) if folder.exists() else []
+    """What is in the per-user folder, besides the lock file installs share."""
+    return sorted(p.name for p in folder.iterdir() if p.name != bt.LOCK_FILE) if folder.exists() else []
+
+
+def never(*_a, **_k):
+    raise AssertionError("nothing may be downloaded here")
 
 
 # --------------------------------------------------------------------------- pin and wheel
@@ -204,15 +218,90 @@ def test_an_install_with_a_missing_file_is_not_installed(tmp_path):
     assert not bt.is_installed(site, pin, pin.wheels[0])
 
 
+def test_an_install_with_a_changed_file_fails_verification(tmp_path):
+    wheel = make_wheel(tmp_path, "cpn_fake_changed")
+    pin = pin_for(wheel, "cpn_fake_changed")
+    site = tmp_path / "site-packages"
+    bt.install(pin, site)
+    (site / "cpn_fake_changed" / "data" / "sample.txt").write_text("damaged\n")
+    assert not bt.is_installed(site, pin, pin.wheels[0])
+    bt.install(pin, site)                                       # downloaded again, replaced
+    assert bt.is_installed(site, pin, pin.wheels[0])
+
+
+def test_an_upgrade_leaves_only_the_new_version(tmp_path):
+    site = tmp_path / "user" / "site-packages"
+    old_pin = pin_for(make_wheel(tmp_path, "cpn_fake_v", "1.0"), "cpn_fake_v", "1.0")
+    bt.install(old_pin, site)
+    new_pin = pin_for(make_wheel(tmp_path, "cpn_fake_v", "2.0"), "cpn_fake_v", "2.0")
+    bt.install(new_pin, site)
+    assert bt.is_installed(site, new_pin, new_pin.wheels[0])
+    assert sorted(p.name for p in site.iterdir()) == [bt.STAMP_FILE, "cpn_fake_v", "cpn_fake_v-2.0.dist-info"]
+    assert (site / "cpn_fake_v" / "data" / "sample.txt").read_text() == "version 2.0\n"
+    assert json.loads((site / bt.STAMP_FILE).read_text())["version"] == "2.0"
+    assert leftovers(site.parent) == ["site-packages"]          # the old copy is gone too
+    assert bt.extraneous(site) == []
+
+
 def test_another_start_that_installed_first_wins(tmp_path):
     wheel = make_wheel(tmp_path, "cpn_fake_race")
     pin = pin_for(wheel, "cpn_fake_race")
     site = tmp_path / "site-packages"
     bt.install(pin, site)
-    marker = site / "kept"
-    marker.write_text("first")
-    bt.install(pin, site)                                       # finds it installed: keeps it
-    assert marker.read_text() == "first" and bt.is_installed(site, pin, pin.wheels[0])
+    bt.install(pin, site, opener=never)                         # finds it installed: no download
+    assert bt.is_installed(site, pin, pin.wheels[0])
+
+
+def test_a_stale_partial_folder_is_replaced(tmp_path):
+    wheel = make_wheel(tmp_path, "cpn_fake_stale")
+    pin = pin_for(wheel, "cpn_fake_stale")
+    site = tmp_path / "user" / "site-packages"
+    (site / "cpn_fake_stale").mkdir(parents=True)               # half a copy, no marker
+    (site / "cpn_fake_stale" / "__init__.py").write_text("half")
+    (site / "triangle-1999.dist-info").mkdir()
+    staging = site.parent / f"{bt.STAGING_PREFIX}dead"          # a download that was killed
+    staging.mkdir()
+    (staging / "partial.whl").write_bytes(b"PK")
+    assert not bt.is_installed(site, pin, pin.wheels[0])
+    bt.install(pin, site)
+    assert bt.is_installed(site, pin, pin.wheels[0])
+    assert sorted(p.name for p in site.iterdir()) == [bt.STAMP_FILE, "cpn_fake_stale",
+                                                      "cpn_fake_stale-1.0.dist-info"]
+    assert leftovers(site.parent) == ["site-packages"]
+
+
+def test_a_start_cleans_around_a_good_install_without_downloading(monkeypatch, tmp_path):
+    bundle, site = _frozen_bundle(monkeypatch, tmp_path, "cpn_fake_tidy")
+    plan = bt.needed()
+    bt.install(plan.pin, site, wheel=plan.wheel, url=plan.url)
+    (site / "stray.py").write_text("x")                         # not the pinned version's
+    (site / "cpn_fake_tidy" / "extra").mkdir()
+    (site / "cpn_fake_tidy" / "extra" / "f.txt").write_text("x")
+    (site / "other-3.0.dist-info").mkdir()
+    (site.parent / ".site-packages-old-1234abcd").mkdir()       # an old version moved aside
+    (site.parent / f"{bt.STAGING_PREFIX}xyz").mkdir()
+    monkeypatch.setattr(bt, "install", never)
+    monkeypatch.setattr(bt, "_open", never)
+    before = list(sys.path)
+    try:
+        assert bt.needed() is None                              # no dialog, no download
+        assert bt.extraneous(site) == [] and leftovers(site.parent) == ["site-packages"]
+        assert bt.is_installed(site, plan.pin, plan.wheel)
+    finally:
+        sys.path[:] = before
+
+
+def test_removing_the_download(tmp_path):
+    wheel = make_wheel(tmp_path, "cpn_fake_rm")
+    pin = pin_for(wheel, "cpn_fake_rm")
+    site = tmp_path / "user" / "site-packages"
+    assert bt.remove(site) == 0                                 # nothing there yet
+    bt.install(pin, site)
+    (site.parent / ".site-packages-old-0").mkdir()
+    size = sum(p.stat().st_size for p in site.rglob("*") if p.is_file())
+    assert bt.remove(site) == size
+    assert leftovers(site.parent) == [] and not (site.parent / bt.LOCK_FILE).exists()
+    assert bt.remove(site) == 0
 
 
 @pytest.mark.parametrize("error, text", [
@@ -260,33 +349,55 @@ def test_nothing_happens_when_not_frozen(monkeypatch, tmp_path):
     assert sys.path == before and not (tmp_path / "site").exists()
 
 
-def test_the_frozen_app_fetches_once_then_works_offline(monkeypatch, tmp_path):
+def _frozen_bundle(monkeypatch, tmp_path, module):
+    """Pretend to be the packaged app: a bundle whose pin names a wheel of ``module`` built
+    here (fetched from its file:// URL; the hash is still checked), and a per-user folder."""
     bundle = tmp_path / "bundle"
     bundle.mkdir()
-    wheel = make_wheel(tmp_path, "cpn_fake_frozen")
-    pin = pin_for(wheel, "cpn_fake_frozen")
+    wheel = make_wheel(tmp_path, module)
+    pin = pin_for(wheel, module)
     bt.write_pin(bt.Pin(pin.name, pin.version, (bt.Wheel(wheel.name, "https://unused.invalid/x.whl",
                                                          pin.wheels[0].sha256),)),
                  bundle / bt.PIN_FILE)
-    site = tmp_path / "site"
+    site = tmp_path / "user" / "site-packages"
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
     monkeypatch.setenv(bt.SITE_ENV, str(site))
-    monkeypatch.setenv(bt.URL_ENV, wheel.as_uri())             # the hash is still checked
+    monkeypatch.setenv(bt.URL_ENV, wheel.as_uri())
+    return bundle, site
+
+
+def test_the_frozen_app_fetches_once_then_works_offline(monkeypatch, tmp_path):
+    _bundle, site = _frozen_bundle(monkeypatch, tmp_path, "cpn_fake_frozen")
     before = list(sys.path)
     try:
         plan = bt.needed()
-        assert plan is not None and plan.site == site and plan.url == wheel.as_uri()
+        assert plan is not None and plan.site == site and plan.url.startswith("file:")
         out = io.StringIO()
         bt.fetch_on_console(plan, stream=out)
         assert "Downloading the Triangle mesher from PyPI (once)" in out.getvalue()
         assert bt.TRIANGLE_URL in out.getvalue() and str(site) in out.getvalue()
         assert importlib.import_module("cpn_fake_frozen").VALUE == 42
-        monkeypatch.setenv(bt.URL_ENV, "http://127.0.0.1:9/unreachable.whl")   # offline now
+        # The next start, offline: the right version is there, so nothing is downloaded.
+        monkeypatch.setenv(bt.URL_ENV, "http://127.0.0.1:9/unreachable.whl")
+        monkeypatch.setattr(bt, "install", never)
+        monkeypatch.setattr(bt, "_open", never)
         assert bt.needed() is None and str(site) in sys.path
     finally:
         sys.path[:] = before
         sys.modules.pop("cpn_fake_frozen", None)
+
+
+def test_remove_triangle_in_the_packaged_app(monkeypatch, tmp_path, capsys):
+    _bundle, site = _frozen_bundle(monkeypatch, tmp_path, "cpn_fake_remove")
+    plan = bt.needed()
+    bt.install(plan.pin, site, wheel=plan.wheel, url=plan.url)
+    monkeypatch.setattr(sys, "argv", ["Coppernicus", "--remove-triangle"])
+    assert _frozen_main().main() == 0
+    assert "Removed the downloaded Triangle mesher" in capsys.readouterr().out
+    assert not site.exists()
+    assert _frozen_main().main() == 0
+    assert "Nothing to remove" in capsys.readouterr().out
 
 
 def test_a_bundle_without_its_pin_says_so(monkeypatch, tmp_path):
