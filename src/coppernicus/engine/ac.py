@@ -457,8 +457,11 @@ def _assumptions(board: Board, project: Project, c: _Context, res, summary: str,
     if n_field == n_sweep:
         how = f"the copper is solved at every one of the {n_sweep} frequencies"
     else:
-        how = (f"the copper is solved at {n_field} frequencies ({a.field_points_per_decade} per "
-               "decade) and interpolated between them (PCHIP of jω·Z on log f)")
+        per = f"{a.field_points_per_decade} per decade"
+        if a.field_points_per_decade != d.field_points_per_decade:      # e.g. the app's quick preset
+            per += f"; KiPI's default {d.field_points_per_decade}"
+        how = (f"the copper is solved at {n_field} frequencies ({per}) and interpolated between "
+               "them (PCHIP of jω·Z on log f)")
     out.append(f"Sweep {hz_text(a.f_start_hz)} to {hz_text(a.f_stop_hz)}, {a.points_per_decade} "
                f"points per decade; {how}.")
     out.append(f"AC mesh: largest edge {a.max_edge_mm:g} mm, refined toward plated holes near the "

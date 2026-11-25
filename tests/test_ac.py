@@ -520,7 +520,7 @@ def test_assumptions_name_the_model_the_dielectric_and_the_open_loop(quick):
             "Dielectric εr, top to bottom: FR4 200 µm εr 4.5, FR4 1000 µm εr 4.5, FR4 200 µm εr 4.5.",
             "Dielectric loss tangent 0.02 (ac.loss_tangent; KiPI's default 0.02).",
             "Sweep 100 kHz to 100 MHz, 20 points per decade; the copper is solved at 13 frequencies "
-            "(4 per decade) and interpolated between them (PCHIP of jω·Z on log f).",
+            "(4 per decade; KiPI's default 20) and interpolated between them (PCHIP of jω·Z on log f).",
             "AC mesh: largest edge 2 mm, refined toward plated holes near the rail from 0.03 mm "
             "(grading 0.3), up to 5 mm far from it (KiPI's AC defaults).",
             "Capacitors: ESR + jω·ESL + 1/(jω·C) as entered, 1 modelled.",
