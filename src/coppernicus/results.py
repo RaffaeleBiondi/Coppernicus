@@ -664,6 +664,9 @@ class ToleranceCheck:
     complete: bool
     passed: Optional[bool]
     missing: List[str] = field(default_factory=list)   # the parts not known (MISSING)
+    # Missing parts whose least value is known (an entered ripple_mv, the usable aggressors, a
+    # DC drop not settled thermally): added into below_v / above_v for the FAIL test only.
+    floors: List[str] = field(default_factory=list)
     limit: str = ""                # the key set ("tol_pct", "dc_tol_mv", …); "" without one
     reason: str = ""               # why it is not judged ("" when judged or without a limit)
 
@@ -698,6 +701,8 @@ class ToleranceRow:
     checks: Dict[str, ToleranceCheck] = field(default_factory=dict)
     verdict: str = ""              # "pass", "fail", "not_judged"; "" without any tolerance
     stand_ins: List[str] = field(default_factory=list)   # KiPI stand-ins behind a part not used
+    # A missing part's least value, when known: it can make a check fail, never pass.
+    floors: Dict[str, TolerancePart] = field(default_factory=dict)
     # KiPI's transient estimate at its probe, shown, never judged: (below, above, the same
     # through 20 MHz) V, already swapped on a negative rail; None without one.
     transient_estimate_v: Optional[Tuple[float, float, float, float]] = None

@@ -670,7 +670,7 @@ def test_summary_text_and_csv(tmp_path):
     assert doc["kind"] == "tolerance" and doc["options"] == {"ripple_sum": "linear", "bw_limit_20mhz": False}
     (ld,) = doc["loads"]
     assert set(ld) == {"load", "name", "net", "rail", "nominal_v", "source", "probe", "verdict", "parts",
-                       "hints", "transient_estimate", "checks", "stand_ins"}
+                       "hints", "floors", "transient_estimate", "checks", "stand_ins"}
     assert ld["parts"]["accuracy"] == {"below_mv": pytest.approx(18.0), "above_mv": pytest.approx(18.0),
                                        "source": "accuracy_pct of U1", "detail": "accuracy_pct ±1 % of 1.8 V"}
     dc = ld["checks"]["dc"]
@@ -811,3 +811,73 @@ def test_a_partial_noise_result_is_not_a_solved_ripple():
     row = _compose(project, noise=[partial]).rows[0]
     assert row.parts["ripple"] is None and row.verdict == "not_judged"
     assert row.hints["ripple"].startswith("A1 not solved (its result is partial")
+
+
+def _exit(r):
+    from coppernicus.cli import _exit_for
+    from coppernicus.tolerance import tolerance_summary
+    return _exit_for(tolerance_summary(r))
+
+
+STANDIN = ["Coss not entered on phase 1: KiPI's 200 pF sets the ringing"]
+
+
+def test_an_entered_ripple_is_a_floor_that_can_fail_beside_a_stand_in_aggressor():
+    """The final ripple is never below ripple_mv: 10 + 18 + 20 + 20 = 68 mV over 54 mV is a
+    certain fail, while the stand-in aggressor keeps the ripple missing (I4)."""
+    from coppernicus.cli import EXIT_LIMIT
+    project = _comp_project(load={"tol_mv": 54, "transient_mv": 20, "ripple_mv": 20},
+                            source={"accuracy_pct": 1}, aggressors=[("A1", True)])
+    r = _compose(project, noise=[_noise_result("A1", (0.002, 0.002, 0.002, 0.002), stand_ins=STANDIN)])
+    row = r.rows[0]
+    assert row.parts["ripple"] is None and row.floors["ripple"].below_v == pytest.approx(0.020)
+    total = row.checks["total"]
+    assert (total.passed, total.complete, total.floors) == (False, False, ["ripple"])
+    assert total.below_v == pytest.approx(0.068)
+    assert r.verdict == "fail" and _exit(r) == EXIT_LIMIT
+    reason = r.failed[0]["reason"]
+    assert "from its known parts alone" in reason and "ripple at least 20 / 20 mV" in reason
+    assert "missing: ripple" in reason
+    from coppernicus.tolerance import tolerance_summary, tolerance_text
+    doc = tolerance_summary(r)
+    assert doc["loads"][0]["floors"]["ripple"]["below_mv"] == pytest.approx(20.0)
+    assert doc["loads"][0]["checks"]["total"]["floors"] == ["ripple"]
+    assert "ripple       missing (at least 20 / 20 mV from ripple_mv):" in "\n".join(tolerance_text(doc))
+
+
+def test_the_solved_aggressors_are_a_floor_while_another_is_unsolved():
+    project = _comp_project(load={"tol_mv": 54, "transient_mv": 20}, source={"accuracy_pct": 1},
+                            aggressors=[("A1", True), ("A2", True)])
+    a1 = _noise_result("A1", (0.010, 0.010, 0.008, 0.008))
+    r = _compose(project, noise=[a1])                      # 10 + 18 + 20 = 48, + A1's 10 = 58 > 54
+    assert r.rows[0].parts["ripple"] is None and r.rows[0].checks["total"].passed is False
+    assert r.verdict == "fail" and "A2 not solved" in r.rows[0].hints["ripple"]
+    rss = _compose(_comp_project(load={"tol_mv": 54, "transient_mv": 20}, source={"accuracy_pct": 1},
+                                 aggressors=[("A1", True), ("A2", True)], ripple_sum="rss"), noise=[a1])
+    assert rss.verdict == "fail"                            # one aggressor's RSS is itself
+    # A stand-in aggressor's value is never a floor: 48 known, its 10 mV would push it over.
+    project = _comp_project(load={"tol_mv": 54, "transient_mv": 20}, source={"accuracy_pct": 1},
+                            aggressors=[("A1", True)])
+    held = _compose(project, noise=[_noise_result("A1", (0.010, 0.010, 0.008, 0.008), stand_ins=STANDIN)])
+    assert held.rows[0].checks["total"].passed is None and held.verdict == "not_judged"
+    assert "ripple" not in held.rows[0].floors
+
+
+def test_a_dc_drop_from_an_unsettled_board_temperature_can_fail_but_never_pass():
+    """temperature.py's rule (M12): over a limit fails even when not settled; otherwise not
+    judged."""
+    import types
+    hot = types.SimpleNamespace(settled=False, history=[{"dt_max_c": 0.83}])
+    project = _comp_project(**COMPLETE)
+    tree = _comp_tree()
+    tree.thermal = hot
+    row = _compose(project, tree=tree).rows[0]
+    assert row.parts["dc"] is None and row.floors["dc"].below_v == pytest.approx(0.010)
+    assert "not settled: last change 0.83 °C" in row.hints["dc"] and row.verdict == "not_judged"
+    over = _comp_tree(low=1.8 - 0.060)
+    over.thermal = hot
+    r = _compose(project, tree=over)                      # 60 + 18 + 5 + 20 = 103 > 90
+    assert r.verdict == "fail" and "DC drop at least 60 / 0 mV" in r.failed[0]["reason"]
+    once = _comp_tree()
+    once.thermal = types.SimpleNamespace(settled=None, history=[{"dt_max_c": 5.0}])
+    assert "one iteration: settling not checked" in _compose(project, tree=once).rows[0].hints["dc"]

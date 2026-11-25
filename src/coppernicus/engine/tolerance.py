@@ -95,22 +95,27 @@ def _finite(x: Optional[float]) -> Optional[float]:
     return x if x is not None and math.isfinite(x) else None
 
 
-def stack(parts: Dict[str, Optional[Pair]], limits: Dict[str, Limit]) -> Dict[str, ToleranceCheck]:
+def stack(parts: Dict[str, Optional[Pair]], limits: Dict[str, Limit],
+          floors: Optional[Dict[str, Pair]] = None) -> Dict[str, ToleranceCheck]:
     """The three checks from the parts (``None``: missing), a thin copy of KiPI's ``stack()``
     loop (evaluate.py:123-129) with KiPI's ``judge`` (:96-102, +1e-12 V): a check adds the
     parts it knows, each side apart, and is complete only when it knows them all, so it can
     fail before it is complete but pass only once it is. A part that is not finite counts as
-    missing and a limit that is not finite places nothing (NaN would pass any comparison)."""
+    missing and a limit that is not finite places nothing (NaN would pass any comparison).
+    ``floors``: a missing part's least value, where known; it is added for the FAIL test only
+    (the check stays incomplete, so it can fail on it but never pass)."""
+    floors = floors or {}
     out = {}
     for kind, names in CHECK_PARTS.items():
         known = [parts[n] for n in names if finite_pair(parts.get(n))]
-        below = sum(p[0] for p in known)
-        above = sum(p[1] for p in known)
-        complete = len(known) == len(names)
+        missing = [n for n in names if not finite_pair(parts.get(n))]
+        used = [n for n in missing if finite_pair(floors.get(n))]
+        below = sum(p[0] for p in known) + sum(floors[n][0] for n in used)
+        above = sum(p[1] for p in known) + sum(floors[n][1] for n in used)
+        complete = not missing
         lo, hi = (_finite(x) for x in limits.get(kind, (None, None)))
         out[kind] = ToleranceCheck(kind, float(below), float(above), lo, hi, complete,
-                                   judge(below, above, (lo, hi), complete),
-                                   missing=[n for n in names if not finite_pair(parts.get(n))])
+                                   judge(below, above, (lo, hi), complete), missing=missing, floors=used)
     return out
 
 

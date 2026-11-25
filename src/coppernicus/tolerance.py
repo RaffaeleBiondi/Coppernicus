@@ -161,11 +161,13 @@ def _probe_ripple(r: NoiseResult, probe: str) -> Optional[RippleResult]:
 
 def _ripple(project: Project, load: Load, probe: Optional[str], source: Optional[Source],
             source_name: str, noise: Dict[str, NoiseResult], notes: Dict[str, str]
-            ) -> Tuple[Optional[TolerancePart], str, List[str]]:
+            ) -> Tuple[Optional[TolerancePart], str, List[str], Optional[TolerancePart]]:
     """The ripple from every aggressor listing the load's probe (any of them unsolved, with
     stand-ins, or showing no ripple there: missing), added by ``tolerance.ripple_sum``, the
     larger per side with an entered ``ripple_mv``; with none listing it, the entered
-    ``ripple_mv``; else missing (never 0)."""
+    ``ripple_mv``; else missing (never 0). ``(part, hint, stand-ins, floor)``: while it is
+    missing, its least value where known (the usable aggressors added by the same rule, and
+    ``ripple_mv``, the larger per side; a stand-in's value never)."""
     bw = project.tolerance.bw_limit_20mhz
     entered = load.ripple_mv
     listing = [a for a in project.aggressors if probe is not None and probe in a.ripple_probes]
@@ -188,20 +190,22 @@ def _ripple(project: Project, load: Load, probe: Optional[str], source: Optional
                                 f"{probe} is not on its rails)")
             else:
                 values.append((a.name, rp))
+        below, above, how = _combine(project, values, bw)
         if problems:
             hint = "; ".join(problems)
             if entered is not None:
                 hint += (f"; ripple_mv {_entered(entered)} entered, not used while an aggressor "
-                         f"listing {probe} gives no usable ripple")
-            return None, hint, stand_ins
-        sides = [_sides(rp, bw) for _name, rp in values]
-        if project.tolerance.ripple_sum == "rss":
-            below = math.sqrt(sum(s[0] ** 2 for s in sides))
-            above = math.sqrt(sum(s[1] ** 2 for s in sides))
-            how = "the root sum of squares of " if len(values) > 1 else ""
-        else:
-            below, above = sum(s[0] for s in sides), sum(s[1] for s in sides)
-            how = "the sum of the peaks of " if len(values) > 1 else ""
+                         f"listing {probe} gives no usable ripple (it is the ripple's floor)")
+            floor, what = None, []
+            if values:
+                floor, what = (below, above), [f"noise of {', '.join(n for n, _ in values)} at {probe}"]
+            if entered is not None:
+                eb, ea = _deviation(entered)
+                floor = (eb, ea) if floor is None else (max(floor[0], eb), max(floor[1], ea))
+                what.append("ripple_mv")
+            least = (None if floor is None else
+                     TolerancePart(float(floor[0]), float(floor[1]), " and ".join(what)))
+            return None, hint, stand_ins, least
         each = "; ".join(f"{name} {_pair_mv(rp.below_v, rp.above_v)} "
                          f"(20 MHz {_pair_mv(rp.below_bw_v, rp.above_bw_v)})" for name, rp in values)
         band = "through 20 MHz" if bw else "full band"
@@ -212,24 +216,35 @@ def _ripple(project: Project, load: Load, probe: Optional[str], source: Optional
             below, above = max(below, eb), max(above, ea)
             detail += f"; ripple_mv {_entered(entered)} entered: the larger per side"
             what += " and ripple_mv"
-        return TolerancePart(float(below), float(above), what, detail), "", []
+        return TolerancePart(float(below), float(above), what, detail), "", [], None
     if entered is not None:
-        return TolerancePart(*_deviation(entered), "entered (ripple_mv)", ""), "", []
+        return TolerancePart(*_deviation(entered), "entered (ripple_mv)", ""), "", [], None
     switching = source is not None and (source.kind == "smps"
                                         or any(a.vrm == source_name for a in project.aggressors))
     if not switching:
-        return None, f"enter ripple_mv for {load.label} (no switcher's ripple is solved here)", []
+        return None, f"enter ripple_mv for {load.label} (no switcher's ripple is solved here)", [], None
     where = f"probe {probe}" if probe is not None else f"a probe on {load.ref}'s pins"
     on = [a.name for a in project.aggressors if a.vrm == source_name]
     if on:
         return None, (f"add {where} to {', '.join(on)}'s ripple probes, or enter ripple_mv for "
-                      f"{load.label}"), []
+                      f"{load.label}"), [], None
     return None, (f"add an aggressor for {source.label} with {where} in its ripple probes, or enter "
-                  f"ripple_mv for {load.label}"), []
+                  f"ripple_mv for {load.label}"), [], None
 
 
 def _sides(rp: RippleResult, bw: bool) -> Pair:
     return (rp.below_bw_v, rp.above_bw_v) if bw else (rp.below_v, rp.above_v)
+
+
+def _combine(project: Project, values: List[Tuple[str, RippleResult]],
+             bw: bool) -> Tuple[float, float, str]:
+    """(below, above, how) of several aggressors' ripple by ``tolerance.ripple_sum``."""
+    sides = [_sides(rp, bw) for _name, rp in values]
+    if project.tolerance.ripple_sum == "rss":
+        return (math.sqrt(sum(s[0] ** 2 for s in sides)), math.sqrt(sum(s[1] ** 2 for s in sides)),
+                "the root sum of squares of " if len(values) > 1 else "")
+    return (sum(s[0] for s in sides), sum(s[1] for s in sides),
+            "the sum of the peaks of " if len(values) > 1 else "")
 
 
 # ---------------------------------------------------------------------- rows and verdicts
@@ -266,14 +281,17 @@ def _judge_row(row: ToleranceRow, load: Load) -> None:
         row.verdict = "not_judged"
 
 
-def _fail_reason(c: ToleranceCheck) -> str:
+def _fail_reason(c: ToleranceCheck, floors: Dict[str, TolerancePart]) -> str:
     from coppernicus.engine.tolerance import EPS_V
     sides = []
     if c.allowed_below_v is not None and c.below_v > c.allowed_below_v + EPS_V:
         sides.append(f"{_mv(c.below_v)} mV below nominal, over the {_mv(c.allowed_below_v)} mV allowed")
     if c.allowed_above_v is not None and c.above_v > c.allowed_above_v + EPS_V:
         sides.append(f"{_mv(c.above_v)} mV above nominal, over the {_mv(c.allowed_above_v)} mV allowed")
-    known = "" if c.complete else f" (from its known parts alone; missing: {', '.join(c.missing)})"
+    least = "".join(f", {PART_NAMES[k]} at least {_pair_mv(floors[k].below_v, floors[k].above_v)} "
+                    f"({floors[k].source})" for k in c.floors if k in floors)
+    known = ("" if c.complete else
+             f" (from its known parts alone{least}; missing: {', '.join(c.missing)})")
     return f"{CHECK_NAMES[c.kind]} {' and '.join(sides)}{known}"
 
 
@@ -289,12 +307,22 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
     row = ToleranceRow(load.label, name, rep.net if rep is not None and rep.net else rail, rail,
                        None if nominal is None else float(nominal),
                        source.label if source is not None else "", probe or "")
+    from coppernicus.temperature import _not_settled
     found = {"dc": _dc(tree, rep), "accuracy": _accuracy(source, nominal)}
+    unsettled = _not_settled(tree.thermal) if tree.thermal is not None else ""
+    if unsettled and found["dc"][0] is not None:      # temperature.py's rule: fail, never pass
+        dc = found["dc"][0]
+        row.floors["dc"] = dc
+        found["dc"] = (None, f"the board temperature is {unsettled}: its DC drop "
+                             f"{_pair_mv(dc.below_v, dc.above_v)} can fail a check, never pass one")
     part, hint, row.transient_estimate_v = _transient(project, load, nominal, probe, shown.get(probe or ""),
                                                     source, ac_notes)
     found["transient"] = (part, hint)
-    part, hint, row.stand_ins = _ripple(project, load, probe, source, driver or "", noise, noise_notes)
+    part, hint, row.stand_ins, least = _ripple(project, load, probe, source, driver or "", noise,
+                                               noise_notes)
     found["ripple"] = (part, hint)
+    if least is not None:
+        row.floors["ripple"] = least
     for kind in PARTS:
         part, text = found[kind]
         if part is not None and not all(math.isfinite(x) for x in (part.below_v, part.above_v)):
@@ -305,7 +333,8 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
         if part is None:
             row.hints[kind] = text
     row.checks = stack({k: None if p is None else (p.below_v, p.above_v) for k, p in row.parts.items()},
-                       load_limits(load, row.nominal_v))
+                       load_limits(load, row.nominal_v),
+                       {k: (p.below_v, p.above_v) for k, p in row.floors.items()})
     _judge_row(row, load)
     return row
 
@@ -393,7 +422,7 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
         for c in row.checks.values():
             if c.passed is False:
                 out.failed.append({"item": row.load, "net": row.net, "limit": c.limit,
-                                   "reason": _fail_reason(c)})
+                                   "reason": _fail_reason(c, row.floors)})
             elif c.limit and c.passed is None:
                 out.not_judged.append({"item": row.load, "net": row.net, "limit": c.limit,
                                        "reason": c.reason})
@@ -432,7 +461,8 @@ def _check_summary(c: ToleranceCheck) -> Dict[str, Any]:
     return {"limit": c.limit, "below_mv": _mv_num(c.below_v), "above_mv": _mv_num(c.above_v),
             "allowed_below_mv": _mv_num(c.allowed_below_v), "allowed_above_mv": _mv_num(c.allowed_above_v),
             "margin_below_mv": _mv_num(c.margin_below_v), "margin_above_mv": _mv_num(c.margin_above_v),
-            "complete": c.complete, "passed": c.passed, "missing": list(c.missing), "reason": c.reason}
+            "complete": c.complete, "passed": c.passed, "missing": list(c.missing),
+            "floors": list(c.floors), "reason": c.reason}
 
 
 def _row_summary(r: ToleranceRow) -> Dict[str, Any]:
@@ -441,6 +471,8 @@ def _row_summary(r: ToleranceRow) -> Dict[str, Any]:
             "source": r.source, "probe": r.probe, "verdict": r.verdict,
             "parts": {k: _part_summary(r.parts.get(k)) for k in PARTS},
             "hints": {k: r.hints[k] for k in PARTS if k in r.hints},
+            "floors": {k: {"below_mv": _mv_num(f.below_v), "above_mv": _mv_num(f.above_v), "source": f.source}
+                       for k, f in r.floors.items()},
             "transient_estimate": None if e is None else {
                 "below_mv": _mv_num(e[0]), "above_mv": _mv_num(e[1]), "below_20mhz_mv": _mv_num(e[2]),
                 "above_20mhz_mv": _mv_num(e[3])},
@@ -480,7 +512,10 @@ def tolerance_text(doc: Dict[str, Any]) -> List[str]:
         for kind in PARTS:
             p = ld["parts"][kind]
             if p is None:
-                lines.append(f"  {PART_NAMES[kind]:12s} missing: {ld['hints'].get(kind, '')}")
+                f = ld["floors"].get(kind)
+                least = (f" (at least {_side_text(f['below_mv'])} / {_side_text(f['above_mv'])} mV from "
+                         f"{f['source']})" if f else "")
+                lines.append(f"  {PART_NAMES[kind]:12s} missing{least}: {ld['hints'].get(kind, '')}")
             else:
                 more = f"; {p['detail']}" if p["detail"] else ""
                 lines.append(f"  {PART_NAMES[kind]:12s} {_side_text(p['below_mv'])} / "
