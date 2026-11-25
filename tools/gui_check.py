@@ -12,6 +12,10 @@ with a separate off-screen VTK window into ``--out`` (``*_scene.png``). With ``-
 also sends mouse presses, releases and moves (the hover readout) to the view. It saves
 projects and the app's settings only into ``--out`` and never writes next to a board. Exit
 code 0 when every check passes, 1 otherwise.
+
+A ``--window`` run never takes the focus: its windows open without activating, behind the
+other applications' windows, and on macOS the process never becomes the application in front
+(checked at the end of the run). The app itself, started by its user, still comes to the front.
 """
 
 from __future__ import annotations
@@ -20,7 +24,9 @@ import argparse
 import faulthandler
 import multiprocessing
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -67,6 +73,107 @@ def _quiet_dialogs():
         return question
     fields_view.ask_override = ask("ask_override", None)
     fields_view.confirm_use_fields = ask("confirm_use_fields", False)
+
+
+# A --window run must never take the focus: its windows used to pop up over the user's work.
+# On macOS Qt makes a plain process a foreground app and activates it at launch unless this is
+# set (Qt 6.12: the process then stays "prohibited": no Dock icon, never active).
+QT_BACKGROUND_ENV = {"QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM": "1"}
+
+
+def background_env(window: bool, platform: str = sys.platform) -> dict:
+    """What a run puts in its environment before Qt starts so that it never comes to the
+    front: Qt's own switch, on macOS with a real window only (offscreen there is no window)."""
+    return dict(QT_BACKGROUND_ENV) if window and platform == "darwin" else {}
+
+
+def show_in_background(app):
+    """From now on every top-level window or dialog shown opens without activating (Qt's
+    WA_ShowWithoutActivating) and then goes behind the other applications' windows. Qt copies
+    the attribute to the platform window only when it creates one, so a widget whose native
+    window exists already (a VTK view) gets the property the platform window reads, too."""
+    from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+    from PySide6.QtWidgets import QWidget
+
+    class Background(QObject):
+        def eventFilter(self, obj, event):
+            if (event.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow()
+                    and obj.windowType() in (Qt.Window, Qt.Dialog, Qt.Tool)):
+                obj.setAttribute(Qt.WA_ShowWithoutActivating)
+                if obj.windowHandle() is not None:
+                    obj.windowHandle().setProperty("_q_showWithoutActivating", True)
+                QTimer.singleShot(0, obj, obj.lower)          # once it is on screen
+            return False
+    background = Background(app)
+    app.installEventFilter(background)
+    return background
+
+
+def parse_front_app(text: str):
+    """(name, pid) from ``lsappinfo info -only pid -only name <front>``, or None."""
+    name, pid = re.search(r'"([^"]*)"', text), re.search(r"\bpid\s*=\s*(\d+)", text)
+    return (name.group(1), int(pid.group(1))) if name and pid else None
+
+
+def front_app():
+    """(name, pid) of the application in front (macOS), or None where it cannot be read."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        asn = subprocess.run(["lsappinfo", "front"], capture_output=True, text=True, timeout=5).stdout.strip()
+        info = subprocess.run(["lsappinfo", "info", "-only", "pid", "-only", "name", asn],
+                              capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_front_app(info)
+
+
+def _app_name(front) -> str:
+    return f"{front[0]} (pid {front[1]})" if front else "not readable here"
+
+
+class FrontWatch:
+    """A --window run never becomes the application in front: the front application before
+    Qt starts, then every second while Qt runs events and at the end; and every change of Qt's
+    application state, where "active" would mean it took the focus."""
+
+    def __init__(self, app, before):
+        from PySide6.QtCore import Qt, QTimer
+        self.before, self.fronts, self.active, self.exposed = before, [], 0, []
+        self.window, self.without_activating = None, False
+        app.applicationStateChanged.connect(lambda state: self._state(state == Qt.ApplicationActive))
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.sample)
+        self.timer.start(1000)
+
+    def _state(self, active: bool):
+        self.active += active
+
+    def shown(self, window):
+        """The main window is on screen: it opened without activating?"""
+        from PySide6.QtCore import Qt
+        self.window = window
+        self.without_activating = (window.testAttribute(Qt.WA_ShowWithoutActivating)
+                                   and window.windowHandle().property("_q_showWithoutActivating") is True)
+        self.sample()
+
+    def sample(self):
+        self.fronts.append(front_app())
+        if self.window is not None and self.window.isVisible():
+            self.exposed.append(self.window.windowHandle().isExposed())
+
+    def finish(self, check: Checks):
+        self.timer.stop()
+        self.sample()
+        mine = sum(1 for f in self.fronts if f and f[1] == os.getpid())
+        read = [f for f in self.fronts if f]
+        print(f"[INFO] front application before the run: {_app_name(self.before)}; at the end: "
+              f"{_app_name(self.fronts[-1])}; main window exposed in {sum(self.exposed)} of "
+              f"{len(self.exposed)} sample(s)", flush=True)
+        check("window run: the main window opens without activating", self.without_activating)
+        check("window run: never the application in front, never active", mine == 0 and not self.active,
+              f"{len(read)} of {len(self.fronts)} sample(s) read, {mine} were this run (pid {os.getpid()}); "
+              f"Qt reported it active {self.active} time(s)")
 
 
 def time_remerge(window, n: int = 20) -> str:
@@ -1820,6 +1927,9 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     if not args.window:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    for key, value in background_env(args.window).items():
+        os.environ.setdefault(key, value)
+    front_before = front_app() if args.window else None
     faulthandler.dump_traceback_later(args.timeout, exit=True)
     out = Path(args.out) if args.out else Path(tempfile.mkdtemp(prefix="coppernicus-gui-"))
     out.mkdir(parents=True, exist_ok=True)
@@ -1828,6 +1938,10 @@ def main(argv=None) -> int:
 
     from coppernicus.app.main_window import MainWindow
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    watch = None
+    if args.window:
+        watch = FrontWatch(app, front_before)
+        show_in_background(app)
     from PySide6.QtCore import QSettings
     QSettings.setDefaultFormat(QSettings.IniFormat)       # the app's settings go into --out,
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(out / "settings"))   # never the user's
@@ -1836,6 +1950,8 @@ def main(argv=None) -> int:
     window.show()
     app.processEvents()
     check = Checks()
+    if watch is not None:
+        watch.shown(window)
     try:
         run_other_net(window, check, out)
         run_marked(window, check, out)
@@ -1858,6 +1974,8 @@ def main(argv=None) -> int:
             run_hover_pixels(window, check, args, out)
         run_copper_thickness(window, check, args, out)
         run_close_asks(window, check, args, out)
+        if watch is not None:
+            watch.finish(check)
     finally:
         if window.isVisible():
             window.dirty = False          # never ask to save
