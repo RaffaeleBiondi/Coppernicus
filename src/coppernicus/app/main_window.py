@@ -679,9 +679,16 @@ class MainWindow(QMainWindow):
         if res is not None:
             self._show_problems(res)
         else:
-            self.problems.clear(f"<b>{net}</b>: add a source and a load, then Solve (F5)")
+            self.problems.clear(self._unsolved_text())
         self._refresh_results()
         self.refresh_view(fit=True)
+
+    def _unsolved_text(self) -> str:
+        """The Problems line of the shown net before it is solved: a rail from the KiCad
+        fields is set up already."""
+        if self._kicad_shown:
+            return f"<b>{self.net}</b>: rail from KiCad footprint fields — press Solve (F5)"
+        return f"<b>{self.net}</b>: add a source and a load, then Solve (F5)"
 
     def _show_rail(self, net: str) -> Rail:
         """Fill the rail panel for ``net`` as its origin says: a rail from the KiCad fields is
@@ -1186,7 +1193,7 @@ class MainWindow(QMainWindow):
         if res is not None:
             self._show_problems(res)
         else:
-            self.problems.clear(f"<b>{self.net}</b>: add a source and a load, then Solve (F5)")
+            self.problems.clear(self._unsolved_text())
         self._refresh_results()
         self.refresh_view(fit=True)
 

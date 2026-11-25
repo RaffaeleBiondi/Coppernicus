@@ -341,6 +341,10 @@ def test_a_kicad_rail_is_read_only_each_value_naming_its_field(tmp_path):
     run_in_window('''
         open_net(strip(TMP / "a"))
         assert not window.dirty                              # showing it read-only edits nothing
+        unsolved = "<b>VCC</b>: rail from KiCad footprint fields — press Solve (F5)"
+        assert window.problems.summary.text() == unsolved, window.problems.summary.text()
+        window._show_net_view()                              # back from a power-tree group
+        assert window.problems.summary.text() == unsolved, window.problems.summary.text()
         assert rp.banner.text.text() == "From KiCad footprint fields (parts J1, U1) — read-only"
         assert rp.banner.button.text() == "Override in project" and not rp.banner.button.isHidden()
         assert "Rail VCC from KiCad footprint fields" in rp.banner.text.toolTip()     # the notes
