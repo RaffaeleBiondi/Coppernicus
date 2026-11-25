@@ -120,7 +120,8 @@ positive like the drops.
   thickness is the board file's (an in-process caller's `base_settings` give a project's).
   From a design that is not a standard weight, no step is offered. Anything else is refused
   (`invalid_input`); the hint points to `copper_step` and to KiCad. `write_project` applies
-  the same rule to the layers you name in `settings.copper_thickness_mm` (see
+  the same rule, from the board file's thickness, to the layers you change in
+  `settings.copper_thickness_mm` (see
   [Editing projects](#editing-projects)). A project the user edits (the app, by hand, the
   CLI) keeps the free value (more than 0, at most 1 mm): that is the user's own what-if.
 
@@ -167,12 +168,13 @@ app or CI. It writes one file, at the path you give (a `*.coppernicus.yml`):
   `ground`; `limits`; `follow_net_ties`; `override_board_fields`); `remove_rails` removes by
   net; `links` and `remove_links` work by name; `settings` keys are set, and null removes one
   (its default again); `use_board_fields: false` turns the KiCad fields off;
-- `settings.copper_thickness_mm` replaces the project's whole mapping. Each layer you name
-  takes a standard weight at most one step from the design: the project's own value for that
-  layer when it has one, else the board file's. Giving back the value the project already
-  holds is not a change, so a value the user typed stays as it is. Anything else is refused
-  (`invalid_input`) and nothing is written. `copper_thickness_mm: null` goes back to the
-  board file's copper;
+- `settings.copper_thickness_mm` is merged layer by layer: the layers you name are set, a
+  layer set to null goes back to the board file's copper, the others stay as they are. Each
+  layer you change takes a standard weight at most one step from the **board file's**
+  thickness, never from a value already in the project. Giving back the value the project
+  already holds is not a change, so a value the user typed stays as it is. Anything else is
+  refused (`invalid_input`) and nothing is written. `copper_thickness_mm: null` removes every
+  layer's value;
 - an existing file is replaced only with `overwrite: true`, else `file_exists`;
 - the file is rewritten from its data: **comments are lost**, keys Coppernicus does not know
   are kept (a replaced rail's included); the board path is written relative to the project's
@@ -245,9 +247,10 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
     holds only limits does not stop this: it stays, limits only. A `PI_LIMIT_DROP` on the
     tied net still wins over its `max_drop_pct`; with no project rail there, it stays on that
     net in a rail that holds only the limit. Per rail, that rail is skipped and its limits
-    are listed as not judged. In the power tree its copper limits count in the group's
-    strictest; the loads moved into the driven rail are judged by the driven net's
-    `max_drop_pct` for now, not by the tied net's;
+    are listed as not judged. In the power tree a load past a tie is judged by its own net's
+    limit, then the rail it is listed in's, then the group's driving net's (field by field);
+    the tied net's copper limits count in the group's strictest. The tree's load rows say
+    both: `net` (where its pins are) and `rail` (where it is listed);
   - loads behind a **link** (`PI_LINK`, a ferrite), on a net with no source of its own, make
     a loads-only rail, as in a project file. Per rail it is skipped ("its loads are drawn
     through link FB1 by rail +3V3", estimated there; its limits are listed as not judged),
@@ -404,7 +407,9 @@ ground net is solved, each regulator's and load's `ground` pins (see
   a load of the rail that feeds it: `input_net`, `input_drop_mv`, `input_drop_pct`,
   `input_exceeds_drop_limit`, `input_status`;
 - `loads`: each load's `v_supply_v`, `v_ground_v`, `v_across_v`, `drop_mv` and `drop_pct`
-  (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`;
+  (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`, `net`
+  (the net its supply pins are on) and `rail` (the rail it is listed in; another net past a
+  net tie);
 - `links` and `groups`. A rail group has `max_drop_mv` and `max_drop_pct`. A ground group has
   `max_rise_mv`, **signed**: negative when the ground sinks below 0 V (under a negative rail),
   judged by its magnitude; give it with its sign. Its `max_drop_pct` is `null`. Each group has
@@ -603,7 +608,13 @@ The demo board's report is 2.2 MB, with 0.027 mm cells.
 
 Paths: `--html` alone writes `<out>/<project>_report.html`, where `<out>` defaults to
 `results/` next to the project file. `--html PATH` writes it elsewhere, and `--open` also opens
-it in the default browser.
+it in the default browser. A link ending in `#group=NET` (for example `report.html#group=+3V3`)
+opens that rail, or that group of a power-tree report, instead of the first.
+
+In the power-tree report (`solve --tree --html`), each group's loads table and worst-load card
+show what the tree judged: the voltage across each load's supply (or a regulator's input) and
+ground pins, its drop from its nominal voltage and the tree's verdict, each by its own net's
+limit. The map is still the copper drop below the group's source output, as its scale says.
 
 ## Without MCP: the CLI with `--json`
 

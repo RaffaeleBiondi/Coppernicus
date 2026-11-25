@@ -218,9 +218,12 @@ function panels() {
   const rail = R(), w = rail.worst;
   const v = $("verdict"); v.textContent = ""; v.className = rail.verdict;
   v.append(el("strong", {}, rail.label), " ", badge(rail.verdict), " ", el("span", {}, rail.verdict_text));
-  if (rail.nets.length > 1) v.append(el("div", { class: "muted small" }, "Solved together through net ties: " + rail.nets.join(", ")));
+  if (rail.nets.length > 1) v.append(el("div", { class: "muted small" },
+    (rail.tree ? "Solved together (joined by net ties or links): " : "Solved together through net ties: ") + rail.nets.join(", ")));
   const cards = $("worst"); cards.textContent = "";
-  if (w.load) cards.append(card("Worst load", `${w.load.name}: ${sig(w.load.drop_mv, 4)} mV`, `${sig(w.load.drop_pct, 3)} % ${dropSign(rail) < 0 ? "above" : "below"} ${sig(rail.v_ref_v, 4)} V`));
+  if (w.load) cards.append(card("Worst load", `${w.load.name}: ${sig(w.load.drop_mv, 4)} mV`, rail.tree
+    ? `${sig(w.load.drop_pct, 3)} % from ${sig(w.load.nominal_v, 4)} V nominal, across its supply and ground pins`
+    : `${sig(w.load.drop_pct, 3)} % ${dropSign(rail) < 0 ? "above" : "below"} ${sig(rail.v_ref_v, 4)} V`));
   cards.append(card(`Largest ${dropTitle(rail)} on the copper`, `${sig(w.max_drop_mv, 4)} mV`,
     rail.v_ref_v ? `${sig(w.max_drop_pct, 3)} %` : rail.drop_unit));
   cards.append(card("Copper loss", `${sig(w.power_loss_w * 1e3, 4)} mW`, w.busiest_layer ? `most on ${w.busiest_layer}` : null));
@@ -234,9 +237,16 @@ function panels() {
       if (p.layer) { const li = rail.layers.findIndex((l) => l.name === p.layer); if (li >= 0) setLayer(li, false); }
       S.mark = [p.x_mm, p.y_mm]; zoomTo(p.x_mm, p.y_mm, 8); $("map").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
   const lim = rail.limits.max_drop_pct;
-  table("loads", [["Load", ""], ["Ref", ""], ["Pins", "num"], ["Current (A)", "num"], ["V at worst pin (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"], [lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""]],
-    rail.loads.map((t) => [[t.estimated ? el("span", { title: "estimated at nominal voltages, without copper losses" }, t.name, " ", el("span", { class: "muted small" }, "estimated draw")) : t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"], [sig(t.v_worst_v ?? t.v_min_v, 7), "num"], [sig(t.drop_mv, 4), "num"],
-      [sig(t.drop_pct, 3), "num"], [t.exceeds === null ? (lim ? "not judged" : "no limit set") : (t.exceeds ? el("span", { class: "badge fail" }, "FAIL") : "within"), ""]]));
+  // A tree group: the voltage across supply (input) and ground pins and the tree's verdict per
+  // load, each by its own net's limit; a rail alone: the worst pin against the rail's limit.
+  const verdictCell = (t) => t.status ? t.status : t.exceeds === null || t.exceeds === undefined
+    ? (rail.tree || lim ? "not judged" : "no limit set") : (t.exceeds ? el("span", { class: "badge fail" }, "FAIL") : "within");
+  table("loads", [["Load", ""], ["Ref", ""], ["Pins", "num"], ["Current (A)", "num"],
+    [rail.tree ? "Across (V)" : "V at worst pin (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"],
+    [rail.tree ? "Verdict" : lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""]],
+    rail.loads.map((t) => [[t.estimated ? el("span", { title: "estimated at nominal voltages, without copper losses" }, t.name, " ", el("span", { class: "muted small" }, "estimated draw")) : t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"],
+      [ok(rail.tree ? t.v_across_v : (t.v_worst_v ?? t.v_min_v)) ? sig(rail.tree ? t.v_across_v : (t.v_worst_v ?? t.v_min_v), 7) : "–", "num"],
+      [ok(t.drop_mv) ? sig(t.drop_mv, 4) : "–", "num"], [ok(t.drop_pct) ? sig(t.drop_pct, 3) : "–", "num"], [verdictCell(t), ""]]));
   table("sources", [["Source", ""], ["Ref", ""], ["Pins", "num"], ["Voltage (V)", "num"], ["Current (A)", "num"]],
     rail.sources.map((t) => [[t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.v_v, 6), "num"], [sig(t.current_a, 4), "num"]]));
   const losses = $("losses"); losses.textContent = "";
@@ -305,6 +315,16 @@ if (M.tree) {                 // solve --tree --html: the tree's own tables, onc
   table("tree-links", [["Link", ""], ["Nets", ""], ["Current (A)", "num"], ["Loss (mW)", "num"]],
     (T.links || []).map((k) => [[k.name, ""], [(k.nets || []).join(" ↔ "), ""], [sig(k.current_a, 4), "num"], [mw(k.power_w), "num"]]));
 }
-if (M.rails.length) setRail(0);
+// report.html#group=+3V3 opens that rail or group (by net or label); the first otherwise.
+function railFromHash() {
+  const m = /(?:^#|[#&])group=([^&]*)/.exec(location.hash || "");
+  if (!m) return 0;
+  let want = m[1];
+  try { want = decodeURIComponent(want); } catch (e) { /* keep it as written */ }
+  const i = M.rails.findIndex((r) => r.net === want || r.label === want);
+  return i < 0 ? 0 : i;
+}
+if (M.rails.length) setRail(railFromHash());
+window.addEventListener("hashchange", () => { const i = railFromHash(); if (M.rails.length && i !== S.rail) setRail(i); });
 window.__coppernicus = { ready: () => layerImage(S.rail, S.layer, S.field).then(() => true), state: S };
 })();

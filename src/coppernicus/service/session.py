@@ -695,8 +695,9 @@ class Session:
         checked by the project loader before the file is replaced; the board is only read.
 
         A ``copper_thickness_mm`` given here is an agent's what-if, as in :meth:`solve_rail`:
-        each layer it names takes a standard weight at most one step from the design (the
-        project's own value for that layer when it has one, else the board file's)."""
+        it is merged layer by layer (a layer set to None goes back to the board file), and each
+        layer it changes takes a standard weight at most one step from the board file's
+        thickness; a value the project already holds and that is given back unchanged stays."""
         from coppernicus.project import board_reference
         from coppernicus.service import projects as P
         path = Path(str(project_path)).expanduser()
@@ -740,9 +741,12 @@ class Session:
             raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
                                "nothing was written; fix the values and try again") from None
         given = settings.get("copper_thickness_mm") if isinstance(settings, Mapping) else None
-        if isinstance(given, Mapping) and given:
+        changed = {layer: mm for layer, mm in (given.items() if isinstance(given, Mapping) else ())
+                   if mm is not None and not (layer in planned and isinstance(mm, (int, float))
+                                              and math.isclose(planned[layer], mm, rel_tol=1e-9))}
+        if changed:              # one step from the board file's copper, never from the project's
             entry = self._entry(self.open_board(board)["board_id"])
-            self._check_copper_what_if(entry.board, edited_project.settings, given, planned)
+            self._check_copper_what_if(entry.board, edited_project.settings, changed, {})
         _replace_checked(path, mapping)
         project = Project.load(path)
         edited = [r.get("net") for r in rails or [] if isinstance(r, Mapping)

@@ -162,6 +162,19 @@ def edit(mapping: Dict[str, Any], *, rails: Optional[Sequence[Any]] = None,
         for key, value in settings.items():
             if value is None:
                 file_settings.pop(key, None)
+            elif key == "copper_thickness_mm" and isinstance(value, Mapping):
+                # Layer by layer: a layer set to None goes back to the board file's copper,
+                # the layers not named stay as they are.
+                layers = dict(file_settings.get(key) or {})
+                for layer, mm in value.items():
+                    if mm is None:
+                        layers.pop(layer, None)
+                    else:
+                        layers[layer] = mm
+                if layers:
+                    file_settings[key] = layers
+                else:
+                    file_settings.pop(key, None)
             else:
                 file_settings[key] = copy.deepcopy(value)
         out["settings"] = file_settings

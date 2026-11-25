@@ -119,7 +119,9 @@ Coppernicus.exe
 The SHA-256 is checked whatever the source. `COPPERNICUS_SITE_PACKAGES` moves the folder
 Triangle goes into (it is used by the tests).
 
-**Removing Triangle.** Run the app with `--remove-triangle`:
+**Removing Triangle.** In the app, **Help → Remove downloaded mesher (Triangle)…** asks for
+a confirmation, then deletes the folder. From a terminal, run the app with
+`--remove-triangle`:
 
 ```sh
 /Applications/Coppernicus.app/Contents/MacOS/Coppernicus --remove-triangle
@@ -135,6 +137,15 @@ on its next start. To remove Coppernicus completely, delete the app (or the extr
 that `Coppernicus` folder (it also holds matplotlib's font cache), and the app's settings (macOS:
 `~/Library/Preferences/com.coppernicus.Coppernicus.plist`; Windows: the registry key
 `HKEY_CURRENT_USER\Software\Coppernicus`).
+
+**When a file is in use.** Windows cannot delete a library that a running program has
+loaded, and the running app has Triangle loaded. So when the folder cannot be deleted now
+(from the app's Help menu on Windows, or while another Coppernicus window is open), it is
+left whole and marked, and Coppernicus says *"Triangle will be removed the next time
+Coppernicus starts"*. The next start deletes it before anything uses it, then offers to
+download it again, as on a first start. To remove it for good, close every Coppernicus window
+and run `--remove-triangle` from a terminal; with no window open, nothing holds the files.
+The mark is a file named `.triangle-remove` beside the folder.
 
 ## Licences
 
