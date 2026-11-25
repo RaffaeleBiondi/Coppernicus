@@ -6,6 +6,7 @@ tolerance run with its exit codes. KiPI's synthetic coupled-noise board and the 
 
 import dataclasses
 import json
+import math
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -97,6 +98,24 @@ def _comparable(doc):
     return out
 
 
+def _same(a, b, where="doc"):
+    """Two documents alike: the keys, strings and verdicts exact, the numbers within a relative
+    1e-4 (two solves of the same board; CI runs on Linux and Windows)."""
+    if isinstance(a, float) or isinstance(b, float):
+        assert isinstance(a, (int, float)) and isinstance(b, (int, float)), where
+        assert math.isclose(a, b, rel_tol=1e-4, abs_tol=1e-9), (where, a, b)
+    elif isinstance(a, dict):
+        assert isinstance(b, dict) and set(a) == set(b), where
+        for k in a:
+            _same(a[k], b[k], f"{where}.{k}")
+    elif isinstance(a, (list, tuple)):
+        assert isinstance(b, (list, tuple)) and len(a) == len(b), where
+        for i, (x, y) in enumerate(zip(a, b)):
+            _same(x, y, f"{where}[{i}]")
+    else:
+        assert a == b, (where, a, b)
+
+
 # ---------------------------------------------------------------------- the session
 
 def test_solve_tolerance_returns_the_summary_with_its_files_and_the_estimates(write, tmp_path):
@@ -153,7 +172,7 @@ def test_the_session_and_the_cli_give_the_same_document(write, tmp_path, capsys,
     code = main(["tolerance", str(path), "--json", "--out", str(tmp_path / "c"), *flags])
     cli = json.loads(capsys.readouterr().out)
     assert set(cli) == set(doc)
-    assert _comparable(cli) == _comparable(doc)
+    _same(_comparable(cli), _comparable(doc))
     assert code == {"pass": EXIT_OK, "fail": EXIT_LIMIT}.get(doc["verdict"],
                                                             EXIT_NOT_JUDGED if doc["not_judged"] else EXIT_OK)
     if case == "carried":
@@ -275,7 +294,7 @@ def test_the_cli_writes_an_offline_html_page(write, tmp_path, capsys):
                  "--html"]) == EXIT_NOT_JUDGED
     printed = capsys.readouterr().out
     default = tmp_path / "d" / f"{STEM}_tolerance_report.html"
-    assert default.is_file() and f"Report: {default}" in printed
+    assert default.is_file() and f"Report: {default.as_posix()}" in printed
 
 
 def test_the_page_says_what_is_missing_why_it_fails_and_what_is_not_judged(write, tmp_path, capsys):
