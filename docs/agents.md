@@ -209,6 +209,20 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
 | `PI_INPUT` | `VIN` | regulator | The net it draws from (its pads there); required with `ldo` and `smps`. `PI_INPUT_PINS` chooses the pads. |
 | `PI_GND` | `GND` | source, load | The ground net of its ground pins (the return path the power tree solves). `PI_GND_PINS` chooses the pads. |
 | `PI_LINK` | `50mOhm` | a two-net part | A link (ferrite, sense resistor, fuse) of this resistance between the nets of its pads (`Ohm`, `mOhm`, `Ω`). Not with `PI_RAIL`. |
+| `PI_LINK_PINS` | `1,2;5` | a link part with more nets | The link's two sides on a part with more than two nets (load switch, MOSFET, 3-pin fuse): side A's pads `;` side B's, each side's pads on one net. A two-net part needs none. |
+| `PI_VOUT` | `3.3V` | source | A fixed-output part's voltage: the source voltage when the instance has `PI_RAIL` and no `PI_SOURCE` (the assumption says "from KiCad field PI_VOUT"). When both are given and differ, `PI_SOURCE` wins, with a warning. |
+| `PI_IMAX` | `2A`, `500mA` | source | Its rated output current: kept as the source's `current_limit_a` and shown next to I_out (rail summary `current_limit_a`, tree `vrms[].i_max_a`, the report and CI tables). **Not judged yet.** |
+| `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its fixed switching frequency (`Hz`, `kHz`, `MHz`): kept as the source's `fsw_hz`. **Not used yet.** |
+| `PI_SOURCE_REF` | `L1` | source | The part whose pads hold the rail, when it is not this part: an external-inductor buck's inductor. `PI_PINS` then selects that part's pads; input, ground and kind stay on this part. An error when that part has no pad on the rail. |
+
+- **Library and instance.** `PI_KIND`, `PI_EFF`, `PI_IQ`, `PI_VOUT`, `PI_IMAX` and `PI_FSW` say
+  what the part **is**: put them on the library symbol. They need no `PI_RAIL`: a part that
+  carries only them is part data, used once its instance has `PI_RAIL`. With `PI_RAIL`, one
+  such value applies to every rail where the part is a source (on a rail where it is a load
+  it is not used), or one per rail with `;`. A part that is a source on no rail but carries
+  them is refused (a regulator placed as a load). The other fields say where the part **sits**:
+  put them on the schematic instance; they need `PI_RAIL` (`PI_LINK` and `PI_LINK_PINS` stand
+  alone). See [How to annotate](#how-to-annotate-a-kicad-library) below.
 
 - **Several rails on one part** give one value per rail, by position, separated by `;`, in
   every per-rail field. An empty value skips that rail: a dual-output regulator is
@@ -278,19 +292,80 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
 `propose_fields(project_path)` (or a `result_id`) is the inverse of the merge: the field text
 that describes the project's rails and links, part by part, for the user to paste into the
 symbols in KiCad. Coppernicus never writes KiCad files. Each part has:
-- `library_symbol`: `PI_KIND`, `PI_EFF`, `PI_IQ`, what the part is;
-- `schematic_instance`: `PI_RAIL`, `PI_SOURCE`, `PI_LOAD`, `PI_PINS`, `PI_LIMIT_DROP`,
-  `PI_INPUT`, `PI_INPUT_PINS`, `PI_GND`, `PI_GND_PINS`, `PI_LINK`, where it sits.
+- `library_symbol`: `PI_KIND`, `PI_EFF`, `PI_IQ`, `PI_IMAX`, `PI_FSW`, what the part is;
+- `schematic_instance`: `PI_RAIL`, `PI_SOURCE`, `PI_SOURCE_REF`, `PI_LOAD`, `PI_PINS`,
+  `PI_LIMIT_DROP`, `PI_INPUT`, `PI_INPUT_PINS`, `PI_GND`, `PI_GND_PINS`, `PI_LINK`,
+  `PI_LINK_PINS`, where it sits.
 
 A part on several rails gets one value per rail, by position (`PI_RAIL=+3V3;+1V8`,
 `PI_LOAD=1.2A;400mA`). Values are written with their unit and read back exactly. A rail's
 `max_drop_pct` becomes `PI_LIMIT_DROP` on its first source; if it is a chip's own supply
 tolerance, it belongs in that chip's library symbol instead. The proposal is checked by
 parsing it back, which gives the project's rails. `not_expressed` lists what fields cannot
-carry: remote sense, terminal names, the other limits, `follow_net_ties: false`; a rail that
-needs input or ground pins on another part, or a link that does not use all its part's pads,
-is not proposed at all, since a wrong field would fail every run. The CLI prints the same:
-`coppernicus fields --propose PROJECT [--json]`.
+carry: remote sense, terminal names, the other limits, `follow_net_ties: false`. A source held
+at another part's pads, with its input and ground on one part, is proposed on that part with
+`PI_SOURCE_REF`; a link on a part with more nets, or using only some of its pads, gets
+`PI_LINK_PINS` (when the board's pads are known). A rail whose input and ground pins are on
+two other parts, or a link whose pins are not its part's pads on its two nets, is not proposed
+at all, since a wrong field would fail every run. The proposal gives the source's voltage as
+`PI_SOURCE`; move it to `PI_VOUT` on the library symbol when it is the part's fixed output.
+The CLI prints the same: `coppernicus fields --propose PROJECT [--json]`.
+
+### How to annotate a KiCad library
+
+Put what a part **is** on its library symbol, once, and what it **does on this board** on the
+placed symbol. KiCad copies a symbol's fields onto its footprint when the PCB is updated from
+the schematic (**Tools → Update PCB from Schematic…**), which is where Coppernicus reads them.
+Fields added to a library symbol reach symbols already placed through **Tools → Update
+Symbols from Library…**. (These KiCad steps follow the KiCad 9 manual; check them once on a
+small project with your KiCad version.) Part names below are generic.
+
+**A fixed 3.3 V LDO** (one library symbol, used on many boards):
+
+| Where | Fields |
+|---|---|
+| Library symbol `LDO_3V3` | `PI_KIND=ldo`, `PI_VOUT=3.3V`, `PI_IQ=50uA`, `PI_IMAX=500mA` |
+| Placed U3 | `PI_RAIL=+3V3`, `PI_INPUT=+5V`, `PI_GND=GND` |
+
+U3 holds +3V3 at 3.3 V (from `PI_VOUT`), draws its input from its pads on +5V, and returns
+through its pads on GND. Every pad of U3 on +3V3 is its output (add `PI_PINS` to choose).
+
+**An external-inductor buck.** The IC has the input, the ground, the switch node and the
+feedback; the rail itself is held at the inductor's output pad. The IC carries the fields;
+`PI_SOURCE_REF` points at the inductor:
+
+| Where | Fields |
+|---|---|
+| Library symbol `BUCK_IC` | `PI_KIND=smps`, `PI_EFF=90%`, `PI_IQ=2mA`, `PI_IMAX=3A`, `PI_FSW=1.2MHz` |
+| Placed U1 | `PI_RAIL=+3V3`, `PI_SOURCE=3.3V`, `PI_SOURCE_REF=L1`, `PI_PINS=2`, `PI_INPUT=VIN`, `PI_INPUT_PINS=1`, `PI_GND=GND`, `PI_GND_PINS=3` |
+| Placed L1 | nothing |
+
+This makes the source `L1` pin 2 at 3.3 V, named U1, a switcher with η 0.9 drawing from U1
+pin 1 on VIN and returning through U1 pin 3 on GND: in a project file, `ref: L1`,
+`pins: ['2']`, `name: U1`, `input: {ref: U1, net: VIN, pins: ['1']}`,
+`ground: {ref: U1, net: GND, pins: ['3']}`. An adjustable buck gives its voltage on the
+instance (`PI_SOURCE`), since it depends on the board's divider; a fixed one can carry
+`PI_VOUT` on the library symbol instead. `PI_IMAX` is shown next to I_out and `PI_FSW` is
+stored; neither is judged or used yet.
+
+**A load switch** (input pins 1 and 2 on VIN, enable 3, ground 4, output 5 on VOUT), with
+an on-resistance of 20 mΩ: a link between its input and output pads.
+
+| Where | Fields |
+|---|---|
+| Placed Q1 | `PI_LINK=20mOhm`, `PI_LINK_PINS=1,2;5` |
+
+The link joins VIN (Q1 pins 1, 2) and VOUT (Q1 pin 5). Without `PI_LINK_PINS` the part is
+refused, since its pads are on four nets. The loads on VOUT are drawn through it by the rail
+that drives VIN; the power tree solves VIN and VOUT as one group. A two-pad ferrite needs only
+`PI_LINK`.
+
+**Loads** carry instance fields only: `PI_RAIL=+3V3`, `PI_LOAD=1.2A`, and `PI_GND=GND` for the
+power tree. A chip on two rails gives one value per rail: `PI_RAIL=+3V3;+1V2`,
+`PI_LOAD=200mA;1.5A`.
+
+Check the result with `coppernicus fields BOARD.kicad_pcb`, or the MCP `board_fields` tool:
+both list every part's fields and the rails and links they make, with each value's field.
 
 ### Estimated draws
 

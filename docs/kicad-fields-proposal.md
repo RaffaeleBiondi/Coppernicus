@@ -165,3 +165,24 @@ So the custom fields are parsed with the rest of the file and then dropped.
    the off switch. A footprint marked "do not populate" is read like any other.
 8. **Not yet:** the desktop app does not read the fields (the peer will call the merge).
    The test board is a synthetic `.kicad_pcb` written by `tests/kicad_fixture.py`.
+
+## Second step (library-level fields, external inductors, multi-net links)
+
+Decided by the owner for annotating a real KiCad library, additive:
+
+- `PI_KIND`, `PI_EFF`, `PI_IQ`, and the new `PI_VOUT` (fixed output voltage), `PI_IMAX`
+  (rated output current) and `PI_FSW` (fixed switching frequency) are library-level: they need
+  no `PI_RAIL`, and a part carrying only them is part data. With `PI_RAIL`, one value applies
+  to every rail where the part is a source, or one per rail with `;`. `PI_VOUT` is the source
+  voltage when the instance has no `PI_SOURCE`; when both differ, `PI_SOURCE` wins with a
+  warning. `PI_IMAX` becomes `Source.current_limit_a`, shown next to I_out and not judged yet;
+  `PI_FSW` becomes `Source.fsw_hz`, stored for later use.
+- `PI_SOURCE_REF=<ref>` on an external-inductor buck's IC names the part whose pads hold the
+  rail (the inductor); `PI_PINS` selects that part's pads. It maps to
+  `Source(ref=L1, name=U1, input ref=U1, ground ref=U1)`; the board reader also reads the pads
+  of the named part, and a named part with no pad on the rail is an error.
+- `PI_LINK_PINS="1,2;5"` chooses a link's two sides on a part with more than two nets (load
+  switch, MOSFET, 3-pin fuse); each side's pads are on one net. Two-net parts keep working
+  without it.
+
+Everything maps onto existing or additive project objects; the engine path is unchanged.

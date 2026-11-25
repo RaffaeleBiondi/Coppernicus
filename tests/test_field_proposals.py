@@ -79,7 +79,9 @@ def test_multi_rail_parts_and_a_part_twice_on_one_rail():
 
 def test_what_fields_cannot_carry_is_listed_and_not_proposed():
     project = Project(rails=[
-        Rail("OUT", [Source("U2", 3.3, kind="ldo", input_ref="U7", input_net="VIN")], [Load("U4", 1.0)]),
+        # Input and ground on two other parts: PI_SOURCE_REF (one other part) cannot say it.
+        Rail("OUT", [Source("U2", 3.3, kind="ldo", input_ref="U7", input_net="VIN", ground_ref="U8",
+                            ground_net="GND")], [Load("U4", 1.0)]),
         Rail("VIN", [Source("J1", 12.0, name="Supply")], [Load("U5", 0.1)])])
     proposal = propose(project)
     assert proposal["rails"] == ["VIN"]

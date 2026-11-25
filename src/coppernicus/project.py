@@ -98,6 +98,11 @@ class Source:
     ground_sense_ref: str = ""
     ground_sense_pins: PinSpec = None
     ground_sense_net: str = ""
+    # Part data kept for later use (none of it changes a solve yet): the rated output
+    # current (KiCad field PI_IMAX; shown next to I_out, not judged) and a switcher's fixed
+    # switching frequency (PI_FSW; stored, not used yet).
+    current_limit_a: Optional[float] = None
+    fsw_hz: Optional[float] = None
 
     @property
     def label(self) -> str:
@@ -630,6 +635,10 @@ class Project:
                     d["efficiency"] = t.efficiency
                 if t.quiescent_a:
                     d["quiescent_a"] = t.quiescent_a
+                if t.current_limit_a is not None:
+                    d["current_limit_a"] = t.current_limit_a
+                if t.fsw_hz is not None:
+                    d["fsw_hz"] = t.fsw_hz
             for what in (SOURCE_PIN_REFS if value_key == "voltage" else LOAD_PIN_REFS):
                 if getattr(t, f"{what}_net"):
                     d[what] = _pin_ref_out(getattr(t, f"{what}_ref"), getattr(t, f"{what}_pins"),
@@ -820,13 +829,19 @@ def _source_in(s: Dict[str, Any]) -> Source:
     quiescent = _number(s.get("quiescent_a", 0.0), f"source {ref}: quiescent_a")
     if quiescent < 0:
         raise ValueError(f"source {ref}: quiescent_a cannot be negative")
+    extra: Dict[str, Optional[float]] = {}
+    for key in ("current_limit_a", "fsw_hz"):           # part data: > 0 when given
+        if s.get(key) is not None:
+            extra[key] = _number(s[key], f"source {ref}: {key}")
+            if not extra[key] > 0:
+                raise ValueError(f"source {ref}: {key} is above 0, not {extra[key]:g}")
     refs: Dict[str, Any] = {}
     for what in SOURCE_PIN_REFS:
         refs.update(_pin_ref_in(s, what, f"source {ref}"))
     return Source(ref=ref, voltage=_number(s["voltage"], f"source {ref}: voltage"),
                   pins=parse_pins(s.get("pins")),
                   name=str(s.get("name", "")), kind=kind, efficiency=efficiency,
-                  quiescent_a=quiescent, **refs)
+                  quiescent_a=quiescent, **refs, **extra)
 
 
 def _load_in(ld: Dict[str, Any]) -> Load:

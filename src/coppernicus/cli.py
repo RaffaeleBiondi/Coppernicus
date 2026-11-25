@@ -125,6 +125,8 @@ def _cmd_fields(args) -> int:
         print(f"Rail {rail['net']}" + ("" if rail["complete"] else f": {rail['missing']}"))
         if rail["note"]:
             print(f"  {rail['note']}")
+        for warning in rail.get("warnings", []):
+            print(f"  warning: {warning}")
     for link in doc["links"]:
         print(f"Link {link['ref']} {link['resistance_ohm']:g} Ω between {link['net_a']} and "
               f"{link['net_b']} ({link['from']})")
@@ -338,7 +340,8 @@ def _cmd_solve_tree(args) -> int:
         return fail("solve_failed", str(e), "fix the project file or the KiCad fields (PI_GND, "
                     "PI_INPUT, PI_LINK...), then solve again")
     merged.annotate(tree)
-    doc = tree_summary(tree, top=args.top)
+    from coppernicus.service.convert import vrm_ratings
+    doc = vrm_ratings(tree_summary(tree, top=args.top), project)    # + each VRM's I_max (shown)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = out_dir / f"{safe_name(Path(args.project).stem)}_tree_summary.json"

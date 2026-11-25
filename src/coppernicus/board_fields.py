@@ -27,7 +27,23 @@ Fields, on the part (every one optional; ``PI_RAIL`` is required with any per-ra
 ``PI_LINK``         ``50mOhm``   On a two-net part (ferrite, sense resistor, fuse): a link
                                  of this resistance between the nets of its pads. Not with
                                  ``PI_RAIL``.
+``PI_LINK_PINS``    ``1,2;5``    The two sides of a link on a part with more than two nets
+                                 (load switch, MOSFET, 3-pin fuse): side A's pads ; side B's.
+``PI_VOUT``         ``3.3V``     A fixed-output part's voltage: the source voltage when the
+                                 instance has ``PI_RAIL`` and no ``PI_SOURCE``.
+``PI_IMAX``         ``2A``       A source's rated output current (shown, not judged yet).
+``PI_FSW``          ``1.2MHz``   A switcher's fixed switching frequency (stored, not used yet).
+``PI_SOURCE_REF``   ``L1``       The part whose pads hold the rail (an external-inductor
+                                 buck's inductor); ``PI_PINS`` then selects that part's pads,
+                                 while input, ground and kind stay on this part.
 ==================  ===========  ===========================================================
+
+**Library and instance.** ``PI_KIND``, ``PI_EFF``, ``PI_IQ``, ``PI_VOUT``, ``PI_IMAX`` and
+``PI_FSW`` say what the part is (its library symbol): they need no ``PI_RAIL``, and a part
+that carries only them is part data, used once its instance has ``PI_RAIL``. With
+``PI_RAIL``, one such value applies to every rail where the part is a source (on a rail where
+it is a load it is not used), or one per rail with ``;``. The other fields say where the part
+sits (the schematic instance) and need ``PI_RAIL``.
 
 Remote sense stays in the project file for now: when the fields replace a project rail, the
 sense pins of its sources are carried over by part.
@@ -51,15 +67,23 @@ import fnmatch
 import math
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from coppernicus.project import SOURCE_KINDS, Limits, Link, Load, PinSpec, Project, Rail, Source, parse_pins
 
 PREFIX = "PI_"
-PER_RAIL = ("PI_SOURCE", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP", "PI_KIND", "PI_EFF", "PI_IQ",
-            "PI_INPUT", "PI_INPUT_PINS", "PI_GND", "PI_GND_PINS")
-FIELDS = ("PI_RAIL", *PER_RAIL, "PI_LINK")
-SOURCE_ONLY = ("PI_KIND", "PI_EFF", "PI_IQ", "PI_INPUT", "PI_INPUT_PINS")
+# What the part is (its library symbol): no PI_RAIL needed; with PI_RAIL, one value for every
+# rail where the part is a source, or one per rail.
+LIBRARY_FIELDS = ("PI_KIND", "PI_EFF", "PI_IQ", "PI_VOUT", "PI_IMAX", "PI_FSW")
+# Where it sits (the schematic instance): one value per rail of PI_RAIL.
+RAIL_FIELDS = ("PI_SOURCE", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP", "PI_INPUT", "PI_INPUT_PINS",
+               "PI_GND", "PI_GND_PINS", "PI_SOURCE_REF")
+PER_RAIL = (*RAIL_FIELDS, *LIBRARY_FIELDS)
+FIELDS = ("PI_RAIL", *PER_RAIL, "PI_LINK", "PI_LINK_PINS")
+INSTANCE_FIELDS = ("PI_RAIL", "PI_SOURCE", "PI_SOURCE_REF", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP",
+                   "PI_INPUT", "PI_INPUT_PINS", "PI_GND", "PI_GND_PINS", "PI_LINK", "PI_LINK_PINS")
+SOURCE_ONLY = ("PI_INPUT", "PI_INPUT_PINS", "PI_SOURCE_REF")
 _OHM = ("Ohm", "Ω", "Ω")                    # Ohm, Greek capital omega, the Ohm sign
 _MICRO = ("u", "µ", "μ")                     # u, the micro sign, Greek small mu
 # Units by field: unit text -> divisor (value = number / divisor, exactly rounded).
@@ -70,11 +94,16 @@ UNITS: Dict[str, Dict[str, float]] = {
     "PI_EFF": {"%": 100.0},
     "PI_IQ": {"A": 1.0, "mA": 1e3, **{f"{m}A": 1e6 for m in _MICRO}},
     "PI_LINK": {**{o: 1.0 for o in _OHM}, **{f"m{o}": 1e3 for o in _OHM}},
+    "PI_VOUT": {"V": 1.0},
+    "PI_IMAX": {"A": 1.0, "mA": 1e3},
+    "PI_FSW": {"Hz": 1.0, "kHz": 1e-3, "MHz": 1e-6},
 }
 SHOWN = {"PI_SOURCE": "V", "PI_LOAD": "A or mA", "PI_LIMIT_DROP": "%", "PI_EFF": "%",
-         "PI_IQ": "A, mA or uA", "PI_LINK": "Ohm or mOhm"}
+         "PI_IQ": "A, mA or uA", "PI_LINK": "Ohm or mOhm", "PI_VOUT": "V", "PI_IMAX": "A or mA",
+         "PI_FSW": "Hz, kHz or MHz"}
 EXAMPLES = {"PI_SOURCE": "3.3V or -5V", "PI_LOAD": "2A or 250mA", "PI_LIMIT_DROP": "2%",
-            "PI_EFF": "90%", "PI_IQ": "2mA or 50uA", "PI_LINK": "50mOhm"}
+            "PI_EFF": "90%", "PI_IQ": "2mA or 50uA", "PI_LINK": "50mOhm", "PI_VOUT": "3.3V or -5V",
+            "PI_IMAX": "2A or 500mA", "PI_FSW": "500kHz or 2.2MHz"}
 _QUANTITY = re.compile(r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s?(\S*)$")
 
 
@@ -108,13 +137,21 @@ class FieldTerm:
     """A source or load built from fields, with every field value it used."""
     term: Union[Source, Load]
     values: List[Tuple[str, FieldValue]]          # (what it set, e.g. "3.3 V", the value)
+    owner: str = ""             # the part carrying the fields, when not the term's ref
+    warnings: List[str] = field(default_factory=list)
+
+    @property
+    def part(self) -> str:
+        """The part whose fields made it (a source held at another part's pads, through
+        ``PI_SOURCE_REF``, is the part that carries the fields)."""
+        return self.owner or self.term.ref
 
     def text(self) -> str:
         kind = "source" if isinstance(self.term, Source) else "load"
         items = [f"{what} ({fv.origin()})" for what, fv in self.values]
         if not any(fv.field == "PI_PINS" for _, fv in self.values):
             items.insert(1, "every pin on the net")
-        return f"{kind} {self.term.ref} " + ", ".join(items)
+        return f"{kind} {self.part} " + ", ".join(items)
 
 
 @dataclass
@@ -129,14 +166,18 @@ class FieldRail:
     def missing(self) -> Optional[str]:
         """Why it is not a rail by itself (no source, no load), or None."""
         if not self.sources:
-            return (f"{self.net}: loads {', '.join(t.term.ref for t in self.loads)} have PI_LOAD "
+            return (f"{self.net}: loads {', '.join(t.part for t in self.loads)} have PI_LOAD "
                     "but no part on this net has PI_SOURCE (the voltage that holds the rail), and "
                     "no link or net tie joins it to a net that has one")
         if not self.loads:
-            return (f"{self.net}: {', '.join(t.term.ref for t in self.sources)} has PI_SOURCE but "
+            return (f"{self.net}: {', '.join(t.part for t in self.sources)} has PI_SOURCE but "
                     "no part on this net has PI_LOAD (a current drawn from the rail), and it feeds "
                     "no regulator input or link")
         return None
+
+    @property
+    def warnings(self) -> List[str]:
+        return [w for t in self.sources + self.loads for w in t.warnings]
 
     def rail(self) -> Rail:
         return Rail(self.net, sources=[copy.deepcopy(t.term) for t in self.sources],
@@ -160,6 +201,8 @@ class FieldRail:
             d = {k: v for k, v in dataclasses.asdict(t.term).items()
                  if v not in (None, "", 0.0) or k in ("voltage", "current")}
             d.pop("name", None)
+            if t.part != t.term.ref:
+                d["fields_on"] = t.part
             d["fields"] = {fv.field: fv.text for _, fv in t.values}
             return d
         return {"net": self.net, "parts": list(self.parts), "complete": self.missing() is None,
@@ -168,7 +211,8 @@ class FieldRail:
                 "loads": [{**term(t), "current_a": t.term.current, "from": t.values[0][1].origin()}
                           for t in self.loads],
                 "limits": ({"max_drop_pct": self.limit[0], "from": self.limit[1].origin()}
-                           if self.limit else {})}
+                           if self.limit else {}),
+                "warnings": self.warnings}
 
 
 def quantity(ref: str, name: str, text: str) -> float:
@@ -187,7 +231,10 @@ def quantity(ref: str, name: str, text: str) -> float:
                          "number is refused so that no unit is guessed")
     if unit not in units:
         raise FieldError(f"{shown}: {name} takes {SHOWN[name]}, not {unit}; e.g. {EXAMPLES[name]}")
-    x = float(number) / units[unit]
+    div = units[unit]
+    x = float(number) / div if div >= 1 else float(Decimal(number) / Decimal(repr(div)))
+    if name in ("PI_IMAX", "PI_FSW") and x <= 0:
+        raise FieldError(f"{shown}: the value is > 0")
     if name in ("PI_LOAD", "PI_IQ", "PI_LINK") and x < 0:
         raise FieldError(f"{shown}: the value is ≥ 0" + (" (a part that feeds the rail is a "
                                                           "PI_SOURCE)" if name == "PI_LOAD" else ""))
@@ -224,9 +271,12 @@ def _check_names(ref: str, f: Mapping[str, str]) -> None:
                          f"{', '.join(FIELDS)}, in upper case)")
 
 
-def field_rails(fields: Mapping[str, Mapping[str, str]]) -> Dict[str, FieldRail]:
+def field_rails(fields: Mapping[str, Mapping[str, str]],
+                pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None) -> Dict[str, FieldRail]:
     """The rails the parts' fields describe (``fields``: reference → {field name: text}), by
-    net, complete or not. Raises FieldError for a field that cannot be used."""
+    net, complete or not. ``pad_nets`` (reference → {pad: net}, as read from the board) checks
+    that a ``PI_SOURCE_REF`` part has a pad on its rail. Raises FieldError for a field that
+    cannot be used."""
     rails: Dict[str, FieldRail] = {}
     inputs: List[Tuple[str, str]] = []               # (ref, input net) of field regulators
     for ref in sorted(fields, key=_ref_key):
@@ -234,31 +284,54 @@ def field_rails(fields: Mapping[str, Mapping[str, str]]) -> Dict[str, FieldRail]
         _check_names(ref, f)
         nets = _split(f.get("PI_RAIL"))
         values = {n: _split(f.get(n)) for n in PER_RAIL}
-        if _split(f.get("PI_LINK")) is not None:
-            if nets is not None or any(v is not None for v in values.values()):
+        placed = [n for n in RAIL_FIELDS if values[n] is not None]    # instance data
+        link = _split(f.get("PI_LINK")) is not None
+        if _split(f.get("PI_LINK_PINS")) is not None and not link:
+            raise FieldError(f"{ref}: PI_LINK_PINS without PI_LINK: the sides belong to a link "
+                             "(PI_LINK, e.g. 20mOhm)")
+        if link:
+            if nets is not None or placed:
                 raise FieldError(f"{ref}: PI_LINK with other fields: a link part has no PI_RAIL; "
                                  "its two nets are those of its pads")
-            continue
+            continue                          # library fields on a link part: part data
         if nets is None:
-            given = [n for n, v in values.items() if v is not None]
-            if given:
-                raise FieldError(f"{ref}: {', '.join(given)} without PI_RAIL: set PI_RAIL to the "
+            if placed:
+                raise FieldError(f"{ref}: {', '.join(placed)} without PI_RAIL: set PI_RAIL to the "
                                  "net it is on (e.g. +3V3)")
-            continue
+            continue                          # library fields only: part data, no rail yet
         if any(not n for n in nets):
             raise FieldError(f'{ref}: PI_RAIL = "{f["PI_RAIL"]}" has an empty net name')
-        if values["PI_SOURCE"] is None and values["PI_LOAD"] is None:
+        if values["PI_SOURCE"] is None and values["PI_LOAD"] is None and values["PI_VOUT"] is None:
             raise FieldError(f"{ref}: PI_RAIL {f['PI_RAIL']} but no PI_SOURCE or PI_LOAD: give the "
-                             "voltage it holds (PI_SOURCE, e.g. 3.3V) or the current it draws "
-                             "(PI_LOAD, e.g. 2A)")
+                             "voltage it holds (PI_SOURCE, e.g. 3.3V, or PI_VOUT on a fixed-output "
+                             "part) or the current it draws (PI_LOAD, e.g. 2A)")
         for name, vals in values.items():
-            if vals is not None and len(vals) != len(nets):
-                raise FieldError(f'{ref}: {name} = "{f[name]}" has {len(vals)} value(s) for '
-                                 f'{len(nets)} rail(s) (PI_RAIL = "{f["PI_RAIL"]}"): give one per '
-                                 "rail, separated by ';' (leave one empty to skip that rail)")
-        for i, net in enumerate(nets):
-            v = {n: _at(values[n], i) for n in PER_RAIL}
-            term, limit = _term(ref, net, i, v)
+            if vals is None or len(vals) == len(nets) or (name in LIBRARY_FIELDS and len(vals) == 1):
+                continue
+            rule = ("give one value for every rail, or one per rail separated by ';'"
+                    if name in LIBRARY_FIELDS else
+                    "give one per rail, separated by ';' (leave one empty to skip that rail)")
+            raise FieldError(f'{ref}: {name} = "{f[name]}" has {len(vals)} value(s) for '
+                             f'{len(nets)} rail(s) (PI_RAIL = "{f["PI_RAIL"]}"): {rule}')
+        positions = []
+        for i in range(len(nets)):
+            v: Dict[str, Optional[str]] = {}
+            explicit = set()                  # library fields given rail by rail
+            for n in PER_RAIL:
+                vals = values[n]
+                if vals is not None and n in LIBRARY_FIELDS and len(vals) == 1:
+                    v[n] = vals[0] or None    # one value for every rail of the part
+                else:
+                    v[n] = _at(vals, i)
+                    if vals is not None and n in LIBRARY_FIELDS:
+                        explicit.add(n)
+            positions.append((v, explicit))
+        if not any(v["PI_SOURCE"] or (v["PI_VOUT"] and not v["PI_LOAD"]) for v, _ in positions):
+            # A source nowhere: its library data cannot be part data for a source rail, so it
+            # is a mistake (a regulator placed as a load) and is refused, rail by rail.
+            positions = [(v, set(LIBRARY_FIELDS)) for v, _ in positions]
+        for i, (net, (v, explicit)) in enumerate(zip(nets, positions)):
+            term, limit = _term(ref, net, i, v, explicit)
             rail = rails.setdefault(net, FieldRail(net))
             rail.parts.append(ref)
             if isinstance(term.term, Source):
@@ -273,35 +346,66 @@ def field_rails(fields: Mapping[str, Mapping[str, str]]) -> Dict[str, FieldRail]
         if net in rails and any(t.term.ref == ref for t in rails[net].loads):
             raise FieldError(f"{ref}: PI_LOAD on {net} and PI_INPUT {net}: its input current would "
                              f"be counted twice; remove the PI_LOAD on {net}, PI_INPUT draws it")
+    if pad_nets:                          # a PI_SOURCE_REF part holds the rail on its pads
+        for net, fr in rails.items():
+            for t in fr.sources:
+                if t.part == t.term.ref:
+                    continue
+                pads = pad_nets.get(t.term.ref)
+                if pads is None:
+                    raise FieldError(f"{t.part}: PI_SOURCE_REF {t.term.ref}: no part {t.term.ref} on "
+                                     "the board; name the part whose pads hold the rail (e.g. the "
+                                     "inductor of an external-inductor buck)")
+                if net not in pads.values():
+                    on = ", ".join(sorted({n for n in pads.values() if n})) or "no net"
+                    raise FieldError(f"{t.part}: PI_SOURCE_REF {t.term.ref} has no pad on {net} (its "
+                                     f"pads are on {on}); name the part whose pads hold {net}, e.g. "
+                                     "the inductor's output pad")
     return rails
 
 
-def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]]
+def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=frozenset()
           ) -> Tuple[FieldTerm, Optional[Tuple[float, FieldValue]]]:
-    """The source or load at rail position ``i`` of a part, and its drop limit."""
-    src, load = v["PI_SOURCE"], v["PI_LOAD"]
+    """The source or load at rail position ``i`` of a part, and its drop limit. ``explicit``:
+    the library fields given rail by rail (the others apply to every rail where the part is a
+    source, and are not used where it is a load)."""
+    src, load, vout = v["PI_SOURCE"], v["PI_LOAD"], v["PI_VOUT"]
     if src and load:
         raise FieldError(f"{ref}: both PI_SOURCE and PI_LOAD for rail {net}: a part is either the "
                          "source of a rail or a load on it")
-    if not src and not load:
+    if not src and not load and not vout:
         raise FieldError(f"{ref}: rail {net} (PI_RAIL position {i + 1}) has neither PI_SOURCE nor "
                          "PI_LOAD")
     for name, of in (("PI_INPUT_PINS", "PI_INPUT"), ("PI_GND_PINS", "PI_GND")):
         if v[name] and not v[of]:
             raise FieldError(f"{ref}: {name} without {of} for rail {net}: set {of} to the net")
     values: List[Tuple[str, FieldValue]] = []
+    warnings: List[str] = []
     if load:
-        extra = [n for n in SOURCE_ONLY if v[n]]
+        extra = [n for n in SOURCE_ONLY if v[n]] + [n for n in LIBRARY_FIELDS if n in explicit and v[n]]
         if extra:
-            raise FieldError(f"{ref}: {extra[0]} is for a source (PI_SOURCE), not a load on {net}")
+            raise FieldError(f"{ref}: {extra[0]} is for a source (PI_SOURCE or PI_VOUT), not a load "
+                             f"on {net}" + ("; a regulator holds its output rail and draws its input "
+                                            "through PI_INPUT" if extra[0] in LIBRARY_FIELDS else ""))
         current = quantity(ref, "PI_LOAD", load)
         values.append((f"{current:g} A", FieldValue(ref, "PI_LOAD", load)))
         pins = _pins(ref, v["PI_PINS"], "PI_PINS", values)
         ground, gpins = _ground(ref, v, values)
         term: Union[Source, Load] = Load(ref, current, pins, ground_pins=gpins, ground_net=ground)
     else:
-        voltage = quantity(ref, "PI_SOURCE", src)
-        values.append((f"{voltage:g} V", FieldValue(ref, "PI_SOURCE", src)))
+        if src:
+            voltage = quantity(ref, "PI_SOURCE", src)
+            values.append((f"{voltage:g} V", FieldValue(ref, "PI_SOURCE", src)))
+            if vout and not math.isclose(quantity(ref, "PI_VOUT", vout), voltage, rel_tol=1e-12):
+                warnings.append(f'{ref}: PI_SOURCE "{src}" and PI_VOUT "{vout}" differ on {net}: '
+                                "PI_SOURCE (the placed part's value) is used, not the library's "
+                                "PI_VOUT")
+        else:
+            voltage = quantity(ref, "PI_VOUT", vout)
+            values.append((f"{voltage:g} V", FieldValue(ref, "PI_VOUT", vout)))
+        out_ref = v["PI_SOURCE_REF"] if v["PI_SOURCE_REF"] and v["PI_SOURCE_REF"] != ref else ""
+        if out_ref:
+            values.append((f"output on {out_ref}", FieldValue(ref, "PI_SOURCE_REF", out_ref)))
         pins = _pins(ref, v["PI_PINS"], "PI_PINS", values)
         kind = (v["PI_KIND"] or "source").lower()
         if kind not in SOURCE_KINDS:
@@ -333,15 +437,37 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]]
         if v["PI_INPUT"]:
             values.append((f"input {v['PI_INPUT']}", FieldValue(ref, "PI_INPUT", v["PI_INPUT"])))
             ipins = _pins(ref, v["PI_INPUT_PINS"], "PI_INPUT_PINS", values)
+        imax = fsw = None
+        if v["PI_IMAX"]:
+            imax = quantity(ref, "PI_IMAX", v["PI_IMAX"])
+            values.append((f"I_max {imax:g} A (shown, not judged yet)",
+                           FieldValue(ref, "PI_IMAX", v["PI_IMAX"])))
+        if v["PI_FSW"]:
+            if kind != "smps":
+                raise FieldError(f"{ref}: PI_FSW is for a switcher (PI_KIND smps), not a {kind}")
+            fsw = quantity(ref, "PI_FSW", v["PI_FSW"])
+            values.append((f"f_sw {fsw:g} Hz (stored, not used yet)",
+                           FieldValue(ref, "PI_FSW", v["PI_FSW"])))
         ground, gpins = _ground(ref, v, values)
-        term = Source(ref, voltage, pins, kind=kind, efficiency=efficiency, quiescent_a=iq,
-                      input_pins=ipins, input_net=v["PI_INPUT"] or "", ground_pins=gpins,
-                      ground_net=ground)
+        # PI_SOURCE_REF: the rail is held at that part's pads; input and ground stay this part's.
+        term = Source(out_ref or ref, voltage, pins, name=ref if out_ref else "", kind=kind,
+                      efficiency=efficiency, quiescent_a=iq,
+                      input_ref=ref if out_ref and v["PI_INPUT"] else "", input_pins=ipins,
+                      input_net=v["PI_INPUT"] or "", ground_ref=ref if out_ref and ground else "",
+                      ground_pins=gpins, ground_net=ground, current_limit_a=imax, fsw_hz=fsw)
+        if out_ref:
+            return _limited(FieldTerm(term, values, owner=ref, warnings=warnings), ref, v)
+    return _limited(FieldTerm(term, values, warnings=warnings), ref, v)
+
+
+def _limited(term: FieldTerm, ref: str, v: Mapping[str, Optional[str]]
+             ) -> Tuple[FieldTerm, Optional[Tuple[float, FieldValue]]]:
+    """``term`` with the drop limit of its rail position."""
     limit = None
     if v["PI_LIMIT_DROP"]:
         limit = (quantity(ref, "PI_LIMIT_DROP", v["PI_LIMIT_DROP"]),
                  FieldValue(ref, "PI_LIMIT_DROP", v["PI_LIMIT_DROP"]))
-    return FieldTerm(term, values), limit
+    return term, limit
 
 
 def _ground(ref: str, v: Mapping[str, Optional[str]], values: List) -> Tuple[str, PinSpec]:
@@ -368,11 +494,45 @@ def field_links(fields: Mapping[str, Mapping[str, str]],
         for number in sorted(pads, key=_pin_key):
             if pads[number]:
                 nets.setdefault(pads[number], []).append(number)
-        if len(nets) != 2:
+        sides = fields[ref].get("PI_LINK_PINS")
+        if sides is not None and sides.strip():
+            (net_a, pins_a), (net_b, pins_b) = _link_sides(ref, sides, pads)
+        elif len(nets) != 2:
             raise FieldError(f"{ref}: PI_LINK on a part whose pads are on {len(nets)} net(s) "
-                             f"({', '.join(nets) or 'none'}); a link joins exactly two nets")
-        (net_a, pins_a), (net_b, pins_b) = nets.items()
+                             f"({', '.join(nets) or 'none'}); a link joins exactly two nets: on a "
+                             'part with more, choose its two sides with PI_LINK_PINS (e.g. "1,2;5": '
+                             "side A's pads ; side B's)")
+        else:
+            (net_a, pins_a), (net_b, pins_b) = nets.items()
         out.append((Link(ref, ref, pins_a, net_a, pins_b, net_b, ohm), FieldValue(ref, "PI_LINK", text)))
+    return out
+
+
+def _link_sides(ref: str, text: str, pads: Mapping[str, str]) -> List[Tuple[str, List[str]]]:
+    """The two sides PI_LINK_PINS chooses ("1,2;5": side A's pads ; side B's), each its net
+    and its pads, checked against the part's pads."""
+    shown = f'{ref}: PI_LINK_PINS = "{text}"'
+    parts = [p.strip() for p in text.split(";")]
+    if len(parts) != 2 or not all(parts):
+        raise FieldError(f"{shown}: give the two sides as side A ; side B, e.g. 1,2;5")
+    out = []
+    for label, part in zip("AB", parts):
+        patterns = parse_pins(part)
+        if patterns is None:
+            raise FieldError(f"{shown}: name side {label}'s pads (numbers or globs), not all")
+        chosen = [n for n in sorted(pads, key=_pin_key) if any(fnmatch.fnmatchcase(n, p) for p in patterns)]
+        if not chosen:
+            raise FieldError(f"{shown}: side {label} ({part}) matches no pad of {ref} (its pads: "
+                             f"{', '.join(sorted(pads, key=_pin_key))})")
+        on = sorted({pads[n] for n in chosen if pads[n]})
+        if len(on) != 1:
+            raise FieldError(f"{shown}: side {label}'s pads are on {len(on)} net(s) "
+                             f"({', '.join(on) or 'none'}); each side's pads are on one net, so two "
+                             "nets are not one side")
+        out.append((on[0], chosen))
+    if out[0][0] == out[1][0]:
+        raise FieldError(f"{shown}: both sides are on the same net {out[0][0]}; a link joins two "
+                         "different nets")
     return out
 
 
@@ -452,7 +612,7 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
       the limit;
     * ``PI_LINK`` parts replace project links on the same part (a warning when they differ).
     """
-    rails = field_rails(fields)
+    rails = field_rails(fields, pad_nets)
     links = field_links(fields, pad_nets or {})
     out = copy.deepcopy(project)
     merged = Merged(out)
@@ -627,7 +787,7 @@ def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = N
     """The fields' rail, with what it keeps from the project rail ``own`` of its net, and its
     origin (notes and warnings)."""
     rail = fr.rail()
-    origin = Origin(fr.net, "fields", [fr.note()], board_fields=fr.listing())
+    origin = Origin(fr.net, "fields", [fr.note()], list(fr.warnings), board_fields=fr.listing())
     if own is None:
         return rail, origin
     # A project rail with no sources and no loads only adds limits: nothing to compare.
@@ -662,7 +822,7 @@ def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = N
 # ---------------------------------------------------------------------- comparing
 
 _SOURCE_KEYS = ("voltage", "pins", "kind", "efficiency", "quiescent_a", "input_ref", "input_pins",
-                "input_net", "ground_ref", "ground_pins", "ground_net")
+                "input_net", "ground_ref", "ground_pins", "ground_net", "current_limit_a", "fsw_hz")
 _LOAD_KEYS = ("current", "pins", "ground_ref", "ground_pins", "ground_net")
 
 
@@ -713,6 +873,10 @@ def _term_text(t: Union[Source, Load]) -> str:
             s += f" I_q {t.quiescent_a:g} A"
         if t.input_net:
             s += f" input {t.input_net}{pins(t.input_pins)}"
+        if t.current_limit_a is not None:
+            s += f" I_max {t.current_limit_a:g} A"
+        if t.fsw_hz is not None:
+            s += f" f_sw {t.fsw_hz:g} Hz"
     else:
         s = f"{t.ref} {t.current:g} A{pins(t.pins)}"
     if t.ground_net:
@@ -761,7 +925,7 @@ def listing(fields: Mapping[str, Mapping[str, str]],
             pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None) -> Dict[str, Any]:
     """The fields' rails and links as plain data, each value with the field it came from
     (for the MCP tool and the CLI). Raises FieldError like :func:`field_rails`."""
-    rails = field_rails(fields)
+    rails = field_rails(fields, pad_nets)
     return {
         "rails": [{**fr.listing(), "missing": fr.missing(),
                    "note": fr.note() if fr.missing() is None else None}
@@ -784,22 +948,22 @@ def _pin_key(number: str):
 
 # ---------------------------------------------------------------------- proposing fields
 
-LIBRARY_FIELDS = ("PI_KIND", "PI_EFF", "PI_IQ")
-INSTANCE_FIELDS = ("PI_RAIL", "PI_SOURCE", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP", "PI_INPUT",
-                   "PI_INPUT_PINS", "PI_GND", "PI_GND_PINS", "PI_LINK")
-# The unit a value is written in, by size: (below this, unit, divisor), the first that fits.
+# The unit a value is written in, by size: (below this, unit, scale), the first that fits.
 _WRITE_UNITS = {"PI_SOURCE": [(math.inf, "V", 1)],
                 "PI_LOAD": [(1.0, "mA", 1000), (math.inf, "A", 1)],
                 "PI_IQ": [(1e-3, "uA", 10 ** 6), (1.0, "mA", 1000), (math.inf, "A", 1)],
                 "PI_LINK": [(1.0, "mOhm", 1000), (math.inf, "Ohm", 1)],
-                "PI_EFF": [(math.inf, "%", 100)], "PI_LIMIT_DROP": [(math.inf, "%", 1)]}
+                "PI_EFF": [(math.inf, "%", 100)], "PI_LIMIT_DROP": [(math.inf, "%", 1)],
+                "PI_VOUT": [(math.inf, "V", 1)],
+                "PI_IMAX": [(1.0, "mA", 1000), (math.inf, "A", 1)],
+                "PI_FSW": [(1e3, "Hz", 1), (1e6, "kHz", Decimal("0.001")),
+                           (math.inf, "MHz", Decimal("0.000001"))]}
 
 
 def field_text(name: str, value: float) -> str:
     """``value`` (V, A, Ω, a fraction for PI_EFF, % for PI_LIMIT_DROP) as field text with its
     unit, in plain decimals (the grammar has no exponent), read back exactly by
     :func:`quantity`."""
-    from decimal import Decimal
     units = _WRITE_UNITS[name]
     preferred = next(i for i, (below, _, _) in enumerate(units) if abs(value) < below)
     texts = []
@@ -815,8 +979,25 @@ def field_text(name: str, value: float) -> str:
     raise ValueError(f"{name}: {value!r} cannot be written")
 
 
+def _source_part(s: Source) -> str:
+    """The part whose fields describe source ``s``: its own, or, when its rail is held at
+    another part's pads (an external-inductor buck: input and ground on the IC, the output
+    at the inductor), the part with its input and ground, written with PI_SOURCE_REF."""
+    others = {r for r in (s.input_ref, s.ground_ref) if r and r != s.ref}
+    if len(others) != 1:
+        return s.ref
+    (part,) = others
+    if all(not net or ref == part for ref, net in ((s.input_ref, s.input_net),
+                                                    (s.ground_ref, s.ground_net))):
+        return part
+    return s.ref
+
+
 def _source_fields(s: Source, net: str, blocked: List[str], notes: List[str]) -> Dict[str, str]:
+    part = _source_part(s)
     out = {"PI_SOURCE": field_text("PI_SOURCE", s.voltage)}
+    if part != s.ref:
+        out["PI_SOURCE_REF"] = s.ref
     if s.pins:
         out["PI_PINS"] = ",".join(s.pins)
     regulator = s.kind in ("ldo", "smps")
@@ -834,8 +1015,15 @@ def _source_fields(s: Source, net: str, blocked: List[str], notes: List[str]) ->
             out["PI_IQ"] = field_text("PI_IQ", s.quiescent_a)
         else:
             notes.append("quiescent current on a plain source (not used by the solve)")
+    if s.current_limit_a is not None:
+        out["PI_IMAX"] = field_text("PI_IMAX", s.current_limit_a)
+    if s.fsw_hz is not None:
+        if s.kind == "smps":
+            out["PI_FSW"] = field_text("PI_FSW", s.fsw_hz)
+        else:
+            notes.append(f"switching frequency on a {s.kind} (PI_FSW is for a switcher)")
     if s.input_net:
-        if s.input_ref and s.input_ref != s.ref:
+        if s.input_ref and s.input_ref not in (s.ref, part):
             blocked.append(f"input on another part ({s.input_ref})")
         out["PI_INPUT"] = s.input_net
         if s.input_pins:
@@ -844,7 +1032,7 @@ def _source_fields(s: Source, net: str, blocked: List[str], notes: List[str]) ->
         blocked.append(f"a {s.kind} without its input")
     if s.sense_net or s.ground_sense_net:
         notes.append("remote sense (sense, ground_sense): keep it in the project file")
-    _ground_fields(s, out, blocked)
+    _ground_fields(s, out, blocked, part)
     return out
 
 
@@ -856,10 +1044,10 @@ def _load_fields(ld: Load, blocked: List[str]) -> Dict[str, str]:
     return out
 
 
-def _ground_fields(t, out: Dict[str, str], blocked: List[str]) -> None:
+def _ground_fields(t, out: Dict[str, str], blocked: List[str], part: str = "") -> None:
     if not t.ground_net:
         return
-    if t.ground_ref and t.ground_ref != t.ref:
+    if t.ground_ref and t.ground_ref not in (t.ref, part or t.ref):
         blocked.append(f"ground pins on another part ({t.ground_ref})")
     out["PI_GND"] = t.ground_net
     if t.ground_pins:
@@ -884,12 +1072,13 @@ def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]
             notes: List[str] = []
             fields = (_source_fields(t, rail.net, blocked, notes) if isinstance(t, Source)
                       else _load_fields(t, blocked))
-            if t.name and t.name != t.ref:
+            part = _source_part(t) if isinstance(t, Source) else t.ref
+            if t.name and t.name not in (t.ref, part):
                 notes.append(f"its name ({t.name}): fields name a terminal by its part")
-            not_expressed += [{"rail": rail.net, "part": t.ref, "what": n,
+            not_expressed += [{"rail": rail.net, "part": part, "what": n,
                                "reason": "fields cannot carry it; it is not proposed"} for n in notes]
-            blocking += [(t.ref, b) for b in blocked]
-            positions.append((t.ref, fields))
+            blocking += [(part, b) for b in blocked]
+            positions.append((part, fields))
         if blocking:
             not_expressed += [{"rail": rail.net, "part": ref, "what": what,
                                "reason": "fields cannot carry it, so this rail is not proposed"}
@@ -909,17 +1098,22 @@ def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]
     links: Dict[str, Dict[str, str]] = {}
     for k in project.links:
         pads = (pad_nets or {}).get(k.ref)
+        sides = None                         # PI_LINK_PINS, when the link needs its sides named
         if pads is not None:
             on = {net: sorted((p for p, n in pads.items() if n == net), key=_pin_key)
                   for net in {n for n in pads.values() if n}}
-            wrong = (set(on) != {k.net_a, k.net_b}
-                     or any(pins is not None and sorted(pins, key=_pin_key) != on.get(net)
-                            for net, pins in ((k.net_a, k.pins_a), (k.net_b, k.pins_b))))
+            side_a = sorted(k.pins_a or on.get(k.net_a, []), key=_pin_key)
+            side_b = sorted(k.pins_b or on.get(k.net_b, []), key=_pin_key)
+            wrong = (k.net_a not in on or k.net_b not in on
+                     or any(p not in on[net] for net, side in ((k.net_a, side_a), (k.net_b, side_b))
+                            for p in side))
             if wrong:
                 not_expressed.append({"rail": None, "part": k.ref, "what": f"link {k.name}",
-                                      "reason": "a PI_LINK joins all of the part's pads on its two "
-                                                "nets; this link does not, so it is not proposed"})
+                                      "reason": "its pins are not the part's pads on its two nets, "
+                                                "so it is not proposed"})
                 continue
+            if set(on) != {k.net_a, k.net_b} or side_a != on[k.net_a] or side_b != on[k.net_b]:
+                sides = f"{','.join(side_a)};{','.join(side_b)}"
         else:
             not_expressed.append({"rail": None, "part": k.ref, "what": f"link {k.name} pins",
                                   "reason": "the board's pads were not available to check them: a "
@@ -928,7 +1122,8 @@ def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]
         if k.name != k.ref:
             not_expressed.append({"rail": None, "part": k.ref, "what": f"link name {k.name}",
                                   "reason": "a PI_LINK is named by its part"})
-        links[k.ref] = {"PI_LINK": field_text("PI_LINK", k.resistance_ohm)}
+        links[k.ref] = {"PI_LINK": field_text("PI_LINK", k.resistance_ohm),
+                        **({"PI_LINK_PINS": sides} if sides else {})}
     check_pads = dict(pad_nets or {})        # a link without known pads: checked with its own
     for k in project.links:
         if k.ref in links and k.ref not in check_pads:

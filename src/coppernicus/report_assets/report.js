@@ -289,10 +289,12 @@ if (M.tree) {                 // solve --tree --html: the tree's own tables, onc
   const T = M.tree, mw = (x) => (ok(x) ? sig(x * 1e3, 3) : "–");
   $("tree").hidden = false;
   $("tree-verdict").append(badge(T.verdict), " ", T.verdict_note || "");
+  // I max: a source's rated output current (PI_IMAX), shown beside I out, not judged yet.
   table("tree-vrms", [["VRM", ""], ["Kind", ""], ["Group", ""], ["V set (V)", "num"], ["V out (V)", "num"], ["I out (A)", "num"],
-    ["V in (V)", "num"], ["I in (A)", "num"], ["Loss (mW)", "num"], ["", ""]],
+    ["I max (A)", "num"], ["V in (V)", "num"], ["I in (A)", "num"], ["Loss (mW)", "num"], ["", ""]],
     T.vrms.map((v) => [[v.name, ""], [v.kind, ""], [v.group, ""], [sig(v.v_set_v, 4), "num"], [sig(v.v_out_v, 6), "num"],
-      [sig(v.i_out_a, 4), "num"], [ok(v.v_in_v) ? sig(v.v_in_v, 6) : "–", "num"], [ok(v.i_in_a) ? sig(v.i_in_a, 4) : "–", "num"],
+      [sig(v.i_out_a, 4), "num"], [ok(v.i_max_a) ? sig(v.i_max_a, 4) : "–", "num"],
+      [ok(v.v_in_v) ? sig(v.v_in_v, 6) : "–", "num"], [ok(v.i_in_a) ? sig(v.i_in_a, 4) : "–", "num"],
       [mw(v.p_loss_w), "num"], [v.regulation || "", ""]]));
   table("tree-loads", [["Load", ""], ["Group", ""], ["I (A)", "num"], ["Nominal (V)", "num"], ["Across (V)", "num"],
     ["Drop (mV)", "num"], ["Drop (%)", "num"], ["Verdict", ""]],

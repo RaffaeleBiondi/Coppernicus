@@ -184,15 +184,16 @@ def tree_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
     if "error" in doc:
         return lines + [f"**Error:** {_cell(doc['error'].get('message', ''))}"]
     lines += [f"Verdict: **{_cell(doc.get('verdict'))}**. {_cell(doc.get('verdict_note', ''))}", "",
-              "| VRM | Kind | Group | V set (V) | V out (V) | I out (A) | V in (V) | I in (A) "
-              "| Loss (mW) | |",
-              "|---|---|---|---:|---:|---:|---:|---:|---:|---|"]
+              "| VRM | Kind | Group | V set (V) | V out (V) | I out (A) | I max (A) | V in (V) "
+              "| I in (A) | Loss (mW) | |",
+              "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|"]
     for v in doc.get("vrms", []):
         loss = v.get("p_loss_w")
         loss_mw = loss * 1e3 if loss is not None else None
         lines.append(f"| {_cell(v['name'])} | {_cell(v['kind'])} | {_cell(v['group'])} | "
                      f"{_num(v.get('v_set_v'), '.4g')} | {_num(v.get('v_out_v'), '.5g')} | "
-                     f"{_num(v.get('i_out_a'), '.4g')} | {_num(v.get('v_in_v'), '.5g')} | "
+                     f"{_num(v.get('i_out_a'), '.4g')} | {_num(v.get('i_max_a'), '.4g')} | "
+                     f"{_num(v.get('v_in_v'), '.5g')} | "
                      f"{_num(v.get('i_in_a'), '.4g')} | {_num(loss_mw, '.3g')} | "
                      f"{_cell(v.get('regulation') or '')} |")
     lines += ["", "| Load | Group | I (A) | Nominal (V) | Across (V) | Drop (mV) | Drop (%) | Verdict |",

@@ -779,14 +779,16 @@ class Session:
             except ServiceError:
                 board = None                  # links are then proposed without checking pads
         pad_nets: Dict[str, Dict[str, str]] = {}
-        for k in project.links:
-            if board is None:
-                break
-            for net in (k.net_a, k.net_b):
-                if net in board.nets():
-                    for part in board.parts_on_net(net):
-                        if part.ref == k.ref:
-                            pad_nets.setdefault(k.ref, {}).update({pin: net for pin in part.pins})
+        # The pads of the link parts and of the parts a source is held at, to check them.
+        wanted = {k.ref for k in project.links} | {s.ref for r in project.rails for s in r.sources}
+        on_net: Dict[str, list] = {}
+        for ref in sorted(wanted) if board is not None else ():
+            for net in board.part_nets(ref):
+                if net not in on_net:
+                    on_net[net] = board.parts_on_net(net)
+                for part in on_net[net]:
+                    if part.ref == ref:
+                        pad_nets.setdefault(ref, {}).update({pin: net for pin in part.pins})
         try:
             proposal = BF.propose(project, pad_nets)
         except BF.FieldError as e:
@@ -797,10 +799,11 @@ class Session:
             "assumptions": [
                 "Coppernicus never writes KiCad files: paste these fields into the symbols in the "
                 "schematic, then update the PCB from the schematic.",
-                "Library-symbol fields (PI_KIND, PI_EFF, PI_IQ) describe the part itself; "
-                "schematic-instance fields (PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS, PI_INPUT, PI_GND, "
-                "PI_LINK...) where it sits. A part on several rails gets one value per rail, by "
-                "position, separated by ';'.",
+                "Library-symbol fields (PI_KIND, PI_EFF, PI_IQ, PI_IMAX, PI_FSW; PI_VOUT for a "
+                "fixed output) describe the part itself; schematic-instance fields (PI_RAIL, "
+                "PI_SOURCE, PI_SOURCE_REF, PI_LOAD, PI_PINS, PI_INPUT, PI_GND, PI_LINK, "
+                "PI_LINK_PINS...) where it sits. A part on several rails gets one value per rail, "
+                "by position, separated by ';'.",
                 "PI_LIMIT_DROP is placed on the rail's first source; if it is a chip's own supply "
                 "tolerance, it belongs in that chip's library symbol instead.",
                 "Checked by parsing the proposal back: it gives the project's rails, except what "
@@ -850,8 +853,9 @@ class Session:
                                    "links) or the KiCad fields (PI_GND, PI_INPUT, PI_LINK...), "
                                    "then solve again") from None
         merged.annotate(tree)
+        doc = C.vrm_ratings(tree_summary(tree, top=max(1, int(top))), project)
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
-        return json.loads(json.dumps(tree_summary(tree, top=max(1, int(top))), allow_nan=False))
+        return json.loads(json.dumps(doc, allow_nan=False))
 
     # ================================================================== result queries
     def _record(self, result_id: str, heavy: bool = True) -> _ResultRecord:

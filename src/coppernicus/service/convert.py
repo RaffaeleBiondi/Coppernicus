@@ -269,6 +269,31 @@ def verdict(problems: List[Problem], limits: Limits, result: Optional[RailResult
             "not_judged": unjudged}
 
 
+I_MAX_NOTE = ("I_max (a source's rated output current: PI_IMAX, current_limit_a) is shown next to "
+              "I_out; it is not judged yet.")
+
+
+def vrm_ratings(doc: Dict[str, Any], project) -> Dict[str, Any]:
+    """The power-tree document ``doc`` (:func:`coppernicus.power_tree.tree_summary`) with each
+    VRM row's ``i_max_a``: its source's rated output current from ``project`` (None when not
+    given), and an assumption line. Only when some source of ``project`` has one: a document
+    without ratings stays as it was. Shown, not judged. Edits ``doc`` in place."""
+    rated = {(r.net, s.label): s.current_limit_a for r in project.rails for s in r.sources}
+    if all(value is None for value in rated.values()):
+        return doc
+    by_name: Dict[str, List[Optional[float]]] = {}
+    for (_, name), value in rated.items():
+        by_name.setdefault(name, []).append(value)
+    for v in doc.get("vrms", []):
+        value = rated.get((v.get("group"), v.get("name")))
+        if value is None and len(by_name.get(v.get("name"), [])) == 1:
+            value = by_name[v["name"]][0]
+        v["i_max_a"] = value
+    if any(v.get("i_max_a") is not None for v in doc.get("vrms", [])):
+        doc.setdefault("assumptions", []).append(I_MAX_NOTE)
+    return doc
+
+
 def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems: List[Problem],
                  settings: Settings, thickness: Mapping[str, float],
                  layer_thickness: Mapping[str, float], top: int = 5,
@@ -313,7 +338,9 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         x, y = t.positions[0] if t.positions else (float("nan"), float("nan"))
         sources.append({"name": t.name, "ref": t.ref, "pins": pins_text(spec.pins),
                         "pin_count": len(t.pad_ids), "voltage_v": spec.voltage,
-                        "current_a": t.current, "x_mm": x, "y_mm": y})
+                        "current_a": t.current, "x_mm": x, "y_mm": y,
+                        **({"current_limit_a": spec.current_limit_a}
+                           if spec.current_limit_a is not None else {})})
     total = res.power_loss or 1.0
     layers = []
     for lf in res.layers:
