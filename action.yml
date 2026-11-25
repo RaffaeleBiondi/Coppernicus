@@ -36,7 +36,8 @@ inputs:
   tree:
     description: >-
       Also solve each project's whole power tree and add its VRM and load tables to the job
-      summary. The tree's verdict is shown there; it does not set the exit code.
+      summary. The tree's verdict is shown there; it does not set the exit code, except for
+      the board temperature: a project that enables it is judged by it (1 fail, 3 not judged).
     default: "false"
   python-version:
     description: Python used to run Coppernicus (3.12 or 3.13).

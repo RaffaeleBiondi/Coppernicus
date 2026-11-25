@@ -149,3 +149,23 @@ def test_the_tree_report_has_a_board_temperature_section_with_its_maps(thermal_d
     found = re.search(r'id="meta">(.*?)</script>', plain.read_text(encoding="utf-8"), re.S).group(1)
     assert "thermal" in json.loads(found)["tree"]                  # the project enables it
     capsys.readouterr()
+
+
+
+@pytest.mark.parametrize("max_rise, code, verdict", [(100.0, 0, "pass"), (0.1, 1, "fail")])   # ~1 °C rise
+def test_ci_judges_the_board_temperature_when_the_tree_solves_it(relaxed, tmp_path, monkeypatch,
+                                                                 max_rise, code, verdict):
+    """With the tree input, a project that enables the temperature is judged by it in CI: its
+    verdict replaces the rail-by-rail "not judged" entries and sets the code (1 fail, 3 not
+    judged); the job summary has a Board temperature block."""
+    with_thermal_limit(relaxed, enabled=True, max_rise_c=max_rise)
+    monkeypatch.chdir(tmp_path)
+    index = ci.solve_all(["demo/demo-relaxed.coppernicus.yml"], Path("ci"), html=False, tree=True)
+    [entry] = index["projects"]
+    assert entry["tree"]["thermal"]["verdict"] == verdict
+    assert (index["exit_code"], index["verdict"]) == (code, verdict)
+    assert not [u for u in entry["doc"]["not_judged"] if u["item"] == "board temperature"]
+    md = ci.summary_markdown(index)
+    assert "#### Board temperature" in md and "| F.Cu |" in md and "Grid peak" in md
+    without = ci.solve_all(["demo/demo-relaxed.coppernicus.yml"], Path("ci2"), html=False)
+    assert without["exit_code"] == EXIT_NOT_JUDGED                 # no tree: not judged, exit 3

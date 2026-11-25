@@ -119,6 +119,7 @@ def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool =
             entry["doc"] = doc
         if tree and "doc" in entry:
             entry["tree"] = _solve_tree(project, folder, top, env)
+            _judge_board_temperature(entry)
         entries.append(entry)
     exit_code = EXIT_ERROR if unmatched else overall_exit_code(entries)
     verdict = "error" if unmatched else overall_verdict(entries)
@@ -178,6 +179,42 @@ def _solve_tree(project: Path, folder: Path, top: int, env) -> Dict[str, Any]:
                           "hint": "see the log above"}}
 
 
+def _rails_verdict(doc: Dict[str, Any]) -> str:
+    """A rail-by-rail document's overall verdict from its rails and its not_judged list, by
+    the rule of :meth:`coppernicus.service.Session.solve_project`."""
+    rails = doc.get("rails", [])
+    verdicts = ["error" if "error" in r else r.get("verdict") for r in rails if "skipped" not in r]
+    if "error" in verdicts:
+        return "error"
+    if "fail" in verdicts:
+        return "fail"
+    if doc.get("not_judged"):
+        return "not_judged"
+    if verdicts and all(v == "pass" for v in verdicts):
+        return "pass"
+    return "pass_partially_judged" if "pass" in verdicts else "not_judged"
+
+
+def _judge_board_temperature(entry: Dict[str, Any]) -> None:
+    """When the tree run solved the board temperature, its verdict judges the project's
+    board-temperature limits: the rail-by-rail "not judged" entries for them are replaced by
+    it (fail: exit 1; not judged: its own entries, exit 3; pass: nothing left to say)."""
+    thermal = (entry.get("tree") or {}).get("thermal")
+    doc = entry.get("doc")
+    if not thermal or doc is None or entry["exit_code"] == EXIT_ERROR:
+        return
+    kept = [u for u in doc.get("not_judged", [])
+            if not (u.get("rail") is None and u.get("item") == "board temperature")]
+    doc["not_judged"] = kept + [{"rail": None, **u} for u in thermal.get("not_judged", [])]
+    verdict = _rails_verdict(doc)
+    if thermal.get("verdict") == "fail" and verdict != "error":
+        verdict = "fail"
+    doc["verdict"] = verdict
+    doc["board_temperature_verdict"] = thermal.get("verdict")
+    entry["exit_code"] = (EXIT_LIMIT if verdict == "fail" else EXIT_ERROR if verdict == "error"
+                          else EXIT_NOT_JUDGED if doc["not_judged"] else EXIT_OK)
+
+
 def tree_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
     """The VRM and load tables of a power-tree document, for the job summary."""
     lines = ["", f"### Power tree: `{_cell(project)}`", ""]
@@ -205,6 +242,29 @@ def tree_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
                      f"{_num(ld.get('nominal_v'), '.4g')} | {_num(ld.get('v_across_v'), '.5g')} | "
                      f"{_num(ld.get('drop_mv'), '.3g')} | {_num(ld.get('drop_pct'), '.3g')} | "
                      f"{_cell(verdict)} |")
+    if doc.get("thermal"):
+        lines += _thermal_markdown(doc["thermal"])
+    return lines
+
+
+def _thermal_markdown(th: Dict[str, Any]) -> List[str]:
+    """The board temperature of a tree document, for the job summary."""
+    def pad(p):
+        return f"{p['ref']}.{p['pad']}" if p else "–"
+    settled = {True: "settled", False: "not settled"}.get(th.get("settled"), "settling not checked")
+    peak = (f"Grid peak {_num(th.get('peak_c'), '.4g')} °C (rise {_num(th.get('peak_rise_c'), '.3g')} °C)"
+            f" on {_cell(th.get('peak_layer'))}, nearest pad {_cell(pad(th.get('peak_nearest_pad')))}: "
+            f"shown, never judged. Ambient {_num(th.get('ambient_c'), '.3g')} °C, "
+            f"{th.get('iterations')} iteration(s), {settled}.")
+    lines = ["", "#### Board temperature", "",
+             f"Verdict: **{_cell(th.get('verdict'))}**. {_cell(th.get('verdict_note', ''))}", "", peak,
+             "", "| Layer | Hottest copper (°C) | Rise (°C) | Nearest pad | Verdict |",
+             "|---|---:|---:|---|---|"]
+    for r in th.get("layers", []):
+        ex = r.get("exceeds_limit")
+        judged = "**FAIL**" if ex else "within" if ex is False else "not judged"
+        lines.append(f"| {_cell(r['layer'])} | {_num(r.get('t_max_c'), '.4g')} | "
+                     f"{_num(r.get('rise_c'), '.3g')} | {_cell(pad(r.get('nearest_pad')))} | {judged} |")
     return lines
 
 

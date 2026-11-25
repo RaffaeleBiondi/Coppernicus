@@ -134,7 +134,11 @@ uv run --project path/to/Coppernicus python -m coppernicus.ci summary --out resu
   pin a commit SHA, or a release tag once there are releases.
 - **Board temperature.** A project with `thermal.max_temp_c` or `max_rise_c` set needs the
   power tree to judge them: the rail-by-rail check lists each as NOT JUDGED ("solved with the
-  power tree only") and exits 3, never a silent pass.
+  power tree only") and exits 3, never a silent pass. With `tree: true` and `thermal: enabled:
+  true` in the project, the tree run solves the temperature (heavier; its size and memory
+  estimate is printed in the log first): its verdict then judges those limits and sets the
+  step's result (fail 1, not judged 3), and the summary adds a "Board temperature" block with
+  the hottest copper per layer.
 - **Privacy.** The board is processed on the runner of your repository's workflow. The results
   stay in that run's artifacts. Nothing is sent anywhere else.
 - **Self-test.** This repository runs the action on the synthetic demo at every push
