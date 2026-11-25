@@ -690,6 +690,53 @@ class Session:
                             "file was only read."],
             "warnings": self._fields_warnings(project, board, edited)})
 
+    def propose_fields(self, project_path=None, result_id: Optional[str] = None) -> Dict[str, Any]:
+        """The PI_* field text that describes a project's rails and links (or a solved rail's),
+        part by part, split between the library symbol and the schematic instance
+        (:func:`coppernicus.board_fields.propose`). Nothing is written."""
+        if (project_path is None) == (result_id is None):
+            raise ServiceError(E.INVALID_INPUT, "give project_path or result_id, one of them",
+                               "a project file proposes all its rails; a result, its rail")
+        if result_id is not None:
+            rec = self._record(result_id, heavy=False)
+            project = Project(rails=[rec.rail])
+            board = rec.board or self._entry(rec.board_id).board
+        else:
+            path = Path(str(project_path)).expanduser()
+            try:
+                project = Project.from_dict(_read_mapping(path), path)
+            except ProjectError as e:
+                raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                                   "fix the project file; its format is in the README") from None
+            try:
+                board = self._entry(self.open_board(project.board_path())["board_id"]).board
+            except ServiceError:
+                board = None                  # links are then proposed without checking pads
+        pad_nets: Dict[str, Dict[str, str]] = {}
+        for k in project.links:
+            if board is None:
+                break
+            for net in (k.net_a, k.net_b):
+                if net in board.nets():
+                    for part in board.parts_on_net(net):
+                        if part.ref == k.ref:
+                            pad_nets.setdefault(k.ref, {}).update({pin: net for pin in part.pins})
+        proposal = BF.propose(project, pad_nets)
+        return C.jsonable({
+            **proposal,
+            "assumptions": [
+                "Coppernicus never writes KiCad files: paste these fields into the symbols in the "
+                "schematic, then update the PCB from the schematic.",
+                "Library-symbol fields (PI_KIND, PI_EFF, PI_IQ) describe the part itself; "
+                "schematic-instance fields (PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS, PI_INPUT, PI_GND, "
+                "PI_LINK...) where it sits. A part on several rails gets one value per rail, by "
+                "position, separated by ';'.",
+                "PI_LIMIT_DROP is placed on the rail's first source; if it is a chip's own supply "
+                "tolerance, it belongs in that chip's library symbol instead.",
+                "Checked by parsing the proposal back: it gives the project's rails, except what "
+                "not_expressed lists (remote sense, names, the other limits)."],
+            "warnings": []})
+
     def _fields_warnings(self, project: Project, board: Path, nets: Sequence[str]) -> List[str]:
         """What the board's KiCad fields will do to the rails just written: win over a rail of
         a net they define (it is ignored when solving), or fail every run if malformed."""

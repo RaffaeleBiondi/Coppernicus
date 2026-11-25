@@ -77,6 +77,7 @@ input.
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
 | `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. |
 | `solve_tree` | `project_path`, `top`?, `use_board_fields`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. |
+| `propose_fields` | `project_path` or `result_id` | The KiCad `PI_*` field text that describes a project's rails and links (or one solved rail), part by part, to paste into KiCad. See [Proposing fields](#proposing-fields). |
 | `read_project` | `project_path` | A project file as written (rails, sources, loads, limits, links, settings; unknown keys included), checked by the project loader, with the board it names. |
 | `write_project` | `project_path`, `board_path`?, `rails`?, `remove_rails`?, `links`?, `remove_links`?, `settings`?, `use_board_fields`?, `from_project`?, `overwrite`? | Creates or edits a project file for the user. See [Editing projects](#editing-projects). |
 | `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
@@ -220,6 +221,25 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
   Action read the fields. The desktop app does not yet; the merge is a pure function
   (`coppernicus.board_fields.merge(project, fields, pad_nets)`, returning the merged project,
   each net's origin and the warnings) that it can call.
+
+### Proposing fields
+
+`propose_fields(project_path)` (or a `result_id`) is the inverse of the merge: the field text
+that describes the project's rails and links, part by part, for the user to paste into the
+symbols in KiCad. Coppernicus never writes KiCad files. Each part has:
+- `library_symbol`: `PI_KIND`, `PI_EFF`, `PI_IQ`, what the part is;
+- `schematic_instance`: `PI_RAIL`, `PI_SOURCE`, `PI_LOAD`, `PI_PINS`, `PI_LIMIT_DROP`,
+  `PI_INPUT`, `PI_INPUT_PINS`, `PI_GND`, `PI_GND_PINS`, `PI_LINK`, where it sits.
+
+A part on several rails gets one value per rail, by position (`PI_RAIL=+3V3;+1V8`,
+`PI_LOAD=1.2A;400mA`). Values are written with their unit and read back exactly. A rail's
+`max_drop_pct` becomes `PI_LIMIT_DROP` on its first source; if it is a chip's own supply
+tolerance, it belongs in that chip's library symbol instead. The proposal is checked by
+parsing it back, which gives the project's rails. `not_expressed` lists what fields cannot
+carry: remote sense, terminal names, the other limits, `follow_net_ties: false`; a rail that
+needs input or ground pins on another part, or a link that does not use all its part's pads,
+is not proposed at all, since a wrong field would fail every run. The CLI prints the same:
+`coppernicus fields --propose PROJECT [--json]`.
 
 ### Estimated draws
 

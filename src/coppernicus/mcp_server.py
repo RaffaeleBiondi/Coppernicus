@@ -360,6 +360,19 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                      use_board_fields=use_board_fields)
 
     @mcp.tool(annotations=READ_ONLY)
+    def propose_fields(project_path: Annotated[Optional[str], Field(
+                           description="A *.coppernicus.yml whose rails and links to describe.")] = None,
+                       result_id: Annotated[Optional[str], Field(
+                           description="Or a solved rail (from solve_rail or solve_project).")] = None,
+                       ) -> dict[str, Any]:
+        """The KiCad PI_* field text that describes a project's rails and links (or one solved
+        rail), part by part: library_symbol fields (PI_KIND, PI_EFF, PI_IQ) and
+        schematic_instance fields (PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS, PI_INPUT, PI_GND,
+        PI_LINK...), ';' between rails by position. Give the user this text to paste; nothing
+        is written to KiCad files. not_expressed lists what fields cannot carry."""
+        return _call("propose_fields", session.propose_fields, project_path, result_id)
+
+    @mcp.tool(annotations=READ_ONLY)
     def read_project(project_path: Annotated[str, Field(description="Absolute path to a "
                                                                     "*.coppernicus.yml project file.")]
                      ) -> dict[str, Any]:

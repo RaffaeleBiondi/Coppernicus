@@ -100,6 +100,9 @@ def _cmd_fields(args) -> int:
     each value with the field it came from. Nothing is solved."""
     from coppernicus.service import ServiceError, Session
 
+    if args.propose:
+        return _propose_fields(args)
+
     def run():
         session = Session()
         board = session.open_board(args.board)
@@ -123,6 +126,33 @@ def _cmd_fields(args) -> int:
     for link in doc["links"]:
         print(f"Link {link['ref']} {link['resistance_ohm']:g} Ω between {link['net_a']} and "
               f"{link['net_b']} ({link['from']})")
+    return EXIT_OK
+
+
+def _propose_fields(args) -> int:
+    """``fields --propose PROJECT``: the PI_* field text to paste into KiCad, part by part."""
+    from coppernicus.service import ServiceError, Session
+
+    def run():
+        return Session().propose_fields(project_path=args.board), EXIT_OK
+    if args.json:
+        return _run_json(run)
+    try:
+        doc, _ = run()
+    except ServiceError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return EXIT_ERROR
+    for part in doc["parts"]:
+        print(part["ref"])
+        for where, key in (("library symbol:    ", "library_symbol"),
+                           ("schematic instance:", "schematic_instance")):
+            if part[key]:
+                print(f"  {where} " + "  ".join(f"{k}={v}" for k, v in part[key].items()))
+    for n in doc["not_expressed"]:
+        where = " ".join(x for x in (n["rail"] and f"rail {n['rail']}", n["part"]) if x)
+        print(f"not expressed ({where}): {n['what']}; {n['reason']}")
+    for a in doc["assumptions"]:
+        print(f"note: {a}")
     return EXIT_OK
 
 
@@ -404,7 +434,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=_cmd_parts)
 
     p = sub.add_parser("fields", help="list a board's KiCad footprint fields (PI_*) and the rails they make")
-    p.add_argument("board", help="a KiCad board file (.kicad_pcb)")
+    p.add_argument("board", help="a KiCad board file (.kicad_pcb); with --propose, a project file")
+    p.add_argument("--propose", action="store_true",
+                   help="print the PI_* fields that describe the project's rails, to paste into KiCad")
     p.add_argument("--json", action="store_true", help="print JSON (for scripts and agents)")
     p.set_defaults(func=_cmd_fields)
 

@@ -751,5 +751,188 @@ def _pin_key(number: str):
     return (0, int(number), "") if number.isdigit() else (1, 0, number)
 
 
+# ---------------------------------------------------------------------- proposing fields
+
+LIBRARY_FIELDS = ("PI_KIND", "PI_EFF", "PI_IQ")
+INSTANCE_FIELDS = ("PI_RAIL", "PI_SOURCE", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP", "PI_INPUT",
+                   "PI_INPUT_PINS", "PI_GND", "PI_GND_PINS", "PI_LINK")
+# The unit a value is written in, by size: (below this, unit, divisor), the first that fits.
+_WRITE_UNITS = {"PI_SOURCE": [(math.inf, "V", 1)],
+                "PI_LOAD": [(1.0, "mA", 1000), (math.inf, "A", 1)],
+                "PI_IQ": [(1e-3, "uA", 10 ** 6), (1.0, "mA", 1000), (math.inf, "A", 1)],
+                "PI_LINK": [(1.0, "mOhm", 1000), (math.inf, "Ohm", 1)],
+                "PI_EFF": [(math.inf, "%", 100)], "PI_LIMIT_DROP": [(math.inf, "%", 1)]}
+
+
+def field_text(name: str, value: float) -> str:
+    """``value`` (V, A, Ω, a fraction for PI_EFF, % for PI_LIMIT_DROP) as field text with its
+    unit, in plain decimals (the grammar has no exponent), read back exactly by
+    :func:`quantity`."""
+    from decimal import Decimal
+    units = _WRITE_UNITS[name]
+    preferred = next(i for i, (below, _, _) in enumerate(units) if abs(value) < below)
+    for _, unit, scale in units[preferred:] + units[:preferred]:
+        number = format((Decimal(repr(float(value))) * scale).normalize(), "f")
+        text = f"{number}{unit}"
+        if quantity("", name, text) == value:
+            return text
+    raise ValueError(f"{name}: {value!r} cannot be written exactly")      # not reached for floats
+
+
+def _source_fields(s: Source, net: str, blocked: List[str], notes: List[str]) -> Dict[str, str]:
+    out = {"PI_SOURCE": field_text("PI_SOURCE", s.voltage)}
+    if s.pins:
+        out["PI_PINS"] = ",".join(s.pins)
+    regulator = s.kind in ("ldo", "smps")
+    if s.kind != "source":
+        out["PI_KIND"] = s.kind
+    if s.kind == "smps":
+        if s.efficiency is None:
+            blocked.append("a switcher without its efficiency")
+        else:
+            out["PI_EFF"] = field_text("PI_EFF", s.efficiency)
+    elif s.efficiency is not None:
+        notes.append(f"efficiency on a {s.kind} (not used by the solve)")
+    if s.quiescent_a:
+        if regulator:
+            out["PI_IQ"] = field_text("PI_IQ", s.quiescent_a)
+        else:
+            notes.append("quiescent current on a plain source (not used by the solve)")
+    if s.input_net:
+        if s.input_ref and s.input_ref != s.ref:
+            blocked.append(f"input on another part ({s.input_ref})")
+        out["PI_INPUT"] = s.input_net
+        if s.input_pins:
+            out["PI_INPUT_PINS"] = ",".join(s.input_pins)
+    elif regulator:
+        blocked.append(f"a {s.kind} without its input")
+    if s.sense_net or s.ground_sense_net:
+        notes.append("remote sense (sense, ground_sense): keep it in the project file")
+    _ground_fields(s, out, blocked)
+    return out
+
+
+def _load_fields(ld: Load, blocked: List[str]) -> Dict[str, str]:
+    out = {"PI_LOAD": field_text("PI_LOAD", ld.current)}
+    if ld.pins:
+        out["PI_PINS"] = ",".join(ld.pins)
+    _ground_fields(ld, out, blocked)
+    return out
+
+
+def _ground_fields(t, out: Dict[str, str], blocked: List[str]) -> None:
+    if not t.ground_net:
+        return
+    if t.ground_ref and t.ground_ref != t.ref:
+        blocked.append(f"ground pins on another part ({t.ground_ref})")
+    out["PI_GND"] = t.ground_net
+    if t.ground_pins:
+        out["PI_GND_PINS"] = ",".join(t.ground_pins)
+
+
+def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None
+            ) -> Dict[str, Any]:
+    """The PI_* field text that describes ``project``'s rails and links, part by part, split
+    between the library symbol (``PI_KIND``, ``PI_EFF``, ``PI_IQ``: what the part is) and the
+    schematic instance (the rest: where it sits). A part on several rails gets one value per
+    rail, by position. What fields cannot carry is listed in ``not_expressed``; a rail that
+    needs it is not proposed (a wrong field would fail every run). The proposal is checked by
+    parsing it back with :func:`merge`. ``pad_nets``: reference → {pad: net}, to check that a
+    link's pins are all its pads on each net."""
+    not_expressed: List[Dict[str, Any]] = []
+    staged: Dict[str, List[Tuple[str, Dict[str, str]]]] = {}       # rail net -> [(ref, fields)]
+    for rail in project.rails:
+        positions, blocking = [], []
+        for t in [*rail.sources, *rail.loads]:
+            blocked: List[str] = []
+            notes: List[str] = []
+            fields = (_source_fields(t, rail.net, blocked, notes) if isinstance(t, Source)
+                      else _load_fields(t, blocked))
+            if t.name and t.name != t.ref:
+                notes.append(f"its name ({t.name}): fields name a terminal by its part")
+            not_expressed += [{"rail": rail.net, "part": t.ref, "what": n,
+                               "reason": "fields cannot carry it; it is not proposed"} for n in notes]
+            blocking += [(t.ref, b) for b in blocked]
+            positions.append((t.ref, fields))
+        if blocking:
+            not_expressed += [{"rail": rail.net, "part": ref, "what": what,
+                               "reason": "fields cannot carry it, so this rail is not proposed"}
+                              for ref, what in blocking]
+            continue
+        if rail.limits.max_drop_pct is not None and positions:
+            positions[0][1]["PI_LIMIT_DROP"] = field_text("PI_LIMIT_DROP", rail.limits.max_drop_pct)
+        others = [k for k in ("max_current_density", "max_via_current", "max_ground_rise_mv")
+                  if getattr(rail.limits, k) is not None]
+        if others:
+            not_expressed.append({"rail": rail.net, "part": None, "what": ", ".join(others),
+                                  "reason": "limits other than the drop stay in the project file"})
+        if not rail.follow_net_ties:
+            not_expressed.append({"rail": rail.net, "part": None, "what": "follow_net_ties: false",
+                                  "reason": "it stays in the project file"})
+        staged[rail.net] = positions
+    links: Dict[str, Dict[str, str]] = {}
+    for k in project.links:
+        pads = (pad_nets or {}).get(k.ref)
+        if pads is not None:
+            on = {net: sorted((p for p, n in pads.items() if n == net), key=_pin_key)
+                  for net in {n for n in pads.values() if n}}
+            wrong = (set(on) != {k.net_a, k.net_b}
+                     or any(pins is not None and sorted(pins, key=_pin_key) != on.get(net)
+                            for net, pins in ((k.net_a, k.pins_a), (k.net_b, k.pins_b))))
+            if wrong:
+                not_expressed.append({"rail": None, "part": k.ref, "what": f"link {k.name}",
+                                      "reason": "a PI_LINK joins all of the part's pads on its two "
+                                                "nets; this link does not, so it is not proposed"})
+                continue
+        elif k.pins_a is not None or k.pins_b is not None:
+            not_expressed.append({"rail": None, "part": k.ref, "what": f"link {k.name} pins",
+                                  "reason": "a PI_LINK uses all of the part's pads on each net; "
+                                            "check that these are all of them"})
+        if k.name != k.ref:
+            not_expressed.append({"rail": None, "part": k.ref, "what": f"link name {k.name}",
+                                  "reason": "a PI_LINK is named by its part"})
+        links[k.ref] = {"PI_LINK": field_text("PI_LINK", k.resistance_ohm)}
+    for _ in range(len(staged) + 1):          # drop the rails that are incomplete as fields
+        parts = _assemble(staged, links)
+        try:
+            merge(Project(), {ref: {**p["library_symbol"], **p["schematic_instance"]} for ref, p in
+                              ((p["ref"], p) for p in parts)}, pad_nets)
+            break
+        except FieldError as e:
+            bad = [net for net in staged if f"{net}: " in str(e) or
+                   any(str(e).startswith(f"{ref}: ") for ref, _ in staged[net])]
+            if not bad:
+                raise
+            for net in bad:
+                not_expressed.append({"rail": net, "part": None, "what": f"rail {net}",
+                                      "reason": f"incomplete as fields without the rest: {e}"})
+                del staged[net]
+    return {"parts": _assemble(staged, links), "rails": list(staged), "not_expressed": not_expressed}
+
+
+def _assemble(staged: Mapping[str, List[Tuple[str, Dict[str, str]]]],
+              links: Mapping[str, Dict[str, str]]) -> List[Dict[str, Any]]:
+    """Per part: its positions joined by ';' (PI_RAIL in rail order), split into library
+    and instance fields."""
+    by_ref: Dict[str, List[Tuple[str, Dict[str, str]]]] = {}
+    for net, positions in staged.items():
+        for ref, fields in positions:
+            by_ref.setdefault(ref, []).append((net, fields))
+    out = []
+    for ref in sorted(set(by_ref) | set(links), key=_ref_key):
+        joined: Dict[str, str] = dict(links.get(ref, {}))
+        positions = by_ref.get(ref, [])
+        if positions:
+            joined["PI_RAIL"] = ";".join(net for net, _ in positions)
+            for name in [*INSTANCE_FIELDS, *LIBRARY_FIELDS]:
+                if name != "PI_RAIL" and any(name in f for _, f in positions):
+                    joined[name] = ";".join(f.get(name, "") for _, f in positions)
+        out.append({"ref": ref,
+                    "library_symbol": {k: joined[k] for k in LIBRARY_FIELDS if k in joined},
+                    "schematic_instance": {k: joined[k] for k in INSTANCE_FIELDS if k in joined}})
+    return out
+
+
 __all__: Sequence[str] = ("FIELDS", "BoardFields", "FieldError", "FieldRail", "Merged", "Origin",
+                          "field_text", "propose",
                           "apply", "field_links", "field_rails", "listing", "merge", "quantity")

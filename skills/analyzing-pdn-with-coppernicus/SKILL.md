@@ -66,7 +66,9 @@ why, and ask for what is missing.
 9. Setting up a project: `write_project(project_path, board_path, rails=[...])` saves the
    rails you agreed with the user to a `*.coppernicus.yml` they can solve again (CLI, app,
    CI). Ask before `overwrite: true` (it replaces their file and drops its comments); report
-   every warning, e.g. that the KiCad fields win over a rail you wrote.
+   every warning, e.g. that the KiCad fields win over a rail you wrote. To move the setup into
+   KiCad, `propose_fields(project_path)` gives the `PI_*` text per part (library symbol vs
+   schematic instance) for the user to paste; you never edit KiCad files.
 10. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
    layer's maps with zoom, pan and a hover readout, plus the problems, worst values and
    assumptions. Give the user its `path`; you cannot read the page yourself.
