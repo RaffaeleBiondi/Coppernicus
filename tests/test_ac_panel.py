@@ -96,7 +96,10 @@ def test_probe_cells_map_to_the_file_fields():
     p = with_probe_cell(p, "target_hz", "50M")
     assert p == Probe("U7", "U7", "+1V8", ["A1", "B2"], "", None, "GND", target_ohm=0.02, target_hz=5e7)
     assert probe_cell(p, "pins") == "A1, B2" and probe_cell(p, "ground_pins") == "all"
-    assert with_probe_cell(p, "target_ohm", "").target_ohm is None
+    cleared = with_probe_cell(p, "target_ohm", "")
+    assert cleared.target_ohm is None and cleared.target_hz is None     # its "up to" goes with it
+    with pytest.raises(ValueError, match="target_hz without target_ohm"):
+        with_probe_cell(cleared, "target_hz", "50M")
     masked = with_probe_cell(with_probe_cell(p, "target_ohm", ""), "target_points", "1M 10m; 100M 1")
     assert masked.target_points == [(1e6, 0.01), (1e8, 1.0)]
     computed = with_probe_cell(with_probe_cell(with_probe_cell(
@@ -297,6 +300,12 @@ def test_the_impedance_tab_follows_the_power_tree_and_opening_changes_nothing():
     run_in_window(f'''
         tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
         assert tabs[tabs.index("Power tree") + 1] == "Impedance", tabs
+        bar = window.findChild(QtWidgets.QToolBar, "Main")
+        act = next(a for a in bar.actions() if a.text() == "Solve impedance")
+        assert act.shortcut().toString() == "Ctrl+I"
+        act.trigger()                                         # no board yet: says so, shows the tab
+        assert window.results_tabs.currentWidget() is window.ac_panel
+        assert "Open a board" in window.statusBar().currentMessage()
         window.show()                                         # sizes are laid out only when shown
         app.processEvents()
         window.open_project({PDN!r})
@@ -380,7 +389,6 @@ def test_picking_fills_a_probe_and_toggles_a_models_part():
 def test_a_solve_that_could_exceed_the_memory_starts_only_on_yes():
     """The RAM question answered No (or closed): no solve starts and the panel is idle."""
     run_in_window(f'''
-        import types
         from PySide6.QtWidgets import QMessageBox
         import coppernicus.engine.ac as engine_ac
         from coppernicus.engine.ac import AcSize, RamEstimate
@@ -400,8 +408,8 @@ def test_a_solve_that_could_exceed_the_memory_starts_only_on_yes():
         panel.worker, panel._busy = fake, True
         heard = []
         panel.estimated.connect(heard.append)
-        merged = types.SimpleNamespace(project=window.project)
-        fake.sized.emit((AcSize("+3V3", 1000, 500, 2, 111, 278, 0.1), merged))
+        panel._solving = ("+3V3", {{}}, window.merged)
+        fake.sized.emit(AcSize("+3V3", 1000, 500, 2, 111, 278, 0.1))
         assert asked and panel.worker is fake and not panel.busy, (asked, panel.worker)
         assert heard and "could exceed" in heard[0] and "1,000 triangles" in heard[0]
         assert "Not solved" in panel.status.text() + window.statusBar().currentMessage()
@@ -457,3 +465,56 @@ def test_a_result_goes_stale_on_a_setup_edit_not_on_a_save_or_a_marked_net():
     assert _project_key(p) == key
     p.probes[0].target_ohm = 0.05
     assert _project_key(p) != key
+
+
+FIELDS_BOARD = os.path.join(os.path.dirname(__file__), "..", "examples", "fields", "fields.kicad_pcb")
+
+
+def test_an_ac_edit_reaches_the_next_solve_through_the_merged_project(tmp_path):
+    """Edits write the user's project and merge again; Solve takes a copy of the window's
+    merged project: on examples/pdn (no KiCad fields) and on a board whose rail is only in its
+    KiCad footprint fields (examples/fields), where the rail and its source come from the
+    fields and the probe, the model and the bandwidth from the editor. A field that cannot be
+    used refuses the solve, as F5 does. No solve runs: the worker is never started."""
+    path = Project(board=os.path.abspath(FIELDS_BOARD)).save(tmp_path / "fields-ac.coppernicus.yml")
+    run_in_window(f'''
+        from PySide6.QtWidgets import QMessageBox
+        import coppernicus.app.ac_panel as ac_panel
+        started, boxes = [], []
+        ac_panel.AcWorker.start = lambda self: started.append(self)
+        QMessageBox.warning = staticmethod(lambda *a, **k: boxes.append(a[1]) or QMessageBox.Ok)
+        panel = window.ac_panel
+
+        window.open_project({PDN!r})
+        app.processEvents()
+        panel.probes.item(0, 7).setText("40m")                 # target
+        panel.caps.item(0, 2).setText("1n")                    # ESL
+        panel.set_bandwidth_text("200k")
+        panel.solve()
+        solved = started[-1].merged.project
+        assert solved is not window.project and solved is not window.merged.project   # a copy
+        assert solved.probes[0].target_ohm == 0.04 and solved.capacitors[0].esl_h == 1e-9
+        assert solved.ac.bandwidth_hz == {{"U1": 2e5}}, solved.ac.bandwidth_hz
+
+        window.dirty = False
+        window.open_project({str(path)!r})
+        app.processEvents()
+        assert window.project.rails == [] and window.merged.project.rail("VCC").sources
+        assert [panel.rail_box.itemText(i) for i in range(panel.rail_box.count())] == ["VCC"]
+        assert panel.bandwidth.isEnabled() and "J1" in panel.source_label.text()
+        panel.add_probe()
+        for col, text in ((0, "U1"), (1, "U1"), (2, "VCC"), (5, "GND")):
+            panel.probes.item(0, col).setText(text)
+        panel.set_bandwidth_text("100k")
+        assert [p.name for p in window.merged.project.probes] == ["U1"]    # merged again
+        panel.solve()
+        solved = started[-1].merged.project
+        assert solved.rail("VCC").sources[0].ref == "J1" and [p.name for p in solved.probes] == ["U1"]
+        assert solved.ac.bandwidth_hz == {{"J1": 1e5}} and window.project.rails == []
+
+        panel._busy = False
+        n = len(started)
+        window.fields_error = "a field cannot be used"
+        panel.solve()
+        assert len(started) == n and boxes == ["Cannot solve the impedance"], boxes
+    ''')

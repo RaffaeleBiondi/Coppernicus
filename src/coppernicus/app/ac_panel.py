@@ -11,8 +11,9 @@ worker with progress and Cancel. The plot is :func:`coppernicus.impedance.draw_i
 (the GUI never words the band or the verdict itself); the results table gives each probe's
 worst point, ratio and verdict; CSV and PNG are the core's writers.
 
-The project solved is the window's, merged with the board's KiCad footprint fields as
-``coppernicus ac`` does (:func:`coppernicus.board_fields.apply`). The pure functions at the
+The project solved is the window's merged project (``window.merged.project``: the project
+merged with the board's KiCad footprint fields, as ``coppernicus ac`` merges them); an edit
+writes ``window.project`` and merges again (``window._remerge()``). The pure functions at the
 top (form <-> model, estimate and stats text, results rows) need no window.
 """
 
@@ -27,7 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -208,6 +209,8 @@ def with_probe_cell(p: Probe, key: str, text: str) -> Probe:
         raise ValueError(f"{_header(PROBE_COLUMNS, key)}: {e}") from None
     q = copy.deepcopy(p)
     setattr(q, key, value)
+    if key == "target_ohm" and value is None:
+        q.target_hz = None                 # the file takes no target_hz without target_ohm
     # A draft is checked for its values: its missing name, part or net stand in.
     check_ac([dataclasses.replace(q, name=q.name or "draft", ref=q.ref or "?", net=q.net or "?")], [])
     return q
@@ -437,30 +440,22 @@ def _settings() -> QSettings:
 
 # ---------------------------------------------------------------------- worker
 
-def merge_fields(board, project: Project):
-    """The project merged with the board's KiCad footprint fields, as ``coppernicus ac``."""
-    from coppernicus import board_fields
-    from coppernicus.engine.kicad_fields import read_board_fields
-    def read():
-        return read_board_fields(board.path) if board.path is not None else board_fields.BoardFields()
-    return board_fields.apply(project, read, ties=[(t.net_a, t.net_b) for t in board.net_ties()])
-
-
 class AcWorker(QThread):
-    """Phase "size": the project merged with the KiCad fields, and the rail meshed as the solve
-    will mesh it (:func:`coppernicus.engine.ac.ac_size`); phase "solve": the AC solve. KiPI
-    calls the progress hooks from its own threads: they reach the panel as queued signals."""
+    """Phase "size": the rail meshed as the solve will mesh it
+    (:func:`coppernicus.engine.ac.ac_size`); phase "solve": the AC solve. Both on a copy of the
+    window's merged project (``merged``, a :class:`coppernicus.board_fields.Merged`), whose
+    notes and warnings the result gets. KiPI calls the progress hooks from its own threads:
+    they reach the panel as queued signals."""
     message = Signal(str)
     fraction = Signal(object)        # 0..1 per field frequency, None while meshing
-    sized = Signal(object)           # (AcSize, Merged)
+    sized = Signal(object)           # AcSize
     succeeded = Signal(object)       # ImpedanceResult
     failed = Signal(str)
     cancelled = Signal()
 
-    def __init__(self, board, project: Project, rail: str, phase: str, merged=None, parent=None):
+    def __init__(self, board, merged, rail: str, phase: str, parent=None):
         super().__init__(parent)
-        self._board, self._project, self.rail, self.phase = board, project, rail, phase
-        self.merged = merged
+        self._board, self.merged, self.rail, self.phase = board, merged, rail, phase
         self._cancel = False
         self.generation = 0
 
@@ -468,17 +463,15 @@ class AcWorker(QThread):
         self._cancel = True
 
     def run(self):
-        from coppernicus import board_fields
         from coppernicus.engine import Cancelled, EngineError
         from coppernicus.engine.ac import ac_size, solve_ac_rail
         try:
             if self.phase == "size":
-                merged = merge_fields(self._board, self._project)
-                size = ac_size(self._board, merged.project, self.rail, progress=self.message.emit,
+                size = ac_size(self._board, self.merged.project, self.rail, progress=self.message.emit,
                                cancelled=lambda: self._cancel)
                 if self._cancel:
                     raise Cancelled("cancelled")
-                self.sized.emit((size, merged))
+                self.sized.emit(size)
             else:
                 res = solve_ac_rail(self._board, self.merged.project, self.rail, progress=self.message.emit,
                                     cancelled=lambda: self._cancel, fraction=self.fraction.emit)
@@ -486,9 +479,6 @@ class AcWorker(QThread):
                 self.succeeded.emit(res)
         except Cancelled:
             self.cancelled.emit()
-        except board_fields.FieldError as e:
-            from coppernicus.service.session import FIELD_HINT
-            self.failed.emit(f"{e} ({FIELD_HINT})")
         except EngineError as e:
             self.failed.emit(str(e))
         except Exception:                                   # noqa: BLE001 - shown to the user
@@ -528,7 +518,6 @@ class AcPanel(QWidget):
         self._loading = False
         self._probe_rows: List[Probe] = []
         self._cap_rows: List[CapModel] = []
-        self._merged_project: Optional[Project] = None     # the last merge with the KiCad fields
         self.last_estimate = ""
         self._shown: Dict[str, str] = {}      # what each line edit shows: a commit of it unchanged is no edit
         self._build()
@@ -751,7 +740,13 @@ class AcPanel(QWidget):
     # ------------------------------------------------------------------ project in and out
     @property
     def project(self) -> Project:
-        return self._win.project               # never kept: opening a board replaces it
+        """The user's project, the one edited and saved (never kept: opening a board replaces it)."""
+        return self._win.project
+
+    @property
+    def merged_project(self) -> Project:
+        """The project merged with the KiCad footprint fields: what is solved."""
+        return self._win.merged.project
 
     def load_project(self):
         """Fill the editor from the window's project (after a board or project is opened)."""
@@ -802,7 +797,9 @@ class AcPanel(QWidget):
         self.links.blockSignals(False)
 
     def _edited(self):
-        """After any edit written to the project: dirty, and every result checked again."""
+        """After any edit written to the project: merged again with the KiCad fields (what the
+        next solve takes), dirty, and every result checked again."""
+        self._win._remerge()
         self._win.dirty = True
         self._win._update_title()
         self._check_stale()
@@ -937,7 +934,7 @@ class AcPanel(QWidget):
     def _rail_and_ground_nets(self, rail: str):
         """The rail's nets (joined by the project's links) and its ground nets (the source's,
         else its probes')."""
-        p = self._merged_project or self.project
+        p = self.merged_project
         nets, queue = {rail}, [rail]
         while queue:
             n = queue.pop(0)
@@ -948,7 +945,7 @@ class AcPanel(QWidget):
                         queue.append(b)
         src = rail_source(p, rail)
         grounds = {src.ground_net} if src is not None and src.ground_net else set()
-        grounds |= {q.ground_net for q in self.project.probes if q.net in nets and q.ground_net}
+        grounds |= {q.ground_net for q in p.probes if q.net in nets and q.ground_net}
         return nets, grounds
 
     def import_cap_file(self, path) -> str:
@@ -1025,8 +1022,8 @@ class AcPanel(QWidget):
                             f"decade instead of KiPI's {KIPI_FIELD_POINTS} (the result's assumptions say so)")
 
     def _source(self, rail: str) -> Optional[Source]:
-        return rail_source(self.project, rail) or (
-            rail_source(self._merged_project, rail) if self._merged_project is not None else None)
+        """The source whose bandwidth the rail's solve uses (a rail from the KiCad fields too)."""
+        return rail_source(self.merged_project, rail)
 
     def _bandwidth_edited(self):
         src = self._source(self.rail_box.currentText())
@@ -1072,12 +1069,10 @@ class AcPanel(QWidget):
 
     # ------------------------------------------------------------------ rails and results
     def refresh_rails(self):
-        """The rail list (no engine call): rails with a source, then probe nets, then rails the
-        KiCad fields gave at the last solve."""
+        """The rail list (no engine call): the merged project's rails with a source (the
+        KiCad fields' too), then the probes' nets."""
         keep = self.rail_box.currentText()
-        rails = solvable_rails(self.project)
-        if self._merged_project is not None:
-            rails += [n for n in solvable_rails(self._merged_project) if n not in rails]
+        rails = solvable_rails(self.merged_project)
         self.rail_box.blockSignals(True)
         self.rail_box.clear()
         self.rail_box.addItems(rails)
@@ -1089,9 +1084,7 @@ class AcPanel(QWidget):
     def _setup_changed(self):
         """The rail setup changed elsewhere (a source, a pad picked): the rail list follows,
         refilled only when it changed, and the shown result is checked again."""
-        rails = solvable_rails(self.project)
-        if self._merged_project is not None:
-            rails += [n for n in solvable_rails(self._merged_project) if n not in rails]
+        rails = solvable_rails(self.merged_project)
         if rails != [self.rail_box.itemText(i) for i in range(self.rail_box.count())]:
             self.refresh_rails()
         self._check_stale()
@@ -1353,6 +1346,8 @@ class AcPanel(QWidget):
         if not rail:
             self._report("Add a probe on a rail with a source first")
             return
+        if win._refuse_fields("Cannot solve the impedance"):    # a KiCad field cannot be used
+            return
         self.stop_pick()
         self._busy = True
         self.solve_button.setEnabled(False)
@@ -1360,10 +1355,24 @@ class AcPanel(QWidget):
         self.progress.setRange(0, 0)
         self.last_estimate = ""
         self.estimate.setText("Estimating: meshing the rail as the AC solve will…")
-        project = copy.deepcopy(self.project)
-        self._solving = (rail, _project_key(project))
-        self._start(AcWorker(win.board, project, rail, "size", parent=self))
+        # What is solved: a copy of the merged project as it is now (the user may edit on).
+        self._solving = (rail, _project_key(self.project), copy.deepcopy(win.merged))
+        self._start(AcWorker(win.board, self._solving[2], rail, "size", parent=self))
         self._report(f"{rail}: meshing it as the AC solve will, for the estimate…")
+
+    def add_solve_action(self, toolbar) -> QAction:
+        """A "Solve impedance" action (Ctrl+I) on the window's toolbar: shows this tab, then
+        solves its rail."""
+        act = QAction("Solve impedance", self._win)
+        act.setShortcut(QKeySequence("Ctrl+I"))
+        act.setToolTip("Solve the AC impedance of the Impedance tab's rail (Ctrl+I)")
+        act.triggered.connect(self.solve_shown)
+        toolbar.addAction(act)
+        return act
+
+    def solve_shown(self):
+        self._win.results_tabs.setCurrentWidget(self)
+        self.solve()
 
     def _start(self, worker: AcWorker):
         worker.generation = self._generation
@@ -1399,8 +1408,7 @@ class AcPanel(QWidget):
         if not self._current():
             return
         from coppernicus.engine.ac import cost_estimate, free_memory_bytes, ram_estimate, total_memory_bytes
-        size, merged = payload
-        self._merged_project = merged.project
+        size = payload
         cost = cost_estimate(size.triangles, size.ports, size.field_frequencies, self._last_solve())
         ram = ram_estimate(size.unknowns, total_memory_bytes(), free_memory_bytes())
         self.last_estimate = estimate_text(cost, ram)
@@ -1419,17 +1427,18 @@ class AcPanel(QWidget):
             self._busy_off()
             return
         self.progress.setRange(0, 0)
-        self._start(AcWorker(self._win.board, None, size.rail, "solve", merged=merged, parent=self))
+        self._start(AcWorker(self._win.board, self._solving[2], size.rail, "solve", parent=self))
 
     def _solved(self, res):
         if not self._current():
             return
-        _rail, solved = self._solving
+        _rail, solved, _merged = self._solving
         self.results[res.rail] = (res, solved)
         st = res.stats
         try:
             _settings().setValue(LAST_SOLVE_SETTING, json.dumps(
-                {k: float(st[k]) for k in ("seconds", "triangles", "ports", "field_frequencies")}))
+                {k: float(st[k]) for k in ("seconds", "field_seconds", "triangles", "ports",
+                                           "field_frequencies")}))
         except (KeyError, TypeError, ValueError):
             pass
         if self.rail_box.findText(res.rail) < 0:
@@ -1480,7 +1489,6 @@ class AcPanel(QWidget):
             self.solve_button.setEnabled(True)
             self.cancel_button.setEnabled(False)
         self.results.clear()
-        self._merged_project = None
         self.last_estimate = ""
         self.estimate.setText("")
         self._say("")
