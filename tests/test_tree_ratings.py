@@ -392,6 +392,9 @@ def test_the_power_tree_tab_and_problems_show_a_regulator_over_its_rating(tmp_pa
         assert top.text(0) == "FAIL", top.text(0)
         assert top.text(1) == "U1: 2.502 A out, over its rated 2 A (from the project file)", top.text(1)
         assert "nan" not in top.text(3), top.text(3)                # at U1's output pins
+        from coppernicus.power_tree import RATING_RULE
+        notes = window.problems.notes.toPlainText()
+        assert RATING_RULE in notes, notes                          # the rule, beside the fail
 
         solve_tree({str(buck)!r})
         window.show_group("+3V3")

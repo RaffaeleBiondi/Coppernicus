@@ -209,11 +209,15 @@ def apply_limits(tree, project: Project) -> None:
         if s.current_limit_a is not None and not _solved_as_rail(tree, rail.net)]
     judge_loads(tree)
     judge_ratings(tree)                  # the ratings came with the solve (convert_tree)
-    rated = bool(tree.unsolved_ratings) or any(v.current_limit_a is not None for v in tree.vrms)
-    if rated and RATING_RULE not in tree.assumptions:
-        tree.assumptions.append(RATING_RULE)
-    elif not rated and RATING_RULE in tree.assumptions:
-        tree.assumptions.remove(RATING_RULE)
+    rated_groups = {v.group for v in tree.vrms if v.current_limit_a is not None}
+    # The rule, once: on the tree, and on each group a rated regulator drives (the app shows a
+    # group's assumptions beside its problems).
+    for key, notes in [("", tree.assumptions)] + [(k, r.assumptions) for k, r in tree.groups.items()]:
+        rated = key in rated_groups if key else bool(rated_groups or tree.unsolved_ratings)
+        if rated and RATING_RULE not in notes:
+            notes.append(RATING_RULE)
+        elif not rated and RATING_RULE in notes:
+            notes.remove(RATING_RULE)
     apply_thermal_limits(tree, getattr(project, "thermal", None))   # the board temperature's
 
 
