@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 from kipi.dc.pi.model import Load as KipiLoad
 from kipi.dc.pi.model import PinRef, Vrm
 from kipi.tolerance import evaluate as kipi_evaluate
-from kipi.tolerance.evaluate import CHECK_PARTS, deviation_limits, judge
+from kipi.tolerance.evaluate import CHECK_PARTS, EPS_V, deviation_limits, judge  # noqa: F401 (EPS_V re-exported)
 from kipi.tolerance.gather import probe_for_load
 from kipi.tolerance.model import Contribution, LoadEntry
 

@@ -345,3 +345,345 @@ def test_the_ac_result_warns_when_a_load_and_its_probe_disagree():
     project.rails[0].loads[0].ac_tol_mv = (-50.0, 50.0)
     assert not [w for w in solve_ac_rail(Board(ac_decap_board()), project, "+3V3").warnings
                 if "disagree" in w]
+
+
+# ---------------------------------------------------------------------- composition (no solve)
+
+def _comp_project(load=None, source=None, aggressors=(), probe=True, voltage=1.8, kind="smps", **opts):
+    """VOUT at ``voltage`` from U1 (a switcher), load U2 with probe P1 on its pins; ``aggressors``
+    (name, listing P1?) on U1."""
+    from coppernicus.project import Aggressor, Probe, Rail
+    src = Source("L1", voltage, ["2"], name="U1", kind=kind, efficiency=0.9 if kind == "smps" else None,
+                 **(source or {}))
+    p = Project(rails=[Rail("VOUT", sources=[src], loads=[Load("U2", 5.0, ["1"], **(load or {}))])],
+                tolerance=ToleranceOptions(**opts))
+    if probe:
+        p.probes = [Probe("P1", "U2", "VOUT", ["1"])]
+    p.aggressors = [Aggressor(a, vrm="U1", ripple_probes=["P1"] if listing else [])
+                    for a, listing in aggressors]
+    return p
+
+
+def _comp_tree(nominal=1.8, low=None, high=None, mean=None, status="", converged=True):
+    """A power tree holding U2 on VOUT, driven by U1: worst pins ``low`` and ``high`` (V)."""
+    from coppernicus.results import LoadReport, TreeResult, VrmReport
+    low = nominal - 0.010 if low is None else low
+    high = nominal - 0.004 if high is None else high
+    mean = (low + high) / 2 if mean is None else mean
+    ld = LoadReport("U2", "VOUT", 5.0, nominal, mean, low, None, mean, low, nominal - low,
+                    100 * (nominal - low) / (abs(nominal) or 1.0), status=status, net="VOUT", rail="VOUT",
+                    v_low_v=low, v_high_v=high)
+    vrm = VrmReport("U1", "smps", "VOUT", nominal, nominal, 5.0)
+    return TreeResult(loads=[ld], vrms=[vrm], converged=converged)
+
+
+def _noise_result(name, peaks=None, stand_ins=(), probe="P1"):
+    """A NoiseResult of aggressor ``name`` showing ripple ``peaks`` (V: below, above, the same
+    through 20 MHz) at ``probe`` (no probe ripple when None)."""
+    import numpy as np
+
+    from coppernicus.results import NoiseResult, RippleResult
+    z = np.zeros(4)
+    ripple = [] if peaks is None else [RippleResult(probe, "probe", "VOUT", "GND", "U2", ["1"], *peaks,
+                                                    peaks[0] + peaks[1], peaks[2] + peaks[3], 0.0, z, z, z)]
+    return NoiseResult(name, "U1", "VOUT", "VIN", "GND", "buck", 12.0, 1.8, 5.0, 0.8, 0.15, 0.9, 1, [],
+                       1e6, 2e-9, 2e-9, 1e9, 1000, False, [0.5], [], z, [z], [z], [""], ripple=ripple,
+                       stand_ins=list(stand_ins))
+
+
+def _impedance(probe="P1", estimate=(0.020, 0.012, 0.015, 0.010)):
+    """An ImpedanceResult whose probe carries KiPI's transient estimate (V)."""
+    import numpy as np
+
+    from coppernicus.results import ImpedanceResult, ProbeImpedance, TransientResult
+    z = np.ones(3, dtype=complex)
+    tr = None if estimate is None else TransientResult(1e5, 1.0, 1e6, 1e-6, *estimate, z.real, z.real,
+                                                       z.real, z.real)
+    return ImpedanceResult("VOUT", ["VOUT"], "GND", "U1", 1e5, np.array([1e3, 1e4, 1e5]), np.array([1e3]),
+                           probes=[ProbeImpedance(probe, "U2", ["1"], "VOUT", "GND", z, transient=tr)])
+
+
+def _compose(project, tree=None, impedance=(), noise=(), pairs=None, **kw):
+    from coppernicus.tolerance import compose
+    pairs = {"U2": "P1" if project.probes else None} if pairs is None else pairs
+    return compose(project, tree or _comp_tree(), impedance, noise, pairs, **kw)
+
+
+COMPLETE = dict(load={"tol_pct": 5, "transient_mv": 20, "ripple_mv": 5}, source={"accuracy_pct": 1})
+
+
+def test_a_complete_stack_passes_and_names_where_each_part_came_from():
+    r = _compose(_comp_project(**COMPLETE))
+    (row,) = r.rows
+    assert row.verdict == "pass" and r.verdict == "pass" and r.failed == r.not_judged == []
+    assert row.nominal_v == 1.8 and row.source == "U1" and row.probe == "P1"
+    assert row.parts["dc"].below_v == pytest.approx(0.010) and row.parts["dc"].above_v == 0.0
+    assert row.parts["accuracy"].below_v == pytest.approx(0.018)
+    assert (row.parts["ripple"].below_v, row.parts["transient"].above_v) == pytest.approx((0.005, 0.020))
+    assert row.parts["transient"].source == "entered (transient_mv)"
+    assert row.parts["accuracy"].source == "accuracy_pct of U1"
+    total = row.checks["total"]
+    assert (total.limit, total.complete, total.passed) == ("tol_pct", True, True)
+    assert total.below_v == pytest.approx(0.010 + 0.018 + 0.005 + 0.020)
+    assert total.allowed_below_v == pytest.approx(0.09)
+    assert row.checks["dc"].limit == "" and row.checks["dc"].passed is None
+
+
+def test_f1_an_unset_accuracy_is_missing_not_zero():
+    """KiPI counts a VRM accuracy not set as 0 (accuracy_sides, model.py:171-177): its own
+    stack passes; here the accuracy is missing and the check is not judged."""
+    from coppernicus.engine.tolerance import kipi_reference_stack
+    project = _comp_project(load=COMPLETE["load"])
+    row = _compose(project).rows[0]
+    kipi = kipi_reference_stack(1.8, project.rails[0].loads[0], project.rails[0].sources[0],
+                                {k: (row.parts[k].below_v, row.parts[k].above_v)
+                                 for k in ("dc", "ripple", "transient")})
+    assert kipi["verdict"] is True                                     # before: a pass
+    assert row.parts["accuracy"] is None and row.verdict == "not_judged"   # after
+    assert row.hints["accuracy"] == "enter U1's DC accuracy (accuracy_pct)"
+
+
+def test_f2_ripple_with_an_aggressor_not_solved_is_missing():
+    """KiPI sets the ripple from the aggressors solved and only hints at the others
+    (gather.py:206-209): complete. Here it is missing."""
+    from coppernicus.engine.tolerance import kipi_reference_stack
+    project = _comp_project(load={"tol_pct": 5, "transient_mv": 20}, source={"accuracy_pct": 1},
+                            aggressors=[("A1", True), ("A2", True)])
+    peaks = (0.004, 0.006, 0.003, 0.004)
+    row = _compose(project, noise=[_noise_result("A1", peaks)],
+                   noise_notes={"A2": "--skip-noise"}).rows[0]
+    kipi = kipi_reference_stack(1.8, project.rails[0].loads[0], project.rails[0].sources[0],
+                                {"dc": (0.010, 0.0), "ripple": peaks, "transient": (0.020, 0.020)})
+    assert kipi["verdict"] is True
+    assert row.parts["ripple"] is None and row.verdict == "not_judged"
+    assert row.hints["ripple"] == "A2 not solved (--skip-noise)"
+
+
+@pytest.mark.parametrize("kind, hint", [
+    ("ldo", "enter ripple_mv for U2 (no switcher's ripple is solved here)"),
+    ("smps", "add an aggressor for U1 with probe P1 in its ripple probes, or enter ripple_mv for U2")])
+def test_f3_no_aggressor_on_the_rail_is_missing_not_zero(kind, hint):
+    """KiPI counts the ripple of a rail with no aggressor as nothing (NO_SWITCHER,
+    gather.py:147, :186): its stack passes. Here it is missing, whatever the source."""
+    from coppernicus.engine.tolerance import kipi_reference_stack
+    project = _comp_project(load={"tol_pct": 5, "transient_mv": 20}, source={"accuracy_pct": 1}, kind=kind)
+    row = _compose(project).rows[0]
+    kipi = kipi_reference_stack(1.8, project.rails[0].loads[0], project.rails[0].sources[0],
+                                {"dc": (0.010, 0.0), "ripple": None, "transient": (0.020, 0.020)},
+                                not_applicable=("ripple",))
+    assert kipi["verdict"] is True
+    assert row.parts["ripple"] is None and row.verdict == "not_judged" and row.hints["ripple"] == hint
+    entered = _compose(_comp_project(load={"tol_pct": 5, "transient_mv": 20, "ripple_mv": [-3, 4]},
+                                     source={"accuracy_pct": 1}, kind=kind)).rows[0]
+    assert entered.parts["ripple"].source == "entered (ripple_mv)" and entered.verdict == "pass"
+    assert (entered.parts["ripple"].below_v, entered.parts["ripple"].above_v) == pytest.approx((0.003, 0.004))
+
+
+def test_a_listed_probe_without_its_ripple_hints_at_the_aggressor_and_the_probe():
+    project = _comp_project(**COMPLETE, aggressors=[("A1", True)])
+    row = _compose(project, noise=[_noise_result("A1", None)]).rows[0]
+    assert row.parts["ripple"] is None
+    assert row.hints["ripple"].startswith("A1 shows no ripple at P1")
+    # ripple_mv entered beside a listed aggressor that gives nothing usable: still missing.
+    assert "ripple_mv ±5 mV entered, not used" in row.hints["ripple"]
+    no_probe = _compose(_comp_project(**COMPLETE, probe=False), pairs={"U2": None}).rows[0]
+    assert no_probe.parts["ripple"].source == "entered (ripple_mv)"
+
+
+def test_a_stand_in_ripple_over_is_not_judged_while_dc_and_accuracy_alone_over_fail():
+    project = _comp_project(load={"tol_pct": 3, "transient_mv": 10}, source={"accuracy_pct": 1},
+                            aggressors=[("A1", True)])
+    big = (0.040, 0.040, 0.030, 0.030)
+    stand_in = _noise_result("A1", big, stand_ins=["Coss not entered on phase 1: KiPI's 200 pF sets "
+                                                   "the ringing"])
+    row = _compose(project, noise=[stand_in]).rows[0]
+    # 10 + 18 + 10 = 38 mV known below of 54 allowed; the 40 mV stand-in ripple would put it over.
+    assert row.parts["ripple"] is None and row.checks["total"].passed is None
+    assert row.verdict == "not_judged" and row.stand_ins
+    assert "rests on KiPI's stand-ins (Coss not entered" in row.hints["ripple"]
+    assert "40 / 40 mV" in row.hints["ripple"]
+    over = _compose(project, tree=_comp_tree(low=1.8 - 0.040), noise=[stand_in]).rows[0]
+    assert over.checks["total"].passed is False and over.verdict == "fail"     # 40 + 18 + 10 > 54
+    r = _compose(project, tree=_comp_tree(low=1.8 - 0.040), noise=[stand_in])
+    assert r.verdict == "fail" and r.failed[0]["limit"] == "tol_pct" and r.failed[0]["item"] == "U2"
+
+
+def test_two_aggressors_add_linearly_by_default_and_as_kipis_rss_when_chosen():
+    import types
+
+    import numpy as np
+    from kipi.tolerance.gather import Fresh, Gatherer
+    a1, a2 = (0.003, 0.004, 0.002, 0.003), (0.004, 0.003, 0.0025, 0.002)
+    noise = [_noise_result("A1", a1), _noise_result("A2", a2)]
+    load = {"tol_pct": 10, "transient_mv": 10}
+    linear = _compose(_comp_project(load=load, source={"accuracy_pct": 1},
+                                    aggressors=[("A1", True), ("A2", True)]), noise=noise).rows[0]
+    assert (linear.parts["ripple"].below_v, linear.parts["ripple"].above_v) == pytest.approx((0.007, 0.007))
+    assert "sum of the peaks" in linear.parts["ripple"].detail
+    rss = _compose(_comp_project(load=load, source={"accuracy_pct": 1}, ripple_sum="rss",
+                                 aggressors=[("A1", True), ("A2", True)]), noise=noise).rows[0]
+    # KiPI's own Gatherer._ripple on the same peaks (gather.py:178-210).
+    g, out = Gatherer(), Fresh()
+    results = {n: types.SimpleNamespace() for n in ("A1", "A2")}
+    for n, pk in (("A1", a1), ("A2", a2)):
+        g._cache[id(results[n])] = (results[n], {"P1": pk})
+    setup = types.SimpleNamespace(aggressors=[types.SimpleNamespace(name=n, ripple_probes=["P1"], vrm="U1")
+                                              for n in ("A1", "A2")])
+    loaded = types.SimpleNamespace(noise={n: (results[n], "noise", "now") for n in ("A1", "A2")})
+    g._ripple(out, setup, types.SimpleNamespace(name="P1"), types.SimpleNamespace(name="U1"), loaded)
+    kipi = out.values["ripple"]
+    assert (rss.parts["ripple"].below_v, rss.parts["ripple"].above_v) == pytest.approx(
+        (kipi.below_v, kipi.above_v), rel=1e-6)                     # KiPI keeps 6 figures
+    assert rss.parts["ripple"].below_v == pytest.approx(float(np.hypot(a1[0], a2[0])))
+    assert "root sum of squares" in rss.parts["ripple"].detail
+    # Through 20 MHz when chosen (both always shown).
+    bw = _compose(_comp_project(load=load, source={"accuracy_pct": 1}, bw_limit_20mhz=True,
+                                aggressors=[("A1", True), ("A2", True)]), noise=noise).rows[0]
+    assert (bw.parts["ripple"].below_v, bw.parts["ripple"].above_v) == pytest.approx((0.0045, 0.005))
+
+
+def test_a_computed_ripple_and_an_entered_one_take_the_larger_per_side():
+    project = _comp_project(load={"tol_pct": 10, "transient_mv": 10, "ripple_mv": [-2, 9]},
+                            source={"accuracy_pct": 1}, aggressors=[("A1", True)])
+    row = _compose(project, noise=[_noise_result("A1", (0.004, 0.006, 0.003, 0.004))]).rows[0]
+    assert (row.parts["ripple"].below_v, row.parts["ripple"].above_v) == pytest.approx((0.004, 0.009))
+    assert "A1" in row.parts["ripple"].detail and "ripple_mv" in row.parts["ripple"].detail
+
+
+def test_worst_pins_not_the_mean_and_both_sides_of_a_remote_sensed_load(pins_tree, sensed_tree):
+    for (project, tree), both in ((pins_tree, False), (sensed_tree, True)):
+        (rep,) = tree.loads
+        row = _compose(project, tree=tree, pairs={"U1": None}).rows[0]
+        dc = row.parts["dc"]
+        assert dc.below_v == pytest.approx(3.3 - rep.v_low_v, abs=1e-15)
+        assert dc.below_v > abs(3.3 - rep.v_across_v)                  # the mean drops less
+        assert "mean" in dc.detail and dc.source.startswith("power tree")
+        assert (dc.above_v > 0) is both
+        if both:
+            assert dc.above_v == pytest.approx(rep.v_high_v - 3.3, abs=1e-15)
+
+
+@pytest.mark.parametrize("status, converged, words", [
+    ("DISCONNECTED", True, "DISCONNECTED"), ("NOT CONVERGED", True, "NOT CONVERGED"),
+    ("VRM OUT OF REGULATION", True, "VRM OUT OF REGULATION"), ("", False, "did not converge")])
+def test_no_dc_part_from_a_load_the_tree_could_not_judge(status, converged, words):
+    row = _compose(_comp_project(**COMPLETE), tree=_comp_tree(status=status, converged=converged)).rows[0]
+    assert row.parts["dc"] is None and words in row.hints["dc"] and row.verdict == "not_judged"
+
+
+def test_kipis_transient_estimate_is_shown_never_judged():
+    project = _comp_project(load={"tol_pct": 5, "ripple_mv": 5}, source={"accuracy_pct": 1})
+    project.probes[0].step_a, project.probes[0].slew_a_per_us = 1.0, 1.0
+    project.ac.bandwidth_hz = {"U1": 1e5}
+    row = _compose(project, impedance=[_impedance()]).rows[0]
+    assert row.parts["transient"] is None and row.verdict == "not_judged"
+    assert row.hints["transient"] == ("enter transient_mv for U2 (KiPI's estimate with a typical loop "
+                                      "at 100 kHz: 20 / 12 mV, 15 / 10 mV through 20 MHz)")
+    assert row.transient_estimate == pytest.approx((0.020, 0.012, 0.015, 0.010))
+    entered = _compose(_comp_project(**COMPLETE), impedance=[_impedance()]).rows[0]
+    assert entered.parts["transient"].above_v == pytest.approx(0.020)          # the entered one
+    assert "KiPI's estimate with a typical loop" in entered.parts["transient"].detail
+
+
+@pytest.mark.parametrize("change, why", [
+    (dict(bandwidth=None), "no control loop bandwidth is given for U1 (ac.bandwidth_hz)"),
+    (dict(step=None), "probe P1 has no load step (step_a, slew_a_per_us)"),
+    (dict(probe=False), "no probe on U2's pins"),
+    (dict(note="--skip-ac"), "--skip-ac")])
+def test_without_kipis_estimate_the_hint_says_why(change, why):
+    project = _comp_project(load={"tol_pct": 5, "ripple_mv": 5}, probe=change.get("probe", True))
+    if project.probes and change.get("step", 1):
+        project.probes[0].step_a, project.probes[0].slew_a_per_us = 1.0, 1.0
+    if change.get("bandwidth", 1):
+        project.ac.bandwidth_hz = {"U1": 1e5}
+    notes = {"P1": change["note"]} if "note" in change else {}
+    row = _compose(project, ac_notes=notes, pairs={"U2": "P1" if project.probes else None}).rows[0]
+    assert row.hints["transient"] == f"enter transient_mv for U2 ({why} for KiPI's estimate)"
+    assert row.transient_estimate is None
+
+
+def test_a_negative_rail_swaps_kipis_estimate_and_judges_in_volts():
+    project = _comp_project(load={"tol_pct": (-5, 3), "transient_mv": [-20, 10], "ripple_mv": 5},
+                            source={"accuracy_pct": (-1, 2)}, voltage=-1.8)
+    tree = _comp_tree(nominal=-1.8, low=-1.8, high=-1.8 + 0.010)      # drops toward 0 V: above
+    row = _compose(project, tree=tree, impedance=[_impedance()]).rows[0]
+    assert (row.parts["dc"].below_v, row.parts["dc"].above_v) == pytest.approx((0.0, 0.010))
+    assert (row.parts["accuracy"].below_v, row.parts["accuracy"].above_v) == pytest.approx((0.036, 0.018))
+    assert (row.parts["transient"].below_v, row.parts["transient"].above_v) == pytest.approx((0.020, 0.010))
+    # A step pulls a negative rail up (gather.py:163): KiPI's under/overshoot swapped.
+    assert row.transient_estimate == pytest.approx((0.012, 0.020, 0.010, 0.015))
+    total = row.checks["total"]
+    assert (total.allowed_below_v, total.allowed_above_v) == pytest.approx((0.054, 0.090))
+    assert total.below_v == pytest.approx(0.0 + 0.036 + 0.005 + 0.020)
+
+
+def test_a_percent_tolerance_on_a_0_v_rail_is_not_judged():
+    project = _comp_project(load={"tol_pct": 5, "transient_mv": 2, "ripple_mv": 1},
+                            source={"accuracy_mv": 1}, voltage=0.0)
+    row = _compose(project, tree=_comp_tree(nominal=0.0, low=-0.001, high=0.0)).rows[0]
+    assert row.checks["total"].passed is None and row.verdict == "not_judged"
+    assert "tol_pct is a % of 0 V" in row.checks["total"].reason
+
+
+def test_no_tolerance_anywhere_is_not_judged_without_an_entry():
+    r = _compose(_comp_project(source={"accuracy_pct": 1}))
+    assert r.rows[0].verdict == "" and r.verdict == "not_judged" and r.not_judged == r.failed == []
+    assert r.verdict_note.startswith("No tolerance set")
+
+
+def test_not_judged_entries_name_the_key_set_and_every_missing_part():
+    project = _comp_project(load={"dc_tol_mv": 40, "ac_tol_pct": 2})
+    r = _compose(project)
+    by_limit = {e["limit"]: e for e in r.not_judged}
+    assert set(by_limit) == {"dc_tol_mv", "ac_tol_pct"}
+    assert by_limit["dc_tol_mv"]["reason"] == "accuracy: enter U1's DC accuracy (accuracy_pct)"
+    assert "ripple: " in by_limit["ac_tol_pct"]["reason"] and "transient: enter transient_mv" in \
+        by_limit["ac_tol_pct"]["reason"]
+    assert {e["item"] for e in r.not_judged} == {"U2"} and r.verdict == "not_judged"
+
+
+def test_q9_mismatch_warns_in_the_tolerance_result():
+    project = _comp_project(load={"ac_tol_mv": 30, **COMPLETE["load"]}, source={"accuracy_pct": 1})
+    project.probes[0].ac_tolerance_v = 0.05
+    r = _compose(project)
+    assert any("disagree" in w and "ac_tol_mv ±30 mV" in w for w in r.warnings)
+
+
+# ---------------------------------------------------------------------- summary, text and CSV
+
+def test_summary_text_and_csv(tmp_path):
+    import csv
+    import json
+
+    from coppernicus.tolerance import tolerance_summary, tolerance_text, write_csv
+    project = _comp_project(load={"tol_pct": 5, "dc_tol_mv": [-15, 10], "transient_mv": 20},
+                            source={"accuracy_pct": 1}, aggressors=[("A1", True)])
+    r = _compose(project, impedance=[_impedance()], noise=[_noise_result("A1", (0.004, 0.006, 0.003, 0.004))])
+    path = write_csv(r, tmp_path / "t.csv")
+    doc = tolerance_summary(r, path.as_posix())
+    text = json.dumps(doc, allow_nan=False)                      # plain JSON, no NaN
+    assert "nan" not in text.lower()
+    assert set(doc) == {"kind", "verdict", "verdict_note", "failed", "not_judged", "options", "warnings",
+                        "assumptions", "estimates", "stats", "csv_file", "loads"}
+    assert doc["kind"] == "tolerance" and doc["options"] == {"ripple_sum": "linear", "bw_limit_20mhz": False}
+    (ld,) = doc["loads"]
+    assert set(ld) == {"load", "name", "net", "rail", "nominal_v", "source", "probe", "verdict", "parts",
+                       "hints", "transient_estimate", "checks", "stand_ins"}
+    assert ld["parts"]["accuracy"] == {"below_mv": pytest.approx(18.0), "above_mv": pytest.approx(18.0),
+                                       "source": "accuracy_pct of U1", "detail": "accuracy_pct ±1 % of 1.8 V"}
+    dc = ld["checks"]["dc"]
+    assert dc["limit"] == "dc_tol_mv" and dc["passed"] is False            # 10 + 18 > 15 below
+    assert dc["allowed_below_mv"] == pytest.approx(15.0) and dc["margin_below_mv"] == pytest.approx(-13.0)
+    assert ld["checks"]["ac"]["limit"] == "" and ld["transient_estimate"]["above_mv"] == pytest.approx(12.0)
+    assert doc["verdict"] == "fail" and doc["failed"][0]["reason"].startswith(
+        "DC 28 mV below nominal, over the 15 mV allowed")
+    lines = "\n".join(tolerance_text(doc))
+    for words in ("Load U2 on VOUT (nominal 1.8 V from U1, probe P1): FAIL", "DC accuracy  18 / 18 mV",
+                  "check DC    28 / 18 mV of 15 / 10 allowed (dc_tol_mv), margin -13 / -8 mV  FAIL",
+                  "check total", "FAIL U2 (dc_tol_mv)", "assumption: Tolerance stack-up",
+                  "Verdict: fail."):
+        assert words in lines, words
+    rows = list(csv.DictReader(path.open(encoding="utf-8")))
+    assert len(rows) == 1 and rows[0]["load"] == "U2" and rows[0]["verdict"] == "fail"
+    assert float(rows[0]["accuracy_below_mv"]) == pytest.approx(18.0) and rows[0]["ac_verdict"] == ""
+    assert rows[0]["dc_verdict"] == "fail" and rows[0]["total_limit"] == "tol_pct"

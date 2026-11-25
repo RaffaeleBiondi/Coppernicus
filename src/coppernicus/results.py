@@ -676,3 +676,44 @@ class ToleranceCheck:
     @property
     def margin_above_v(self) -> Optional[float]:
         return None if self.allowed_above_v is None else self.allowed_above_v - self.above_v
+
+
+@dataclass
+class ToleranceRow:
+    """One load's stack-up: its four parts (None: missing, with a hint saying what to do), the
+    three checks against the tolerances set, and its verdict ("" without any tolerance)."""
+    load: str                      # its label
+    name: str                      # its engine name (TreeResult.loads)
+    net: str                       # its supply net
+    rail: str                      # the rail it is listed in
+    nominal_v: Optional[float]     # the set voltage of the source driving its rail
+    source: str                    # that source's label ("" without one)
+    probe: str                     # its probe (KiPI's rule; "" without one)
+    # dc, accuracy, ripple, transient (None: missing); part -> what to do; dc, ac, total
+    parts: Dict[str, Optional[TolerancePart]] = field(default_factory=dict)
+    hints: Dict[str, str] = field(default_factory=dict)
+    checks: Dict[str, ToleranceCheck] = field(default_factory=dict)
+    verdict: str = ""              # "pass", "fail", "not_judged"; "" without any tolerance
+    stand_ins: List[str] = field(default_factory=list)   # KiPI stand-ins behind a part not used
+    # KiPI's transient estimate at its probe, shown, never judged: (below, above, the same
+    # through 20 MHz) V, already swapped on a negative rail; None without one.
+    transient_estimate: Optional[Tuple[float, float, float, float]] = None
+
+
+@dataclass
+class ToleranceResult:
+    """Every load's stack-up (KiPI ``kipi/tolerance``) and the verdict over them: only against
+    the tolerances the user set, and only with every part of a check known."""
+    rows: List[ToleranceRow] = field(default_factory=list)
+    verdict: str = "not_judged"
+    verdict_note: str = ""
+    failed: List[Dict[str, Any]] = field(default_factory=list)       # {item, net, limit, reason}
+    not_judged: List[Dict[str, Any]] = field(default_factory=list)
+    options: Dict[str, Any] = field(default_factory=dict)            # ripple_sum, bw_limit_20mhz
+    assumptions: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    estimates: List[Dict[str, Any]] = field(default_factory=list)    # what each solve was to cost
+    stats: Dict[str, Any] = field(default_factory=dict)
+
+    def row(self, load: str) -> Optional[ToleranceRow]:
+        return next((r for r in self.rows if load in (r.load, r.name)), None)
