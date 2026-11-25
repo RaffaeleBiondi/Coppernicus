@@ -33,7 +33,8 @@ from kipi.ac.solver.field import MEMORY_SHARE
 from kipi.ac.solver.physics import EPS0_F_PER_MM  # noqa: F401  (re-exported for the tests)
 from kipi.ac.solver.sweep import build_ports, solve_ac
 from kipi.ac.target import judged_from, target_at, target_from_transient
-from kipi.ac.transient import bandwidth_limited, transient
+from kipi.ac.transient import bandwidth_limited
+from kipi.ac.transient import transient as kipi_transient
 from kipi.core.eta import factor_work
 from kipi.core.memory import free_memory
 from kipi.core.mesh.mesher import MeshError
@@ -344,9 +345,12 @@ def peak_rss_bytes() -> Optional[int]:
 def solve_ac_rail(board: Board, project: Project, rail: str,
                   progress: Optional[Callable[[str], None]] = None,
                   cancelled: Callable[[], bool] = lambda: False,
-                  fraction: Optional[Callable[[Optional[float]], None]] = None) -> ImpedanceResult:
+                  fraction: Optional[Callable[[Optional[float]], None]] = None,
+                  transient: bool = False) -> ImpedanceResult:
     """The open-loop PDN impedance of ``rail`` (or of the rail feeding it) at its probes,
-    each probe judged against its target (:func:`coppernicus.impedance.judge`).
+    each probe judged against its target (:func:`coppernicus.impedance.judge`). With
+    ``transient`` (only the tolerance stack-up asks for it) each probe with a step and a slew
+    rate also gets KiPI's transient estimate, when its source's bandwidth is given.
 
     ``progress`` is also called from KiPI's worker threads (frequencies solved side by side),
     ``fraction`` and ``cancelled`` from the thread that solves: a GUI must only emit signals
@@ -366,7 +370,7 @@ def solve_ac_rail(board: Board, project: Project, rail: str,
         raise EngineError(f"AC solve of {c.rail}: {e}") from e
     seconds = time.perf_counter() - t0
     peak1 = peak_rss_bytes()
-    out = _convert(board, project, c, res, thickness)
+    out = _convert(board, project, c, res, thickness, transient)
     st = res.stats
     out.stats = {"seconds": seconds, "triangles": float(st.n_tris), "nodes": float(st.n_nodes),
                  "unknowns": float(st.n_unknowns), "ports": float(st.n_ports), "method": st.method,
@@ -388,7 +392,8 @@ def _transient(freqs: np.ndarray, z, bandwidth: Optional[float], p: Probe) -> Op
     KiPI's ``transients(result)``. No load line (``ImpedanceResult.load_line_ohm`` is 0)."""
     if bandwidth is None or not (p.step_a and p.slew_a_per_us):
         return None
-    tr = transient(freqs, np.asarray(z, dtype=complex), bandwidth, p.step_a, p.slew_a_per_us * 1e6, 0.0)
+    tr = kipi_transient(freqs, np.asarray(z, dtype=complex), bandwidth, p.step_a, p.slew_a_per_us * 1e6,
+                        0.0)
     if tr is None:
         return None
     bw = bandwidth_limited(tr, BW_LIMIT_HZ)
@@ -420,7 +425,8 @@ def _dielectric(board: Board, default_er: float) -> Tuple[str, str]:
     return summary, "; ".join(why)
 
 
-def _convert(board: Board, project: Project, c: _Context, res, thickness) -> ImpedanceResult:
+def _convert(board: Board, project: Project, c: _Context, res, thickness,
+             transient: bool = False) -> ImpedanceResult:
     freqs = np.asarray(res.freqs, dtype=float)
     shown = c.bandwidth_hz if c.bandwidth_hz is not None else ASSUMED_BANDWIDTH_HZ
     by_name = {p.name: p for p in c.probes}
@@ -434,7 +440,7 @@ def _convert(board: Board, project: Project, c: _Context, res, thickness) -> Imp
             z_ohm=np.asarray(curve.z, dtype=complex), target_ohm=ohm, target_hz=hz,
             target_points=pts, target_curve_ohm=t, target_note=note, judged_from_hz=judged,
             fallback_note=fallback, step_a=p.step_a, slew_a_per_us=p.slew_a_per_us,
-            transient=_transient(freqs, curve.z, c.bandwidth_hz, p)))
+            transient=_transient(freqs, curve.z, c.bandwidth_hz, p) if transient else None))
         if note:
             notes.append(note)
     summary, assumed = _dielectric(board, project.ac.default_er)

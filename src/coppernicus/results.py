@@ -637,6 +637,9 @@ class NoiseResult:
 
 # ---------------------------------------------------------------------- tolerance stack-up (Task 11)
 
+TOLERANCE_PARTS = ("dc", "accuracy", "ripple", "transient")
+TOLERANCE_CHECKS = ("dc", "ac", "total")          # KiPI's CHECK_PARTS order (evaluate.py:23)
+
 @dataclass
 class TolerancePart:
     """One part of a load's stack-up: how far it takes the load below and above nominal (V,
@@ -697,7 +700,7 @@ class ToleranceRow:
     stand_ins: List[str] = field(default_factory=list)   # KiPI stand-ins behind a part not used
     # KiPI's transient estimate at its probe, shown, never judged: (below, above, the same
     # through 20 MHz) V, already swapped on a negative rail; None without one.
-    transient_estimate: Optional[Tuple[float, float, float, float]] = None
+    transient_estimate_v: Optional[Tuple[float, float, float, float]] = None
 
 
 @dataclass

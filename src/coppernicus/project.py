@@ -401,9 +401,10 @@ class ToleranceOptions:
     how several aggressors' ripple at one probe adds, "linear" (the sum of their peaks per
     side: unsynchronised switchers drift through every relative phase, so their peaks line up
     at times) or "rss" (the root sum of squares, KiPI's rule, kipi/tolerance/gather.py:201, for
-    such switchers on average). ``bw_limit_20mhz``: judge the ripple and the transient through
-    a 20 MHz bandwidth limit, as many datasheets measure, instead of the full band. Saved as a
-    block holding only the keys not at their default."""
+    such switchers on average). ``bw_limit_20mhz``: judge the ripple through a 20 MHz bandwidth
+    limit, as many datasheets measure, instead of the full band (an entered transient has no
+    band; KiPI's estimate is shown both ways, never judged). Saved as a block holding only the
+    keys not at their default."""
     ripple_sum: str = "linear"
     bw_limit_20mhz: bool = False
 

@@ -711,7 +711,7 @@ def _cmd_tolerance(args) -> int:
             if estimate["exceeds_memory"]:
                 print(f"warning: the AC solve of {net} could exceed this machine's memory; a coarser "
                       "AC mesh (ac: max_edge_mm) lowers it", file=sys.stderr, flush=True)
-            impedance.append(solve_ac_rail(board, project, net, progress=progress))
+            impedance.append(solve_ac_rail(board, project, net, progress=progress, transient=True))
         except EngineError as e:          # only KiPI's estimate is lost: shown, never judged
             warnings.append(f"AC solve of {net} for KiPI's transient estimate failed: {e}")
             ac_notes.update({n: f"the AC solve of {net} failed" for n in probes_here})

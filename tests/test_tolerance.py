@@ -180,7 +180,7 @@ QUICK = dict(f_start_hz=1e5, f_stop_hz=1e8, points_per_decade=20, field_points_p
              max_edge_mm=2.0)
 
 
-def _decap_solve(bandwidth=1e5, step_a=1.0, slew_a_per_us=1.0):
+def _decap_solve(bandwidth=1e5, step_a=1.0, slew_a_per_us=1.0, transient=True):
     """The ac_decap board with a quick sweep, its probe with a load step."""
     from coppernicus.engine import Board
     from coppernicus.engine.ac import solve_ac_rail
@@ -189,7 +189,7 @@ def _decap_solve(bandwidth=1e5, step_a=1.0, slew_a_per_us=1.0):
     project = ac_decap_project()
     project.ac = AcOptions(**QUICK, bandwidth_hz={"U1": bandwidth} if bandwidth else {})
     project.probes[0].step_a, project.probes[0].slew_a_per_us = step_a, slew_a_per_us
-    return project, solve_ac_rail(Board(ac_decap_board()), project, "+3V3")
+    return project, solve_ac_rail(Board(ac_decap_board()), project, "+3V3", transient=transient)
 
 
 @pytest.fixture(scope="module")
@@ -214,8 +214,9 @@ def test_a_given_bandwidth_and_a_load_step_give_kipis_transient_estimate(stepped
     assert tr.step_a == 1.0 and tr.slew_a_per_s == 1e6 and tr.undershoot_v > 0
 
 
-@pytest.mark.parametrize("change", [dict(bandwidth=None), dict(step_a=None), dict(slew_a_per_us=None)],
-                         ids=["no bandwidth given", "no step", "no slew"])
+@pytest.mark.parametrize("change", [dict(bandwidth=None), dict(step_a=None), dict(slew_a_per_us=None),
+                                    dict(transient=False)],
+                         ids=["no bandwidth given", "no step", "no slew", "not asked for (the default)"])
 def test_no_estimate_without_a_given_bandwidth_a_step_and_a_slew(change, stepped):
     import numpy as np
     _, r = _decap_solve(**change)
@@ -580,7 +581,7 @@ def test_kipis_transient_estimate_is_shown_never_judged():
     assert row.hints["transient"] == ("enter transient_mv for U2; KiPI's estimate with a typical loop "
                                       "at 100 kHz: 20 / 12 mV, 15 / 10 mV through 20 MHz (shown, never "
                                       "judged)")
-    assert row.transient_estimate == pytest.approx((0.020, 0.012, 0.015, 0.010))
+    assert row.transient_estimate_v == pytest.approx((0.020, 0.012, 0.015, 0.010))
     entered = _compose(_comp_project(**COMPLETE), impedance=[_impedance()]).rows[0]
     assert entered.parts["transient"].above_v == pytest.approx(0.020)          # the entered one
     assert "KiPI's estimate with a typical loop" in entered.parts["transient"].detail
@@ -600,7 +601,7 @@ def test_without_kipis_estimate_the_hint_says_why(change, why):
     notes = {"P1": change["note"]} if "note" in change else {}
     row = _compose(project, ac_notes=notes, pairs={"U2": "P1" if project.probes else None}).rows[0]
     assert row.hints["transient"] == f"enter transient_mv for U2; no KiPI estimate: {why}"
-    assert row.transient_estimate is None
+    assert row.transient_estimate_v is None
 
 
 def test_a_negative_rail_swaps_kipis_estimate_and_judges_in_volts():
@@ -612,7 +613,7 @@ def test_a_negative_rail_swaps_kipis_estimate_and_judges_in_volts():
     assert (row.parts["accuracy"].below_v, row.parts["accuracy"].above_v) == pytest.approx((0.036, 0.018))
     assert (row.parts["transient"].below_v, row.parts["transient"].above_v) == pytest.approx((0.020, 0.010))
     # A step pulls a negative rail up (gather.py:163): KiPI's under/overshoot swapped.
-    assert row.transient_estimate == pytest.approx((0.012, 0.020, 0.010, 0.015))
+    assert row.transient_estimate_v == pytest.approx((0.012, 0.020, 0.010, 0.015))
     total = row.checks["total"]
     assert (total.allowed_below_v, total.allowed_above_v) == pytest.approx((0.054, 0.090))
     assert total.below_v == pytest.approx(0.0 + 0.036 + 0.005 + 0.020)
@@ -762,3 +763,13 @@ def test_each_load_takes_the_source_driving_its_group_in_a_real_tree():
     assert u3.parts["accuracy"].source == "accuracy_mv of U2"
     rep = next(ld for ld in tree.loads if ld.name == "U3")
     assert u3.parts["dc"].below_v == pytest.approx(max(1.8 - rep.v_low_v, 0.0), abs=1e-12)
+
+
+def test_the_composition_module_imports_without_kipi():
+    """coppernicus.tolerance stays light, as impedance and coupled_noise are (the app's tab
+    imports it): KiPI is loaded only when a function needs the engine."""
+    import subprocess
+    import sys
+    code = "import sys, coppernicus.tolerance; print('kipi' in sys.modules)"
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "False"

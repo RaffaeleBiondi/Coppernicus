@@ -25,12 +25,12 @@ from kipi.tolerance.model import Contribution, LoadEntry
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import _numbers, _pads, terminal_names, to_pisetup
 from coppernicus.project import Load, Probe, Project, Source
+from coppernicus.results import TOLERANCE_CHECKS as CHECKS
+from coppernicus.results import TOLERANCE_PARTS as PARTS  # noqa: F401 (re-exported)
 from coppernicus.results import ToleranceCheck
 
 Pair = Tuple[float, float]
 Limit = Tuple[Optional[float], Optional[float]]
-PARTS = ("dc", "accuracy", "ripple", "transient")
-CHECKS = ("dc", "ac", "total")
 #: The load's tolerance judged by each check, without its unit (``_pct`` or ``_mv``).
 CHECK_TOLERANCE = {"dc": "dc_tol", "ac": "ac_tol", "total": "tol"}
 REL = 1e-9                         # the Q9 comparison's relative rounding margin

@@ -19,18 +19,6 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from coppernicus.engine.pisetup import terminal_names
-from coppernicus.engine.tolerance import (
-    CHECKS,
-    EPS_V,
-    PARTS,
-    accuracy_sides,
-    load_limits,
-    loads_by_name,
-    mismatch_warnings,
-    stack,
-    tolerance_of,
-)
 from coppernicus.impedance import hz_text
 from coppernicus.project import Load, Project, Source
 from coppernicus.results import (
@@ -48,6 +36,8 @@ from coppernicus.results import (
     ToleranceRow,
     TreeResult,
 )
+from coppernicus.results import TOLERANCE_CHECKS as CHECKS
+from coppernicus.results import TOLERANCE_PARTS as PARTS
 
 PART_NAMES = {"dc": "DC drop", "accuracy": "DC accuracy", "ripple": "ripple", "transient": "transient"}
 CHECK_NAMES = {"dc": "DC", "ac": "AC", "total": "total"}
@@ -104,6 +94,7 @@ def _dc(tree: TreeResult, rep: Optional[LoadReport]) -> Tuple[Optional[Tolerance
 
 
 def _accuracy(source: Optional[Source], nominal: Optional[float]) -> Tuple[Optional[TolerancePart], str]:
+    from coppernicus.engine.tolerance import accuracy_sides
     if source is None or nominal is None:
         return None, "no source drives its rail, so there is no DC accuracy"
     sides = accuracy_sides(nominal, source)
@@ -244,6 +235,7 @@ def _sides(rp: RippleResult, bw: bool) -> Pair:
 
 def _judge_row(row: ToleranceRow, load: Load) -> None:
     """Each check's limit key and why it is not judged, and the row's verdict."""
+    from coppernicus.engine.tolerance import tolerance_of
     for kind, c in row.checks.items():
         _pair, _pct, key = tolerance_of(load, kind)
         c.limit = key
@@ -267,6 +259,7 @@ def _judge_row(row: ToleranceRow, load: Load) -> None:
 
 
 def _fail_reason(c: ToleranceCheck) -> str:
+    from coppernicus.engine.tolerance import EPS_V
     sides = []
     if c.allowed_below_v is not None and c.below_v > c.allowed_below_v + EPS_V:
         sides.append(f"{_mv(c.below_v)} mV below nominal, over the {_mv(c.allowed_below_v)} mV allowed")
@@ -280,6 +273,7 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
          rep: Optional[LoadReport], sources: Dict[str, Source], probe: Optional[str],
          shown: Dict[str, ProbeImpedance], noise: Dict[str, NoiseResult],
          ac_notes: Dict[str, str], noise_notes: Dict[str, str], rail_source: Dict[str, str]) -> ToleranceRow:
+    from coppernicus.engine.tolerance import load_limits, stack
     driver = next((v.name for v in tree.vrms if rep is not None and v.group == rep.group), None)
     driver = driver if driver is not None else rail_source.get(rail)
     source = sources.get(driver) if driver else None
@@ -288,7 +282,7 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
                        None if nominal is None else float(nominal),
                        source.label if source is not None else "", probe or "")
     found = {"dc": _dc(tree, rep), "accuracy": _accuracy(source, nominal)}
-    part, hint, row.transient_estimate = _transient(project, load, nominal, probe, shown.get(probe or ""),
+    part, hint, row.transient_estimate_v = _transient(project, load, nominal, probe, shown.get(probe or ""),
                                                     source, ac_notes)
     found["transient"] = (part, hint)
     part, hint, row.stand_ins = _ripple(project, load, probe, source, driver or "", noise, noise_notes)
@@ -367,6 +361,8 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
     not solved in AC; ``noise_notes``: aggressor -> why it was not solved; ``not_judged``: more
     not-judged entries ``{item, net, limit, reason}`` (a tolerance set on a load the solve does
     not hold: a rail from KiCad fields)."""
+    from coppernicus.engine.pisetup import terminal_names
+    from coppernicus.engine.tolerance import loads_by_name, mismatch_warnings
     pairs, ac_notes, noise_notes = pairs or {}, ac_notes or {}, noise_notes or {}
     names = terminal_names(project)
     sources = {name: project.rail(net).sources[i] for (what, net, i), name in names.items()
@@ -427,7 +423,7 @@ def _check_summary(c: ToleranceCheck) -> Dict[str, Any]:
 
 
 def _row_summary(r: ToleranceRow) -> Dict[str, Any]:
-    e = r.transient_estimate
+    e = r.transient_estimate_v
     return {"load": r.load, "name": r.name, "net": r.net, "rail": r.rail, "nominal_v": _num(r.nominal_v),
             "source": r.source, "probe": r.probe, "verdict": r.verdict,
             "parts": {k: _part_summary(r.parts.get(k)) for k in PARTS},
