@@ -337,7 +337,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Regulator inputs judged as loads on the rail feeding them (across input and ground pins); limits per net, a net without its own limit takes its group's main rail's; copper judged against the strictest limit in the group, and a fail names whose limit it used | ✅ |
 | What-if copper thickness per layer (`copper_thickness_mm`, optional, at most 1 mm per layer) | ✅ (project file, MCP, and the app: Solve settings → Copper thickness → Edit…; empty = board file) |
 | The window fits a 1440 px screen (map bar on two rows) | ✅ |
-| Board temperature (electro-thermal) | 🔄 next |
+| Board temperature (electro-thermal, with the power tree): temperature per layer, the copper heating the drop; `thermal:` in the project or `solve --thermal`; a verdict only against `max_temp_c` / `max_rise_c`. Example: `examples/demo/demo-thermal` | ✅ CLI (app tab next) |
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
 | Packaged app: macOS `.dmg`, Windows `.zip`; Triangle fetched once on first start, checked against `uv.lock` ([install](docs/install.md)) | ✅ macOS built and tried; Windows built by CI, not yet tried; unsigned |
 
