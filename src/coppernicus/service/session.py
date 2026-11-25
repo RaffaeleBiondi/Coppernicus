@@ -909,7 +909,7 @@ class Session:
         this machine's memory the solve is refused (``solve_too_large``) unless
         ``confirm_large``: never a silent multi-GB solve."""
         from coppernicus.engine.tree import solve_project_tree
-        from coppernicus.power_tree import tree_summary
+        from coppernicus.power_tree import rating_origins, tree_summary
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
         project = merged.project
@@ -941,6 +941,7 @@ class Session:
                                    "links) or the KiCad fields (PI_GND, PI_INPUT, PI_LINK...), "
                                    "then solve again") from None
         merged.annotate(tree)
+        rating_origins(tree, merged)          # where each regulator's rating was written
         doc = C.vrm_ratings(tree_summary(tree, top=max(1, int(top))), project)
         if estimate is not None:
             doc["thermal_estimate"] = estimate

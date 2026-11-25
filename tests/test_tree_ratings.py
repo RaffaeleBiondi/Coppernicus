@@ -345,6 +345,21 @@ def test_the_cli_tree_judges_a_kicad_rating_and_names_the_field(tmp_path, capsys
     assert said in [p["title"] for g in doc["groups"] for p in g["problems"]]
 
 
+def test_the_agent_interface_names_where_a_rating_was_written(tmp_path):
+    """Session.solve_tree (the MCP tool solve_tree) as the CLI: from KiCad field PI_IMAX on the
+    IC, or from the project file."""
+    from coppernicus.service import Session
+    doc = Session(out_dir=tmp_path / "s").solve_tree(rated_buck(tmp_path / "buck", "400mA"))
+    u1 = next(v for v in doc["vrms"] if v["name"] == "U1")
+    assert u1["exceeds_current_limit"] is True, u1
+    assert u1["current_limit_from"] == "KiCad field PI_IMAX on U1", u1
+    titles = [p["title"] for g in doc["groups"] for p in g["problems"]]
+    assert "U1: 0.5 A out, over its rated 0.4 A (from KiCad field PI_IMAX on U1)" in titles, titles
+    doc = Session(out_dir=tmp_path / "c").solve_tree(chain_project(tmp_path / "chain", {"+3V3": 2.0}))
+    u1 = next(v for v in doc["vrms"] if v["name"] == "U1")
+    assert u1["current_limit_from"] == "the project file", u1
+
+
 def test_the_power_tree_tab_and_problems_show_a_regulator_over_its_rating(tmp_path):
     rated = chain_project(tmp_path / "rated", {"+3V3": 2.0, "+1V8": 3.0})
     buck = rated_buck(tmp_path / "buck", "400mA")
