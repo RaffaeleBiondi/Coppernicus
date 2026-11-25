@@ -233,18 +233,16 @@ def test_victim_cells_map_to_the_file_and_a_preset_owns_its_terminations():
 
 
 def test_the_custom_starting_terminations_are_kipis_cmos():
-    from kipi.noise.model import VICTIM_PRESETS
-
     from coppernicus.app.noise_panel import CUSTOM_START
+    from coppernicus.engine.noise import VICTIM_PRESETS  # KiPI's, as the engine holds them
     cmos = VICTIM_PRESETS["cmos"]
     assert CUSTOM_START == {"driver_ohm": cmos.driver_ohm, "receiver_ohm": cmos.receiver_ohm,
                             "receiver_pf": cmos.receiver_pf}
 
 
 def test_the_stand_ins_named_in_the_phases_table_are_kipis():
-    from kipi.noise.model import DEFAULT_COSS_F, DEFAULT_QRR_C
-
     from coppernicus.app.noise_panel import KIPI_COSS_PF, KIPI_QRR_NC, STAND_INS
+    from coppernicus.engine.noise import DEFAULT_COSS_F, DEFAULT_QRR_C  # as the engine holds them
     assert KIPI_COSS_PF == pytest.approx(DEFAULT_COSS_F * 1e12)
     assert KIPI_QRR_NC == pytest.approx(DEFAULT_QRR_C * 1e9)
     assert "200 pF" in STAND_INS["coss_f"] and "5 nC" in STAND_INS["qrr_nc"]
@@ -378,6 +376,29 @@ def test_victim_rows_give_peak_margin_verdict_and_why():
     assert rows["ok"]["Mostly"] == "inductive" and rows["ok"]["Capacitive"] == "100 mV"
 
 
+def test_a_stale_result_never_reads_a_clean_verdict():
+    from coppernicus.app.noise_panel import VICTIM_HEADERS, victim_rows
+    r = _result([_victim("ok", 0.4), _victim("bad", 0.9), _victim("free", 0.2, margin=None)])
+    verdict = VICTIM_HEADERS.index("Verdict")
+    assert [row[verdict] for row in victim_rows(r)] == ["PASS", "FAIL", "no margin (ranked)"]
+    assert [row[verdict] for row in victim_rows(r, stale=True)] == [
+        "PASS (setup changed)", "FAIL (setup changed)", "no margin (ranked) (setup changed)"]
+
+
+def test_the_rows_a_solve_leaves_out_are_named():
+    from coppernicus.app.noise_panel import unsolved_text
+    rows = [Victim("SIG", preset="cmos"), Victim("SIG2", preset=""), Victim("SIG", preset="lvds"),
+            Victim("OTHER", preset="hiz", driver_pins=["1"])]
+    a = Aggressor("U1", phases=[Phase(high_side_net="VIN")])
+    text = unsolved_text(a, rows)
+    assert text.startswith("2 victim rows not saved are not solved: row 2 (SIG2): draft: ")
+    assert "row 3 (SIG): victim names must be unique" in text
+    assert "not saved, so solved without it: victim row 4 (OTHER): not saved yet: Driver pins" in text
+    assert "phase 1's High-side side is saved with both its part and its net" in text
+    assert unsolved_text(Aggressor("U1"), rows[:1]) == ""
+    assert unsolved_text(None, rows[1:2]).startswith("1 victim row not saved is not solved: row 1 (SIG2)")
+
+
 def test_a_logic_v_off_kipis_table_is_not_judged_with_its_note_never_ranked():
     from coppernicus.app.noise_panel import VICTIM_HEADERS, victim_rows
     off = _victim("off", 0.2, margin=None)
@@ -407,6 +428,8 @@ def test_the_notes_carry_every_stand_in_and_warning_verbatim():
     text = notes_text(r)                          # no reason carries them here: listed on their own
     assert "capacitive coupling of phase 1 left out: no switch net" in text and "εr assumed: x" in text
     assert "Qrr not entered on phase 1: y" in text
+    r.emi.notes = ["The radiated estimate counts the loops' differential-mode currents only"]
+    assert r.emi.notes[0] in notes_text(r)          # KiPI's notes on the radiated estimate, verbatim
 
 
 def test_the_radiated_estimate_is_for_scale_and_the_header_never_judges_ripple():
@@ -461,7 +484,17 @@ def run_in_window(body: str) -> None:
     assert out.returncode == 0, out.stdout + out.stderr
 
 
-def test_the_noise_tab_follows_the_impedance_tab_and_opening_changes_nothing():
+def _precise_copy(tmp_path):
+    """The example with values a 6-digit field cannot show exactly, and counts above the
+    fields' old maxima: committing a field unchanged must not round them, nor clamp them."""
+    p = Project.load(NOISE)
+    p.aggressors[0].rise_s, p.aggressors[0].vin_v = 2.123456789e-9, 12.3456789
+    p.noise.segment_mm, p.noise.max_harmonics, p.noise.field_per_decade = 0.123456789, 200000, 500
+    return p.save(tmp_path / "precise.coppernicus.yml")
+
+
+def test_the_noise_tab_follows_the_impedance_tab_and_opening_changes_nothing(tmp_path):
+    precise = _precise_copy(tmp_path)
     run_in_window(f'''
         tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
         assert tabs[tabs.index("Power tree") + 1] == "Impedance", tabs
@@ -491,6 +524,16 @@ def test_the_noise_tab_follows_the_impedance_tab_and_opening_changes_nothing():
             if hasattr(w, "editingFinished"):
                 w.editingFinished.emit()                      # committed unchanged: no edit
         assert window.dirty is False and window.project.to_dict() == before
+        window.open_project({str(precise)!r})
+        app.processEvents()
+        before = window.project.to_dict()
+        assert panel.field["rise_s"].text() == "2.12346" and panel.opt["segment_mm"].text() == "0.123457"
+        assert panel.opt["max_harmonics"].value() == 200000 and panel.opt["field_per_decade"].value() == 500
+        for w in list(panel.field.values()) + list(panel.opt.values()):
+            if hasattr(w, "editingFinished"):
+                w.editingFinished.emit()                      # shown rounded, committed unchanged
+        assert window.dirty is False and window.project.to_dict() == before
+        assert window.project.aggressors[0].rise_s == 2.123456789e-9
         with_tab = window.minimumSizeHint()                  # the laptop fit: the tab grows nothing
         window.results_tabs.removeTab(window.results_tabs.indexOf(panel))
         app.processEvents()
@@ -690,8 +733,9 @@ def test_solve_takes_a_copy_of_the_merged_project_and_a_field_error_refuses():
 
 def test_a_solve_that_could_exceed_the_memory_starts_only_on_yes():
     run_in_window(STUB_WORKER + textwrap.dedent(f'''
-        asked = []
-        QMessageBox.warning = staticmethod(lambda *a, **k: asked.append(a[1]) or QMessageBox.No)
+        asked, defaults = [], []
+        QMessageBox.warning = staticmethod(
+            lambda *a, **k: asked.append(a[1]) or defaults.append(a[4]) or QMessageBox.No)
         forced = RamEstimate(9e12, 8e9, True, "up to 9000 GB (forced)")
         engine_noise.noise_ram_estimate = lambda *a, **k: forced
         window.open_project({NOISE!r})
@@ -702,6 +746,7 @@ def test_a_solve_that_could_exceed_the_memory_starts_only_on_yes():
         panel.solve()
         pump(lambda: not panel.busy)
         assert asked == ["This noise solve could exceed the memory"] and panel.worker is None, asked
+        assert defaults == [QMessageBox.No]                     # the question's default is No
         assert heard and "could exceed" in heard[0] and "1,000 triangles" in heard[0], heard
         assert panel.estimate.toolTip() == heard[0] and "1,000 triangles × 4 ports" in panel.estimate.text()
         assert len(panel.estimate.text()) < len(heard[0])
@@ -809,3 +854,175 @@ def test_closing_waits_for_a_noise_solve_and_leaves_none_of_its_signals_connecte
         assert worker.stopped and heard == [], heard
         assert any("Finishing the noise solve" in m for m in said), said
     ''')
+
+
+RESULT = '''
+import numpy as np
+import coppernicus.app.noise_panel as noise_panel
+from coppernicus.coupled_noise import judge
+from coppernicus.results import NoiseResult, RippleResult, VictimResult
+
+
+def make_result(name="U1", peak=0.4, margin=0.8):
+    """A judged result shaped as the example's (its three victims, the LOAD probe)."""
+    n = 16
+    t = np.arange(n) / (n * 1e6)
+    z = np.zeros(n)
+    victims = [VictimResult(net, net, "U5[1]", "U6[1]", True, "cmos", margin, "noise_margin_v",
+                            "noise_margin_v (V)", peak, {"capacitive": peak / 4, "inductive": peak},
+                            "inductive", peak / margin, [], 10.0, 5.0, {}, {}, [], z + peak)
+               for net in ("SIG_SW", "SIG_LOOP", "SIG_BURIED")]
+    ripple = [RippleResult("LOAD", "probe", "VOUT", "GND", "U2", ["1"], 0.004, 0.006, 0.002, 0.003,
+                           0.010, 0.005, 0.003, t, z, z)]
+    r = NoiseResult(name, "U1", "VOUT", "VIN", "GND", "buck", 12.0, 1.8, 5.0, 0.83, 0.15, 0.9, 1, [],
+                    1e6, 2e-9, 2e-9, 1.6e9, 1600, False, [1.5], [], t, [z + 12.0], [z + 5.0], [""],
+                    ripple=ripple, victims=victims, stats={"seconds": 2.0})
+    return judge(r)
+
+
+class FakeSolve(QtCore.QObject):
+    """The solve phase's signals, sent by hand from the test."""
+    succeeded = QtCore.Signal(object)
+    phase = "solve"
+
+    def isRunning(self):
+        return True
+
+    def cancel(self):
+        pass
+
+
+def solving(panel, name):
+    """The panel as it is while ``name`` solves (what Solve sets), with a fake worker."""
+    fake = FakeSolve()
+    fake.generation = panel._generation
+    fake.succeeded.connect(panel._solved)
+    panel.worker, panel._busy = fake, True
+    panel._solving = (name, noise_panel.project_key(window.project), window.merged)
+    return fake
+
+
+def verdicts(panel):
+    col = noise_panel.VICTIM_HEADERS.index("Verdict")
+    return [panel.victim_table.item(i, col).text() for i in range(panel.victim_table.rowCount())]
+'''
+
+
+def test_a_solve_that_ends_shows_its_result_and_an_edit_flags_it_everywhere():
+    run_in_window(RESULT + textwrap.dedent(f'''
+        window.open_project({NOISE!r})
+        app.processEvents()
+        panel = window.noise_panel
+        solving(panel, "U1").succeeded.emit(make_result("U1", 0.4))
+        assert "<b>U1</b>" in panel.header.text() and "PASS" in panel.header.text()
+        assert "Setup changed" not in panel.header.text()
+        assert verdicts(panel) == ["PASS"] * 3, verdicts(panel)
+        assert panel.ripple_table.item(0, 0).text() == "LOAD" and panel.export_button.isEnabled()
+        title = panel.wave_figure.axes[0].get_title()
+        assert "PASS" in title and "setup changed" not in title, title
+        panel.victims.item(0, 8).setText("300")                # an edit after the solve
+        assert "Setup changed since this solve" in panel.header.text()
+        assert verdicts(panel) == ["PASS (setup changed)"] * 3, verdicts(panel)
+        assert "setup changed" in panel.wave_figure.axes[0].get_title()
+    '''))
+
+
+def test_a_solve_that_ends_while_another_aggressor_is_edited_changes_nothing_there():
+    """No worker signal changes the selection or refills an editor the user is in."""
+    run_in_window(RESULT + textwrap.dedent(f'''
+        window.show()
+        window.open_project({NOISE!r})
+        app.processEvents()
+        panel = window.noise_panel
+        window.results_tabs.setCurrentWidget(panel)
+        fake = solving(panel, "U1")
+        panel.add_aggressor()
+        panel.add_phase()
+        panel.tabs.setCurrentIndex(1)
+        app.processEvents()
+        assert panel.aggressor_box.currentText() == "Aggressor 2"
+        item = panel.phases.item(0, 12)                         # Aggressor 2's empty Coss
+        panel.phases.setCurrentItem(item)
+        panel.phases.editItem(item)
+        editing = QtWidgets.QAbstractItemView.State.EditingState
+        assert panel.phases.state() == editing
+        fake.succeeded.emit(make_result("U1", 0.4))             # U1's solve ends now
+        app.processEvents()
+        assert panel.aggressor_box.currentText() == "Aggressor 2" and panel.phases.state() == editing
+        assert "U1 solved: choose it to see the result" in window.statusBar().currentMessage()
+        assert "U1" in panel.results and panel.header.text() == ""
+        panel.phases.item(0, 12).setText("450")                 # the commit lands on Aggressor 2
+        assert window.project.aggressors[1].phases[0].coss_f == 4.5e-10
+        assert window.project.aggressors[0].phases[0].coss_f == 3e-10
+        panel.aggressor_box.setCurrentIndex(0)                  # choosing U1 shows its result
+        assert "<b>U1</b>" in panel.header.text() and verdicts(panel)[0].startswith("PASS")
+        fake = solving(panel, "U1")
+        panel.set_field_text("name", "U1 buck")                 # renamed while it solves
+        fake.succeeded.emit(make_result("U1", 0.4))
+        assert "U1" not in panel.results and "U1 buck" not in panel.results, list(panel.results)
+        assert "renamed or removed" in window.statusBar().currentMessage()
+    '''))
+
+
+def test_export_asks_before_writing_a_stale_result_and_the_summary_says_so(tmp_path):
+    run_in_window(RESULT + textwrap.dedent(f'''
+        import json
+        from pathlib import Path
+        from PySide6.QtWidgets import QMessageBox
+        out = Path({str(tmp_path)!r})
+        window.open_project({NOISE!r})
+        app.processEvents()
+        panel = window.noise_panel
+        solving(panel, "U1").succeeded.emit(make_result("U1", 0.4))
+        panel.results["GONE"] = (make_result("GONE"), noise_panel.project_key(window.project))
+        asked = []
+        QMessageBox.question = staticmethod(lambda *a, **k: asked.append(a[4]) or QMessageBox.No)
+        names = sorted(p.name for p in panel.export_files(out / "fresh"))
+        assert asked == [] and not any("GONE" in n for n in names), names     # current: no question
+        doc = json.loads((out / "fresh" / "noise.coppernicus_noise_summary.json").read_text())
+        assert doc["warnings"] == [] and [a["aggressor"] for a in doc["aggressors"]] == ["U1"]
+        panel.victims.item(0, 8).setText("300")                # now U1's result is stale
+        assert panel.export_files(out / "no") == [] and not (out / "no").exists()
+        assert asked == [QMessageBox.No] and "Not exported" in panel.status.text()
+        QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+        panel.export_files(out / "yes")
+        doc = json.loads((out / "yes" / "noise.coppernicus_noise_summary.json").read_text())
+        assert doc["warnings"] == ["U1: the setup changed since this solve"], doc["warnings"]
+    '''))
+
+
+def test_turning_the_kicad_fields_off_flags_the_noise_and_impedance_results():
+    run_in_window(RESULT + textwrap.dedent(f'''
+        from coppernicus.app.ac_panel import _project_key as ac_key
+        from coppernicus.results import ImpedanceResult
+        window.open_project({NOISE!r})
+        app.processEvents()
+        panel, ac = window.noise_panel, window.ac_panel
+        solving(panel, "U1").succeeded.emit(make_result("U1", 0.4))
+        rail = ac.rail_box.currentText()
+        f = np.array([1e3, 1e6])
+        ac.results[rail] = (ImpedanceResult(rail, [rail], "GND", "J1", None, f, f),
+                            ac_key(window.project))
+        ac._check_stale()
+        assert "Setup changed" not in panel.header.text() and "Setup changed" not in ac.header.text()
+        window.use_fields_action.trigger()                      # Project → Use KiCad footprint fields
+        app.processEvents()
+        assert "Setup changed" in panel.header.text(), panel.header.text()
+        assert "Setup changed" in ac.header.text(), ac.header.text()
+    '''))
+
+
+def test_solve_names_the_rows_it_leaves_out_and_the_result_keeps_saying_so():
+    run_in_window(RESULT + STUB_WORKER + textwrap.dedent(f'''
+        StubWorker.start = lambda self: None
+        window.open_project({NOISE!r})
+        app.processEvents()
+        panel = window.noise_panel
+        panel.add_victim()                                      # a draft: not saved, not solved
+        panel.solve()
+        said = window.statusBar().currentMessage()
+        assert "1 victim row not saved is not solved: row 4" in said, said
+        fake = solving(panel, "U1")
+        fake.succeeded.emit(make_result("U1", 0.4))
+        assert "1 victim row not saved is not solved: row 4" in panel.notes.toPlainText()
+    '''))

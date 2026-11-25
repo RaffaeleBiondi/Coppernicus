@@ -502,6 +502,8 @@ class MainWindow(QMainWindow):
             return
         self.project.use_board_fields = on
         self._merge_again(reshow=True)
+        self.noise_panel._setup_changed()            # the switchers, and the shown results flagged
+        self.ac_panel._setup_changed()
         self.dirty = True
         self._update_title()
         if self.board is None:

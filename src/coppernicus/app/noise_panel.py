@@ -66,7 +66,7 @@ from PySide6.QtWidgets import (
 )
 
 from coppernicus.app.panels import FieldComboBox, OptionalDecimalValidator, WheelWhenFocused
-from coppernicus.engine.pisetup import terminal_names
+from coppernicus.engine.pisetup import terminal_names  # engine names; fsw_default mirrors the engine
 from coppernicus.impedance import hz_text
 from coppernicus.project import (
     CUSTOM_PRESET,
@@ -219,9 +219,10 @@ def switcher_names(project: Project) -> List[str]:
 
 def fsw_default(project: Project, vrm: str, from_fields: Sequence[str]) -> Tuple[Optional[float], str, str]:
     """(fsw, source label, where it comes from) of the source ``vrm`` as the noise solve takes
-    it when the aggressor gives none (``engine.noise._source_fsw``): its ``fsw_hz``, from the
-    KiCad field PI_FSW when its rail came from the fields (``from_fields``), else from the
-    project file; (None, "", "") when it has none."""
+    it when the aggressor gives none: its ``fsw_hz``, from the KiCad field PI_FSW when its rail
+    came from the fields (``from_fields``), else from the project file; (None, "", "") when it
+    has none. The same rule as ``engine.noise._source_fsw`` (a test holds them together),
+    copied only so that this module does not import ``engine.noise`` when the window opens."""
     if not vrm:
         return None, "", ""
     names = terminal_names(project)
@@ -624,9 +625,13 @@ def _verdict_word(v) -> str:
     return "NOT JUDGED" if _meant_a_margin(v) else "no margin (ranked)"
 
 
-def victim_rows(r) -> List[Tuple[str, ...]]:
+STALE_MARK = " (setup changed)"
+
+
+def victim_rows(r, stale: bool = False) -> List[Tuple[str, ...]]:
     """One row per victim of a judged NoiseResult (VICTIM_HEADERS): its peak at the receiver,
-    its margin and where the verdict comes from (the failure, the stand-ins, or no margin)."""
+    its margin and where the verdict comes from (the failure, the stand-ins, or no margin).
+    ``stale``: the setup changed since the solve, and every verdict says so."""
     failed = {e["item"]: e["reason"] for e in r.failed}
     rows = []
     for v in r.victims:
@@ -638,7 +643,8 @@ def victim_rows(r) -> List[Tuple[str, ...]]:
             why = "no noise margin set: ranked, not judged"
         ends = f"{v.driver} → {v.receiver} ({'entered' if v.ends_entered else 'guessed by KiPI'})"
         rows.append((v.name, v.net, _volts(v.peak_v), _volts(v.margin_v),
-                     f"{100 * v.ratio:.3g}" if v.ratio is not None else "-", _verdict_word(v),
+                     f"{100 * v.ratio:.3g}" if v.ratio is not None else "-",
+                     _verdict_word(v) + (STALE_MARK if stale else ""),
                      v.dominant or "-", *(_volts(v.peak_by_v[k]) if k in v.peak_by_v else "-"
                                           for k in ("capacitive", "inductive", "common")), ends, why))
     return rows
@@ -653,7 +659,33 @@ def notes_text(r) -> str:
     lines += [f"  stand-in: {x}" for x in r.stand_ins]
     lines += [f"  stand-in ({v.name}): {x}" for v in r.victims for x in v.stand_ins if x not in r.stand_ins]
     lines += [f"  warning ({v.name}): {w}" for v in r.victims for w in v.warnings]
+    lines += [f"  radiated estimate: {n}" for n in (r.emi.notes if r.emi is not None else [])]
     return "\n".join(lines)
+
+
+def unsolved_text(a: Optional[Aggressor], rows: Sequence[Victim]) -> str:
+    """What a solve leaves out, said at Solve and kept with its result ("" when nothing): the
+    victim rows not saved (drafts, a name used twice), and what is solved without a part not
+    saved yet (an end's pins without its part, a phase side without its part or its net)."""
+    try:
+        problems = usable_victims(rows)[1]
+    except ProjectError:
+        problems = {}
+
+    def row(r: int, why: str, prefix: str = "") -> str:
+        return f"{prefix}row {r + 1} ({rows[r].label or 'no net'}): {why}"
+    skipped = [row(r, why) for r, why in sorted(problems.items()) if not why.startswith("not saved yet")]
+    partly = [row(r, why, "victim ") for r, why in sorted(problems.items())
+              if why.startswith("not saved yet")]
+    partly += savable_aggressor(a)[1] if a is not None else []
+    parts = []
+    if skipped:
+        n = len(skipped)
+        parts.append(f"{n} victim row{'s' if n > 1 else ''} not saved {'are' if n > 1 else 'is'} not solved: "
+                     + "; ".join(skipped))
+    if partly:
+        parts.append("not saved, so solved without it: " + "; ".join(partly))
+    return " · ".join(parts)
 
 
 def radiated_text(r) -> str:
@@ -825,6 +857,9 @@ class NoisePanel(QWidget):
         self._guessed: Dict[int, Dict[str, Tuple[str, Optional[List[str]]]]] = {}
         self._shown: Dict[str, str] = {}           # what each line edit shows: committed unchanged is no edit
         self._solving: Optional[Tuple[str, Dict[str, Any], Any]] = None
+        self._solving_note = ""                    # what the running solve leaves out (unsolved_text)
+        self._result_notes: Dict[str, str] = {}    # aggressor -> what its result left out
+        self._wave_title: Optional[str] = None     # the shown result's plot title (None: none or partial)
         self._outline = None
         self.last_estimate = ""
         self._build()
@@ -961,9 +996,9 @@ class NoisePanel(QWidget):
         self.opt["segment_mm"].setToolTip("Victims are cut into 2D cross-sections this often (KiPI's 0.5 mm)")
         self.opt["window_mm"].setToolTip("Copper this close to a victim is in its cross-section "
                                          "(KiPI's 3 mm)")
-        for key, low, high in (("max_harmonics", 1, 100000), ("field_per_decade", 1, 200)):
+        for key in ("max_harmonics", "field_per_decade"):     # the file: a whole number, at least 1
             spin = _IntSpin()
-            spin.setRange(low, high)
+            spin.setRange(1, 2 ** 31 - 1)
             spin.setKeyboardTracking(False)
             self.opt[key] = spin
         self.opt["max_harmonics"].setToolTip("At most this many harmonics (KiPI's 4000); fewer cut the "
@@ -1254,6 +1289,7 @@ class NoisePanel(QWidget):
             return
         gone = self._agg_rows.pop(i)
         self.results.pop(gone.name, None)
+        self._result_notes.pop(gone.name, None)
         self._fill_aggressor_box()
         self._write_aggressors()
         self._aggressor_shown()
@@ -1292,6 +1328,7 @@ class NoisePanel(QWidget):
         self._agg_rows[i] = q
         if key == "name":
             self.results.pop(old.name, None)
+            self._result_notes.pop(old.name, None)
             self.aggressor_box.blockSignals(True)
             self.aggressor_box.setItemText(i, q.name)
             self.aggressor_box.blockSignals(False)
@@ -1744,23 +1781,39 @@ class NoisePanel(QWidget):
             return
         r = entry[0]
         self._draw_waveforms(r)
+        self._wave_title = self.wave_figure.axes[0].get_title() if self.wave_figure.axes else None
         for kind in "HE":
             self._draw_map(r, kind)
         self._fill_rows(self.ripple_table, ripple_rows(r), RIPPLE_HEADERS.index("Verdict"))
         self._fill_rows(self.victim_table, victim_rows(r), VICTIM_HEADERS.index("Verdict"))
         self.radiated.setText(radiated_text(r))
         self.stats.setText(stats_text(r.stats))
-        self.notes.setPlainText(notes_text(r))
+        left_out = self._result_notes.get(r.aggressor, "")
+        head = f"Left out of this solve: {left_out}\n\n" if left_out else ""
+        self.notes.setPlainText(head + notes_text(r))
         self.export_button.setEnabled(True)
         self._check_stale()
 
     def _check_stale(self):
+        """The shown result flagged wherever it is read when the setup changed since its solve:
+        the verdict line, each victim's verdict and the waveforms' title."""
         i = self._index()
         entry = self.results.get(self._agg_rows[i].name) if i >= 0 else None
         if entry is None:
             self.header.setText("")
             return
-        self.header.setText(header_html(entry[0], project_key(self.project) != entry[1]))
+        r, solved = entry
+        stale = project_key(self.project) != solved
+        self.header.setText(header_html(r, stale))
+        col = VICTIM_HEADERS.index("Verdict")
+        for k, row in enumerate(victim_rows(r, stale)):
+            item = self.victim_table.item(k, col)
+            if item is not None:
+                item.setText(row[col])
+        if self._wave_title is not None and self.wave_figure.axes:
+            flag = "\n(the setup changed since this solve: solve again)" if stale else ""
+            self.wave_figure.axes[0].set_title(self._wave_title + flag, fontsize=PLOT_FONT + 1, wrap=True)
+            self.canvases["wave"][1].draw_idle()
 
     @property
     def stale(self) -> bool:
@@ -1790,13 +1843,30 @@ class NoisePanel(QWidget):
         and ``<stem>_noise_summary.json`` over them."""
         from coppernicus.coupled_noise import noise_summary, write_csv, write_field_png, write_png
         from coppernicus.maps import safe_name
+        names = [a.name for a in self._agg_rows]
+        kept = {n: e for n, e in self.results.items() if n in names}     # removed or renamed: never
+        if not kept:
+            self._report("Nothing to export: solve an aggressor first")
+            return []
+        key = project_key(self.project)
+        stale = [n for n, (_r, solved) in kept.items() if solved != key]
+        if stale:
+            answer = QMessageBox.question(
+                self, "Export results the setup changed since?",
+                f"The setup changed since {', '.join(stale)} was solved: the result no longer matches the "
+                "project. Export it anyway? The summary will say so.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                self._report(f"Not exported: the setup changed since {', '.join(stale)} was solved (solve "
+                             "again, or export anyway)")
+                return []
         folder = Path(folder)
         folder.mkdir(parents=True, exist_ok=True)
         board = self._win.board
         stem = export_stem(self.project.path, board.name if board else "")
         outline = self._board_outline()
         files, written, results = {}, [], []
-        for name, (r, _key) in self.results.items():
+        for name, (r, _key) in kept.items():
             base = folder / f"{stem}_{safe_name(name)}_noise"
             pngs = [write_png(r, base.with_name(base.name + ".png"))]
             maps = (r.emi.h_map, r.emi.e_map) if r.emi is not None else (None, None)
@@ -1806,12 +1876,12 @@ class NoisePanel(QWidget):
             files[name] = (csv_path.as_posix(), [p.as_posix() for p in pngs])
             written += [csv_path, *pngs]
             results.append(r)
-        doc = noise_summary(results, files)
+        doc = noise_summary(results, files,
+                            warnings=[f"{n}: the setup changed since this solve" for n in stale])
         summary = folder / f"{stem}_noise_summary.json"
         doc["summary_file"] = summary.as_posix()
         summary.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False), encoding="utf-8")
         written.append(summary)
-        stale = [n for n, (_r, key) in self.results.items() if key != project_key(self.project)]
         self._report(f"Wrote {len(written)} files in {folder} ({summary.name} and each aggressor's CSV and "
                      "PNGs)"
                      + (f"; the setup changed since {', '.join(stale)} was solved" if stale else ""))
@@ -1881,8 +1951,10 @@ class NoisePanel(QWidget):
                               "will…")
         # What is solved: a copy of the merged project as it is now (the user may edit on).
         self._solving = (name, project_key(self.project), copy.deepcopy(win.merged))
+        self._solving_note = unsolved_text(self._agg_rows[i], self._victim_rows)
         self._start(NoiseWorker(win.board, self._solving[2], name, "size", parent=self))
-        self._report(f"{name}: meshing its rails and ground as the noise solve will, for the estimate…")
+        self._report(f"{name}: meshing its rails and ground as the noise solve will, for the estimate…"
+                     + (f" · {self._solving_note}" if self._solving_note else ""))
 
     def _start(self, worker: NoiseWorker):
         worker.generation = self._generation
@@ -1922,6 +1994,7 @@ class NoisePanel(QWidget):
             i = self._index()
             if i >= 0 and self._agg_rows[i].name == res.aggressor:
                 self._draw_waveforms(res)
+                self._wave_title = None             # not the shown result's: never flagged as it
 
     def _sized(self, size):
         if not self._current():
@@ -1968,18 +2041,25 @@ class NoisePanel(QWidget):
         if not self._current():
             return
         _name, solved, _merged = self._solving
-        self.results[res.aggressor] = (res, solved)
         st = res.stats
         if all(st.get(k) is not None for k in _LAST_KEYS):     # a solve without field solves times nothing
             try:
                 _settings().setValue(LAST_SOLVE_SETTING, json.dumps({k: float(st[k]) for k in _LAST_KEYS}))
             except (TypeError, ValueError):
                 pass
-        i = self.aggressor_box.findText(res.aggressor)
-        if i >= 0 and i != self.aggressor_box.currentIndex():
-            self.aggressor_box.setCurrentIndex(i)           # shows the result
-        else:
-            self.show_result()
+        if res.aggressor not in [a.name for a in self._agg_rows]:
+            self._report(f"{res.aggressor} solved, but it was renamed or removed meanwhile: its result is "
+                         "dropped (solve it again)")
+            return
+        self.results[res.aggressor] = (res, solved)
+        self._result_notes[res.aggressor] = self._solving_note
+        # Never a change of selection, nor a refill of the editor the user may be in: the result
+        # shows only where its aggressor is the one shown.
+        i = self._index()
+        if i < 0 or self._agg_rows[i].name != res.aggressor:
+            self._report(f"{res.aggressor} solved: choose it to see the result")
+            return
+        self.show_result()
         verdict = {"fail": "FAIL", "pass": "PASS", "not_judged": "not judged"}.get(res.verdict, res.verdict)
         seconds = float(st.get("seconds") or 0.0)
         self._report(f"{res.aggressor} noise solved in {seconds:.1f} s: victims {verdict}")
@@ -2044,6 +2124,7 @@ class NoisePanel(QWidget):
             self.solve_button.setEnabled(True)
             self.cancel_button.setEnabled(False)
         self.results.clear()
+        self._result_notes.clear()
         self._outline = None
         self.last_estimate = ""
         self.estimate.setText("")
