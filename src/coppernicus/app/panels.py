@@ -1209,10 +1209,19 @@ class TreePanel(QWidget):
         self.links.clear()
         self.notes.clear()
 
-    def set_tree(self, tree, verdict_html: str = ""):
-        vrms = [(v.name, v.kind, v.group, f"{v.v_set_v:g}", _cell(v.v_out_v, ".5f"),
-                 _cell(v.i_out_a, ".4f"), _cell(v.v_in_v, ".5f"), _cell(v.i_in_a, ".4f"),
-                 _cell(v.p_loss_w, ".1f", 1e3), _cell(v.v_ground_v, ".2f", 1e3), v.regulation)
+    def set_tree(self, tree, verdict_html: str = "", i_max: Optional[Mapping[str, Optional[float]]] = None):
+        """Show ``tree``. ``i_max``: each VRM's rated output current by name (I max, see
+        ``MainWindow``'s ``tree_i_max``), in a column after I out only when one has a value."""
+        rated = any(a is not None for a in (i_max or {}).values())
+        headers = list(self.VRM_HEADERS)
+        if rated:
+            headers.insert(headers.index("I out (A)") + 1, "I max (A)")
+        self.vrms.setColumnCount(len(headers))
+        self.vrms.setHorizontalHeaderLabels(headers)
+        vrms = [(v.name, v.kind, v.group, f"{v.v_set_v:g}", _cell(v.v_out_v, ".5f"), _cell(v.i_out_a, ".4f"))
+                + ((_cell(i_max.get(v.name), ".4g"),) if rated else ())
+                + (_cell(v.v_in_v, ".5f"), _cell(v.i_in_a, ".4f"), _cell(v.p_loss_w, ".1f", 1e3),
+                   _cell(v.v_ground_v, ".2f", 1e3), v.regulation)
                 for v in tree.vrms]
         loads, fails = [], set()
         for ld in tree.loads:
