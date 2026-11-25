@@ -368,7 +368,7 @@ group is always a rise (`RailResult.sign` is −1 there).
 | GUI map, isolines, colour bar, double-click readout, Δ drop vs baseline | `drop_at`; label `drop_unit`; "rise =" at 0 V. |
 | `maps.py` PNG maps | `drop_at`; label "drop, …" or "rise, …". |
 | Service: rail summary `drop_sign`, layers' `max_drop_mv`, `probe` `drop_mv` / `drop_pct` | `drop_at`. `v_min_v` / `v_max_v` stay the lowest and highest pin: on a negative rail or at 0 V the worst pin is `v_max_v`. |
-| Report: meta `drop_sign`, `drop_unit`, `drop_max_mv`, layers' `max_drop_mv`; `report.js` lut, readout, colour bar, worst card | the same formula in JS (`dropSign(rail)`; reports written before the field read +1). |
+| Report: meta `drop_sign`, `drop_unit`, `drop_word`, `drop_max_mv`, layers' `max_drop_mv`, `worst.max_drop_mv`; `report.js` lut, readout, colour bar, worst card | The drop as the app shows it: `shown_drop_at`, labelled `shown_drop_unit`, named by `drop_word` (drop, rise, shift). On a ground below 0 V (a shift) that is its depth below 0 V, so the meta's `drop_sign` is +1 there. The same formula in JS (`dropSign(rail)`; reports written before the field read +1). |
 | Tree: a 0 V rail group (no ground pins named) | `drop_sign` +1, and a warning in `tree.warnings` and the group's notes: "… is solved as a 0 V rail (no ground pins named): KiPI draws its loads' current out of it, so its voltages are shown with the opposite sign to a ground's; name ground pins on it to solve it as a ground." |
 
 ---

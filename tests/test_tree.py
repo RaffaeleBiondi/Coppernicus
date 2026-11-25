@@ -564,11 +564,10 @@ def test_a_ground_below_0_v_is_a_rise_by_its_magnitude():
     assert "max ground shift" in line and "mV below 0 V" in line and "rise" not in line, line
 
 
-def test_the_tree_report_of_a_ground_below_0_v_keeps_its_rise_unit(tmp_path):
-    """The tree report reads a ground below 0 V as a signed rise from 0 V (drop_at, its
-    drop_sign -1): its meta keeps RailResult.drop_unit's "mV above 0 V (ground rise)", as it
-    always did. Only the app's maps and readouts give the depth below 0 V
-    (shown_drop_unit)."""
+def test_the_tree_report_of_a_ground_below_0_v_reads_its_shift(tmp_path):
+    """The tree report shows a ground below 0 V as the app does (RailResult.shown_drop_at /
+    shown_drop_unit): a shift, its depth below 0 V, "mV below 0 V (ground shift)", with the
+    shown drop_sign +1. RailResult.drop_unit itself stays a signed rise."""
     import json
     import re
 
@@ -584,9 +583,13 @@ def test_the_tree_report_of_a_ground_below_0_v_keeps_its_rise_unit(tmp_path):
     page = write_tree_report(tree, tree_summary(tree), tmp_path / "tree.html")
     meta = json.loads(re.search(r'id="meta">(.*?)</script>', page.read_text(encoding="utf-8"), re.S).group(1))
     gnd = next(r for r in meta["rails"] if r["net"] == "GND")
-    assert gnd["drop_unit"] == "mV above 0 V (ground rise)" and gnd["drop_sign"] == -1
-    assert gnd["drop_max_mv"] == 0.0 and [lf["max_drop_mv"] for lf in gnd["layers"]] == [0.0]
-    assert tree.groups["GND"].shown_drop_unit() == "mV below 0 V (ground shift)"
+    depth = -tree.groups["GND"].max_drop * 1e3
+    assert gnd["drop_unit"] == "mV below 0 V (ground shift)"
+    assert (gnd["drop_sign"], gnd["drop_word"]) == (1, "shift")
+    assert gnd["drop_max_mv"] == pytest.approx(depth, rel=1e-6)
+    assert [lf["max_drop_mv"] for lf in gnd["layers"]] == [pytest.approx(depth, rel=1e-6)]
+    assert gnd["worst"]["max_drop_mv"] == pytest.approx(depth, rel=1e-9)
+    assert tree.groups["GND"].drop_unit() == "mV above 0 V (ground rise)"      # unchanged
 
 
 def strip_board_with_ground():

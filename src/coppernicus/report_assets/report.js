@@ -166,7 +166,7 @@ async function readout(ev) {
   let text;
   if (cv === 1) text = `${where}: copper with no path to a source (no voltage); |J| = 0.`;
   else { const V = rail.v_lo_v + (cv - 2) * vstep, drop = dropSign(rail) * (rail.v_ref_v - V) * 1e3;
-    text = `${where}: V = ${sig(V, 7)} V · drop = ${sig(drop, 4)} mV (${rail.v_ref_v ? sig(100 * drop / 1e3 / Math.abs(rail.v_ref_v), 3) : "n/a"} %) · |J| = ${sig(J, 4)} A/mm²`; }
+    text = `${where}: V = ${sig(V, 7)} V · ${rail.drop_word || "drop"} = ${sig(drop, 4)} mV (${rail.v_ref_v ? sig(100 * drop / 1e3 / Math.abs(rail.v_ref_v), 3) : "n/a"} %) · |J| = ${sig(J, 4)} A/mm²`; }
   out.textContent = "";
   out.append(text, el("br"), el("span", { class: "muted small" },
     `Values at the centre of the ${sig(c, 3)} mm cell under the pointer, (${fix(g.x0 + (i + 0.5) * c, 3)}, ${fix(g.y0 + (j + 0.5) * c, 3)}) mm, ` +
@@ -174,9 +174,11 @@ async function readout(ev) {
 }
 
 // ---------------------------------------------------------------- colour bar and notes
-// drop = drop_sign · (v_ref − V): +1 on a positive rail, −1 on a negative one (toward 0 V)
-// and at 0 V (a rise); reports written before the field have +1.
+// drop = drop_sign · (v_ref − V), as the app shows it: +1 on a positive rail, −1 on a negative
+// one (toward 0 V) and on a ground above 0 V (a rise), +1 on a ground below 0 V (a shift: its
+// depth below 0 V); reports written before the field have +1. drop_word: drop, rise or shift.
 function dropSign(rail) { return rail.drop_sign === -1 ? -1 : 1; }
+function dropTitle(rail) { return { rise: "ground rise", shift: "ground shift" }[rail.drop_word] || "drop"; }
 
 function bar() {
   const rail = R(), lay = L(), cb = $("bar"), c2 = cb.getContext("2d");
@@ -184,8 +186,9 @@ function bar() {
   for (let i = 0; i < 256; i++) { const rgb = cm[255 - i]; c2.fillStyle = `rgb(${rgb >> 16},${(rgb >> 8) & 255},${rgb & 255})`; c2.fillRect(0, i, 18, 1); }
   let top, bottom, unit, note;
   if (S.field === "drop") { top = sig(rail.drop_max_mv, 4); bottom = "0"; unit = rail.drop_unit || `mV below ${sig(rail.v_ref_v, 4)} V`;
-    note = (dropSign(rail) < 0 ? (rail.v_ref_v ? "Drop toward 0 V from the source voltage (a negative rail)." : "Rise above 0 V (a ground).")
-                              : "Drop below the source voltage.") + " Same scale on every layer of the rail."; }
+    note = (rail.drop_word === "shift" ? "Shift below 0 V (a ground under a negative rail)."
+      : dropSign(rail) < 0 ? (rail.v_ref_v ? "Drop toward 0 V from the source voltage (a negative rail)." : "Rise above 0 V (a ground).")
+      : "Drop below the source voltage.") + " Same scale on every layer of the rail."; }
   else if (S.field === "voltage") { top = sig(rail.v_hi_v, 7); bottom = sig(rail.v_lo_v, 7); unit = "V";
     note = "Same scale on every layer of the rail."; }
   else { top = "≥ " + sig(lay.j_scale_a_mm2, 4); bottom = "0"; unit = "A/mm²";
@@ -218,7 +221,8 @@ function panels() {
   if (rail.nets.length > 1) v.append(el("div", { class: "muted small" }, "Solved together through net ties: " + rail.nets.join(", ")));
   const cards = $("worst"); cards.textContent = "";
   if (w.load) cards.append(card("Worst load", `${w.load.name}: ${sig(w.load.drop_mv, 4)} mV`, `${sig(w.load.drop_pct, 3)} % ${dropSign(rail) < 0 ? "above" : "below"} ${sig(rail.v_ref_v, 4)} V`));
-  cards.append(card("Largest drop on the copper", `${sig(w.max_drop_mv, 4)} mV`, `${sig(w.max_drop_pct, 3)} %`));
+  cards.append(card(`Largest ${dropTitle(rail)} on the copper`, `${sig(w.max_drop_mv, 4)} mV`,
+    rail.v_ref_v ? `${sig(w.max_drop_pct, 3)} %` : rail.drop_unit));
   cards.append(card("Copper loss", `${sig(w.power_loss_w * 1e3, 4)} mW`, w.busiest_layer ? `most on ${w.busiest_layer}` : null));
   if (w.hotspot) cards.append(card("Strongest current crowding", `${sig(w.hotspot.mean_j_a_mm2, 4)} A/mm² mean`,
     `${w.hotspot.layer} at ${xy(w.hotspot.x_mm, w.hotspot.y_mm)}, over ${sig(w.hotspot.area_mm2, 3)} mm²; peak ${sig(w.hotspot.peak_j_a_mm2, 4)} A/mm² is mesh-dependent at sharp corners`));

@@ -193,6 +193,35 @@ def test_the_verdict_sentence_names_failures_and_what_was_not_judged(tmp_path):
     assert parse(none)[1]["rails"][0]["verdict_text"].startswith("Not judged: no limits were set")
 
 
+def _ground(volts):
+    """A ground group whose copper sits at ``volts`` (one node per corner), as a power tree
+    gives it: below 0 V under a negative rail."""
+    from coppernicus.results import LayerField, RailResult
+    pts = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 5.0], [0.0, 5.0]])
+    layer = LayerField(0, "F.Cu", pts, np.array([[0, 1, 2], [0, 2, 3]]), np.array(volts, dtype=float),
+                       np.ones(2), np.zeros(2), np.full(2, 25.0))
+    worst = max(volts, key=abs)
+    return RailResult("GND", ["GND"], 0.0, [layer], [], [], [], worst, 1.0, 0.0, 0.0, kind="ground")
+
+
+@pytest.mark.parametrize("volts, word, unit, sign", [
+    ([0.0, -0.002, -0.005, -0.001], "shift", "mV below 0 V (ground shift)", 1),
+    ([0.0, 0.002, 0.005, 0.001], "rise", "mV above 0 V (ground rise)", -1),
+])
+def test_a_ground_below_0_v_reads_as_a_shift_as_in_the_app(tmp_path, volts, word, unit, sign):
+    """The page's map, scale, readout and worst card show the drop as the app does
+    (RailResult.shown_drop_at / shown_drop_unit): on a ground below 0 V, its depth below 0 V,
+    called a shift; on a ground above 0 V, its rise."""
+    res = _ground(volts)
+    path = write_report([RailReport(res, problems=[])], None, tmp_path / "g.html",
+                        outline=[np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 5.0], [0.0, 5.0]])])
+    [rail] = parse(path)[1]["rails"]
+    assert (rail["drop_word"], rail["drop_unit"], rail["drop_sign"]) == (word, unit, sign)
+    assert rail["drop_max_mv"] == pytest.approx(5.0)
+    assert rail["layers"][0]["max_drop_mv"] == pytest.approx(5.0)
+    assert rail["worst"]["max_drop_mv"] == pytest.approx(5.0)
+
+
 @pytest.mark.parametrize("title, label", [("GND: largest ground shift -5.00 mV on F.Cu", "ground shift"),
                                           ("GND: largest ground rise 5.00 mV on F.Cu", "ground rise")])
 def test_the_kind_label_follows_the_problems_own_words(tmp_path, title, label):

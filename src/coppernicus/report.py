@@ -315,7 +315,7 @@ class ReportBuilder:
             lv = lf.voltage[np.isfinite(lf.voltage)]
             layers.append({
                 "name": lf.name, "power_w": lf.power, "copper_area_mm2": float(lf.tri_area.sum()),
-                "max_drop_mv": float(result.drop_at(lv).max()) * 1e3 if lv.size else None,
+                "max_drop_mv": float(result.shown_drop_at(lv).max()) * 1e3 if lv.size else None,
                 "j_scale_a_mm2": max(j_scale, 1e-12), "j_hi_a_mm2": j_hi,
                 "j_point_max_a_mm2": j_hi, "triangles": int(len(lf.tris)),
                 "grid": {"x0": grid.x0, "y0": grid.y0, "nx": grid.nx, "ny": grid.ny},
@@ -342,17 +342,22 @@ class ReportBuilder:
         busiest = max(result.layers, key=lambda lf: lf.power, default=None)
         judged = dict(judged) if judged is not None else verdict(problems, limits, result)
         judged["verdict_text"] = verdict_text(judged)
+        shift = -1 if result.is_shift() else 1      # the drop as the app shows it (shown_drop_at)
+        worst_mv = shift * result.max_drop * 1e3
         self.rails.append({
             "net": result.net, "label": label or result.net, "nets": list(result.nets),
             "v_ref_v": result.v_ref, "v_lo_v": v_lo, "v_hi_v": v_hi,
-            # drop = drop_sign · (v_ref − V): toward 0 V on a negative rail, a rise at 0 V
-            "drop_sign": int(result.sign), "drop_unit": result.drop_unit(),
-            "drop_max_mv": max(float(result.drop_at([v_lo, v_hi]).max()), 0.0) * 1e3, "cell_mm": cell,
+            # The drop as the app shows it (RailResult.shown_drop_at): drop = drop_sign · (v_ref
+            # − V), toward 0 V on a negative rail, a rise above 0 V on a ground, and on a ground
+            # below 0 V (a shift) its depth below 0 V. drop_word names it: drop, rise or shift.
+            "drop_sign": int(result.sign) * shift, "drop_unit": result.shown_drop_unit(),
+            "drop_word": result.drop_word(),
+            "drop_max_mv": max(float(result.shown_drop_at([v_lo, v_hi]).max()), 0.0) * 1e3, "cell_mm": cell,
             **judged,
             "worst": {
                 "load": worst_load and {k: worst_load[k] for k in ("name", "drop_mv", "drop_pct")},
-                "max_drop_mv": result.max_drop * 1e3,
-                "max_drop_pct": 100.0 * result.max_drop / abs(result.v_ref) if result.v_ref else None,
+                "max_drop_mv": worst_mv,
+                "max_drop_pct": worst_mv / 10.0 / abs(result.v_ref) if result.v_ref else None,
                 "power_loss_w": result.power_loss,
                 "busiest_layer": busiest.name if busiest else None,
                 "hotspot": top_hot and {"mean_j_a_mm2": top_hot.data.get("mean_j_a_mm2", top_hot.value),

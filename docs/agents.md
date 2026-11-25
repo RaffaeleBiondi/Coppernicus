@@ -93,7 +93,9 @@ Each load has `v_min_v`, `v_max_v` and `v_worst_v`: the pin furthest from the so
 direction of the drop, the lowest on a positive rail and the highest on a negative rail or a
 0 V net, so read `v_worst_v`, not `v_min_v`. The summary's `drop_sign` (+1 or −1) gives that
 direction: drop = `drop_sign` · (`v_ref_v` − V). The HTML report carries the same, per rail
-(`drop_sign`, `drop_unit`) and per load (`v_worst_v`).
+(`drop_sign`, `drop_unit`, `drop_word`) and per load (`v_worst_v`), with the drop as the app
+shows it: a ground below 0 V (under a negative rail) reads as a **ground shift**, its depth
+below 0 V, with `drop_sign` +1 and `drop_unit` "mV below 0 V (ground shift)".
 
 On a **ground rail**, which is solved with the source at 0 V, `v_ref_v` is 0. A percentage has
 no meaning there: `max_drop_pct` and `drop_pct` are `null`, and a `max_drop_pct` limit cannot

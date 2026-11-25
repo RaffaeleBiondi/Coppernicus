@@ -99,9 +99,9 @@ RISE, SHIFT = "mV above 0 V (ground rise)", "mV below 0 V (ground shift)"
     (_result("VZ", 0.0, 0.00567), "mV below 0 V", "mV below 0 V"),
 ])
 def test_the_map_unit_names_the_side_the_summary_names(res, unit, shown):
-    """The app's maps and readouts (RailResult.shown_drop_unit) say what the summary line
-    (max_drop_text) says: a ground whose largest deviation lies below 0 V is a shift. The
-    report keeps drop_unit, a signed rise from 0 V on every ground."""
+    """The app's maps and readouts and the HTML report (RailResult.shown_drop_unit) say what
+    the summary line (max_drop_text) says: a ground whose largest deviation lies below 0 V is
+    a shift. drop_unit itself stays a signed rise from 0 V on every ground."""
     from coppernicus.problems import drop_words
     assert res.drop_unit() == unit and res.shown_drop_unit() == shown
     what, where = drop_words(res.max_drop, res.v_ref, res.sign, res.is_rise())
