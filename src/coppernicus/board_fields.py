@@ -974,19 +974,34 @@ def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = N
     # Tolerance stack-up (Task 11): a load's tolerances and entered parts, a source's DC accuracy,
     # carried by ref, as remote sense is (no KiCad field holds them yet).
     for terms, own_terms, keys in ((rail.sources, own.sources, SOURCE_ACCURACY_KEYS),
-                                   (rail.loads, own.loads, LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS)):
-        unused = [o for o in own_terms if any(getattr(o, k) is not None for k in keys)]
-        for t in terms:
-            p = next((o for o in unused if o.ref == t.ref), None)
-            if p is None:
-                continue
-            unused.remove(p)
+                                   (rail.loads, own.loads, TOLERANCE_KEYS)):
+        pairs, _lost = carried_by_ref(terms, own_terms, keys)
+        for t, p in pairs:
             carried = [k for k in keys if getattr(p, k) is not None]
             for k in carried:
                 setattr(t, k, copy.deepcopy(getattr(p, k)))
             origin.notes.append(f"Rail {fr.net}: {', '.join(carried)} of {t.ref} from the project file "
                                 "(no KiCad field holds them yet).")
     return rail, origin
+
+
+TOLERANCE_KEYS = LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS
+
+
+def carried_by_ref(terms: Sequence[Union[Source, Load]], own_terms: Sequence[Union[Source, Load]],
+                   keys: Sequence[str]) -> Tuple[List[Tuple[Union[Source, Load], Union[Source, Load]]],
+                                                 List[Union[Source, Load]]]:
+    """Which project terminals (``own_terms``) holding any of ``keys`` give them to which of a
+    fields rail's ``terms``: each fields terminal takes the first unused project one of its ref.
+    ``(pairs (fields term, project term), the project terms left: theirs are lost)``."""
+    unused = [o for o in own_terms if any(getattr(o, k) is not None for k in keys)]
+    pairs = []
+    for t in terms:
+        p = next((o for o in unused if o.ref == t.ref), None)
+        if p is not None:
+            unused.remove(p)
+            pairs.append((t, p))
+    return pairs, unused
 
 
 # ---------------------------------------------------------------------- comparing

@@ -1121,10 +1121,12 @@ LOAD, 1.697 mV without; KiPI's test_probe_ripple.py:48 allows 2 %). Every tolera
 
 Code: `coppernicus.engine.tolerance` (`allowed`, `load_limits`, `accuracy_sides`, `stack`,
 `load_probes`, `ac_tolerance_mismatch`, `kipi_reference_stack`), `coppernicus.tolerance`
-(`compose`, `tolerance_summary`, `tolerance_text`, `write_csv`), `results.TolerancePart`,
-`ToleranceCheck`, `ToleranceRow`, `ToleranceResult`, `TransientResult` (in
-`ProbeImpedance.transient`), `LoadReport.v_low_v` / `v_high_v`, `coppernicus tolerance` in
-`cli.py`, `examples/tolerance`.
+(`compose`, `misspelt_keys`, `tolerance_summary`, `tolerance_text`, `write_csv`; it imports the
+engine only inside the functions that need it, so importing it does not load KiPI),
+`results.TolerancePart`, `ToleranceCheck` (with `floors`), `ToleranceRow` (with `floors`,
+`ripple_from`, `transient_estimate_v`), `ToleranceResult`, `TransientResult` (in
+`ProbeImpedance.transient`), `LoadReport.v_low_v` / `v_high_v`, `board_fields.carried_by_ref`,
+`coppernicus tolerance` in `cli.py`, `examples/tolerance`.
 
 KiPI (evaluate.py:1-10): per load, each side apart (below and above nominal), every value a
 deviation in volts, never negative: **DC** = the DC drop (or boost) + the VRM's DC accuracy,
@@ -1189,8 +1191,8 @@ source.
   REGULATION, absent from the tree (an excluded net, a rail solved as a ground), or when
   `TreeResult.converged` is False. From an electro-thermal solve that did not settle (or ran one
   iteration), `temperature.py`'s rule: the DC drop is a **floor** (below), so it can fail a check
-  but never pass one, and the hint uses its wording ("the board temperature is not settled: last
-  change 0.83 °C: its DC drop … can fail a check, never pass one").
+  but never pass one, and the hint uses its wording ("the board temperature (not settled: last
+  change 0.83 °C): its DC drop … can fail a check, never pass one").
 - **Accuracy**: the driving source's (`TreeResult.vrms` entry whose `group` is the load's
   group, so a load behind a link or net tie gets its rail's source). Unset: missing, "enter
   U1's DC accuracy (accuracy_pct)" (F1).
@@ -1287,7 +1289,9 @@ rest on (finding I3): the power tree's assumptions, and those of each noise resu
 prefixed with the aggressor's name ("U1: …"); the KiCad-field notes (`merged.annotate`, as the
 other commands). Warnings: the KiCad-field and misspelt-key warnings, the tree's, those of each
 noise result used ("U1: …"), the AC result's beside each estimate shown ("AC VOUT, behind KiPI's
-transient estimate at LOAD (shown, never judged): …"), and the Q9 mismatches. Where each part
+transient estimate at LOAD (shown, never judged): …"; a Q9 mismatch it also carries is shown once),
+and the Q9 mismatches. The AC results themselves are not annotated with the KiCad-field notes
+(those are in the result already). Where each part
 came from is in its `source` and `detail`.
 
 ### Outputs
@@ -1306,7 +1310,8 @@ came from is in its `source` and `detail`.
 - `<project>_tolerance.csv`: one row per load: `load`, `net`, `nominal_v`, per part
   `<part>_below_mv`, `<part>_above_mv`, `<part>_source` (empty when missing), per check
   `<check>_limit`, `_below_mv`, `_above_mv`, `_allowed_below_mv`, `_allowed_above_mv`,
-  `_margin_below_mv`, `_margin_above_mv`, `_verdict`, then `verdict`.
+  `_margin_below_mv`, `_margin_above_mv`, `_verdict`, then `verdict`. A check's sums (CSV and
+  summary) include its floors, so on an incomplete check they are a least value.
 - `coppernicus tolerance PROJECT [--skip-ac] [--skip-noise] [--out DIR] [--no-board-fields]
   [--json] [-v]`: the power tree (KiCad footprint fields merged as `solve --tree`; the board
   temperature's estimate first when `thermal.enabled`), then **only where a load with a

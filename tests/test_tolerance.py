@@ -672,7 +672,11 @@ def test_q9_mismatch_warns_in_the_tolerance_result():
     project = _comp_project(load={"ac_tol_mv": 30, **COMPLETE["load"]}, source={"accuracy_pct": 1})
     project.probes[0].ac_tolerance_v = 0.05
     r = _compose(project)
-    assert any("disagree" in w and "ac_tol_mv ±30 mV" in w for w in r.warnings)
+    (q9,) = [w for w in r.warnings if "disagree" in w and "ac_tol_mv ±30 mV" in w]
+    # The AC result carries the same warning: shown once, not again beside the estimate.
+    z = _impedance()
+    z.warnings = [q9]
+    assert [w for w in _compose(project, impedance=[z]).warnings if "disagree" in w] == [q9]
 
 
 # ---------------------------------------------------------------------- summary, text and CSV
@@ -897,7 +901,8 @@ def test_a_dc_drop_from_an_unsettled_board_temperature_can_fail_but_never_pass()
     tree.thermal = hot
     row = _compose(project, tree=tree).rows[0]
     assert row.parts["dc"] is None and row.floors["dc"].below_v == pytest.approx(0.010)
-    assert "not settled: last change 0.83 °C" in row.hints["dc"] and row.verdict == "not_judged"
+    assert row.hints["dc"].startswith("the board temperature (not settled: last change 0.83 °C): its DC drop")
+    assert row.verdict == "not_judged"
     over = _comp_tree(low=1.8 - 0.060)
     over.thermal = hot
     r = _compose(project, tree=over)                      # 60 + 18 + 5 + 20 = 103 > 90
@@ -960,3 +965,17 @@ def test_the_kicad_fields_merge_carries_tolerances_and_accuracy_by_ref():
            "them yet)." in notes
     assert "Rail VCC: accuracy_mv of J1 from the project file (no KiCad field holds them yet)." in notes
     assert project.rail("VCC").loads[0].tol_pct == (-5.0, 5.0)          # the loaded project unchanged
+
+
+def test_the_rss_floor_of_two_usable_aggressors_is_not_their_linear_sum():
+    """Two usable aggressors at 10 mV and one unsolved under rss, the rest at 38 mV: a linear
+    floor (58 mV) would fail the 54 mV tolerance; the RSS floor (52.1 mV) does not."""
+    project = _comp_project(load={"tol_mv": 54, "transient_mv": 10}, source={"accuracy_pct": 1},
+                            aggressors=[("A1", True), ("A2", True), ("A3", True)], ripple_sum="rss")
+    noise = [_noise_result(n, (0.010, 0.010, 0.010, 0.010)) for n in ("A1", "A2")]
+    row = _compose(project, noise=noise).rows[0]           # 10 + 18 + 10 = 38 known
+    assert row.floors["ripple"].below_v == pytest.approx(0.010 * 2 ** 0.5)
+    assert row.checks["total"].passed is None and row.verdict == "not_judged"
+    linear = _compose(_comp_project(load={"tol_mv": 54, "transient_mv": 10}, source={"accuracy_pct": 1},
+                                    aggressors=[("A1", True), ("A2", True), ("A3", True)]), noise=noise)
+    assert linear.verdict == "fail"

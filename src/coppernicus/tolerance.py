@@ -327,7 +327,7 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
     if unsettled and found["dc"][0] is not None:      # temperature.py's rule: fail, never pass
         dc = found["dc"][0]
         row.floors["dc"] = dc
-        found["dc"] = (None, f"the board temperature is {unsettled}: its DC drop "
+        found["dc"] = (None, f"the board temperature ({unsettled}): its DC drop "
                              f"{_pair_mv(dc.below_v, dc.above_v)} can fail a check, never pass one")
     part, hint, row.transient_estimate_v = _transient(project, load, nominal, probe, shown.get(probe or ""),
                                                     source, ac_notes)
@@ -462,15 +462,15 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
              if negative else [])
     out.assumptions = list(dict.fromkeys(assumptions(project, tree) + sides + carried))
     nominal = {r.name: r.nominal_v for r in out.rows}
+    q9 = mismatch_warnings(project, pairs, nominal)
     behind = []
     for r in out.rows:
         z = next((x for x in impedance if r.transient_estimate_v is not None and x.probe(r.probe)), None)
         if z is not None:
             behind += [f"AC {z.rail}, behind KiPI's transient estimate at {r.probe} (shown, never "
-                       f"judged): {w}" for w in z.warnings if w not in tree.warnings]
+                       f"judged): {w}" for w in z.warnings if w not in tree.warnings and w not in q9]
     noise_warnings = [f"{a}: {w}" for a in used for w in by_noise[a].warnings if w not in tree.warnings]
-    out.warnings = list(dict.fromkeys(list(warnings) + list(tree.warnings) + noise_warnings + behind
-                                      + mismatch_warnings(project, pairs, nominal)))
+    out.warnings = list(dict.fromkeys(list(warnings) + list(tree.warnings) + noise_warnings + behind + q9))
     return out
 
 

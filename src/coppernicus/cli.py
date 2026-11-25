@@ -613,7 +613,6 @@ def _cmd_tolerance(args) -> int:
     from coppernicus.engine.tree import solve_project_tree
     from coppernicus.maps import safe_file_name
     from coppernicus.project import (
-        LOAD_PART_KEYS,
         LOAD_TOLERANCE_KEYS,
         SOURCE_ACCURACY_KEYS,
         Load,
@@ -659,21 +658,22 @@ def _cmd_tolerance(args) -> int:
         own, kept = loaded.rail(net), project.rail(net)
         if own is None:
             continue
-        refs = {t.ref for t in kept.sources + kept.loads} if kept is not None else set()
-        keys = ((own.loads, LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS), (own.sources, SOURCE_ACCURACY_KEYS))
-        lost = [t for ts, k in keys for t in ts
-                if t.ref not in refs and any(getattr(t, x) is not None for x in k)]
+        sides = ((kept.sources if kept else [], own.sources, SOURCE_ACCURACY_KEYS),
+                 (kept.loads if kept else [], own.loads, board_fields.TOLERANCE_KEYS))
+        lost = [t for ts, own_ts, keys in sides for t in board_fields.carried_by_ref(ts, own_ts, keys)[1]]
         if not lost:
             continue
         others = ", ".join(s.label for s in kept.sources) if kept is not None and kept.sources else "none"
-        why = (f"rail {net} comes from the board's KiCad footprint fields, which have no {{ref}}: set "
-               "override_board_fields: true on the rail to use the project's")
+        names = ", ".join(t.label for t in lost)
         warnings.append(f"Rail {net} comes from the board's KiCad footprint fields: the tolerances, accuracy "
-                        f"and entered parts of {', '.join(t.ref for t in lost)} in the project file are not "
-                        "used (those parts are not on the fields' rail); set override_board_fields: true on "
-                        "the rail to use the project's")
+                        f"and entered parts of {names} in the project file are not used (no part of the "
+                        "fields' rail takes them); set override_board_fields: true on the rail to use the "
+                        "project's")
         # A tolerance the user set that cannot be judged: not judged (exit 3), never a pass.
-        dropped += [{"item": t.label, "net": net, "limit": key, "reason": why.format(ref=t.ref)}
+        dropped += [{"item": t.label, "net": net, "limit": key,
+                     "reason": f"rail {net} comes from the board's KiCad footprint fields, where no part "
+                               f"takes {t.label}'s tolerances: set override_board_fields: true on the rail "
+                               "to use the project's"}
                     for t in lost if isinstance(t, Load) for key in LOAD_TOLERANCE_KEYS
                     if getattr(t, key) is not None]
         for t in lost:                    # an accuracy entered, then lost: say so, not "enter it"

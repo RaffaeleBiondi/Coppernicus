@@ -116,14 +116,14 @@ def test_errors(write, tmp_path, capsys):
     assert err["code"] == "invalid_project" and "below" in err["message"]
 
 
-def _strip(tmp_path, sources, loads):
-    """The strip as a .kicad_pcb whose J1 and U1 define VCC in KiCad fields, and a project
-    file with its own VCC rail."""
+def _strip(tmp_path, sources, loads, net="VCC"):
+    """The strip as a .kicad_pcb whose J1 and U1 define ``net`` in KiCad fields, and a project
+    file with its own rail of that net."""
     from coppernicus.engine.synthetic import write_strip_kicad_pcb
     from coppernicus.project import Rail
-    write_strip_kicad_pcb(tmp_path / "s.kicad_pcb", {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V"},
-                                                     "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}})
-    return Project(board="s.kicad_pcb", rails=[Rail("VCC", sources=sources, loads=loads)]
+    write_strip_kicad_pcb(tmp_path / "s.kicad_pcb", {"J1": {"PI_RAIL": net, "PI_SOURCE": "3.3V"},
+                                                     "U1": {"PI_RAIL": net, "PI_LOAD": "1A"}}, net=net)
+    return Project(board="s.kicad_pcb", rails=[Rail(net, sources=sources, loads=loads)]
                    ).save(tmp_path / "s.coppernicus.yml")
 
 
@@ -199,6 +199,7 @@ def test_the_example_passes_and_its_tight_copy_fails(tmp_path, capsys):
     assert "KiPI's estimate with a typical loop at 100 kHz" in parts["transient"]["detail"]
     assert f"check total {total['below_mv']:.4g} / {total['above_mv']:.4g} mV of 108 / 108 allowed" in text
     assert [e["solve"] for e in doc["estimates"]] == ["AC VOUT", "noise U1"]
+    assert {"harmonics", "field_solves", "board_model"} <= set(doc["estimates"][1])     # noise_estimate's
     assert doc["stats"]["ac_rails"] == 1 and doc["stats"]["aggressors"] == 1
     assert main(["tolerance", str(EXAMPLE / "tolerance-tight.coppernicus.yml"), "--json",
                  "--out", str(out)]) == EXIT_LIMIT
@@ -233,7 +234,8 @@ def test_a_project_with_the_board_temperature_prints_its_estimate_first(tmp_path
     doc = json.loads((tmp_path / "o" / "demo-thermal.coppernicus_tolerance_summary.json").read_text(
         encoding="utf-8"))
     assert doc["estimates"][0]["solve"] == "board temperature"
-    assert doc["loads"][0]["parts"]["dc"]["source"] == "power tree (electro-thermal)"
+    ld = doc["loads"][0]                   # settled, or a floor if not (temperature.py's rule)
+    assert (ld["parts"]["dc"] or ld["floors"]["dc"])["source"] == "power tree (electro-thermal)"
 
 
 def test_a_misspelt_tolerance_key_is_not_judged_with_a_suggestion(write, tmp_path, capsys):
@@ -249,3 +251,31 @@ def test_a_misspelt_tolerance_key_is_not_judged_with_a_suggestion(write, tmp_pat
         in doc["warnings"]
     (e,) = doc["not_judged"]
     assert (e["item"], e["net"], e["limit"]) == ("U2", "VOUT", "tol_pc") and "did you mean" in e["reason"]
+
+
+def test_a_second_project_load_on_the_same_ref_is_lost_not_silent(tmp_path, capsys):
+    """The fields' rail has one U1: the project's first U1 row carries its tolerances, the second
+    loses its own, which is not judged (never silently dropped)."""
+    from coppernicus.project import Load, Source
+    path = _strip(tmp_path, [Source("J1", 3.3, accuracy_pct=1)],
+                  [Load("U1", 1.0, tol_pct=5, ripple_mv=2, transient_mv=3),
+                   Load("U1", 0.5, name="U1b", tol_pct=3)])
+    assert main(["tolerance", str(path), "--json", "--out", str(tmp_path / "o")]) == EXIT_NOT_JUDGED
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["loads"][0]["verdict"] == "pass"            # the first U1, carried
+    (e,) = doc["not_judged"]
+    assert (e["item"], e["limit"]) == ("U1b", "tol_pct")
+
+
+def test_a_net_name_with_braces_does_not_break_the_lost_reason(tmp_path, capsys):
+    """KiCad writes "/" in a label as {slash}: the reason is built per part, never formatted."""
+    from coppernicus.project import Load, Source
+    path = _strip(tmp_path, [Source("J5", 3.3, accuracy_pct=1)],
+                  [Load("U1", 1.0, tol_pct=5), Load("U9", 1.0, tol_pct=4)], net="V{slash}A")
+    assert main(["tolerance", str(path), "--json", "--out", str(tmp_path / "o")]) == EXIT_NOT_JUDGED
+    doc = json.loads(capsys.readouterr().out)
+    (u9,) = [e for e in doc["not_judged"] if e["item"] == "U9"]
+    assert u9["reason"].startswith("rail V{slash}A comes from the board's KiCad footprint fields, where no "
+                                   "part takes U9's tolerances")
+    assert doc["loads"][0]["hints"]["accuracy"].startswith("J5's accuracy_pct in the project file was lost: "
+                                                           "rail V{slash}A")
