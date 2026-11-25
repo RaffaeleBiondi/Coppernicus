@@ -255,10 +255,13 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
   from the fields has one assumption line giving every value with its field: `load U1 2 A
   (from KiCad field PI_LOAD "2A" on U1)`. Say so when you report these numbers, and if you copy
   values from `board_fields` into `solve_rail`.
-- `solve_project`, `solve_tree`, `coppernicus solve` (with or without `--tree`) and the GitHub
-  Action read the fields. The desktop app does not yet; the merge is a pure function
-  (`coppernicus.board_fields.merge(project, fields, pad_nets)`, returning the merged project,
-  each net's origin and the warnings) that it can call.
+- `solve_project`, `solve_tree`, `coppernicus solve` (with or without `--tree`), the GitHub
+  Action and the desktop app read the fields, through the same merge
+  (`coppernicus.board_fields.merge(project, fields, pad_nets, ties)`, returning the merged
+  project, each net's origin and the warnings). In the app a rail from the fields is listed
+  `[KiCad]` and shown read-only; **Override in project** keeps a project rail instead, **Use
+  KiCad fields** goes back, **Project → Use KiCad footprint fields** turns the fields off and
+  **File → Reload board** reads them again after a change in KiCad.
 
 ### Proposing fields
 
@@ -580,8 +583,8 @@ setting with the others.
 - A layer name the board does not have fails the whole project, with one `layer_not_found`
   error listing the board's copper layers.
 - Without the key, the file is read and saved exactly as before.
-- The desktop app solves with the setting but has no field for it yet: edit the YAML. The app
-  keeps the key when it saves the project.
+- The desktop app edits it under **Copper thickness → Edit…** in the solve settings, and keeps
+  the key when it saves the project.
 
 ## Limits of this version
 
@@ -601,8 +604,7 @@ setting with the others.
   smaller than a cell, such as a hole or a very thin track, can look blocky or vanish in the
   map, while the numbers, the problems and the probes stay exact.
 - **KiCad footprint fields are read from `.kicad_pcb` files only**, not from ODB++, HyperLynx
-  or snapshots. Remote sense cannot be a field yet, and the desktop app does not read the
-  fields yet.
+  or snapshots. Remote sense cannot be a field yet.
 - **Tested** on macOS, with synthetic boards and the SDK's own client (in memory and over stdio).
   Registration in Claude Code and Claude Desktop follows their documented commands but has not
   been run in those hosts yet. The tests run in CI on Ubuntu, macOS and Windows, all required.
