@@ -13,6 +13,8 @@ import math
 import statistics
 from typing import Any, Dict, List, Optional, Sequence
 
+from bench_probes import PHASES
+
 MB = 1e6
 
 
@@ -199,9 +201,10 @@ def run_table(run: Dict[str, Any]) -> str:
 
 
 def stage_table(run: Dict[str, Any]) -> str:
-    """Per step, the median seconds of each timed stage (runtime wrapping, see bench_probes),
-    and what no stage covers ("other": wall - stages timed in the main thread). A stage seen
-    in several threads ("[10 thr]") sums their seconds: it can exceed the wall time."""
+    """Per step, the median exclusive seconds of each timed stage (runtime wrapping, see
+    bench_probes), what no stage covers ("other": wall - stages timed in the main thread), and
+    the entry points' inclusive seconds. A stage seen in several threads ("[10 thr]") sums
+    their seconds: it can exceed the wall time."""
     rows = []
     for step in all_steps(run):
         reps = _ok(step)
@@ -215,10 +218,16 @@ def stage_table(run: Dict[str, Any]) -> str:
             threads = max((g.get("threads") or 1) for g in got)
             if s["median"] is not None and s["median"] >= 0.0005:
                 parts.append(f"{name} {_fmt_s(s['median'])}" + (f" [{threads} thr]" if threads > 1 else ""))
+        phases = []
+        for name in PHASES:
+            s = stats([((r.get("stages") or {}).get(name) or {}).get("inclusive_s") for r in reps])
+            if s["median"] is not None:
+                phases.append(f"{name} {_fmt_s(s['median'])}")
         other = stats(_values(reps, "unattributed_s"))
         rows.append([step["case"], _name(step), _fmt_s(stats(_values(reps, "wall_s"))["median"]),
-                     ", ".join(parts) or "-", _fmt_s(other["median"])])
-    return table(["case", "step", "wall med s", "stages (median s)", "other s"], rows)
+                     ", ".join(parts) or "-", _fmt_s(other["median"]), ", ".join(phases) or "-"])
+    return table(["case", "step", "wall med s", "stages, exclusive (median s)", "other s",
+                  "entry points, inclusive (median s)"], rows)
 
 
 COMPARE_HEADERS = ["case", "step", "wall A s", "wall B s", "x wall (min)", "x wall (med)", "RSS A MB",

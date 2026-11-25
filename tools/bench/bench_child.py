@@ -61,7 +61,7 @@ def _reap_workers(limit_s: float = 30.0) -> int:
     return len(left)
 
 
-def open_case(spec: Dict[str, Any]) -> Case:
+def open_case(spec: Dict[str, Any], rec=None) -> Case:
     from coppernicus import board_fields
     from coppernicus.board_fields import BoardFields
     from coppernicus.engine import Board
@@ -70,8 +70,11 @@ def open_case(spec: Dict[str, Any]) -> Case:
 
     case = spec["case"]
     if case["kind"] == "synthetic":
+        import contextlib
+
         import bench_synth
-        board, loaded = bench_synth.build(case["synthetic"])
+        with rec.span("synthetic_build") if rec is not None else contextlib.nullcontext():
+            board, loaded = bench_synth.build(case["synthetic"])
         path = None
     else:
         path = Path(case["project"])
@@ -301,10 +304,10 @@ def main(spec_path: str, out_path: str) -> int:
         record["rss_after_import_bytes"] = peak_rss_bytes()
         step = spec["step"]
         if step == "open":
-            case, wall, cpu, child_cpu = _measure(open_case, rec, spec)
+            case, wall, cpu, child_cpu = _measure(open_case, rec, spec, rec)
             fingerprint, extra = F.board(case.board), {}
         else:
-            case, record["open_s"], _, _ = _measure(open_case, rec, spec)
+            case, record["open_s"], _, _ = _measure(open_case, rec, spec, rec)
             record["rss_after_open_bytes"] = peak_rss_bytes()
             rec.reset()
             (fingerprint, extra), wall, cpu, child_cpu = _measure(RUNNERS[step], rec, case, spec, rec)

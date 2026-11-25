@@ -229,13 +229,28 @@ FUNCTIONS: List[Tuple[str, str, Optional[str], Optional[Callable]]] = [
     ("kipi.noise.solver", "_board_model", "noise_board_model", None),
     ("kipi.noise.solver", "_victims", "noise_victims", None),
     ("kipi.noise.solver", "_fields", "noise_fields", None),
+    ("kipi.sources.kicad_pcb.reader", "load_tree", "kicad_parse", None),
+    ("kipi.sources.kicad_pcb.reader", "read_footprints", "kicad_footprints", None),
+    ("kipi.sources.kicad_pcb.reader", "read_zones", "kicad_zones", None),
+    ("kipi.sources.kicad_pcb.reader", "trim_unused_layers", "kicad_trim", None),
+    ("kipi.sources.kicad_pcb.reader", "trim_unused_via_pads", "kicad_trim", None),
+    ("kipi.sources.kicad_pcb.reader", "read_outline", "kicad_outline", None),
     ("coppernicus.board_fields", "apply", "board_fields", None),
+    # Entry points (PHASES): their exclusive time is Coppernicus' own work around KiPI's.
+    ("coppernicus.engine.solve", "solve_rail", "dc_solve", None),
+    ("coppernicus.engine.tree", "solve_project_tree", "tree_solve", None),
+    ("coppernicus.engine.ac", "solve_ac_rail", "ac_solve", None),
+    ("coppernicus.engine.ac", "ac_size", "ac_size", None),
+    ("coppernicus.engine.noise", "solve_aggressor", "noise_solve", None),
+    ("coppernicus.engine.noise", "mesh_estimate", "noise_size", None),
     ("coppernicus.engine.solve", "_convert", "convert", None),
     ("coppernicus.engine.tree", "convert_tree", "convert", None),
     ("coppernicus.engine.thermal", "_finish", "convert", None),
     ("coppernicus.engine.ac", "_convert", "convert", None),
     ("coppernicus.problems", "find_problems", "problems", None),
 ]
+#: Stages that are entry points or wrap others: reports also give their inclusive time.
+PHASES = ("board_open", "dc_solve", "tree_solve", "ac_solve", "ac_size", "noise_solve", "noise_size")
 # (module, class, method, stage, hook): methods, wrapped on their class.
 METHODS: List[Tuple[str, str, str, Optional[str], Optional[Callable]]] = [
     ("coppernicus.project", "Project", "load", "project_load", None),
@@ -253,7 +268,8 @@ METHODS: List[Tuple[str, str, str, Optional[str], Optional[Callable]]] = [
 MODULES = ("kipi.core.workers", "kipi.core.mesh.mesher", "kipi.core.mesh.parallel", "kipi.core.solver.spd",
            "kipi.core.solver.direct", "kipi.dc.solver", "kipi.dc.solver.fem", "kipi.dc.solver.post",
            "kipi.dc.pi.tree", "kipi.dc.thermal.model", "kipi.dc.thermal.cosim", "kipi.ac.solver.fem",
-           "kipi.ac.solver.field", "kipi.ac.solver.sweep", "kipi.noise.solver", "coppernicus.project",
+           "kipi.ac.solver.field", "kipi.ac.solver.sweep", "kipi.noise.solver",
+           "kipi.sources.kicad_pcb.reader", "coppernicus.project",
            "coppernicus.board_fields", "coppernicus.problems", "coppernicus.engine.board",
            "coppernicus.engine.solve", "coppernicus.engine.tree", "coppernicus.engine.thermal",
            "coppernicus.engine.ac", "coppernicus.engine.noise", "coppernicus.engine.tolerance",
