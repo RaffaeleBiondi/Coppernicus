@@ -429,3 +429,161 @@ class ImpedanceResult:
 
     def probe(self, name: str) -> Optional[ProbeImpedance]:
         return next((p for p in self.probes if p.name == name), None)
+
+
+# ---------------------------------------------------------------------- DC-DC noise (Task 10)
+
+@dataclass
+class HotLoop:
+    """One phase's hot loop as KiPI traced it: its inductance, the switch node's capacitance
+    (Coss + copper), where it rings and how damped. ``coss_entered`` / ``qrr_entered``:
+    False where KiPI's stand-ins (200 pF, 5 nC) were used."""
+    phase: int
+    loop_l_h: float
+    package_l_h: float
+    c_sw_f: float
+    coss_f: float
+    coss_entered: bool
+    qrr_nc: float
+    qrr_entered: bool
+    c_copper_f: float
+    r_loop_ohm: float
+    f_ring_hz: Optional[float]     # None: no hot-loop inductance, no ringing
+    zeta: float                    # at least the aggressor's min_ring_zeta
+    zeta_loop: float               # what the loop's resistance alone gives
+    traced: bool                   # through the copper (True) or straight between the pads
+    image_plane: str = ""
+
+
+@dataclass
+class RippleResult:
+    """The ripple an aggressor puts between a pair of pins over one switching period: at a
+    probe, or at phase 1's device pins ("input", "output"). Never judged in Task 10. The four
+    peaks are KiPI's tolerance values (``kipi/tolerance/gather.py`` ``ripple_peaks``): the
+    lowest and highest points from the mean, full band and through 20 MHz."""
+    name: str
+    where: str                     # "probe", "device pins", "capacitor bank" (no board model)
+    net: str
+    ground_net: str
+    ref: str
+    pins: Optional[List[str]]
+    below_v: float
+    above_v: float
+    below_bw_v: float
+    above_bw_v: float
+    pp_v: float
+    pp_bw_v: float                 # through a single pole at 20 MHz (a scope's limit)
+    rms_v: float
+    t_s: np.ndarray                # one period
+    v: np.ndarray                  # V about the mean
+    v_bw: np.ndarray
+
+
+@dataclass
+class VictimResult:
+    """The noise one aggressor couples onto a victim net, at its receiver, and its verdict:
+    only against a margin the user gave (``margin_from``), and only when no KiPI stand-in is
+    in play (``stand_ins``)."""
+    name: str
+    net: str
+    driver: str                    # pin labels as KiPI shows them
+    receiver: str
+    ends_entered: bool
+    preset: str
+    margin_v: Optional[float]      # None: no margin set, ranked only
+    margin_from: str               # where the margin comes from ("" without one)
+    limit: str                     # the limit's name in a verdict entry ("" without one)
+    peak_v: float                  # the receiver's largest |v| over a period, held high or low
+    peak_by_v: Dict[str, float]    # capacitive, inductive, common (those solved)
+    dominant: str
+    ratio: Optional[float]         # peak / margin (None without a margin)
+    states: List[Dict[str, Any]]   # name, level_v, threshold_v, driver_ohm, excursion_v, margin_v
+    length_mm: float
+    coupled_mm: float
+    cm_f: Dict[str, float]         # switch net -> mutual capacitance
+    m_h: Dict[str, float]          # loop -> mutual inductance (at fsw)
+    splits: List[str]              # plane-split crossings, described
+    receiver_v: np.ndarray         # one period, driven high, all mechanisms
+    stand_ins: List[str] = field(default_factory=list)
+    passed: Optional[bool] = None
+    not_judged: str = ""
+    warnings: List[str] = field(default_factory=list)
+
+
+@dataclass
+class FieldMap:
+    """Each point's strongest harmonic (peak amplitude) on a plane over the board:
+    ``values`` (ny, nx), rows from y0 (KiCad's y points down), over ``bounds`` (x0, y0, x1,
+    y1) mm, the centres of the first and last points."""
+    kind: str                      # "H" or "E"
+    unit: str                      # "A/m" or "V/m"
+    values: np.ndarray
+    bounds: Tuple[float, float, float, float]
+
+
+@dataclass
+class NearField:
+    """The near field over the top copper and the radiated estimate (KiPI ``kipi/noise/
+    fields.py``): an indicator, never judged."""
+    height_mm: float
+    distance_m: float
+    h_map: Optional[FieldMap] = None
+    e_map: Optional[FieldMap] = None
+    # kind, x_mm, y_mm, value, unit, f_hz, source; the strongest first, per kind
+    hotspots: List[Dict[str, Any]] = field(default_factory=list)
+    radiated_dbuv_m: Optional[float] = None    # the harmonic nearest the CISPR 32 B limit
+    radiated_hz: Optional[float] = None
+    cispr32_b_dbuv_m: Optional[float] = None   # the limit there (None below 30 MHz)
+    radiated_source: str = ""
+    notes: List[str] = field(default_factory=list)
+
+
+@dataclass
+class NoiseResult:
+    """One aggressor's ripple and coupled noise (KiPI ``kipi/noise``)."""
+    aggressor: str
+    vrm: str
+    rail: str                      # the output net
+    input_net: str
+    ground: str
+    topology: str
+    vin_v: float
+    vout_v: float
+    iout_a: float
+    iin_a: float
+    duty: float
+    efficiency: float
+    phases: int
+    operating_notes: List[str]
+    fsw_hz: float
+    rise_s: float
+    fall_s: float
+    f_max_hz: float
+    harmonics: int
+    harmonics_capped: bool
+    inductor_ripple_a: List[float]
+    hot_loops: List[HotLoop]
+    t_s: np.ndarray                # one period
+    switch_node_v: List[np.ndarray]    # per phase, one period
+    inductor_a: List[np.ndarray]
+    edges: List[str]               # per phase, how each edge switches
+    ripple: List[RippleResult] = field(default_factory=list)
+    victims: List[VictimResult] = field(default_factory=list)
+    # used, note, unknowns, field_solves, ports, caps_modelled, caps_missing
+    board: Dict[str, Any] = field(default_factory=dict)
+    emi: Optional[NearField] = None
+    stand_ins: List[str] = field(default_factory=list)   # the aggressor's own (every victim)
+    partial: bool = False          # a partial result handed over during the solve
+    verdict: str = ""
+    verdict_note: str = ""
+    failed: List[Dict[str, Any]] = field(default_factory=list)
+    not_judged: List[Dict[str, Any]] = field(default_factory=list)
+    assumptions: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    stats: Dict[str, Any] = field(default_factory=dict)
+
+    def victim(self, name: str) -> Optional[VictimResult]:
+        return next((v for v in self.victims if v.name == name), None)
+
+    def ripple_at(self, name: str) -> Optional[RippleResult]:
+        return next((r for r in self.ripple if r.name == name), None)

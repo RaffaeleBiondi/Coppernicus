@@ -27,7 +27,19 @@ from kipi.core.model.board import (
 )
 from shapely.geometry import MultiPolygon, box
 
-from coppernicus.project import AcOptions, CapModel, Link, Load, Probe, Project, Rail, Source
+from coppernicus.project import (
+    AcOptions,
+    Aggressor,
+    CapModel,
+    Link,
+    Load,
+    Phase,
+    Probe,
+    Project,
+    Rail,
+    Source,
+    Victim,
+)
 
 F, B = 3, 34                    # KiCad layer ids of F.Cu and B.Cu
 OZ1 = 0.035                     # 1 oz copper
@@ -544,3 +556,33 @@ def coupled_noise_board() -> BoardSnapshot:
             b.via("GND", x, y + dy, 0.2, 0.3, layers=(F, IN1, IN2) if layer == IN2 else (F, IN1))
         b.track(net, layer, 0.2, (x0, y), (x1, y))
     return b.snapshot()
+
+
+def coupled_noise_project(board: str = "coupled_noise.kipi.json.gz", qrr_nc: Optional[float] = None,
+                          logic_v: Optional[float] = None, ripple_probe: bool = True) -> Project:
+    """KiPI's coupled-noise setup as a project: J1 12 V on VIN; U1 a switcher (efficiency 0.9,
+    KiPI's default that its setup keeps) holding VOUT at 1.8 V at L1.2, fed at U1.1, ground
+    U1.2; U2 drawing 5 A; models 10u on C1 and 47u on C2; aggressor U1 at 1 MHz, 2 ns edges,
+    Coss 300 pF; the three victims as cmos lines with both ends. ``qrr_nc`` None leaves KiPI's
+    stand-in (as its setup does); ``logic_v`` None sets no margin; ``ripple_probe`` adds the
+    probe LOAD at U2 and names it for the ripple."""
+    g = CoupledNoise
+    gnd = dict(ground_pins=["2"], ground_net="GND")
+    project = Project(board=board, rails=[
+        Rail("VIN", sources=[Source("J1", g.VIN, ["1"], **gnd)]),
+        Rail("VOUT", sources=[Source("L1", g.VOUT, ["2"], name="U1", kind="smps", efficiency=g.ETA,
+                                     input_ref="U1", input_pins=["1"], input_net="VIN",
+                                     ground_ref="U1", **gnd)],
+             loads=[Load("U2", g.LOAD, ["1"], **gnd)])],
+        capacitors=[CapModel("10u", *g.C1, ["C1"]), CapModel("47u", *g.C2, ["C2"])])
+    phase = Phase(inductor="L1", inductance_h=g.L, switch_net="SW", high_side_ref="U1",
+                  high_side_pins=["1"], high_side_net="VIN", low_side_ref="U1", low_side_pins=["2"],
+                  low_side_net="GND", input_caps=["C1"], output_caps=["C2"], coss_f=g.COSS,
+                  qrr_nc=qrr_nc)
+    project.aggressors = [Aggressor("U1", vrm="U1", fsw_hz=g.FSW, rise_s=g.RISE, fall_s=g.RISE,
+                                    phases=[phase], ripple_probes=["LOAD"] if ripple_probe else [])]
+    if ripple_probe:
+        project.probes = [Probe("LOAD", "U2", "VOUT", ["1"], **gnd)]
+    project.victims = [Victim(net, preset="cmos", driver_ref=d, driver_pins=["1"], receiver_ref=r,
+                              receiver_pins=["1"], logic_v=logic_v) for net, d, r in g.VICTIMS]
+    return project
