@@ -593,6 +593,167 @@ def _cmd_noise(args) -> int:
     return _exit_for(doc)
 
 
+def _cmd_tolerance(args) -> int:
+    """``tolerance PROJECT``: each load's tolerance stack-up (Task 11): the power tree (the DC
+    drop on the worst pins), then, only where a load with a tolerance needs it, one AC solve
+    per rail for KiPI's transient estimate at its probe (shown, never judged; only with a
+    bandwidth given) and one noise solve per aggressor listing its probe (the ripple), each
+    cost printed first; ``--skip-ac`` / ``--skip-noise`` leave those parts missing. Writes
+    ``<project>_tolerance_summary.json`` and ``<project>_tolerance.csv`` into ``--out``
+    (default: results/ next to the project file). Prints the report, or with ``--json`` the
+    summary. Exit codes as ``solve``."""
+    import time
+
+    from coppernicus import board_fields
+    from coppernicus.engine import Board, EngineError
+    from coppernicus.engine.ac import peak_rss_bytes, probe_rails, solve_ac_rail, total_memory_bytes
+    from coppernicus.engine.kicad_fields import read_board_fields
+    from coppernicus.engine.noise import (
+        mesh_estimate,
+        noise_cost_estimate,
+        noise_ram_estimate,
+        solve_aggressor,
+    )
+    from coppernicus.engine.tolerance import load_probes, loads_by_name
+    from coppernicus.engine.tree import solve_project_tree
+    from coppernicus.maps import safe_file_name
+    from coppernicus.project import (
+        LOAD_PART_KEYS,
+        LOAD_TOLERANCE_KEYS,
+        SOURCE_ACCURACY_KEYS,
+        Project,
+        ProjectError,
+    )
+    from coppernicus.service.session import FIELD_HINT, ac_estimate, thermal_estimate
+    from coppernicus.tolerance import compose, tolerance_summary, tolerance_text, write_csv
+
+    quiet = args.json
+    t0 = time.perf_counter()
+
+    def fail(code, message, hint=""):
+        if quiet:
+            _print_json({"error": {"code": code, "message": message, "hint": hint}})
+        print(f"error: {message}".replace("\n", " "), file=sys.stderr)
+        return EXIT_ERROR
+    if not Path(args.project).is_file():
+        return fail("file_not_found", f"No such file: {args.project}")
+    try:
+        loaded = Project.load(args.project)
+        board = Board.open(loaded.board_path())
+    except (OSError, ProjectError) as e:
+        return fail("invalid_project", str(e))
+    except EngineError as e:
+        return fail("board_unreadable", str(e))
+    try:                                  # the KiCad footprint fields, as solve --tree
+        merged = board_fields.apply(loaded, lambda: read_board_fields(board.path),
+                                    False if args.no_board_fields else None,
+                                    ties=[(t.net_a, t.net_b) for t in board.net_ties()])
+    except (board_fields.FieldError, EngineError) as e:
+        return fail("invalid_board_field", str(e), FIELD_HINT)
+    project = merged.project
+    warnings = list(merged.warnings)
+    for net in merged.from_fields:        # the fields' rail replaces the project's terminals
+        own = loaded.rail(net)
+        keys = (LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS, SOURCE_ACCURACY_KEYS)
+        refs = [t.ref for ts, k in ((own.loads, keys[0]), (own.sources, keys[1])) if own is not None
+                for t in ts if any(getattr(t, x) is not None for x in k)]
+        if refs:
+            warnings.append(f"Rail {net} comes from the board's KiCad footprint fields: the tolerances, "
+                            f"accuracy and entered parts of {', '.join(refs)} in the project file are not "
+                            "used (no KiCad field holds them yet); set override_board_fields: true on the "
+                            "rail to use the project's")
+    stream = sys.stderr if quiet else sys.stdout
+    progress = (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None
+    estimates = []
+    if project.thermal.enabled:           # warn before a heavy electro-thermal solve
+        estimate = thermal_estimate(board, project.thermal)
+        estimates.append({"solve": "board temperature", **estimate})
+        print(f"Board temperature: {estimate['text']}", file=stream, flush=True)
+        if estimate["exceeds_memory"]:
+            print("warning: the board temperature's model could exceed this machine's memory; "
+                  "a coarser grid (thermal: grid_mm) lowers it", file=sys.stderr, flush=True)
+    try:
+        tree = solve_project_tree(board, project, progress=progress)
+        pairs = load_probes(board, project)
+        rails_of = probe_rails(board, project)
+    except EngineError as e:
+        return fail("solve_failed", str(e), "fix the project file or the KiCad fields, then solve again")
+    needed = {pairs[n] for n, (_net, ld) in loads_by_name(project).items()
+              if ld.has_tolerance() and pairs.get(n)}             # the probes of loads judged
+    ac_notes, noise_notes, rails = {}, {}, []
+    for p in project.probes:              # AC only for KiPI's estimate: a step and a bandwidth given
+        rail = rails_of.get(p.name)
+        if p.name not in needed or not (p.step_a and p.slew_a_per_us) or rail is None:
+            continue
+        source = project.rail(rail).sources[0]
+        if project.ac.bandwidth_hz.get(source.label, project.ac.bandwidth_hz.get(source.ref)) is None:
+            continue
+        if args.skip_ac:
+            ac_notes[p.name] = "--skip-ac left it out"
+        elif rail not in rails:
+            rails.append(rail)
+    impedance = []
+    for net in rails:
+        probes_here = [n for n in needed if rails_of.get(n) == net]
+        try:                              # its cost first: a heavy solve is never a surprise
+            estimate = ac_estimate(board, project, net)
+            estimates.append({"solve": f"AC {net}", **estimate})
+            print(f"Impedance of {net}: {estimate['text']}", file=stream, flush=True)
+            if estimate["exceeds_memory"]:
+                print(f"warning: the AC solve of {net} could exceed this machine's memory; a coarser "
+                      "AC mesh (ac: max_edge_mm) lowers it", file=sys.stderr, flush=True)
+            impedance.append(solve_ac_rail(board, project, net, progress=progress))
+        except EngineError as e:          # only KiPI's estimate is lost: shown, never judged
+            warnings.append(f"AC solve of {net} for KiPI's transient estimate failed: {e}")
+            ac_notes.update({n: f"the AC solve of {net} failed" for n in probes_here})
+    noise = []
+    for a in project.aggressors:
+        if not set(a.ripple_probes) & needed:
+            continue
+        if args.skip_noise:
+            noise_notes[a.name] = "--skip-noise"
+            continue
+        try:
+            size = mesh_estimate(board, project, a.name, fields_rails=merged.from_fields)
+            ram = noise_ram_estimate(size.unknowns, total_memory_bytes())
+            text = f"{noise_cost_estimate(size).text}. {ram.text}" + (f" {size.note}." if size.note else "")
+            estimates.append({"solve": f"noise {a.name}", "unknowns": size.unknowns,
+                              "memory_bytes": ram.bytes, "machine_memory_bytes": ram.total_bytes,
+                              "exceeds_memory": ram.risk, "text": text})
+            print(f"Noise of {a.name}: {text}", file=stream, flush=True)
+            if ram.risk:
+                print(f"warning: the noise solve of {a.name} could exceed this machine's memory; a "
+                      "coarser AC mesh (ac: max_edge_mm) or fewer field solves (noise: "
+                      "field_per_decade) lowers it", file=sys.stderr, flush=True)
+            noise.append(solve_aggressor(board, project, a.name, progress=progress,
+                                         fields_rails=merged.from_fields))
+        except EngineError as e:          # its ripple is missing: not judged, never a pass
+            warnings.append(f"Noise solve of {a.name} failed: {e}")
+            noise_notes[a.name] = "its noise solve failed"
+    result = compose(project, tree, impedance, noise, pairs, ac_notes, noise_notes, warnings)
+    result.estimates = estimates
+    peak = peak_rss_bytes()
+    result.stats = {"seconds": time.perf_counter() - t0, "tree_seconds": tree.stats.get("seconds"),
+                    "ac_rails": len(impedance), "aggressors": len(noise),
+                    "memory_peak_mb": peak / 1e6 if peak else None}
+    stem = safe_file_name(Path(args.project).stem)
+    out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = write_csv(result, out_dir / f"{stem}_tolerance.csv")
+    doc = tolerance_summary(result, csv_path.as_posix())
+    summary_path = out_dir / f"{stem}_tolerance_summary.json"
+    doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
+    summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
+                            encoding="utf-8")
+    if quiet:
+        _print_json(doc)
+    else:
+        print(f"Board: {board.name}")
+        print("\n".join(tolerance_text(doc)))
+        print(f"Summary: {summary_path}")
+    return _exit_for(doc)
+
+
 def _print_rail(res, problems):
     from coppernicus.problems import FAIL, max_drop_text
     others = [n for n in res.nets if n != res.net]
@@ -736,6 +897,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true",
                    help="print a JSON summary on stdout (for scripts and agents)")
     p.set_defaults(func=_cmd_noise)
+
+    p = sub.add_parser("tolerance", help="each load's tolerance stack-up: DC drop and accuracy, ripple, "
+                                         "transient", epilog=EXIT_CODES)
+    p.add_argument("project")
+    p.add_argument("--skip-ac", action="store_true",
+                   help="no AC solve: KiPI's transient estimate (shown, never judged) is left out")
+    p.add_argument("--skip-noise", action="store_true",
+                   help="no noise solve: the ripple of the aggressors is left missing (not judged)")
+    p.add_argument("--out",
+                   help="folder for the CSV and summary (default: results/ next to the project file)")
+    p.add_argument("--no-board-fields", action="store_true",
+                   help="ignore the board's KiCad footprint fields (PI_*)")
+    p.add_argument("-v", "--verbose", action="store_true", help="show the engines' progress")
+    p.add_argument("--json", action="store_true",
+                   help="print a JSON summary on stdout (for scripts and agents)")
+    p.set_defaults(func=_cmd_tolerance)
     return ap
 
 

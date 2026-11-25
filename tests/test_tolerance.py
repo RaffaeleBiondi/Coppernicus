@@ -577,8 +577,9 @@ def test_kipis_transient_estimate_is_shown_never_judged():
     project.ac.bandwidth_hz = {"U1": 1e5}
     row = _compose(project, impedance=[_impedance()]).rows[0]
     assert row.parts["transient"] is None and row.verdict == "not_judged"
-    assert row.hints["transient"] == ("enter transient_mv for U2 (KiPI's estimate with a typical loop "
-                                      "at 100 kHz: 20 / 12 mV, 15 / 10 mV through 20 MHz)")
+    assert row.hints["transient"] == ("enter transient_mv for U2; KiPI's estimate with a typical loop "
+                                      "at 100 kHz: 20 / 12 mV, 15 / 10 mV through 20 MHz (shown, never "
+                                      "judged)")
     assert row.transient_estimate == pytest.approx((0.020, 0.012, 0.015, 0.010))
     entered = _compose(_comp_project(**COMPLETE), impedance=[_impedance()]).rows[0]
     assert entered.parts["transient"].above_v == pytest.approx(0.020)          # the entered one
@@ -589,7 +590,7 @@ def test_kipis_transient_estimate_is_shown_never_judged():
     (dict(bandwidth=None), "no control loop bandwidth is given for U1 (ac.bandwidth_hz)"),
     (dict(step=None), "probe P1 has no load step (step_a, slew_a_per_us)"),
     (dict(probe=False), "no probe on U2's pins"),
-    (dict(note="--skip-ac"), "--skip-ac")])
+    (dict(note="--skip-ac left it out"), "--skip-ac left it out")])
 def test_without_kipis_estimate_the_hint_says_why(change, why):
     project = _comp_project(load={"tol_pct": 5, "ripple_mv": 5}, probe=change.get("probe", True))
     if project.probes and change.get("step", 1):
@@ -598,7 +599,7 @@ def test_without_kipis_estimate_the_hint_says_why(change, why):
         project.ac.bandwidth_hz = {"U1": 1e5}
     notes = {"P1": change["note"]} if "note" in change else {}
     row = _compose(project, ac_notes=notes, pairs={"U2": "P1" if project.probes else None}).rows[0]
-    assert row.hints["transient"] == f"enter transient_mv for U2 ({why} for KiPI's estimate)"
+    assert row.hints["transient"] == f"enter transient_mv for U2; no KiPI estimate: {why}"
     assert row.transient_estimate is None
 
 

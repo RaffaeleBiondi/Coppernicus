@@ -160,7 +160,7 @@ def _transient(project: Project, load: Load, nominal: Optional[float], probe: Op
         return TolerancePart(*_deviation(load.transient_mv), "entered (transient_mv)", detail), "", estimate
     why = _no_estimate(project, load, probe, source, ac_notes) if not text else ""
     hint = f"enter transient_mv for {load.label}"
-    hint += f" ({text})" if text else f" ({why} for KiPI's estimate)" if why else ""
+    hint += f"; {text} (shown, never judged)" if text else f"; no KiPI estimate: {why}" if why else ""
     return None, hint, estimate
 
 
