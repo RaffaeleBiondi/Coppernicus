@@ -579,6 +579,19 @@ def _ac_in(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"probes": probes, "capacitors": caps, "ac": _ac_options_in(data.get("ac") or {})}
 
 
+def check_ac(probes: Sequence[Probe], capacitors: Sequence[CapModel],
+             ac: Optional[AcOptions] = None) -> None:
+    """Raise :class:`ProjectError` when these probes, capacitor models and ``ac`` options
+    would not load back from a project file: the checks :meth:`Project.from_dict` makes,
+    for an editor that must never write a file the loader refuses."""
+    try:
+        _ac_in({"probes": [_probe_out(p) for p in probes],
+                "capacitors": [_cap_out(c) for c in capacitors],
+                "ac": _ac_out(ac) if ac is not None else {}})
+    except (KeyError, TypeError, ValueError) as e:
+        raise ProjectError(str(e)) from e
+
+
 @dataclass
 class Project:
     board: str = ""
