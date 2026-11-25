@@ -222,3 +222,126 @@ def test_no_estimate_without_a_given_bandwidth_a_step_and_a_slew(change, stepped
     assert r.probes[0].transient is None
     # |Z| does not depend on the bandwidth, the step or the slew: bit-identical.
     assert np.array_equal(r.probes[0].z_ohm, stepped[1].probes[0].z_ohm)
+
+
+# ---------------------------------------------------------------------- engine: limits and stack
+
+def test_limits_in_percent_and_mv_signed_and_on_a_negative_rail():
+    from coppernicus.engine.tolerance import accuracy_sides, allowed
+    assert allowed(3.3, (-5.0, 3.0), True) == pytest.approx((0.165, 0.099))
+    assert allowed(3.3, (-50.0, 30.0), False) == pytest.approx((0.050, 0.030))
+    # A % of a negative rail is of its magnitude (KiPI's pct_to_volts swaps the ends): −5 %
+    # takes −3.3 V toward 0 V, which is above it. mV from nominal add as they are.
+    assert allowed(-3.3, (-5.0, 3.0), True) == pytest.approx((0.099, 0.165))
+    assert allowed(-3.3, (-50.0, 30.0), False) == pytest.approx((0.050, 0.030))
+    assert allowed(3.3, None, True) == (None, None) and allowed(None, (-5.0, 5.0), True) == (None, None)
+    # A % of 0 V places nothing (KiPI would allow 0 V either side, a spurious fail).
+    assert allowed(0.0, (-5.0, 5.0), True) == (None, None)
+    assert allowed(0.0, (-50.0, 50.0), False) == pytest.approx((0.05, 0.05))
+    assert accuracy_sides(1.8, Source("U1", 1.8, accuracy_pct=(-2, 1))) == pytest.approx((0.036, 0.018))
+    assert accuracy_sides(-1.8, Source("U1", -1.8, accuracy_pct=(-2, 1))) == pytest.approx((0.018, 0.036))
+    assert accuracy_sides(1.8, Source("U1", 1.8, accuracy_mv=(-10, 0))) == pytest.approx((0.010, 0.0))
+    assert accuracy_sides(1.8, Source("U1", 1.8)) is None
+    assert accuracy_sides(0.0, Source("U1", 0.0, accuracy_pct=1)) is None
+
+
+DRIFT = [
+    # nominal, load tolerances, source accuracy, dc, ripple, transient (V, below / above)
+    (1.8, dict(tol_pct=5, dc_tol_pct=3, ac_tol_mv=40), dict(accuracy_pct=1),
+     (0.012, 0.0), (0.004, 0.006), (0.020, 0.015)),
+    (1.8, dict(tol_pct=(-3, 2)), dict(accuracy_mv=(-10, 12)),
+     (0.030, 0.0), (0.004, 0.006), (0.020, 0.015)),                       # fails below
+    (3.3, dict(tol_mv=(-120, 80), ac_tol_pct=(-1, 0.5)), dict(accuracy_pct=(-1.5, 1)),
+     (0.002, 0.001), (0.010, 0.012), (0.009, 0.004)),                     # ac fails above
+    (-3.3, dict(tol_pct=(-5, 3), dc_tol_mv=(-30, 60)), dict(accuracy_pct=(-1, 2)),
+     (0.0, 0.025), (0.005, 0.004), (0.030, 0.010)),                       # a negative rail
+    (5.0, dict(dc_tol_pct=0), dict(accuracy_pct=0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)),
+]
+
+
+@pytest.mark.parametrize("nominal, tols, acc, dc, ripple, transient", DRIFT)
+def test_our_stack_equals_kipis_where_both_rules_agree(nominal, tols, acc, dc, ripple, transient):
+    """Accuracy set, every part present (one aggressor, the mean = the worst pin): our copy of
+    KiPI's stack() gives KiPI's numbers and verdicts (KiPI rounds a part to 6 figures)."""
+    from coppernicus.engine.tolerance import accuracy_sides, kipi_reference_stack, load_limits, stack
+    load, source = Load("U1", 1.0, **tols), Source("J1", nominal, **acc)
+    parts = {"dc": dc, "ripple": ripple, "transient": transient,
+             "accuracy": accuracy_sides(nominal, source)}
+    ours = stack(parts, load_limits(load, nominal))
+    kipi = kipi_reference_stack(nominal, load, source, {k: parts[k] for k in ("dc", "ripple", "transient")})
+    assert kipi["parts"]["accuracy"] == pytest.approx(parts["accuracy"], abs=1e-15)
+    for kind, (below, above, allowed_, complete, passed) in kipi["checks"].items():
+        c = ours[kind]
+        assert (c.below_v, c.above_v) == pytest.approx((below, above), rel=1e-6, abs=1e-12)
+        assert (c.allowed_below_v, c.allowed_above_v) == pytest.approx(allowed_, abs=1e-15)
+        assert (c.complete, c.passed) == (complete, passed)
+
+
+def test_a_check_can_fail_while_incomplete_but_never_pass():
+    from coppernicus.engine.tolerance import stack
+    limits = {"dc": (0.020, 0.020), "ac": (None, None), "total": (None, None)}
+    over = stack({"dc": None, "accuracy": (0.025, 0.0), "ripple": None, "transient": None}, limits)
+    assert (over["dc"].complete, over["dc"].passed, over["dc"].missing) == (False, False, ["dc"])
+    under = stack({"dc": None, "accuracy": (0.010, 0.0), "ripple": None, "transient": None}, limits)
+    assert (under["dc"].complete, under["dc"].passed) == (False, None)
+    full = stack({"dc": (0.005, 0.0), "accuracy": (0.010, 0.0), "ripple": None, "transient": None}, limits)
+    assert (full["dc"].complete, full["dc"].passed, full["dc"].missing) == (True, True, [])
+    assert full["ac"].passed is None and full["ac"].missing == ["ripple", "transient"]
+    assert full["dc"].margin_below_v == pytest.approx(0.005) and full["ac"].margin_below_v is None
+
+
+# ---------------------------------------------------------------------- loads, probes and Q9
+
+def _noise_board():
+    from coppernicus.engine import Board
+    from coppernicus.engine.synthetic import coupled_noise_board
+    return Board(coupled_noise_board())
+
+
+def test_each_load_gets_its_probe_by_kipis_rule():
+    from coppernicus.engine.synthetic import coupled_noise_project
+    from coppernicus.engine.tolerance import load_probes
+    from coppernicus.project import Probe
+    board, project = _noise_board(), coupled_noise_project()
+    assert load_probes(board, project) == {"U2": "LOAD"}
+    # Same part on the same supply net, other pins and no ground: still U2's (KiPI's fallback),
+    # after an exact one; a probe whose pins are not on the board is left out, not an error.
+    project.probes = [Probe("NOPE", "U2", "VOUT", ["9"]), Probe("ANY", "U2", "VOUT")] + project.probes
+    assert load_probes(board, project) == {"U2": "LOAD"}
+    project.probes = project.probes[:2]
+    assert load_probes(board, project) == {"U2": "ANY"}
+    project.probes = []
+    assert load_probes(board, project) == {"U2": None}
+
+
+def test_a_load_ac_tolerance_and_its_probe_ac_tolerance_v_must_agree():
+    from coppernicus.engine.tolerance import ac_tolerance_mismatch
+    from coppernicus.project import Probe
+    probe = Probe("P1", "U1", "VCC", ac_tolerance_v=0.05)
+    assert ac_tolerance_mismatch(Load("U1", 1.0, ac_tol_mv=50), probe, 3.3) == ""
+    # The tighter side, in volts: 1 % of 3.3 V is 33 mV.
+    assert ac_tolerance_mismatch(Load("U1", 1.0, ac_tol_pct=(-2, 1)), Probe(
+        "P1", "U1", "VCC", ac_tolerance_v=0.033), 3.3) == ""
+    text = ac_tolerance_mismatch(Load("U1", 1.0, ac_tol_mv=(-40, 60)), probe, 3.3)
+    assert "ac_tol_mv -40 / +60 mV: 40 mV on its tighter side" in text and "ac_tolerance_v (50 mV" in text
+    assert ac_tolerance_mismatch(Load("U1", 1.0), probe, 3.3) == ""
+    assert ac_tolerance_mismatch(Load("U1", 1.0, ac_tol_mv=40), Probe("P1", "U1", "VCC"), 3.3) == ""
+    assert ac_tolerance_mismatch(Load("U1", 1.0, ac_tol_mv=50 * (1 + 1e-12)), probe, 3.3) == ""
+
+
+def test_the_ac_result_warns_when_a_load_and_its_probe_disagree():
+    from coppernicus.engine import Board
+    from coppernicus.engine.ac import solve_ac_rail
+    from coppernicus.engine.synthetic import ac_decap_board, ac_decap_project
+    from coppernicus.project import AcOptions
+    project = ac_decap_project()
+    project.ac = AcOptions(**QUICK, bandwidth_hz={"U1": 1e5})
+    project.probes[0].ac_tolerance_v = 0.05
+    project.rails[0].loads = [Load("U1", 0.1, ["1"], ground_pins=["2"], ground_net="GND",
+                                   ac_tol_mv=30)]
+    r = solve_ac_rail(Board(ac_decap_board()), project, "+3V3")
+    (w,) = [w for w in r.warnings if "disagree" in w]
+    assert "Load U1's AC tolerance (ac_tol_mv ±30 mV" in w and "probe U1's ac_tolerance_v (50 mV" in w
+    project.rails[0].loads[0].ac_tol_mv = (-50.0, 50.0)
+    assert not [w for w in solve_ac_rail(Board(ac_decap_board()), project, "+3V3").warnings
+                if "disagree" in w]

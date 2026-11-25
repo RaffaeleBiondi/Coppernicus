@@ -633,3 +633,46 @@ class NoiseResult:
 
     def ripple_at(self, name: str) -> Optional[RippleResult]:
         return next((r for r in self.ripple if r.name == name), None)
+
+
+# ---------------------------------------------------------------------- tolerance stack-up (Task 11)
+
+@dataclass
+class TolerancePart:
+    """One part of a load's stack-up: how far it takes the load below and above nominal (V,
+    never negative), where it came from and the numbers behind it."""
+    below_v: float
+    above_v: float
+    source: str                    # "power tree", "entered (transient_mv)", "accuracy_pct of U1", …
+    detail: str = ""
+
+
+@dataclass
+class ToleranceCheck:
+    """One check of a load's stack-up (KiPI ``kipi/tolerance/evaluate.py``): the usable parts it
+    adds, each side apart, against the allowed deviation. ``passed``: False when a side is
+    over (+1e-12 V), even while parts are missing; True only when every part is known; None
+    otherwise (or without a tolerance)."""
+    kind: str                      # "dc", "ac", "total"
+    below_v: float
+    above_v: float
+    allowed_below_v: Optional[float]
+    allowed_above_v: Optional[float]
+    complete: bool
+    passed: Optional[bool]
+    missing: List[str] = field(default_factory=list)   # the parts not known (MISSING)
+    limit: str = ""                # the key set ("tol_pct", "dc_tol_mv", …); "" without one
+    reason: str = ""               # why it is not judged ("" when judged or without a limit)
+
+    @property
+    def has_limit(self) -> bool:
+        return self.allowed_below_v is not None or self.allowed_above_v is not None
+
+    @property
+    def margin_below_v(self) -> Optional[float]:
+        """Volts to spare below (negative: over); None where not limited."""
+        return None if self.allowed_below_v is None else self.allowed_below_v - self.below_v
+
+    @property
+    def margin_above_v(self) -> Optional[float]:
+        return None if self.allowed_above_v is None else self.allowed_above_v - self.above_v

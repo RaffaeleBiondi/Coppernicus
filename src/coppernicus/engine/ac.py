@@ -48,6 +48,7 @@ from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import _numbers, _pads, terminal_names, to_pisetup
 from coppernicus.engine.pisetup import ground_nets as project_ground_nets
 from coppernicus.engine.solve import Cancelled, _Progress, engine_settings, thickness_note
+from coppernicus.engine.tolerance import load_probes, mismatch_warnings
 from coppernicus.impedance import hz_text, judge, ohm_text
 from coppernicus.project import CapModel, Probe, Project, Source
 from coppernicus.results import ImpedanceResult, ProbeImpedance, TransientResult
@@ -447,6 +448,10 @@ def _convert(board: Board, project: Project, c: _Context, res, thickness) -> Imp
         assumed_bandwidth_hz=None if c.bandwidth_hz is not None else ASSUMED_BANDWIDTH_HZ,
         dielectric_assumed=assumed)
     out.assumptions = _assumptions(board, project, c, res, summary, assumed, thickness) + notes
+    # Task 11 (Q9): a load whose AC tolerance disagrees with its probe's ac_tolerance_v.
+    pairs = load_probes(board, project)
+    out.warnings += mismatch_warnings(project, pairs, {name: float(c.source.voltage) for name in pairs},
+                                      list(by_name))
     return out
 
 
