@@ -438,3 +438,16 @@ def test_closing_during_an_impedance_solve_leaves_none_of_its_signals_connected(
         worker.finished.emit()
         assert heard == [] and worker.stopped, heard
     ''')
+
+
+def test_a_result_goes_stale_on_a_setup_edit_not_on_a_save_or_a_marked_net():
+    """Saving rewrites the board's path relative to the file, and marking a net as a rail
+    changes no solve: neither flags the shown result; any other edit does."""
+    from coppernicus.app.ac_panel import _project_key
+    p = _project()
+    p.board = "/abs/b.kipi.json.gz"
+    key = _project_key(p)
+    p.board, p.marked_rails = "b.kipi.json.gz", ["+1V8"]
+    assert _project_key(p) == key
+    p.probes[0].target_ohm = 0.05
+    assert _project_key(p) != key

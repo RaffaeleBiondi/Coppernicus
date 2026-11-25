@@ -414,9 +414,12 @@ def result_rows(r) -> List[Tuple[str, ...]]:
 
 
 def _project_key(project: Project) -> Dict[str, Any]:
-    """What a solve depends on, to tell when a result no longer matches the project."""
+    """What a solve depends on, to tell when a result no longer matches the project: not the
+    board's path (a save rewrites it; another board clears the results) nor the nets marked
+    as rails."""
     d = project.to_dict()
     d.pop("marked_rails", None)
+    d.pop("board", None)
     return d
 
 
