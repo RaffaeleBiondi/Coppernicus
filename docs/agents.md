@@ -76,7 +76,7 @@ input.
 | `cut_current` | `result_id`, `layer`, `x1_mm`, `y1_mm`, `x2_mm`, `y2_mm` | A cross-section along a segment: the copper width crossed, the current through it (∫ J·n t ds, signed along `normal`), and the mean and max \|J\|. Use it to measure a neck. |
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
 | `compare_revisions` | `result_a`, `result_b` | Two revisions of a board (different board files, or the same file edited and saved in KiCad, then opened again), whose meshes differ: per-load drop deltas matched by part, per-layer loss deltas, via currents matched by position and drill, where the drop grew or shrank most (B's drop mapped onto A's mesh, a PNG Δ map per layer), and what could not be matched. See [Comparing revisions](#comparing-revisions). |
-| `copper_step` | `result_id`, `layer`, `step` (`up`/`down`) | What-if: the result re-solved with one copper layer **one** standard weight up or down (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness (the project's `copper_thickness_mm`, else the board file's), with the comparison against that result and the new `result_id`. A project rail keeps its estimated draws. Bigger jumps, a non-standard start (more than 3 % off a standard weight) and a result that is already a what-if are refused: real changes are made in KiCad. The assumptions carry the via-barrel note. |
+| `copper_step` | `result_id`, `layer`, `step` (`up`/`down`) | What-if: the result re-solved with one copper layer **one** standard weight up or down (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness (the project's `copper_thickness_mm`, else the board file's), with the comparison against that result and the new `result_id`. A project rail keeps its estimated draws. Bigger jumps, a non-standard start (more than 3 % off a standard weight) and a result that is already a what-if (any layer off the design's copper) are refused: real changes are made in KiCad. The assumptions carry the via-barrel note. |
 | `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. |
 | `solve_tree` | `project_path`, `top`?, `use_board_fields`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. |
 | `propose_fields` | `project_path` or `result_id` | The KiCad `PI_*` field text that describes a project's rails and links (or one solved rail), part by part, to paste into KiCad. See [Proposing fields](#proposing-fields). |
@@ -134,8 +134,9 @@ the earlier result keeps its own board), solve the same rail (`result_b`), then
 - `vias`: `matched` by position (within 0.01 mm) and drill, with both currents and the change,
   `largest_changes`, and `only_in_a` / `only_in_b`;
 - `drop_map`: B's drop interpolated onto A's mesh, minus A's: `most_increased` and
-  `most_decreased` (layer, x/y in mm, mV), and the `copper` only one of them has, as areas
-  both ways. When less than half of A's copper is also copper in B, no point is named;
+  `most_decreased` (layer, x/y in mm, mV; null when nothing grew, or shrank, beyond
+  round-off), and the `copper` only one of them has, as areas both ways. When less than half
+  of A's copper is also copper in B, no point is named;
 - `maps`: a PNG per common layer, red where the drop grew, blue where it shrank;
 - `unmatched`: `loads_only_in_a`, `loads_only_in_b`, `moved` (a part's first pad moved more
   than 0.01 mm), `nets` (when the rail's net was renamed).
@@ -161,9 +162,10 @@ app or CI. It writes one file, at the path you give (a `*.coppernicus.yml`):
 - the result goes through the project loader before the file is replaced (a temporary file
   beside it, then a rename): a refused edit (`invalid_project`) leaves the old file as it was;
 - the board file is only read, never written;
-- when the board's KiCad fields define a rail you wrote, a warning says they win (the rail is
-  ignored when solving) and that `override_board_fields: true` on it uses your values; a
-  malformed field is a warning too, since this is how the user turns the fields off.
+- when the board's KiCad fields define a rail you wrote and it differs from theirs, the warning
+  a solve would give says they win (the rail is ignored, with the differences) and that
+  `override_board_fields: true` on it uses your values; a rail equal to the fields' gives no
+  warning. A malformed field is a warning too, since this is how the user turns the fields off.
 
 Ask the user before you overwrite their project file, and tell them where you saved it.
 

@@ -775,12 +775,17 @@ def field_text(name: str, value: float) -> str:
     from decimal import Decimal
     units = _WRITE_UNITS[name]
     preferred = next(i for i, (below, _, _) in enumerate(units) if abs(value) < below)
+    texts = []
     for _, unit, scale in units[preferred:] + units[:preferred]:
         number = format((Decimal(repr(float(value))) * scale).normalize(), "f")
-        text = f"{number}{unit}"
-        if quantity("", name, text) == value:
-            return text
-    raise ValueError(f"{name}: {value!r} cannot be written exactly")      # not reached for floats
+        texts.append(f"{number}{unit}")
+        if quantity("", name, texts[-1]) == value:
+            return texts[-1]
+    # A percentage read back is divided by 100, which can be one unit in the last place off
+    # (33.3 % gives 0.33299999999999996): the preferred text, which is that close.
+    if math.isclose(quantity("", name, texts[0]), value, rel_tol=1e-12):
+        return texts[0]
+    raise ValueError(f"{name}: {value!r} cannot be written")
 
 
 def _source_fields(s: Source, net: str, blocked: List[str], notes: List[str]) -> Dict[str, str]:
@@ -888,19 +893,25 @@ def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]
                                       "reason": "a PI_LINK joins all of the part's pads on its two "
                                                 "nets; this link does not, so it is not proposed"})
                 continue
-        elif k.pins_a is not None or k.pins_b is not None:
+        else:
             not_expressed.append({"rail": None, "part": k.ref, "what": f"link {k.name} pins",
-                                  "reason": "a PI_LINK uses all of the part's pads on each net; "
-                                            "check that these are all of them"})
+                                  "reason": "the board's pads were not available to check them: a "
+                                            "PI_LINK uses all of the part's pads on each of its two "
+                                            "nets; check that this part has no others"})
         if k.name != k.ref:
             not_expressed.append({"rail": None, "part": k.ref, "what": f"link name {k.name}",
                                   "reason": "a PI_LINK is named by its part"})
         links[k.ref] = {"PI_LINK": field_text("PI_LINK", k.resistance_ohm)}
+    check_pads = dict(pad_nets or {})        # a link without known pads: checked with its own
+    for k in project.links:
+        if k.ref in links and k.ref not in check_pads:
+            check_pads[k.ref] = {**{p: k.net_a for p in (k.pins_a or ["a"])},
+                                 **{p: k.net_b for p in (k.pins_b or ["b"])}}
     for _ in range(len(staged) + 1):          # drop the rails that are incomplete as fields
         parts = _assemble(staged, links)
         try:
             merge(Project(), {ref: {**p["library_symbol"], **p["schematic_instance"]} for ref, p in
-                              ((p["ref"], p) for p in parts)}, pad_nets)
+                              ((p["ref"], p) for p in parts)}, check_pads)
             break
         except FieldError as e:
             bad = [net for net in staged if f"{net}: " in str(e) or

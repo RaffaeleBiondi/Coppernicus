@@ -107,3 +107,10 @@ def test_mcp_copper_step(strip, tmp_path):
                                                      "layer": "F.Cu", "step": "down"})
     out = anyio.run(scenario)
     assert not out.is_error and out.structured_content["to_oz"] == "0.5 oz"
+
+
+def test_a_step_on_another_layer_of_a_what_if_is_refused(session, strip):
+    first = session.copper_step(solve(session, strip)["result_id"], "F.Cu", "up")
+    with pytest.raises(ServiceError) as e:
+        session.copper_step(first["result_id"], "B.Cu", "up")
+    assert "already" in e.value.message and "F.Cu" in e.value.message

@@ -628,13 +628,15 @@ class Session:
         except ProjectError as e:
             raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
                                "fix the project file; its format is in the README") from None
-        return C.jsonable({
+        doc = C.jsonable({
             "path": path.resolve(), "board_path": project.board_path().resolve(),
-            "project": mapping, "rails": [r.net for r in project.rails],
-            "links": [k.name for k in project.links],
-            "assumptions": ["The project as written; solves also take rails from the board's "
-                            "KiCad footprint fields unless use_board_fields is false."],
+            "rails": [r.net for r in project.rails], "links": [k.name for k in project.links],
+            "assumptions": ["The project as written (its numbers unrounded); solves also take rails "
+                            "from the board's KiCad footprint fields unless use_board_fields is "
+                            "false."],
             "warnings": []})
+        doc["project"] = json.loads(json.dumps(mapping, default=str))   # every digit, as written
+        return doc
 
     def write_project(self, project_path, board_path=None, rails: Optional[Sequence[Any]] = None,
                       remove_rails: Optional[Sequence[str]] = None,
@@ -732,7 +734,11 @@ class Session:
                     for part in board.parts_on_net(net):
                         if part.ref == k.ref:
                             pad_nets.setdefault(k.ref, {}).update({pin: net for pin in part.pins})
-        proposal = BF.propose(project, pad_nets)
+        try:
+            proposal = BF.propose(project, pad_nets)
+        except BF.FieldError as e:
+            raise ServiceError(E.INVALID_INPUT, f"the project cannot be described in fields: {e}",
+                               "keep it in the project file") from None
         return C.jsonable({
             **proposal,
             "assumptions": [
@@ -761,10 +767,8 @@ class Session:
         out = []
         for net in nets:
             origin = merged.origins.get(net)
-            if origin is not None and origin.source == "fields":
-                out.append(f"KiCad fields define {net}: they win over this project rail when solving "
-                           "(it is ignored); set override_board_fields: true on the rail to use the "
-                           "project's values.")
+            if origin is not None:
+                out += origin.warnings       # as a solve says it: the differences, or nothing
         return out
 
     def solve_tree(self, project_path, top: int = 5, progress: Progress = None,
@@ -1091,11 +1095,13 @@ class Session:
         project = rec.context.get("project")
         design = (project.settings.copper_thickness_mm.get(layer) if project is not None else None)
         design = design if design is not None else entry.board.file_thickness_mm.get(layer, names[layer])
-        now = rec.layer_thickness.get(layer, names[layer])
         kicad = "real changes of copper weight are made in KiCad (the stack-up), then solved again"
-        if abs(now - design) > 1e-9:
-            raise ServiceError(E.INVALID_INPUT, f"{result_id} already has {layer} at {now:g} mm, not the "
-                               f"design's {design:g} mm: copper_step works one step from the design",
+        planned = project.settings.copper_thickness_mm if project is not None else {}
+        off = [f"{n} at {mm:g} mm" for n, mm in rec.layer_thickness.items()
+               if abs(mm - planned.get(n, entry.board.file_thickness_mm.get(n, mm))) > 1e-9]
+        if off:
+            raise ServiceError(E.INVALID_INPUT, f"{result_id} is already a what-if ({', '.join(off)}, not "
+                               "the design's copper): copper_step works one step from the design",
                                f"step from the result solved with the design's copper; {kicad}")
         at = next((i for i, mm in enumerate(COPPER_STEPS_MM) if abs(design - mm) <= 0.03 * mm), None)
         if at is None:

@@ -111,3 +111,20 @@ def test_session_mcp_and_cli_propose(tmp_path, capsys):
     rid = session.solve_project(path)["rails"][1]["result_id"]
     one = session.propose_fields(result_id=rid)
     assert one["rails"] == ["+3V3"]
+
+
+def test_a_link_whose_pads_are_unknown_is_proposed_without_a_crash(tmp_path, capsys):
+    proposal = propose(Project.load(CHAIN))                       # no pads: the app's call
+    assert {p["ref"] for p in proposal["parts"]} >= {"FB1", "U1"}
+    assert any(n["part"] == "FB1" and "pads" in n["reason"] for n in proposal["not_expressed"])
+    lone = tmp_path / "lone.coppernicus.yml"                      # its board is not there
+    lone.write_text(CHAIN.read_text(encoding="utf-8"), encoding="utf-8")
+    assert main(["fields", "--propose", str(lone), "--json"]) == EXIT_OK
+    assert json.loads(capsys.readouterr().out)["parts"]
+
+
+def test_every_efficiency_in_tenths_of_a_percent_can_be_written():
+    from coppernicus.board_fields import field_text
+    for k in range(1, 1001):
+        text = field_text("PI_EFF", k / 1000)
+        assert quantity("U1", "PI_EFF", text) == pytest.approx(k / 1000, rel=1e-12), text

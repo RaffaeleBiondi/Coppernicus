@@ -40,7 +40,10 @@ regulator output or supply connector, voltage_v) and the loads (ref, current_a) 
 solve_rail -> get_problems / render_map / probe / cut_current -> change settings
 (copper_thickness_mm, via_plating_um, copper_temp_c) and solve again -> compare_results.
 From a project file: solve_project (rails one by one, with maps) or solve_tree (the whole
-power tree at once, ground return included; tables only).
+power tree at once, ground return included; tables only). Set up a project for the user with
+write_project (read_project to see one); describe it as KiCad fields with propose_fields (the
+user pastes them; KiCad files are never written). Before/after a change in KiCad:
+compare_revisions. One standard copper weight up or down on a layer: copper_step.
 Units are in every key name (_v, _mv, _a, _a_mm2, _mm, _w, _pct). Coordinates are mm in
 KiCad's frame (y down); layer names as in KiCad. Board files are only read.
 A verdict (pass/fail) exists only against limits the user gives; without limits results are
@@ -73,6 +76,7 @@ class LoadSpec(BaseModel):
 
 
 class LimitsSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     max_drop_pct: Optional[float] = Field(None, gt=0, description="Largest allowed load drop, % "
                                                                   "of the source voltage.")
     max_current_density_a_mm2: Optional[float] = Field(None, gt=0, description="Largest allowed "

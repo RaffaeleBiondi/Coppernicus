@@ -47,6 +47,8 @@ def test_a_wider_track_lowers_the_drop_and_the_map_says_where(session, tmp_path)
     assert [(v["x_mm"], v["y_mm"]) for v in out["vias"]["matched"]] == [(10.0, 0.0), (30.0, 0.0)]
     worst = out["drop_map"]["most_decreased"]
     assert worst["layer"] in ("F.Cu", "B.Cu") and worst["delta_mv"] < 0 and worst["x_mm"] > 20
+    grew = out["drop_map"]["most_increased"]
+    assert grew is None               # wider copper: nothing grew (round-off is not a change)
     coverage = out["drop_map"]["copper"]
     assert coverage["a_not_in_b_mm2"] == pytest.approx(0.0, abs=0.5)    # B is wider: covers A
     assert coverage["b_not_in_a_mm2"] > 5.0

@@ -131,13 +131,17 @@ def test_the_fields_win_warning_and_the_override(session, tmp_path):
     kicad = write_strip_board(tmp_path / "strip.kicad_pcb", fields)
     path = tmp_path / "f.coppernicus.yml"
     out = session.write_project(path, board_path=kicad, rails=[dict(RAIL, net="VCC")])
-    assert any("KiCad fields define VCC" in w and "override_board_fields: true" in w
+    assert any("project file rail VCC ignored" in w and "override_board_fields: true" in w
                for w in out["warnings"])
     out = session.write_project(path, rails=[dict(RAIL, net="VCC", override_board_fields=True)],
                                 overwrite=True)
-    assert not any("KiCad fields define VCC" in w for w in out["warnings"])
+    assert not any("ignored" in w for w in out["warnings"])
     assert Project.load(path).rails[0].override_board_fields is True
+    same = session.write_project(path, rails=[{"net": "VCC", "sources": [{"ref": "J1", "voltage_v": 1.0}],
+                                              "loads": [{"ref": "U1", "current_a": 1.0}]}], overwrite=True)
+    assert same["warnings"] == []                       # the fields' own rail: nothing to warn
     write_strip_board(kicad, {"U1": {"PI_RAIL": "VCC", "pi_load": "1A"}})       # a malformed field
+    os.utime(kicad, ns=(os.stat(kicad).st_atime_ns, os.stat(kicad).st_mtime_ns + 10 ** 9))
     out = session.write_project(path, rails=[dict(RAIL, net="VCC")], overwrite=True)
     assert any("pi_load" in w for w in out["warnings"])                       # a warning, not an error
 
@@ -159,3 +163,21 @@ def test_mcp_read_and_write_project(board, tmp_path):
     assert not made.is_error and made.structured_content["rails"] == [Strip.NET]
     assert again.is_error and again.structured_content["error"]["code"] == "file_exists"
     assert read.structured_content["project"]["rails"][0]["loads"][0]["current"] == 0.5
+
+
+def test_a_misspelt_limit_is_refused_not_dropped(board, tmp_path):
+    path = tmp_path / "typo.coppernicus.yml"
+
+    async def scenario():
+        async with Client(build_server(Session(out_dir=tmp_path / "out")), raise_exceptions=True) as c:
+            return await c.call_tool("write_project", {"project_path": str(path), "board_path": str(board),
+                                                       "rails": [dict(RAIL, limits={"max_drop": 2})]})
+    out = anyio.run(scenario)
+    assert out.is_error and not path.exists()
+
+
+def test_read_project_keeps_the_numbers_as_written(session, board, tmp_path):
+    path = tmp_path / "exact.coppernicus.yml"
+    session.write_project(path, board_path=board,
+                          rails=[dict(RAIL, loads=[{"ref": "U1", "current_a": 1.23456789}])])
+    assert session.read_project(path)["project"]["rails"][0]["loads"][0]["current"] == 1.23456789

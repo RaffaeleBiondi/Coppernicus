@@ -21,6 +21,7 @@ from coppernicus.results import LayerField, RailResult
 MOVED_MM = 0.01          # a part whose first pad moved more than this has moved
 VIA_MM = 0.01            # vias closer than this, with the same drill, are the same via
 MIN_OVERLAP = 0.5        # below this share of A's copper also in B, no point is named
+NOISE_MV = 1e-6          # a drop change smaller than this is round-off, not a change
 
 
 def _rows(summary: Mapping[str, Any]) -> Dict[str, Mapping[str, Any]]:
@@ -117,10 +118,11 @@ def drop_map(ra: RailResult, rb: RailResult) -> Tuple[Dict[str, Any], Dict[str, 
                         "much to say where the drop changed; compare the loads instead.")
         best_up = best_down = None
 
-    def point(best):
-        return None if best is None else {"delta_mv": best[0], "layer": best[1], "x_mm": best[2],
-                                          "y_mm": best[3]}
-    doc = {"most_increased": point(best_up), "most_decreased": point(best_down),
+    def point(best, grew):
+        if best is None or (best[0] <= NOISE_MV if grew else best[0] >= -NOISE_MV):
+            return None                       # nothing grew (or shrank) beyond round-off
+        return {"delta_mv": best[0], "layer": best[1], "x_mm": best[2], "y_mm": best[3]}
+    doc = {"most_increased": point(best_up, True), "most_decreased": point(best_down, False),
            "copper": copper, "overlap_share": overlap,
            "layers_only_in_a": [n for n in by_a if n not in by_b],
            "layers_only_in_b": [n for n in by_b if n not in by_a]}
