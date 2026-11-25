@@ -12,6 +12,7 @@ again for anything that needs the field.
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import fnmatch
 import json
@@ -57,6 +58,10 @@ MAX_SUMMARIES = 256
 LIST_LIMIT = 200
 PIN_LIST_LIMIT = 64
 
+
+# Standard copper weights for copper_step: 0.5, 1, 2 and 3 oz.
+COPPER_STEPS_MM = (0.0175, 0.035, 0.070, 0.105)
+COPPER_STEPS_OZ = ("0.5 oz", "1 oz", "2 oz", "3 oz")
 
 FIELD_HINT = ("fix the field in KiCad (on the symbol, then update the PCB); or give the rail in the "
               "project file with override_board_fields: true; or turn the fields off with "
@@ -116,6 +121,9 @@ class _ResultRecord:
     summary: Dict[str, Any]
     nbytes: int
     queries: Dict[str, Any] = field(default_factory=dict)      # per layer: locator, J, copper
+    # What the solve was given besides the rail and settings (project, notes, warnings,
+    # fields_info), so that a what-if re-solves the very same rail.
+    context: Dict[str, Any] = field(default_factory=dict)
 
 
 class _Live(NamedTuple):
@@ -383,7 +391,10 @@ class Session:
         summary.update({"from_board_fields": False, "overrides_board_fields": False,
                         "board_fields_warnings": [], **(fields_info or {})})
         rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
-                            layer_thickness, res, problems, summary, _result_nbytes(res))
+                            layer_thickness, res, problems, summary, _result_nbytes(res),
+                            context={"project": project, "notes": list(notes),
+                                     "warnings": list(warnings), "fields_info": dict(fields_info or {}),
+                                     "top": top})
         with self._lock:
             self._results[rid] = rec
             self._evict(keep=rid)
@@ -605,6 +616,160 @@ class Session:
                             "rail of the same net is ignored unless it sets override_board_fields."],
             "warnings": entry.warnings(),
         })
+
+    # ================================================================== project files
+    def read_project(self, project_path) -> Dict[str, Any]:
+        """A project file as it is written (its mapping, unknown keys included), checked by
+        the project loader, with the board it names."""
+        path = Path(str(project_path)).expanduser()
+        mapping = _read_mapping(path)
+        try:
+            project = Project.from_dict(mapping, path)
+        except ProjectError as e:
+            raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                               "fix the project file; its format is in the README") from None
+        doc = C.jsonable({
+            "path": path.resolve(), "board_path": project.board_path().resolve(),
+            "rails": [r.net for r in project.rails], "links": [k.name for k in project.links],
+            "assumptions": ["The project as written (its numbers unrounded); solves also take rails "
+                            "from the board's KiCad footprint fields unless use_board_fields is "
+                            "false."],
+            "warnings": []})
+        doc["project"] = json.loads(json.dumps(mapping, default=str))   # every digit, as written
+        return doc
+
+    def write_project(self, project_path, board_path=None, rails: Optional[Sequence[Any]] = None,
+                      remove_rails: Optional[Sequence[str]] = None,
+                      links: Optional[Sequence[Any]] = None, remove_links: Optional[Sequence[str]] = None,
+                      settings: Optional[Mapping[str, Any]] = None,
+                      use_board_fields: Optional[bool] = None, from_project=None,
+                      overwrite: bool = False) -> Dict[str, Any]:
+        """Create or edit a project file and save it to ``project_path`` (a
+        ``*.coppernicus.yml``). It starts from ``from_project``, else from the file at
+        ``project_path`` when it exists, else from an empty project for ``board_path``.
+        Rails are added or replaced whole by net, links by name; ``settings`` keys are set
+        (None removes one). An existing file is replaced only with ``overwrite``. The result is
+        checked by the project loader before the file is replaced; the board is only read."""
+        from coppernicus.project import board_reference
+        from coppernicus.service import projects as P
+        path = Path(str(project_path)).expanduser()
+        if not path.name.endswith(".coppernicus.yml"):
+            raise ServiceError(E.INVALID_INPUT, f"{path.name}: a project file is a *.coppernicus.yml",
+                               "give the path of the project file to write, e.g. power.coppernicus.yml")
+        if path.exists() and not overwrite:
+            raise ServiceError(E.FILE_EXISTS, f"{path.name} exists",
+                               "pass overwrite: true to replace it (its comments are not kept), or "
+                               "choose another path")
+        start = Path(str(from_project)).expanduser() if from_project else (path if path.exists() else None)
+        if start is not None:
+            mapping = _read_mapping(start)
+            try:
+                board = Project.from_dict(mapping, start).board_path()
+            except ProjectError as e:
+                raise ServiceError(E.INVALID_PROJECT, f"{start.name}: {e}",
+                                   "fix the project file; its format is in the README") from None
+        elif board_path is None:
+            raise ServiceError(E.INVALID_INPUT, "a new project needs board_path",
+                               "give the board file (.kicad_pcb, ODB++, ...) the project is for")
+        else:
+            mapping, board = Project().to_dict(), None
+        if board_path is not None:
+            board = Path(str(board_path)).expanduser()
+        board = board.resolve()
+        if not board.is_file():
+            raise ServiceError(E.FILE_NOT_FOUND, f"No such board file: {board}",
+                               "give the path of the board the project is for")
+        if path.resolve() == board:
+            raise ServiceError(E.INVALID_INPUT, "the project path is the board file",
+                               "the board file is never written")
+        mapping["board"] = board_reference(board, path)
+        mapping = P.edit(mapping, rails=rails, remove_rails=remove_rails, links=links,
+                         remove_links=remove_links, settings=settings, use_board_fields=use_board_fields)
+        try:
+            Project.from_dict(mapping, path)
+        except ProjectError as e:
+            raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                               "nothing was written; fix the values and try again") from None
+        _replace_checked(path, mapping)
+        project = Project.load(path)
+        edited = [r.get("net") for r in rails or [] if isinstance(r, Mapping)
+                  and (r.get("sources") or r.get("loads"))]
+        return C.jsonable({
+            "path": path.resolve(), "board_path": board, "rails": [r.net for r in project.rails],
+            "links": [k.name for k in project.links],
+            "assumptions": ["The file is rewritten from its data: comments in it are not kept; keys "
+                            "Coppernicus does not know are kept, a replaced rail's included.",
+                            "Checked by the project loader before the file was replaced. The board "
+                            "file was only read."],
+            "warnings": self._fields_warnings(project, board, edited)})
+
+    def propose_fields(self, project_path=None, result_id: Optional[str] = None) -> Dict[str, Any]:
+        """The PI_* field text that describes a project's rails and links (or a solved rail's),
+        part by part, split between the library symbol and the schematic instance
+        (:func:`coppernicus.board_fields.propose`). Nothing is written."""
+        if (project_path is None) == (result_id is None):
+            raise ServiceError(E.INVALID_INPUT, "give project_path or result_id, one of them",
+                               "a project file proposes all its rails; a result, its rail")
+        if result_id is not None:
+            rec = self._record(result_id, heavy=False)
+            project = Project(rails=[rec.rail])
+            board = rec.board or self._entry(rec.board_id).board
+        else:
+            path = Path(str(project_path)).expanduser()
+            try:
+                project = Project.from_dict(_read_mapping(path), path)
+            except ProjectError as e:
+                raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                                   "fix the project file; its format is in the README") from None
+            try:
+                board = self._entry(self.open_board(project.board_path())["board_id"]).board
+            except ServiceError:
+                board = None                  # links are then proposed without checking pads
+        pad_nets: Dict[str, Dict[str, str]] = {}
+        for k in project.links:
+            if board is None:
+                break
+            for net in (k.net_a, k.net_b):
+                if net in board.nets():
+                    for part in board.parts_on_net(net):
+                        if part.ref == k.ref:
+                            pad_nets.setdefault(k.ref, {}).update({pin: net for pin in part.pins})
+        try:
+            proposal = BF.propose(project, pad_nets)
+        except BF.FieldError as e:
+            raise ServiceError(E.INVALID_INPUT, f"the project cannot be described in fields: {e}",
+                               "keep it in the project file") from None
+        return C.jsonable({
+            **proposal,
+            "assumptions": [
+                "Coppernicus never writes KiCad files: paste these fields into the symbols in the "
+                "schematic, then update the PCB from the schematic.",
+                "Library-symbol fields (PI_KIND, PI_EFF, PI_IQ) describe the part itself; "
+                "schematic-instance fields (PI_RAIL, PI_SOURCE, PI_LOAD, PI_PINS, PI_INPUT, PI_GND, "
+                "PI_LINK...) where it sits. A part on several rails gets one value per rail, by "
+                "position, separated by ';'.",
+                "PI_LIMIT_DROP is placed on the rail's first source; if it is a chip's own supply "
+                "tolerance, it belongs in that chip's library symbol instead.",
+                "Checked by parsing the proposal back: it gives the project's rails, except what "
+                "not_expressed lists (remote sense, names, the other limits)."],
+            "warnings": []})
+
+    def _fields_warnings(self, project: Project, board: Path, nets: Sequence[str]) -> List[str]:
+        """What the board's KiCad fields will do to the rails just written: win over a rail of
+        a net they define (it is ignored when solving), or fail every run if malformed."""
+        try:
+            entry = self._entry(self.open_board(board)["board_id"])
+            merged = BF.apply(project, lambda: self._board_fields(entry), None,
+                              ties=[(t.net_a, t.net_b) for t in entry.board.net_ties()])
+        except (BF.FieldError, ServiceError) as e:
+            return [f"The board's KiCad fields cannot be used ({e}): every solve fails until they "
+                    "are fixed in KiCad, or turned off with use_board_fields: false."]
+        out = []
+        for net in nets:
+            origin = merged.origins.get(net)
+            if origin is not None:
+                out += origin.warnings       # as a solve says it: the differences, or nothing
+        return out
 
     def solve_tree(self, project_path, top: int = 5, progress: Progress = None,
                    cancelled: Cancel = None, use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
@@ -912,6 +1077,102 @@ class Session:
             "warnings": warnings,
         })
 
+    def copper_step(self, result_id: str, layer: str, step: str, progress: Progress = None,
+                    cancelled: Cancel = None) -> Dict[str, Any]:
+        """Re-solve a result with one copper layer one standard weight up or down (0.5, 1, 2,
+        3 oz: 0.0175, 0.035, 0.070, 0.105 mm), from the design's own thickness (the project's
+        copper_thickness_mm, else the board file's), and compare it with that result. Bigger
+        jumps, a non-standard start and a result that is already a what-if are refused."""
+        if step not in ("up", "down"):
+            raise ServiceError(E.INVALID_INPUT, f"step is up or down, not {step!r}",
+                               "one standard copper weight at a time")
+        rec = self._record(result_id, heavy=False)
+        entry = self._entry(rec.board_id)
+        names = {lay.name: lay.thickness_mm for lay in entry.board.layers()}
+        if layer not in names:
+            raise ServiceError(E.LAYER_NOT_FOUND, f"No copper layer {layer!r} on this board",
+                               f"copper layers: {', '.join(names)}")
+        project = rec.context.get("project")
+        design = (project.settings.copper_thickness_mm.get(layer) if project is not None else None)
+        design = design if design is not None else entry.board.file_thickness_mm.get(layer, names[layer])
+        kicad = "real changes of copper weight are made in KiCad (the stack-up), then solved again"
+        planned = project.settings.copper_thickness_mm if project is not None else {}
+        off = [f"{n} at {mm:g} mm" for n, mm in rec.layer_thickness.items()
+               if abs(mm - planned.get(n, entry.board.file_thickness_mm.get(n, mm))) > 1e-9]
+        if off:
+            raise ServiceError(E.INVALID_INPUT, f"{result_id} is already a what-if ({', '.join(off)}, not "
+                               "the design's copper): copper_step works one step from the design",
+                               f"step from the result solved with the design's copper; {kicad}")
+        at = next((i for i, mm in enumerate(COPPER_STEPS_MM) if abs(design - mm) <= 0.03 * mm), None)
+        if at is None:
+            weights = ", ".join(f"{n} {mm:g} mm" for n, mm in zip(COPPER_STEPS_OZ, COPPER_STEPS_MM))
+            raise ServiceError(E.INVALID_INPUT, f"{layer} is {design:g} mm, not a standard copper weight "
+                               f"({weights})", f"copper_step starts from a standard weight; {kicad}")
+        to = at + (1 if step == "up" else -1)
+        if not 0 <= to < len(COPPER_STEPS_MM):
+            end = "the thickest" if step == "up" else "the thinnest"
+            raise ServiceError(E.INVALID_INPUT, f"{layer} is {COPPER_STEPS_OZ[at]}, {end} step; one step "
+                               f"{step} is not offered", f"bigger changes are not what-ifs: {kicad}")
+        new_mm = COPPER_STEPS_MM[to]
+        settings = dataclasses.replace(rec.settings, copper_thickness_mm={
+            **rec.settings.copper_thickness_mm, layer: new_mm})
+        ctx = rec.context
+        live = self._solve(entry, rec.rail, settings, ctx.get("top", 5), progress, cancelled,
+                           project=project, notes=ctx.get("notes", ()), warnings=ctx.get("warnings", ()),
+                           fields_info=ctx.get("fields_info"))
+        cmp_ = compare_summaries(rec.summary, live.rec.summary)
+        barrel = [a for a in live.rec.summary["assumptions"] if a.startswith("What-if copper thickness")]
+        return C.jsonable({
+            "result_id": live.rec.id, "baseline": rec.id, "net": rec.rail.net, "layer": layer,
+            "from_mm": design, "to_mm": new_mm, "from_oz": COPPER_STEPS_OZ[at], "to_oz": COPPER_STEPS_OZ[to],
+            "compare": cmp_,
+            "assumptions": [f"One standard step of copper on {layer} ({COPPER_STEPS_OZ[at]} → "
+                            f"{COPPER_STEPS_OZ[to]}), from the design's {design:g} mm; the board file "
+                            f"is not changed and {kicad}.", *barrel],
+            "warnings": list(cmp_.get("warnings", []))})
+
+    def compare_revisions(self, result_a: str, result_b: str, out_dir=None) -> Dict[str, Any]:
+        """Two results from different board files (before and after a change in KiCad),
+        whose meshes differ: per-load drops matched by part, per-layer losses, via currents
+        matched by position and drill, B's drop mapped onto A's mesh (where it grew or shrank
+        most, with a map per layer), and what could not be matched."""
+        from coppernicus.maps import render_delta_map
+        from coppernicus.service import revisions as RV
+        la, lb = self._live(result_a), self._live(result_b)
+        sa, sb = la.rec.summary, lb.rec.summary
+        loads, unmatched, warnings = RV.compare_loads(sa, sb)
+        base = compare_summaries(sa, sb)
+        if base["settings_changed"]:
+            warnings.append("The settings differ (" + ", ".join(base["settings_changed"]) + "): the "
+                            "deltas mix the board change and the settings.")
+        if la.rec.board_id == lb.rec.board_id:
+            warnings.append("Both results are of the same board file: compare_results is the tool "
+                            "for a what-if on one board.")
+        drop_map, deltas, map_warnings = RV.drop_map(la.res, lb.res)
+        folder = Path(out_dir) if out_dir else self.out_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        maps = []
+        for lf in la.res.layers:
+            if lf.name in deltas:
+                name = f"{safe_name(la.res.net)}_{result_a}_vs_{result_b}_{safe_name(lf.name)}"
+                path = folder / f"{name}_delta.png"
+                render_delta_map(la.res, lf, deltas[lf.name], la.outline, path,
+                                 f"{la.res.net} — {lf.name}: drop change, {result_b} − {result_a}")
+                maps.append(path)
+        return C.jsonable({
+            "result_a": result_a, "result_b": result_b, "board_a": la.rec.board_id,
+            "board_b": lb.rec.board_id, "net_a": sa["net"], "net_b": sb["net"],
+            "loads": loads, "losses": base["losses"],
+            "max_drop_mv": base["max_drop_mv"], "power_loss_w": base["power_loss_w"],
+            "vias": RV.compare_vias(la.res, lb.res), "drop_map": drop_map, "maps": maps,
+            "unmatched": unmatched, "verdict_a": sa["verdict"], "verdict_b": sb["verdict"],
+            "assumptions": [
+                "Deltas are B − A. Loads are matched by name (the part, unless named), losses by "
+                "layer name, vias by position (within 0.01 mm) and drill.",
+                "B's drop is interpolated onto A's mesh (the meshes differ); copper only one of "
+                "them has cannot be compared there and is given as an area, both ways."],
+            "warnings": warnings + map_warnings})
+
     def compare_results(self, result_a: str, result_b: str) -> Dict[str, Any]:
         """Per-load and per-layer deltas, b − a (works on evicted results too)."""
         a, b = self._record(result_a, heavy=False), self._record(result_b, heavy=False)
@@ -1003,6 +1264,42 @@ def _fed_through_link(board: Board, project: Project, rail: Rail):
                         used.append(name)
     drivers = sorted(r.net for r in project.rails if r.sources and r.net in nets - {rail.net})
     return (list(dict.fromkeys(used)), drivers) if drivers and used else None
+
+
+def _read_mapping(path: Path) -> Dict[str, Any]:
+    """A project file's YAML mapping, as written."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ServiceError(E.FILE_NOT_FOUND, f"No such project file: {path}",
+                           "give the path of a *.coppernicus.yml file") from None
+    except (OSError, yaml.YAMLError) as e:
+        raise ServiceError(E.INVALID_PROJECT, f"{path.name} cannot be read: {e}",
+                           "fix the project file; its format is in the README") from None
+    if not isinstance(data, dict):
+        raise ServiceError(E.INVALID_PROJECT, f"{path.name} is not a project file (not a mapping)",
+                           "fix the project file; its format is in the README")
+    return data
+
+
+def _replace_checked(path: Path, mapping: Mapping[str, Any]) -> None:
+    """Write ``mapping`` to a temporary file beside ``path``, load it with the project
+    loader, then put it in place; on any failure the old file is left as it was."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            yaml.safe_dump(dict(mapping), f, sort_keys=False, allow_unicode=True)
+        Project.load(tmp)
+        os.replace(tmp, path)
+    except ProjectError as e:
+        raise ServiceError(E.INVALID_PROJECT, f"{path.name}: {e}",
+                           "nothing was written; fix the values and try again") from None
+    except OSError as e:
+        raise ServiceError(E.INVALID_INPUT, f"{path.name} cannot be written: {e}",
+                           "choose a folder you can write to") from None
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def _feeds(board: Board, project: Project, rail: Rail) -> bool:

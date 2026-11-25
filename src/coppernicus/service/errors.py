@@ -25,6 +25,7 @@ class ServiceError(Exception):
 
 # Codes. Keep them stable: scripts and agents branch on them.
 FILE_NOT_FOUND = "file_not_found"
+FILE_EXISTS = "file_exists"
 BOARD_UNREADABLE = "board_unreadable"
 BOARD_NOT_OPEN = "board_not_open"
 INVALID_PROJECT = "invalid_project"

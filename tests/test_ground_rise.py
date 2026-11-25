@@ -89,4 +89,4 @@ def test_report_and_ci_summary_name_the_ground_rise_limit(strip, tmp_path):
     md = ci.summary_markdown({"verdict": "fail", "projects": [
         {"project": "ground.coppernicus.yml", "exit_code": 1, "doc": doc}]})
     assert "**FAIL** (ground rise ≤ 10 mV)" in md
-    assert "largest ground rise" in md
+    assert "largest ground" in md          # "rise" or, below 0 V, "shift" (the result's own words)

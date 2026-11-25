@@ -75,8 +75,13 @@ input.
 | `probe` | `result_id`, `layer`, `x_mm`, `y_mm` | Voltage, drop and current density (magnitude and vector) at a point. Off copper, it says which layers have copper there and where the nearest copper is. |
 | `cut_current` | `result_id`, `layer`, `x1_mm`, `y1_mm`, `x2_mm`, `y2_mm` | A cross-section along a segment: the copper width crossed, the current through it (∫ J·n t ds, signed along `normal`), and the mean and max \|J\|. Use it to measure a neck. |
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
+| `compare_revisions` | `result_a`, `result_b` | Two revisions of a board (different board files, or the same file edited and saved in KiCad, then opened again), whose meshes differ: per-load drop deltas matched by part, per-layer loss deltas, via currents matched by position and drill, where the drop grew or shrank most (B's drop mapped onto A's mesh, a PNG Δ map per layer), and what could not be matched. See [Comparing revisions](#comparing-revisions). |
+| `copper_step` | `result_id`, `layer`, `step` (`up`/`down`) | What-if: the result re-solved with one copper layer **one** standard weight up or down (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness (the project's `copper_thickness_mm`, else the board file's), with the comparison against that result and the new `result_id`. A project rail keeps its estimated draws. Bigger jumps, a non-standard start (more than 3 % off a standard weight) and a result that is already a what-if (any layer off the design's copper) are refused: real changes are made in KiCad. The assumptions carry the via-barrel note. |
 | `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. |
 | `solve_tree` | `project_path`, `top`?, `use_board_fields`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. |
+| `propose_fields` | `project_path` or `result_id` | The KiCad `PI_*` field text that describes a project's rails and links (or one solved rail), part by part, to paste into KiCad. See [Proposing fields](#proposing-fields). |
+| `read_project` | `project_path` | A project file as written (rails, sources, loads, limits, links, settings; unknown keys included), checked by the project loader, with the board it names. |
+| `write_project` | `project_path`, `board_path`?, `rails`?, `remove_rails`?, `links`?, `remove_links`?, `settings`?, `use_board_fields`?, `from_project`?, `overwrite`? | Creates or edits a project file for the user. See [Editing projects](#editing-projects). |
 | `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
 
 A summary's `problems` list is complete: every load, then the `top` current-crowding spots and
@@ -117,6 +122,52 @@ positive like the drops.
   thickens (shorter when it thins). Even a net with no copper on the changed layer then moves
   slightly through its vias. The result's assumptions say which layers were overridden, with
   the board file's value next to each.
+
+### Comparing revisions
+
+To see what a change in KiCad did: solve the rail on the board before the change (`result_a`),
+let the user change and save the board, open it again (a changed file gets a new `board_id`;
+the earlier result keeps its own board), solve the same rail (`result_b`), then
+`compare_revisions(result_a, result_b)`. It returns:
+- `loads`: per load, matched by name (the part, unless named), the drops and `delta_drop_mv`;
+- `losses`, `max_drop_mv`, `power_loss_w`: as `compare_results`;
+- `vias`: `matched` by position (within 0.01 mm) and drill, with both currents and the change,
+  `largest_changes`, and `only_in_a` / `only_in_b`;
+- `drop_map`: B's drop interpolated onto A's mesh, minus A's: `most_increased` and
+  `most_decreased` (layer, x/y in mm, mV; null when nothing grew, or shrank, beyond
+  round-off), and the `copper` only one of them has, as areas both ways. When less than half
+  of A's copper is also copper in B, no point is named;
+- `maps`: a PNG per common layer, red where the drop grew, blue where it shrank;
+- `unmatched`: `loads_only_in_a`, `loads_only_in_b`, `moved` (a part's first pad moved more
+  than 0.01 mm), `nets` (when the rail's net was renamed).
+
+It warns when the load currents, the sources or the settings differ, since the deltas then mix
+copper and those. Both results must still have their fields (`result_evicted` otherwise).
+
+### Editing projects
+
+`write_project` sets up a project for the user, so they can solve it again with the CLI, the
+app or CI. It writes one file, at the path you give (a `*.coppernicus.yml`):
+- it starts from `from_project` (to save an edited copy elsewhere), else the file at
+  `project_path` when it exists, else an empty project for `board_path`;
+- `rails` are added, or replaced **whole** by net (sources with their v2 fields: `kind`,
+  `efficiency`, `quiescent_a`, `input`, `ground`, `sense`, `ground_sense`; loads with
+  `ground`; `limits`; `follow_net_ties`; `override_board_fields`); `remove_rails` removes by
+  net; `links` and `remove_links` work by name; `settings` keys are set, and null removes one
+  (its default again); `use_board_fields: false` turns the KiCad fields off;
+- an existing file is replaced only with `overwrite: true`, else `file_exists`;
+- the file is rewritten from its data: **comments are lost**, keys Coppernicus does not know
+  are kept (a replaced rail's included); the board path is written relative to the project's
+  folder;
+- the result goes through the project loader before the file is replaced (a temporary file
+  beside it, then a rename): a refused edit (`invalid_project`) leaves the old file as it was;
+- the board file is only read, never written;
+- when the board's KiCad fields define a rail you wrote and it differs from theirs, the warning
+  a solve would give says they win (the rail is ignored, with the differences) and that
+  `override_board_fields: true` on it uses your values; a rail equal to the fields' gives no
+  warning. A malformed field is a warning too, since this is how the user turns the fields off.
+
+Ask the user before you overwrite their project file, and tell them where you saved it.
 
 ### KiCad footprint fields
 
@@ -194,6 +245,25 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
   Action read the fields. The desktop app does not yet; the merge is a pure function
   (`coppernicus.board_fields.merge(project, fields, pad_nets)`, returning the merged project,
   each net's origin and the warnings) that it can call.
+
+### Proposing fields
+
+`propose_fields(project_path)` (or a `result_id`) is the inverse of the merge: the field text
+that describes the project's rails and links, part by part, for the user to paste into the
+symbols in KiCad. Coppernicus never writes KiCad files. Each part has:
+- `library_symbol`: `PI_KIND`, `PI_EFF`, `PI_IQ`, what the part is;
+- `schematic_instance`: `PI_RAIL`, `PI_SOURCE`, `PI_LOAD`, `PI_PINS`, `PI_LIMIT_DROP`,
+  `PI_INPUT`, `PI_INPUT_PINS`, `PI_GND`, `PI_GND_PINS`, `PI_LINK`, where it sits.
+
+A part on several rails gets one value per rail, by position (`PI_RAIL=+3V3;+1V8`,
+`PI_LOAD=1.2A;400mA`). Values are written with their unit and read back exactly. A rail's
+`max_drop_pct` becomes `PI_LIMIT_DROP` on its first source; if it is a chip's own supply
+tolerance, it belongs in that chip's library symbol instead. The proposal is checked by
+parsing it back, which gives the project's rails. `not_expressed` lists what fields cannot
+carry: remote sense, terminal names, the other limits, `follow_net_ties: false`; a rail that
+needs input or ground pins on another part, or a link that does not use all its part's pads,
+is not proposed at all, since a wrong field would fail every run. The CLI prints the same:
+`coppernicus fields --propose PROJECT [--json]`.
 
 ### Estimated draws
 

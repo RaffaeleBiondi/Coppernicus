@@ -69,6 +69,26 @@ def _decorate(ax, outline: Sequence[np.ndarray], result: RailResult,
 
 
 FIELDS = ("drop", "voltage", "current")
+DELTA_CMAP = "RdBu_r"       # red where the drop grew, blue where it shrank
+
+
+def render_delta_map(result: RailResult, layer: LayerField, delta_mv: np.ndarray,
+                     outline: Sequence[np.ndarray], path, title: str, dpi: int = 110) -> Dict[str, object]:
+    """A colour map of a drop difference on ``layer``'s mesh (mV per node; NaN where it could
+    not be compared, drawn as 0), symmetric around 0, saved as a PNG at ``path``."""
+    tri = _triangulation(layer)
+    fig = Figure(figsize=(8, 6), dpi=dpi, layout="constrained")
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot()
+    finite = delta_mv[np.isfinite(delta_mv)]
+    top = max(float(np.abs(finite).max()) if finite.size else 0.0, 1e-9)
+    im = ax.tripcolor(tri, np.nan_to_num(delta_mv), shading="gouraud", cmap=DELTA_CMAP,
+                      vmin=-top, vmax=top, rasterized=True)
+    fig.colorbar(im, ax=ax, label="drop change, B − A (mV): red grew, blue shrank")
+    ax.set_title(title)
+    _decorate(ax, outline, result, [], layer.name)
+    fig.savefig(path)
+    return {"unit": "mV", "min": -top, "max": top}
 
 
 def _rail_voltage_range(result: RailResult):

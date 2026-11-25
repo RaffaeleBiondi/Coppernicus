@@ -370,12 +370,7 @@ class Project:
             board = _portable_path(self.board).expanduser()
             if not board.is_absolute():   # relative to where the project was, or will be
                 board = (Path(self.path).parent if self.path else Path(path).parent) / board
-            board = board.resolve()
-            # Always "/" in the file, so a project saved on Windows opens on macOS and Linux.
-            try:
-                self.board = Path(os.path.relpath(board, Path(path).resolve().parent)).as_posix()
-            except ValueError:            # another drive (Windows): keep it absolute
-                self.board = board.as_posix()
+            self.board = board_reference(board, path)
         self.path = path
         with open(path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self.to_dict(), f, sort_keys=False, allow_unicode=True)
@@ -427,6 +422,17 @@ def _number(value: Any, what: str) -> float:
     if not math.isfinite(x):
         raise ValueError(f"{what} must be a finite number, not {value!r}")
     return x
+
+
+def board_reference(board, project_path) -> str:
+    """How a project file at ``project_path`` names the board file ``board``: relative to the
+    project's folder, always with "/" so that a project saved on Windows opens on macOS and
+    Linux; absolute when it is on another drive (Windows)."""
+    board = Path(board).resolve()
+    try:
+        return Path(os.path.relpath(board, Path(project_path).resolve().parent)).as_posix()
+    except ValueError:
+        return board.as_posix()
 
 
 def _pins_out(pins: PinSpec):
