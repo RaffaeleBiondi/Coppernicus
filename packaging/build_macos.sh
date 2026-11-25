@@ -55,6 +55,7 @@ for d in examples/*/; do
 done
 cp LICENSE "$STAGE/LICENSE.txt"
 cp build/packaging/THIRD_PARTY_NOTICES.txt "$STAGE/THIRD_PARTY_NOTICES.txt"
+ditto packaging/licenses "$STAGE/licenses"         # the notices refer to licenses/
 cp docs/install.md "$STAGE/INSTALL.md"
 rm -f "dist/${NAME}.dmg"
 hdiutil create -volname "Coppernicus ${VERSION}" -srcfolder "$STAGE" -fs HFS+ -format UDZO \

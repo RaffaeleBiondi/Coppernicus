@@ -64,13 +64,17 @@ def ensure_triangle(argv) -> int:
     from coppernicus import bootstrap_triangle as bt
     gui = not argv or argv[0] == "gui"
     try:
-        plan = bt.needed()
-        if plan is not None:
-            if gui:
-                if not bt.fetch_with_dialog(plan):      # the dialog said why; the user quit
-                    return 2
-            else:
-                bt.fetch_on_console(plan)
+        try:
+            plan = bt.needed()
+            if plan is not None:
+                if gui:
+                    if not bt.fetch_with_dialog(plan):  # the dialog said why; the user quit
+                        return 2
+                else:
+                    bt.fetch_on_console(plan)
+        except OSError as e:                  # never exit 1: the CLI's "a limit was exceeded"
+            raise bt.BootstrapError(f"cannot prepare the Triangle mesher: {e}",
+                                    f"check that {bt.site_dir().parent} is writable") from e
     except bt.BootstrapError as e:
         print(f"error: {e.message}\n  {e.hint}", file=sys.stderr, flush=True)
         if gui:

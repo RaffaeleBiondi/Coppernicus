@@ -379,15 +379,15 @@ def remove(site: Path) -> int:
     site = Path(site)
     if not site.parent.is_dir():
         return 0
-    with _lock(site.parent):
-        targets = ([site] if site.exists() else []) + leftovers(site)
-        size = sum(_size(p) for p in targets)
-        for path in targets:
-            try:
+    try:
+        with _lock(site.parent):
+            targets = ([site] if site.exists() else []) + leftovers(site)
+            size = sum(_size(p) for p in targets)
+            for path in targets:
                 _delete(path)
-            except OSError as e:
-                raise BootstrapError(f"cannot delete {path}: {e}",
-                                     "close every Coppernicus window, then try again") from e
+    except OSError as e:
+        raise BootstrapError(f"cannot delete the downloaded Triangle in {site.parent}: {e}",
+                             "close every Coppernicus window, then try again") from e
     _unlink(site.parent / LOCK_FILE)
     return size
 
@@ -493,6 +493,16 @@ def install(pin: Pin, site: Path, wheel: Optional[Wheel] = None, url: Optional[s
     is downloaded."""
     wheel = wheel or choose_wheel(pin)
     site = Path(site)
+    try:
+        return _install(pin, site, wheel, url, progress, opener)
+    except OSError as e:                         # the per-user folder: its lock, its temporary folder
+        raise BootstrapError(f"cannot write in {site.parent}: {e}",
+                             f"check that {site.parent} is writable and has free space, "
+                             "then start Coppernicus again") from e
+
+
+def _install(pin: Pin, site: Path, wheel: Wheel, url: Optional[str], progress: Optional[Progress],
+             opener: Callable) -> Path:
     with _lock(site.parent):
         if is_installed(site, pin, wheel):
             _clean([*leftovers(site), *extraneous(site)])
@@ -573,7 +583,10 @@ def needed(env=None) -> Optional[Plan]:
     site = site_dir(env)
     if is_installed(site, pin, wheel):
         if leftovers(site) or extraneous(site):
-            tidy(site)
+            try:
+                tidy(site)
+            except OSError:                      # best effort: tried again at the next start
+                pass
         activate(site)
         return None
     return Plan(pin, wheel, site, env.get(URL_ENV) or wheel.url)

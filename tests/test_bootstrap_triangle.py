@@ -291,6 +291,16 @@ def test_a_start_cleans_around_a_good_install_without_downloading(monkeypatch, t
         sys.path[:] = before
 
 
+def test_a_folder_that_cannot_be_written_is_a_clear_error(tmp_path):
+    wheel = make_wheel(tmp_path, "cpn_fake_ro")
+    pin = pin_for(wheel, "cpn_fake_ro")
+    blocker = tmp_path / "a-file"
+    blocker.write_text("not a folder")
+    with pytest.raises(bt.BootstrapError, match="cannot write in") as caught:
+        bt.install(pin, blocker / "Coppernicus" / "site-packages")
+    assert "writable" in caught.value.hint
+
+
 def test_removing_the_download(tmp_path):
     wheel = make_wheel(tmp_path, "cpn_fake_rm")
     pin = pin_for(wheel, "cpn_fake_rm")
@@ -427,6 +437,13 @@ def test_a_command_line_start_that_cannot_fetch_exits_2_with_the_error_document(
     assert frozen_main.ensure_triangle(["mcp"]) == 2                 # stdout is the protocol's
     out, _ = capsys.readouterr()
     assert out == ""
+
+    def unwritable(env=None):
+        raise NotADirectoryError(20, "Not a directory", "/dev/null/x")
+    monkeypatch.setattr(bt, "needed", unwritable)                    # never exit 1 (a limit)
+    assert frozen_main.ensure_triangle(["solve", "p.coppernicus.yml", "--json"]) == 2
+    out, err = capsys.readouterr()
+    assert json.loads(out)["error"]["code"] == "triangle_unavailable" and "Not a directory" in err
 
 
 def test_the_dialog_fetches_and_reports_a_failure(tmp_path):

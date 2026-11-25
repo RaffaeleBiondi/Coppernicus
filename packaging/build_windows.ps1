@@ -46,6 +46,7 @@ Copy-Item -Recurse examples dist\Coppernicus\examples
 Remove-Item dist\Coppernicus\examples\make_examples.py
 Copy-Item LICENSE dist\Coppernicus\LICENSE.txt
 Copy-Item build\packaging\THIRD_PARTY_NOTICES.txt dist\Coppernicus\THIRD_PARTY_NOTICES.txt
+Copy-Item -Recurse packaging\licenses dist\Coppernicus\licenses     # the notices refer to licenses\
 Copy-Item docs\install.md dist\Coppernicus\INSTALL.md
 if (Test-Path "dist\$Name.zip") { Remove-Item "dist\$Name.zip" }
 Invoke-Checked $Py -c "import shutil, sys; shutil.make_archive(sys.argv[1], 'zip', 'dist', 'Coppernicus')" "dist\$Name"

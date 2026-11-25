@@ -61,7 +61,11 @@ def _pyvista_vtk_modules():
         for source in root.rglob("*.py"):
             text = source.read_text(encoding="utf-8", errors="replace")
             names |= set(re.findall(r"\b(vtk[A-Z][A-Za-z0-9]+)\b", text)) & available
-    return sorted(f"vtkmodules.{n}" for n in names)
+    # VTK's own Python overrides, which it imports by name when vtkCommonCore and others load
+    # (and skips silently when they are missing).
+    import vtkmodules
+    overrides = {m for ms in getattr(vtkmodules, "MODULE_MAPPER", {}).values() for m in ms}
+    return sorted({f"vtkmodules.{n}" for n in names} | overrides)
 
 
 VTK_MODULES = _pyvista_vtk_modules()
@@ -78,7 +82,9 @@ a = Analysis(
         *EXAMPLES,
     ],
     # The CLI, the app and the engine import most modules inside functions.
-    hiddenimports=[*MODULES, *VTK_MODULES],
+    # PyInstaller's PySide6 hook adds PySide6.support.deprecated (Qt enum operators) only when
+    # a "PySide6" distribution is installed; here it is PySide6_Essentials.
+    hiddenimports=[*MODULES, *VTK_MODULES, "PySide6.support.deprecated"],
     excludes=[
         "triangle",                                  # fetched on first start, never bundled
         "vtk", "vtkmodules.all",                     # all of VTK: see _pyvista_vtk_modules
