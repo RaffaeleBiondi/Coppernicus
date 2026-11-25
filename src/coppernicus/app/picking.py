@@ -48,6 +48,8 @@ def add_probe_pin(probe: Probe, side: str, ref: str, pin: str, net: str) -> str:
     refused, as is a ground pad on the supply net. Returns a message for the status bar."""
     name = probe.name or ref
     if side == "supply":
+        if net == probe.ground_net:
+            return f"{ref}.{pin} is on {net}, the ground net of probe {name}: pick a supply pad"
         if not probe.ref or not probe.net:
             probe.name, probe.ref, probe.net, probe.pins = name, ref, net, [pin]
             if probe.ground_ref == ref:

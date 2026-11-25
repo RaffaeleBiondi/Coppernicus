@@ -106,3 +106,13 @@ def test_a_picked_part_toggles_in_a_model_and_leaves_any_other():
     assert models[0].refs == [] and models[1].refs == ["C2", "C3", "C1"] and "10u" in msg
     msg = toggle_cap_ref(models, 1, "C2")
     assert models[1].refs == ["C3", "C1"] and "C2" in msg
+
+
+
+def test_a_supply_pick_on_the_probes_ground_net_is_refused_in_either_order():
+    from coppernicus.app.picking import add_probe_pin
+    from coppernicus.project import Probe
+    p = Probe("", "", "")
+    add_probe_pin(p, "ground", "U1", "2", "GND")
+    msg = add_probe_pin(p, "supply", "U1", "3", "GND")
+    assert not p.ref and p.pins is None and "ground net" in msg

@@ -590,6 +590,10 @@ def check_ac(probes: Sequence[Probe], capacitors: Sequence[CapModel],
                 "ac": _ac_out(ac) if ac is not None else {}})
     except (KeyError, TypeError, ValueError) as e:
         raise ProjectError(str(e)) from e
+    for p in probes:
+        if p.ground_net and p.ground_net == p.net:
+            raise ProjectError(f"probe {p.name}: its ground net is its supply net {p.net}: its ground "
+                               "pins go on the ground")
 
 
 @dataclass
