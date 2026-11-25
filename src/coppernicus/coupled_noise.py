@@ -23,10 +23,11 @@ from coppernicus.results import NoiseResult, VictimResult
 
 def victim_verdict(v: VictimResult) -> Tuple[Optional[bool], str]:
     """(passed, why not judged): ``(None, "")`` without a margin (ranked); ``(None, reason)``
-    while a stand-in is in play, whatever the peak; else ``peak_v <= margin_v`` (KiPI's rule,
+    when the margin the user meant cannot be had (a logic_v off KiPI's JESD8 table) or while a
+    stand-in is in play, whatever the peak; else ``peak_v <= margin_v`` (KiPI's rule,
     kipi/noise/result.py:76-82)."""
     if v.margin_v is None:
-        return None, ""
+        return None, v.margin_note
     if v.stand_ins:
         return None, (f"{'; '.join(v.stand_ins)}; peak {v.peak_v * 1e3:.4g} mV = "
                       f"{100.0 * v.peak_v / v.margin_v:.3g} % of the margin")
@@ -43,7 +44,7 @@ def entries(r: NoiseResult) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]
     failed = [{"item": v.name, "net": v.net, "limit": v.limit, "reason": _fail_reason(v)}
               for v in r.victims if v.passed is False]
     not_judged = [{"item": v.name, "net": v.net, "limit": v.limit, "reason": v.not_judged}
-                  for v in r.victims if v.margin_v is not None and v.passed is None]
+                  for v in r.victims if v.passed is None and (v.margin_v is not None or v.margin_note)]
     return failed, not_judged
 
 
@@ -241,8 +242,10 @@ def noise_text(doc: Dict[str, Any]) -> List[str]:
                          f" below, {_mv_text(rp['above_20mhz_mv'])} above), full band "
                          f"{_mv_text(rp['pp_mv'])} p-p; not judged")
         for v in a["victims"]:
-            margin = (f", margin {_mv_text(v['margin_mv'])} ({100 * v['ratio']:.3g} %)"
-                      if v["margin_mv"] is not None and v["ratio"] is not None else ", no margin set")
+            if v["margin_mv"] is not None and v["ratio"] is not None:
+                margin = f", margin {_mv_text(v['margin_mv'])} ({100 * v['ratio']:.3g} %)"
+            else:
+                margin = ", not judged" if v["not_judged"] else ", no margin set"
             tag = {True: "  PASS", False: "  FAIL"}.get(v["passed"], "")
             lines.append(f"  victim {v['name']} on {v['net']}: peak {_mv_text(v['peak_mv'])} "
                          f"(mostly {v['dominant'] or '-'}){margin}{tag}")

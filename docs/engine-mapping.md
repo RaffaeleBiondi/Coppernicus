@@ -833,7 +833,7 @@ The file may hold a draft (no `fsw_hz`, edges or phases): it loads and is refuse
 | Coppernicus | KiPI | Unit | Default | Notes |
 |---|---|---|---|---|
 | `inductor`, `inductance_h`, `dcr_ohm` | same | —, H, Ω | `""`, 0, 0 | Inductance > 0 to solve (KiPI's check). |
-| `switch_net` | same | — | `""` | Empty on every phase: no capacitive coupling (a stand-in, below). |
+| `switch_net` | same | — | `""` | Empty on a phase: no capacitive coupling from that phase (a stand-in for it, below). |
 | `high_side`, `low_side` `{ref, net, pins}` | `PinRef` | — | none | `ref` required (the regulator's part may be the inductor); pins resolved as in Task 6, a missing pin names the phase. |
 | `input_caps`, `output_caps` | same | refs | `[]` | Off the board: KiPI's error, as `EngineError`. |
 | `coss_f` | same | F | `None` → KiPI's 200 pF | Stand-in when empty (parasitics.py:670-674). |
@@ -906,9 +906,10 @@ model.py:163, :165); else the JESD8 levels of an entered `logic_v` on KiPI's tab
 (model.py:96-103); else none: ranked, no verdict, no entry. The value is KiPI's own
 `Victim.margin()`, the smaller of the held-high and held-low state margins (0.8 V for 3.3 V
 logic), never `logic_margin()` (0.4 V there). KiPI's 35/65 % rule off its table is never used:
-an off-table `logic_v` alone sets no margin and leaves the warning "Victim {v}: logic_v {lv} V is
-not in KiPI's JESD8 table: enter noise_margin_v" (no not-judged entry: nothing was set that
-could be judged; the gate's §5 at face value).
+an off-table `logic_v` alone sets no margin and is **not judged, never a silent pass**
+(coordinator's I1): entry `{item, net, limit: "logic_v margin (V)", reason: "logic_v {lv} V is
+not in KiPI's JESD8 table: enter noise_margin_v"}`, exit 3; its assumption line says so and
+never "no noise margin set".
 
 **Not judged, whatever the peak** (the reason ends "…; peak {p} mV = {r} % of the margin"),
 while any KiPI stand-in is in play:
@@ -916,13 +917,26 @@ while any KiPI stand-in is in play:
   KiPI's 200 pF sets the ringing"; "Qrr not entered on phase {i}: KiPI's 5 nC sets the hard edge
   (enter 0 for a Schottky or GaN low side)"; "capacitors on the converter's rails without a
   model: {refs}" (KiPI's `rail_caps` with the board model, else the phases' capacitors); "εr
-  assumed: {why}" (T9's rule); "capacitive coupling left out: no switch net on any phase";
-  "harmonics stop at {f} MHz (noise.max_harmonics {k})"; "shared-ground coupling left out: board
-  model off (noise.board_model)" or "… board model left out ({KiPI's reason})"; "no {input |
-  output} capacitors on phase {i}: …" (KiPI draws current loops only for the phases' own
-  capacitors, parasitics.py:661-669: without them on the hot-loop side the hot loop is the
-  package alone and couples nothing, a false pass this rule closes; on the other side those
-  loops' coupling is left out);
+  assumed: {why}" (T9's rule); "capacitive coupling of phase {i} left out: no switch net" (any
+  phase without one, gate §3); "harmonics stop at {f} MHz (noise.max_harmonics {k})"; "harmonics
+  stop at {f} MHz (noise.f_max_hz), below the edges' {auto} MHz" (a user's `f_max_hz` below
+  KiPI's automatic reach, `harmonic_count` with no `f_max`); "harmonics stop at KiPI's 3 GHz
+  ceiling, below the edges' {raw} MHz" (`F_MAX_CAP_HZ` clipping max(10/(π·t_min), 3·f_ring),
+  waveforms.py:33, :96-97); "shared-ground coupling left out: board model off
+  (noise.board_model)" or "… board model left out ({KiPI's reason})";
+- **what KiPI drew, not what was listed** (coordinator's C1): KiPI finds a capacitor's loop from
+  its pads on the exact input or output net and the low-side ground (parasitics.py:194-196,
+  :393-396, :600-639). Each listed capacitor with no drawn loop (no `"{ref} (phase {i})"` in
+  KiPI's `loop_paths`) is "{ref} on phase {i}: KiPI draws no current loop for it ({why}), so its
+  loop's coupling is left out", the reason read from the board: "it has no pad on {net | gnd}",
+  "the switching device's high-side or low-side pins are not set", and for the other side's loop,
+  which runs through the inductor and the switch node, "its loop runs through the switch node,
+  and the phase has no switch net" or "… through the inductor, whose pads are not on {sw} and
+  {rail}" (else "it could be neither traced nor drawn"); a phase whose hot-loop side
+  has no drawn loop at all is "phase {i}: no {input | output} capacitor loop is drawn, so the hot
+  loop is {their ESL plus the package | the package} only". This covers swapped input and output
+  capacitors (measured before the fix: hot loop 0.6 nH, SIG_LOOP 1.5 mV, judged PASS), an empty
+  list, a capacitor on a net linked to the rail, and one grounded on a tied ground;
 - per victim: "driver and receiver not both entered: KiPI guessed {d} and {r}"; "inductive
   coupling left out: no capacitor loops (set the switching device's pins and the capacitors)";
   "nothing coupled: {net} has no tracks"; "driver or receiver pins not on the board";
@@ -930,13 +944,19 @@ while any KiPI stand-in is in play:
   low} it sits at {level} V, beyond its {threshold} V threshold: no margin left".
 
 Stand-ins are taken from structured data (`coss_default`, `qrr_default`, `rail_caps`,
-`harmonic_count`, an empty `board_note`, T9's `_dielectric`), never from warning text, except
-KiPI's own "No capacitor loops" flag on a victim. Rds_on, the ζ floors, the dead time, the
-package loop and the inductor's axis and shield stay assumption lines.
+`harmonic_count`, `loop_paths`, an empty `board_note`, T9's `_dielectric`), never from warning
+text, except KiPI's own "No capacitor loops" flag on a victim. Rds_on, the ζ floors, the dead
+time, the package loop and the inductor's axis and shield stay assumption lines.
+
+A capacitor between the rails and the ground (KiPI's `rail_caps`) that no phase lists is a
+**warning**, not a stand-in (coordinator's ruling: the user chose which capacitors form the
+loop): "{refs} is | are on the rails but in no phase's list: the hot loop does not include it |
+them".
 
 **Otherwise** `fail` if `peak_v > margin_v` (KiPI's rule, result.py:76-82: the largest receiver
 |v| over a period, held high or low), else `pass`. Entry: `{"item": victim, "net", "limit":
-"noise_margin_v (V)" | "preset {p} margin (V)" | "logic_v JESD8 margin (V)", "reason"}` (plus
+"noise_margin_v (V)" | "preset {p} margin (V)" | "logic_v JESD8 margin (V)" | "logic_v margin
+(V)" (off the table), "reason"}` (plus
 `"aggressor"` at the top level). An aggressor fails if a victim fails; else it is `not_judged`
 if a victim with a margin was not judged; `pass` if one was judged; `not_judged` with no margin
 at all (no entry: "No noise margins set: nothing is judged; the victims are ranked"). The CLI
@@ -955,8 +975,8 @@ loop); the capacitors (modelled, and those without a model at their board value 
 5 mΩ, 0.5 nH, 10 µF fallback); the board model (rails, ground, unknowns, field solves) or why it
 is off; DC bias when a modelled part has a rating; KiPI's dielectric summary with its 3.5
 solder-mask εr; the victims' cross-sections and mechanisms; per victim its type, terminations
-and ends (entered or guessed), and its margin and source or "no noise margin set: ranked, not
-judged"; per inductor its shield and axis; the near field and radiated estimate (an indicator,
+and ends (entered or guessed), and its margin and source, or that its off-table `logic_v` gives
+no margin ("not judged"), or "no noise margin set: ranked, not judged"; per inductor its shield and axis; the near field and radiated estimate (an indicator,
 never judged); the via plating and what-if thickness, as in DC; the copper temperature when
 ≠ 20 °C; per ripple where it is measured, the 20 MHz single pole and "never judged here".
 

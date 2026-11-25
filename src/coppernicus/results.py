@@ -508,6 +508,8 @@ class VictimResult:
     passed: Optional[bool] = None
     not_judged: str = ""
     warnings: List[str] = field(default_factory=list)
+    # Why a logic_v the user gave sets no margin (off KiPI's JESD8 table): not judged.
+    margin_note: str = ""
 
 
 @dataclass

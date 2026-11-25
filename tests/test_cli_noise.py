@@ -51,6 +51,11 @@ def test_noise_exit_codes_and_json(write, tmp_path, capsys):
     # KiPI's Qrr stand-in: a victim with a margin is not judged (exit 3, as solve).
     assert main(["noise", str(write(board_model=False, qrr_nc=None)), "--json", *out]) == EXIT_NOT_JUDGED
     assert json.loads(capsys.readouterr().out)["not_judged"][0]["aggressor"] == "U1"
+    # A logic_v off KiPI's JESD8 table gives no margin: not judged (exit 3), never a pass.
+    assert main(["noise", str(write(logic_v=3.0)), "--json", *out]) == EXIT_NOT_JUDGED
+    entry = json.loads(capsys.readouterr().out)["not_judged"][0]
+    assert (entry["limit"], entry["reason"]) == ("logic_v margin (V)", "logic_v 3 V is not in KiPI's "
+                                                 "JESD8 table: enter noise_margin_v")
     # No margin at all: ranked, nothing to judge (exit 0).
     assert main(["noise", str(write(board_model=False, logic_v=None)), "--json", *out]) == EXIT_OK
     assert json.loads(capsys.readouterr().out)["verdict"] == "not_judged"

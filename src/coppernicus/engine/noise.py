@@ -58,7 +58,7 @@ from kipi.noise.model import Victim as KipiVictim
 from kipi.noise.parasitics import FALLBACK_C_F, FALLBACK_ESL_H, FALLBACK_ESR_OHM
 from kipi.noise.solver import solve_noise
 from kipi.noise.victims import ends as _kipi_ends
-from kipi.noise.waveforms import bandwidth_limited, harmonic_count
+from kipi.noise.waveforms import F_MAX_CAP_HZ, bandwidth_limited, harmonic_count
 from kipi.tolerance.gather import (
     BW_LIMIT_HZ,
     ripple_peaks,  # noqa: F401  (re-exported for the tests)
@@ -163,6 +163,7 @@ class _Context:
     probes: List[Probe]
     notes: List[str] = field(default_factory=list)
     fsw_note: str = ""             # where fsw_hz came from, when not the aggressor's own
+    setup_snapshot: Any = None     # the board the setup was built on
 
 
 def _aggressor(project: Project, name: str) -> Aggressor:
@@ -288,7 +289,7 @@ def _context(board: Board, project: Project, name: str, fields_rails: Sequence[s
     setup.noise = NoiseSettings(aggressor=a.name, **{k: getattr(o, k) for k in OPTION_KEYS})
     setup.victims = [_kipi_victim(board, v) for v in project.victims]
     return _Context(setup, a, a.vrm, vin_net, vrm.output.net, gnd, rail, grounds, in_rail,
-                    list(project.victims), probes, notes, fsw_note)
+                    list(project.victims), probes, notes, fsw_note, board.snapshot)
 
 
 def noise_setup(board: Board, project: Project, name: str,
@@ -444,7 +445,7 @@ def _device_ripple(board: Board, c: _Context, res, used: bool, n, t) -> List[Rip
 
 
 def _margin(v: Victim, kv: KipiVictim) -> Tuple[Optional[float], str, str, str]:
-    """(margin, where it comes from, the limit's name, a warning): the user's
+    """(margin, where it comes from, the limit's name, why a logic_v gives none): the user's
     ``noise_margin_v``, else the named preset's own (lvds, analog), else the JESD8 levels of
     an entered ``logic_v`` on KiPI's table (model.py:96-103), from KiPI's states (the smaller
     of the held-high and held-low margins). KiPI's 35/65 % rule off the table is not used."""
@@ -455,9 +456,9 @@ def _margin(v: Victim, kv: KipiVictim) -> Tuple[Optional[float], str, str, str]:
         return kv.margin(), f"preset {v.preset}", f"preset {v.preset} margin (V)", ""
     if v.logic_v is not None:
         on = next((lv for lv in LOGIC_LEVELS if abs(lv - v.logic_v) < 1e-3), None)
-        if on is None:
-            return None, "", "", (f"Victim {v.label}: logic_v {v.logic_v:g} V is not in KiPI's JESD8 "
-                                  "table: enter noise_margin_v")
+        if on is None:          # coordinator's I1: not judged, never a silent pass
+            return None, "", "logic_v margin (V)", (f"logic_v {v.logic_v:g} V is not in KiPI's JESD8 "
+                                                     "table: enter noise_margin_v")
         vil, vih, _vol, _voh = LOGIC_LEVELS[on]
         return (kv.margin(), f"the JESD8 levels of a {on:g} V family, VIL {vil:g} V, VIH {vih:g} V",
                 "logic_v JESD8 margin (V)", "")
@@ -495,28 +496,99 @@ def _stand_ins(board: Board, project: Project, c: _Context, res, hot: List[HotLo
                        "the hard edge (enter 0 for a Schottky or GaN low side)")
     if missing:
         out.append(f"capacitors on the converter's rails without a model: {_listed(missing)}")
-    # KiPI draws current loops only for the phases' own capacitors (parasitics.py:661-669):
-    # without them on the hot-loop side the hot loop is the package alone and couples
-    # nothing; without them on the other side those loops' coupling is left out.
-    hot_side = "input" if res.operating.topology == "buck" else "output"
-    for i, ph in enumerate(c.agg.phases, 1):
-        for side in ("input", "output"):
-            if getattr(ph, f"{side}_caps"):
-                continue
-            what = ("KiPI takes the hot loop as the package alone, so its loop couples nothing"
-                    if side == hot_side else "their current loops' inductive coupling is left out")
-            out.append(f"no {side} capacitors on phase {i}: {what} (set the phase's {side}_caps)")
+    out += _loop_stand_ins(c, res)
     assumed = _dielectric(board, project.ac.default_er)[1]
     if assumed:
         out.append(f"εr assumed: {assumed}")
-    if not any(ph.switch_net for ph in c.agg.phases):
-        out.append("capacitive coupling left out: no switch net on any phase")
+    for i, ph in enumerate(c.agg.phases, 1):              # gate §3: per phase
+        if not ph.switch_net:
+            out.append(f"capacitive coupling of phase {i} left out: no switch net")
+    out += _harmonics_stand_ins(project, c, hot)
     if capped:
         out.append(f"harmonics stop at {f_max / 1e6:.4g} MHz (noise.max_harmonics "
                    f"{project.noise.max_harmonics})")
     if not used:
         out.append("shared-ground coupling left out: " + _board_off(project, res))
     return out
+
+
+def _loop_stand_ins(c: _Context, res) -> List[str]:
+    """What KiPI drew, not what was listed: KiPI finds a capacitor's loop from its pads on the
+    exact input or output net and the low-side ground (parasitics.py:194-196, :393-396,
+    :600-639); a listed capacitor it draws no loop for adds only its ESL to the hot loop and
+    couples nothing. Without any drawn loop on the hot-loop side the hot loop is the ESL plus
+    the package (parasitics.py:661-669)."""
+    out = []
+    hot_side = "input" if res.operating.topology == "buck" else "output"
+    nets_of: Dict[str, set] = {}
+    for p in c.setup_snapshot.pads:
+        nets_of.setdefault(p.footprint, set()).add(p.net)
+    for i, (ph, kph) in enumerate(zip(c.agg.phases, c.setup.aggressors[0].phases), 1):
+        gnd = kph.low_side.net if kph.low_side else c.gnd
+        drawn = {}
+        for side, refs, net in (("input", ph.input_caps, c.vin_net), ("output", ph.output_caps, c.vout_net)):
+            drawn[side] = [r for r in refs if f"{r} (phase {i})" in res.loop_paths]
+            out += [f"{r} on phase {i}: KiPI draws no current loop for it "
+                    f"({_why_no_loop(c, ph, kph, nets_of, r, net, gnd, side == hot_side)}), so its "
+                    "loop's coupling is left out" for r in refs if r not in drawn[side]]
+        if not drawn[hot_side]:
+            esl = "their ESL plus the package" if getattr(ph, f"{hot_side}_caps") else "the package"
+            out.append(f"phase {i}: no {hot_side} capacitor loop is drawn, so the hot loop is {esl} only")
+    return out
+
+
+def _why_no_loop(c: _Context, ph: Phase, kph, nets_of: Dict[str, set], ref: str, net: str,
+                 gnd: str, hot: bool) -> str:
+    """Why KiPI drew no loop for a listed capacitor, from the board: its pads on the exact net
+    and ground (parasitics.py:393-396), the device's pins, and for the other side's loop,
+    which runs through the inductor and the switch node, those (:600-639)."""
+    missing = [n for n in (net, gnd) if n not in nets_of.get(ref, set())]
+    if missing:
+        return f"it has no pad on {' or '.join(missing)}"
+    if kph.high_side is None or kph.low_side is None:
+        return "the switching device's high-side or low-side pins are not set"
+    if not hot:
+        rail = c.vout_net if net == c.vout_net else c.vin_net
+        if not ph.switch_net:
+            return "its loop runs through the switch node, and the phase has no switch net"
+        if not ph.inductor or not {ph.switch_net, rail} <= nets_of.get(ph.inductor, set()):
+            return f"its loop runs through the inductor, whose pads are not on {ph.switch_net} and {rail}"
+    return "it could be neither traced nor drawn"
+
+
+def _harmonics_stand_ins(project: Project, c: _Context, hot: List[HotLoop]) -> List[str]:
+    """Harmonics cut short (brief Q2) by a ``noise.f_max_hz`` below KiPI's automatic reach,
+    or by KiPI's 3 GHz ceiling on faster edges: max(10/(π·t_min), 3·f_ring)
+    (waveforms.py:33, :90-101)."""
+    a = c.setup.aggressors[0]
+    rings = [h.f_ring_hz for h in hot if h.f_ring_hz]
+    ring = max(rings) if rings else None
+    _k, auto, _capped = harmonic_count(a.fsw_hz, a.rise_s, a.fall_s, ring, None, 1 << 60)
+    raw = max(10.0 / (math.pi * min(a.rise_s, a.fall_s)), 3.0 * (ring or 0.0))
+    f_user = project.noise.f_max_hz
+    if f_user and f_user < auto * (1 - 1e-9):
+        return [f"harmonics stop at {f_user / 1e6:.4g} MHz (noise.f_max_hz), below the edges' "
+                f"{auto / 1e6:.4g} MHz"]
+    if not f_user and raw > F_MAX_CAP_HZ:
+        return [f"harmonics stop at KiPI's {F_MAX_CAP_HZ / 1e9:g} GHz ceiling, below the edges' "
+                f"{raw / 1e6:.4g} MHz"]
+    return []
+
+
+def _unlisted(board: Board, c: _Context) -> List[str]:
+    """Coordinator's ruling: a capacitor between the rails and the ground (KiPI's
+    ``rail_caps``) that no phase lists is a warning, not a stand-in: the user chose which
+    capacitors form the loop."""
+    if not c.gnd:
+        return []
+    used, missing = rail_caps(board.snapshot, c.setup, c.rail, c.grounds)
+    listed = {r for ph in c.agg.phases for r in (*ph.input_caps, *ph.output_caps)}
+    refs = [r for r in [x[0] for x in used] + list(missing) if r not in listed]
+    if not refs:
+        return []
+    verb, it = ("is", "it") if len(refs) == 1 else ("are", "them")
+    return [f"{_listed(refs)} {verb} on the rails but in no phase's list: the hot loop does not "
+            f"include {it}"]
 
 
 def _board_off(project: Project, res) -> str:
@@ -528,9 +600,7 @@ def _board_off(project: Project, res) -> str:
 
 def _victim(board: Board, c: _Context, v: Victim, kv: KipiVictim, vr, common: List[str],
             used: bool, n: int, warnings: List[str]) -> VictimResult:
-    margin, source, limit, warn = _margin(v, kv)
-    if warn:
-        warnings.append(warn)
+    margin, source, limit, margin_note = _margin(v, kv)
     ends_entered = bool(v.driver_ref and v.receiver_ref)
     own = []
     if not ends_entered:
@@ -571,7 +641,7 @@ def _victim(board: Board, c: _Context, v: Victim, kv: KipiVictim, vr, common: Li
         cm_f={k: float(x) for k, x in vr.cm_f.items()}, m_h={k: float(x) for k, x in vr.m_h.items()},
         splits=[s.describe() for s in vr.splits],
         receiver_v=total.samples(n) if total is not None else np.zeros(n),
-        stand_ins=common + own, warnings=list(vr.warnings))
+        stand_ins=common + own, warnings=list(vr.warnings), margin_note=margin_note)
 
 
 def _near_field(emi) -> Optional[NearField]:
@@ -618,7 +688,7 @@ def _convert(board: Board, project: Project, c: _Context, res, stats: Dict[str, 
     have, missing = _caps(board, c, used)
     # A partial result comes before the board model has run: no stand-ins, no assumptions.
     common = [] if partial else _stand_ins(board, project, c, res, hot, capped, f_max, used, missing)
-    warnings = list(dict.fromkeys(c.notes + list(res.warnings)))
+    warnings = list(dict.fromkeys(c.notes + list(res.warnings) + ([] if partial else _unlisted(board, c))))
     kv = {x.name: x for x in c.setup.victims}
     victims = [_victim(board, c, v, kv[v.label], vr, common, used, n, warnings)
                for v in c.victims for vr in res.victims if vr.name == v.label]
@@ -728,6 +798,9 @@ def _assumptions(board: Board, project: Project, c: _Context, r: NoiseResult, ha
             out.append(f"Victim {v.name}: margin {v.margin_v * 1e3:.4g} mV from {v.margin_from}; judged "
                        "as KiPI does: the largest receiver |v|, held high or low, against the smaller "
                        "state margin.")
+        elif v.margin_note:
+            out.append(f"Victim {v.name}: logic_v {k.logic_v:g} V is not in KiPI's JESD8 table, so it "
+                       "gives no margin: not judged (enter noise_margin_v).")
         else:
             out.append(f"Victim {v.name}: no noise margin set: ranked, not judged.")
     for ph in a.phases:

@@ -29,6 +29,35 @@ def test_the_coupled_noise_board_is_kipis_buck_with_three_victims():
     assert (CoupledNoise.FSW, CoupledNoise.VIN, CoupledNoise.VOUT) == (1e6, 12.0, 1.8)
 
 
+def test_the_board_matches_kipis_validation_snapshot():
+    """Counts and coordinates read from KiPI's examples/validation/coupled_noise/
+    coupled_noise.kipi.json.gz (v1.0.1)."""
+    from coppernicus.engine.synthetic import coupled_noise_board
+    snap = coupled_noise_board()
+    assert (len(snap.pads), len(snap.vias), len(snap.tracks), len(snap.zones), len(snap.footprints)) == \
+        (25, 11, 8, 2, 12)
+    tracks = [(t.net, t.layer, t.width_mm, tuple(t.start), tuple(t.end)) for t in snap.tracks]
+    assert tracks == [("VIN", 3, 1.0, (2, 10), (10, 10)), ("GND", 3, 1.0, (2, 14), (10, 14)),
+                      ("SW", 3, 1.0, (12, 12), (16, 12)), ("VOUT", 3, 1.0, (20, 12), (28, 12)),
+                      ("GND", 3, 1.0, (24, 15), (28, 15)),
+                      ("SIG_SW", 3, 0.2, (11.5, pytest.approx(14.3)), (24.0, pytest.approx(14.3))),
+                      ("SIG_LOOP", 3, 0.2, (3.0, pytest.approx(9.2)), (9.5, pytest.approx(9.2))),
+                      ("SIG_BURIED", 5, 0.2, (3.0, pytest.approx(9.2)), (9.5, pytest.approx(9.2)))]
+    zones = {z.net: sorted(map(tuple, z.filled[next(iter(z.filled))][0].outline)) for z in snap.zones}
+    assert zones == {"SW": [(11.0, 10.0), (11.0, 14.0), (15.0, 10.0), (15.0, 14.0)],
+                     "GND": [(0.0, 0.0), (0.0, 20.0), (32.0, 0.0), (32.0, 20.0)]}
+    pads = {p.id: (p.net, tuple(p.position)) for p in snap.pads}
+    assert [pads[k] for k in ("u1_1", "u1_2", "u1_3", "l1_1", "l1_2", "c2_1", "c2_2")] == [
+        ("VIN", (10.0, 10.0)), ("GND", (10.0, 14.0)), ("SW", (12.0, 12.0)), ("SW", (16.0, 12.0)),
+        ("VOUT", (20.0, 12.0)), ("VOUT", (24.0, 12.0)), ("GND", (24.0, 15.0))]
+    assert [(v.net, tuple(v.position)) for v in snap.vias[:4]] == \
+        [("GND", (2, 14.5)), ("GND", (6, 14.5)), ("GND", (10, 14.5)), ("GND", (24, 15.5))]
+    assert [(c.name, c.thickness_mm) for c in snap.stackup.copper] == \
+        [("F.Cu", 0.035), ("In1.Cu", 0.0175), ("In2.Cu", 0.0175), ("B.Cu", 0.035)]
+    assert [(d.thickness_mm, d.epsilon_r) for d in snap.stackup.dielectrics] == \
+        [(0.2, 4.5), (1.0, 4.5), (0.2, 4.5)]
+
+
 # ---------------------------------------------------------------------- project file
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=lambda p: p.name)
@@ -491,10 +520,11 @@ def test_stand_ins_for_coss_models_ends_switch_node_and_harmonics():
     r = solve_aggressor(_board(), p, "U1")
     text = "; ".join(r.stand_ins)
     for words in ("Coss not entered on phase 1: KiPI's 200 pF", "Qrr not entered on phase 1",
-                  "without a model: C2", "capacitive coupling left out: no switch net on any phase",
+                  "without a model: C2", "capacitive coupling of phase 1 left out: no switch net",
                   "harmonics stop at 100 MHz (noise.max_harmonics 100)",
-                  "no input capacitors on phase 1: KiPI takes the hot loop as the package alone"):
+                  "phase 1: no input capacitor loop is drawn, so the hot loop is the package only"):
         assert words in text, words
+    assert any(w.startswith("C1 is on the rails but in no phase's list") for w in r.warnings)
     sw = r.victim("SIG_SW")
     assert "driver and receiver not both entered: KiPI guessed U3[1] and U4[1]" in sw.stand_ins
     assert r.harmonics_capped and r.harmonics == 100
@@ -679,9 +709,17 @@ def test_the_example_passes_and_its_tight_copy_fails(tmp_path, capsys):
     assert main(["noise", str(folder / "noise.coppernicus.yml"), "--json", "--out", str(tmp_path)]) == EXIT_OK
     (a,) = json.loads(capsys.readouterr().out)["aggressors"]
     assert a["stand_ins"] == [] and [v["passed"] for v in a["victims"]] == [True, True, True]
+    peaks = {v["name"]: f"{v['peak_mv']:.4g}" for v in a["victims"]}
+    assert peaks == {"SIG_SW": "32.67", "SIG_LOOP": "655.4", "SIG_BURIED": "1.425"}
     loop = next(v for v in a["victims"] if v["name"] == "SIG_LOOP")
-    assert loop["peak_mv"] == pytest.approx(655.4, rel=2e-3)
     assert loop["ratio"] == pytest.approx(0.82, abs=0.01)
+    rp = {x["name"]: x for x in a["ripple"]}
+
+    def four(x, *keys):
+        return [f"{x[k]:.4g}" for k in keys]
+    assert four(rp["LOAD"], "pp_mv", "below_20mhz_mv", "above_20mhz_mv") == ["18.45", "4.727", "7.006"]
+    assert four(rp["input"], "pp_mv", "pp_20mhz_mv") == ["1.534e+04", "1873"]
+    assert four(rp["output"], "pp_mv", "pp_20mhz_mv") == ["1878", "268.9"]
     assert main(["noise", str(folder / "noise-tight.coppernicus.yml"), "--json",
                  "--out", str(tmp_path)]) == EXIT_LIMIT
     doc = json.loads(capsys.readouterr().out)
@@ -698,19 +736,61 @@ def test_a_phase_without_its_hot_loop_capacitors_is_not_judged():
     r = solve_aggressor(_board(), p, "U1")
     loop = r.victim("SIG_LOOP")
     assert loop.peak_v < 0.01 and loop.passed is None
-    assert loop.not_judged.startswith("no input capacitors on phase 1:")
+    assert loop.not_judged.startswith("phase 1: no input capacitor loop is drawn, so the hot loop is "
+                                      "the package only")
     assert r.verdict == "not_judged"
 
 
-def test_an_off_table_logic_v_sets_no_margin_and_a_rated_model_is_derated():
+def test_listed_capacitors_without_a_drawn_loop_are_not_judged():
+    """Coordinator's C1: KiPI draws a capacitor's loop only from its pads on the exact input
+    or output net and the low-side ground. C1 and C2 swapped: the hot loop shrinks to the
+    ESL and package, SIG_LOOP falls to about 1.5 mV and passed before; now not judged."""
+    from coppernicus.engine.noise import solve_aggressor
+    from coppernicus.engine.synthetic import coupled_noise_project
+    p = coupled_noise_project(qrr_nc=5.0, logic_v=3.3)
+    ph = p.aggressors[0].phases[0]
+    ph.input_caps, ph.output_caps = ["C2"], ["C1"]
+    r = solve_aggressor(_board(), p, "U1")
+    assert r.hot_loops[0].loop_l_h < 1e-9 and r.victim("SIG_LOOP").peak_v < 0.01
+    for words in ("C2 on phase 1: KiPI draws no current loop for it (it has no pad on VIN), so its "
+                  "loop's coupling is left out",
+                  "C1 on phase 1: KiPI draws no current loop for it (it has no pad on VOUT)",
+                  "phase 1: no input capacitor loop is drawn, so the hot loop is their ESL plus the "
+                  "package only"):
+        assert any(x.startswith(words) for x in r.stand_ins), words
+    assert r.victim("SIG_LOOP").passed is None and r.verdict == "not_judged"
+
+
+def test_a_capacitor_on_the_rails_in_no_phase_list_is_a_warning_not_a_stand_in():
+    """Coordinator's ruling: the user chose the loop's capacitors; one left out is shown."""
+    from coppernicus.engine.noise import solve_aggressor
+    from coppernicus.engine.synthetic import coupled_noise_project
+    p = coupled_noise_project(qrr_nc=5.0, logic_v=3.3)
+    p.aggressors[0].phases[0].output_caps = []
+    r = solve_aggressor(_board(), p, "U1")
+    assert r.stand_ins == []
+    assert "C2 is on the rails but in no phase's list: the hot loop does not include it" in r.warnings
+    assert r.victim("SIG_LOOP").passed is True
+
+
+def test_an_off_table_logic_v_is_not_judged_and_a_rated_model_is_derated():
+    """Coordinator's I1: a logic_v off KiPI's JESD8 table gives no margin, and that is a
+    not-judged entry (exit 3), never a silent pass."""
+    from coppernicus.coupled_noise import noise_summary, noise_text
     p = _project()
     for v in p.victims:
         v.logic_v = 0.9
     p.capacitors[0].rated_v = 25.0
     r = _quick(p)
     assert all(v.margin_v is None and v.passed is None for v in r.victims)
-    assert r.not_judged == [] and r.verdict == "not_judged"
-    assert "Victim SIG_SW: logic_v 0.9 V is not in KiPI's JESD8 table: enter noise_margin_v" in r.warnings
+    assert r.verdict == "not_judged"
+    assert r.not_judged[0] == {"item": "SIG_SW", "net": "SIG_SW", "limit": "logic_v margin (V)",
+                               "reason": "logic_v 0.9 V is not in KiPI's JESD8 table: enter noise_margin_v"}
+    assert len(r.not_judged) == 3
+    assert ("Victim SIG_SW: logic_v 0.9 V is not in KiPI's JESD8 table, so it gives no margin: not "
+            "judged (enter noise_margin_v).") in r.assumptions
+    assert not any("no noise margin set" in a for a in r.assumptions)
+    assert not any("no margin set" in line for line in noise_text(noise_summary([r])))
     assert "DC bias: rated capacitors derated at the rails' nominal voltages, 12 V and 1.8 V; no DC " \
         "solve is passed." in r.assumptions
 
@@ -778,3 +858,57 @@ def test_the_estimate_leaves_the_board_model_out_where_the_solve_would():
     size = mesh_estimate(_board(), p, "U1")
     assert not size.board_model and size.note.startswith("Board model left out (phase 1 needs")
     assert mesh_estimate(_board(), _project(), "U1").board_model
+
+
+def test_a_user_f_max_below_the_edges_or_kipis_ceiling_is_a_stand_in():
+    """Coordinator's I2 and M2: harmonics cut short by noise.f_max_hz, or by KiPI's 3 GHz
+    ceiling (waveforms.py:33, :96-97) on faster edges."""
+    p = _project()
+    for v in p.victims:
+        v.noise_margin_v = 1.0
+    p.noise = NoiseOptions(board_model=False, f_max_hz=100e6)
+    from coppernicus.engine.noise import solve_aggressor
+    r = solve_aggressor(_board(), p, "U1")
+    assert "harmonics stop at 100 MHz (noise.f_max_hz), below the edges' 1592 MHz" in r.stand_ins
+    p = _project(fsw_hz=2e6, rise_s=0.5e-9, fall_s=0.5e-9)
+    r = _quick(p)
+    assert r.f_max_hz == pytest.approx(3e9)
+    assert "harmonics stop at KiPI's 3 GHz ceiling, below the edges' 6366 MHz" in r.stand_ins
+
+
+def test_a_switch_net_missing_on_one_phase_is_a_stand_in_for_that_phase():
+    """Coordinator's I3, on a two-phase aggressor where only phase 2 lacks it."""
+    import dataclasses
+    p = _project()
+    a = p.aggressors[0]
+    a.phases.append(dataclasses.replace(a.phases[0], switch_net=""))
+    r = _quick(p)
+    assert "capacitive coupling of phase 2 left out: no switch net" in r.stand_ins
+    assert not any("phase 1 left out" in x for x in r.stand_ins)
+    # Its output capacitor's loop runs through the switch node: KiPI draws none for phase 2.
+    assert ("C2 on phase 2: KiPI draws no current loop for it (its loop runs through the switch node, "
+            "and the phase has no switch net), so its loop's coupling is left out") in r.stand_ins
+    assert not any(x.startswith("C2 on phase 1") for x in r.stand_ins)
+    assert r.phases == 2
+
+
+def test_a_cancel_during_the_field_solves_stops_the_solve():
+    """Coordinator's M5: KiPI calls progress from its field-solve worker threads; a cancel
+    asked there stops the solve before the victims."""
+    import threading
+
+    from coppernicus.engine.noise import solve_aggressor
+    from coppernicus.engine.solve import Cancelled
+    seen, asked = [], {}
+
+    def progress(m):
+        seen.append(m)
+        if "] solving " in m and "[1/" not in m and not asked:
+            asked["thread"] = threading.current_thread().name
+    with pytest.raises(Cancelled):
+        solve_aggressor(_board(), _project(), "U1", progress=progress, cancelled=lambda: bool(asked))
+    solving = [m for m in seen if "] solving " in m]
+    assert asked and 2 <= len(solving) < 34
+    assert not any(m.startswith("== Victims") for m in seen)
+    if any("at a time" in m for m in seen):            # KiPI solved side by side here
+        assert asked["thread"].startswith("kipi-field")

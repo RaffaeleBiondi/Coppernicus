@@ -569,6 +569,7 @@ def _cmd_noise(args) -> int:
         print(f"Summary: {summary_path}")
     return _exit_for(doc)
 
+
 def _print_rail(res, problems):
     from coppernicus.problems import FAIL, max_drop_text
     others = [n for n in res.nets if n != res.net]
