@@ -410,6 +410,57 @@ def test_remove_triangle_in_the_packaged_app(monkeypatch, tmp_path, capsys):
     assert "Nothing to remove" in capsys.readouterr().out
 
 
+def test_a_folder_in_use_is_removed_at_the_next_start(monkeypatch, tmp_path, capsys):
+    """When the downloaded Triangle cannot be deleted now (a file in use: the running app on
+    Windows has it loaded), remove() leaves it whole, writes the marker and says it will be
+    removed the next time Coppernicus starts; that start deletes it before anything imports it,
+    then downloads it again as usual."""
+    _bundle, site = _frozen_bundle(monkeypatch, tmp_path, "cpn_fake_inuse")
+    plan = bt.needed()
+    bt.install(plan.pin, site, wheel=plan.wheel, url=plan.url)
+    files_before = sorted(p.relative_to(site) for p in site.rglob("*"))
+    real_replace = os.replace
+
+    def busy(src, dst):                       # the folder is in use: it cannot be moved away
+        if Path(src) == site:
+            raise PermissionError(32, "The process cannot access the file because it is being "
+                                      "used by another process", str(src))
+        return real_replace(src, dst)
+    monkeypatch.setattr(bt.os, "replace", busy)
+    with pytest.raises(bt.RemovalDeferred) as caught:
+        bt.remove(site)
+    assert "will be removed the next time Coppernicus starts" in caught.value.message
+    assert (site.parent / bt.REMOVE_MARKER).exists()
+    assert sorted(p.relative_to(site) for p in site.rglob("*")) == files_before      # whole
+    # The same through --remove-triangle: not an error.
+    monkeypatch.setattr(sys, "argv", ["Coppernicus", "--remove-triangle"])
+    assert _frozen_main().main() == 0
+    assert "will be removed the next time Coppernicus starts" in capsys.readouterr().out
+    # The next start: nothing holds it any more; it is deleted before any import, then fetched.
+    monkeypatch.setattr(bt.os, "replace", real_replace)
+    plan = bt.needed()
+    assert plan is not None and not site.exists()
+    assert not (site.parent / bt.REMOVE_MARKER).exists()
+
+
+def test_on_windows_a_loaded_triangle_is_removed_at_the_next_start(monkeypatch, tmp_path):
+    """On Windows the running process cannot delete a package it has loaded: remove() does not
+    try, it leaves the marker."""
+    _bundle, site = _frozen_bundle(monkeypatch, tmp_path, "cpn_fake_loaded")
+    plan = bt.needed()
+    bt.install(plan.pin, site, wheel=plan.wheel, url=plan.url)
+    loaded = type(sys)("cpn_fake_loaded")
+    loaded.__file__ = str(site / "cpn_fake_loaded" / "__init__.py")
+    monkeypatch.setitem(sys.modules, "cpn_fake_loaded", loaded)
+    monkeypatch.setattr(bt.platform, "system", lambda: "Windows")
+    with pytest.raises(bt.RemovalDeferred):
+        bt.remove(site)
+    assert site.exists() and (site.parent / bt.REMOVE_MARKER).exists()
+    monkeypatch.setattr(bt.platform, "system", lambda: "Darwin")   # elsewhere it goes now
+    assert bt.remove(site) > 0 and not site.exists()
+    assert not (site.parent / bt.REMOVE_MARKER).exists()
+
+
 def test_a_bundle_without_its_pin_says_so(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)

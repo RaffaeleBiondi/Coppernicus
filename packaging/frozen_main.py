@@ -35,6 +35,9 @@ def remove_triangle() -> int:
     site = bt.site_dir()
     try:
         size = bt.remove(site)
+    except bt.RemovalDeferred as e:          # a file in use: removed at the next start
+        print(f"{e.message}.\n  {e.hint}.")
+        return 0
     except bt.BootstrapError as e:
         print(f"error: {e.message}\n  {e.hint}", file=sys.stderr)
         return 2

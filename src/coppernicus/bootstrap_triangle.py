@@ -19,7 +19,11 @@ installed file against the wheel's ``RECORD`` (:func:`is_installed`, no network)
 the download happen only when the pinned version is missing or fails that check. A new pin (an
 app update) replaces the folder, and the old version's files go with it. Anything else in or
 beside the folder (a stale or partial copy, a download interrupted) is deleted (:func:`tidy`).
-:func:`remove` deletes the download (``--remove-triangle`` in the packaged app).
+:func:`remove` deletes the download (``--remove-triangle`` in the packaged app, and Help →
+Remove downloaded mesher in the app). When it cannot now (a file in use: on Windows, the
+running app has it loaded), it leaves the folder whole, writes :data:`REMOVE_MARKER` and raises
+:class:`RemovalDeferred`; the next start deletes the folder before anything imports it, then
+downloads it again as usual.
 
 The folder is per user: ``~/Library/Application Support/Coppernicus/site-packages`` on macOS,
 ``%LOCALAPPDATA%\\Coppernicus\\site-packages`` on Windows (:func:`site_dir`). Two environment
@@ -72,6 +76,9 @@ STAMP_FILE = ".coppernicus-triangle.json"
 #: prefix of the temporary folders an install works in.
 LOCK_FILE = ".triangle.lock"
 STAGING_PREFIX = ".triangle-download-"
+#: Beside the folder: a removal asked for while a file of it was in use; the next start deletes
+#: the folder before anything imports it.
+REMOVE_MARKER = ".triangle-remove"
 #: Shewchuk's notice, copied into the bundle by the build.
 NOTICE_FILE = Path("licenses") / "TRIANGLE_NOTICE.txt"
 
@@ -373,9 +380,37 @@ def _size(path: Path) -> int:
     return sum(p.lstat().st_size for p in path.rglob("*") if p.is_file() or p.is_symlink())
 
 
+class RemovalDeferred(BootstrapError):
+    """:func:`remove` could not delete the folder now (a file of it in use): it is whole, the
+    marker is written, and the next start deletes it before anything imports it."""
+
+    code = "triangle_removal_deferred"
+
+
+def _loaded_from(site: Path) -> bool:
+    """Whether this process has imported a module from ``site``."""
+    root = os.path.normcase(str(Path(site).resolve()))
+    for module in list(sys.modules.values()):
+        file = getattr(module, "__file__", None)
+        if file and os.path.normcase(str(Path(file).resolve())).startswith(root + os.sep):
+            return True
+    return False
+
+
+def _defer(site: Path, why: str) -> None:
+    (site.parent / REMOVE_MARKER).write_text(why + "\n", encoding="utf-8")
+    raise RemovalDeferred("Triangle will be removed the next time Coppernicus starts "
+                          f"({why})", "close every Coppernicus window: the next start deletes it "
+                          "before using it, then downloads it again")
+
+
 def remove(site: Path) -> int:
     """Delete the downloaded Triangle: the folder ``site`` and any :func:`leftovers`. Returns
-    the bytes deleted (0: there was nothing). The next start downloads it again."""
+    the bytes deleted (0: there was nothing). The next start downloads it again.
+
+    The folder is first moved aside in one rename, so a file in use leaves it whole: then, and
+    on Windows when this process has it loaded (it could not delete it), the marker is written
+    and :class:`RemovalDeferred` raised; the next start deletes it (:func:`needed`)."""
     site = Path(site)
     if not site.parent.is_dir():
         return 0
@@ -383,13 +418,32 @@ def remove(site: Path) -> int:
         with _lock(site.parent):
             targets = ([site] if site.exists() else []) + leftovers(site)
             size = sum(_size(p) for p in targets)
-            for path in targets:
-                _delete(path)
+            if site.exists():
+                if platform.system() == "Windows" and _loaded_from(site):
+                    _defer(site, "the running app has it loaded")
+                aside = site.parent / f".{site.name}-old-{uuid.uuid4().hex[:8]}"
+                try:
+                    os.replace(site, aside)
+                except OSError as e:
+                    _defer(site, f"a file of it is in use: {e}")
+                targets = [aside] + [p for p in targets if p != site]
+            _clean(targets)                  # moved away: what stays goes at the next start
+            _unlink(site.parent / REMOVE_MARKER)
     except OSError as e:
         raise BootstrapError(f"cannot delete the downloaded Triangle in {site.parent}: {e}",
                              "close every Coppernicus window, then try again") from e
     _unlink(site.parent / LOCK_FILE)
     return size
+
+
+def _remove_if_asked(site: Path) -> None:
+    """At a start, before anything imports Triangle: delete the folder when a removal was
+    deferred (:data:`REMOVE_MARKER`); if it is still in use, the next start tries again."""
+    if (Path(site).parent / REMOVE_MARKER).exists():
+        try:
+            remove(site)
+        except BootstrapError:
+            pass
 
 
 def activate(site: Path) -> None:
@@ -581,6 +635,7 @@ def needed(env=None) -> Optional[Plan]:
                              f"download Coppernicus again; see {DOCS_URL}") from e
     wheel = choose_wheel(pin)
     site = site_dir(env)
+    _remove_if_asked(site)                   # a removal asked for while it was in use
     if is_installed(site, pin, wheel):
         if leftovers(site) or extraneous(site):
             try:
