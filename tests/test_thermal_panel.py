@@ -389,3 +389,71 @@ def test_thermal_edits_reach_the_merged_project_of_a_board_with_fields():
         assert tree.thermal_limits == {"max_temp_c": float(limit)}, tree.thermal_limits
         assert panel.shown_layer_rows()[0][-1] == "FAIL", panel.shown_layer_rows()
     ''')
+
+
+# ---------------------------------------------------------------------- cost and memory
+
+def test_the_estimate_and_the_stats_lines():
+    from coppernicus.app.thermal_panel import estimate_text, stats_text
+    from coppernicus.engine.thermal import ThermalRam
+    ram = ThermalRam(2.5e9, 16e9, False, "The model needs about 2.5 GB.")
+    assert estimate_text("100 cells", ram) == "Before solving: 100 cells. The model needs about 2.5 GB."
+    risky = ThermalRam(20e9, 16e9, True, "The model needs about 20 GB.")
+    assert estimate_text("100 cells", risky) == ("Before solving: 100 cells. It could exceed this machine's "
+                                                 "memory. The model needs about 20 GB.")
+    st = {"seconds": 0.74, "memory_peak_mb": 412.4, "memory_peak_raised": True}
+    assert stats_text(st, 41_750, 2) == ("solved in 0.7 s · 83,500 unknowns (41,750 cells × 2 layers) · "
+                                         "memory peak 412 MB (this solve raised the process's peak)")
+    assert stats_text(dict(st, memory_peak_raised=False), 41_750, 2).endswith(
+        "memory peak 412 MB: the process's peak so far; this solve stayed at or below it")
+    assert stats_text(dict(st, memory_peak_mb=None), 41_750, 2).endswith(
+        "memory peak cannot be read on this system")
+
+
+def test_ctrl_t_shows_the_estimate_and_then_names_the_last_solve():
+    run_in_window(HELPERS + '''
+        window.open_project(EXAMPLES / "demo" / "demo-thermal.coppernicus.yml")
+        window.solve_tree()
+        first = window.thermal_panel.estimate.text()
+        window.tree_worker.wait(120000)
+        app.processEvents()
+        app.processEvents()
+        assert "83,500 unknowns" in first and "no earlier electro-thermal solve" in first, first
+        assert "MB" in first and "measured on synthetic" in first, first
+        details = window.thermal_panel.details.text()
+        assert "memory peak" in details and "83,500 unknowns" in details, details
+        window.solve_tree()
+        second = window.thermal_panel.estimate.text()
+        window.tree_worker.wait(120000)
+        app.processEvents()
+        assert "the last electro-thermal solve on this computer took" in second, second
+        assert "for 83,500 unknowns" in second, second
+    ''')
+
+
+def test_a_model_over_this_machines_memory_asks_first_no_by_default():
+    run_in_window(HELPERS + '''
+        import coppernicus.app.thermal_panel as tp
+        window.open_project(EXAMPLES / "demo" / "demo-thermal.coppernicus.yml")
+        first = solve_tree()
+        rows, vrms = window.thermal_panel.shown_layer_rows(), window.tree_panel.vrm_rows()
+        worker = window.tree_worker
+        tp.total_memory_bytes = lambda: 1e6                      # a 1 MB machine
+        asked = []
+        answer = [QtWidgets.QMessageBox.No]
+
+        def ask(*a, **k):
+            asked.append(a)
+            return answer[0]
+        QtWidgets.QMessageBox.warning = staticmethod(ask)
+        window.solve_tree()
+        assert len(asked) == 1 and asked[0][4] == QtWidgets.QMessageBox.No, asked
+        assert "Solve anyway?" in asked[0][2] and "more than this machine's" in asked[0][2], asked[0][2]
+        status = window.statusBar().currentMessage()
+        assert window.tree_worker is worker and status.startswith("Not solved"), status
+        assert window.tree is first and window.thermal_panel.shown_layer_rows() == rows
+        assert window.tree_panel.vrm_rows() == vrms
+        answer[0] = QtWidgets.QMessageBox.Yes
+        second = solve_tree()
+        assert len(asked) == 2 and window.tree_worker is not worker and second is not first, asked
+    ''')

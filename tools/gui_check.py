@@ -1297,6 +1297,12 @@ def run_thermal(window, check: Checks, args, out: Path):
     loads = panel.shown_load_rows()
     check("... U1's drop: 39.156 mV at the ambient, 41.354 mV electro-thermal",
           bool(loads) and loads[0][:4] == ("U1", "+3V3", "39.156", "41.354"), str(loads[:1]))
+    estimate = panel.estimate.text()
+    check("... before it solved, the tab showed its cost and memory: 83,500 unknowns, a measured fit",
+          estimate.startswith("Before solving: 250 × 167 cells of 0.24 mm (automatic)")
+          and "83,500 unknowns" in estimate and "measured on synthetic" in estimate, estimate)
+    check("... and the solve's memory peak", "memory peak" in details and "83,500 unknowns" in details,
+          details)
 
     window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
     window.field_box.setCurrentIndex(window.field_box.findData("temperature"))
@@ -1424,6 +1430,10 @@ def run_thermal(window, check: Checks, args, out: Path):
     window.solve_tree()
     panel.cancel.click()
     cancelling = window.statusBar().currentMessage()
+    estimate = panel.estimate.text()
+    check("thermal: the next Ctrl+T's estimate is on the set 0.5 mm grid and names the last solve",
+          "cells of 0.5 mm (set)" in estimate
+          and "the last electro-thermal solve on this computer took" in estimate, estimate)
     window.tree_worker.wait(int(args.timeout * 1000))
     QApplication.processEvents()
     QApplication.processEvents()

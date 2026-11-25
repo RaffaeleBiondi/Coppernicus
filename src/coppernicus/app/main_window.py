@@ -39,7 +39,7 @@ from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel, TreePanel
 from coppernicus.app.picking import add_picked_pin, pick_nets
-from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel
+from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel, record_solve
 from coppernicus.app.worker import CANCELLED, ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
@@ -1171,8 +1171,10 @@ class MainWindow(QMainWindow):
         if self.tree_worker is not None and self.tree_worker.isRunning():
             self.statusBar().showMessage("The power tree is already being solved")
             return
-        self.tree_panel.clear("<b>Power tree</b>: solving… · Cancel: Temperature tab")
         thermal = self.merged.project.thermal.enabled   # the Temperature tab holds Cancel
+        if thermal and not self._thermal_go():
+            return
+        self.tree_panel.clear("<b>Power tree</b>: solving… · Cancel: Temperature tab")
         self.thermal_panel.clear("<b>Board temperature</b>: solving…" if thermal else "")
         self.results_tabs.setCurrentWidget(self.thermal_panel if thermal else self.tree_panel)
         self.tree_worker = TreeWorker(self.board, self.merged.project, self)
@@ -1202,6 +1204,8 @@ class MainWindow(QMainWindow):
         # Limits do not change the solve: judge it by the ones set now (one may have been
         # edited while it solved, on the copy the worker took).
         apply_limits(tree, self.merged.project)         # the board temperature's too
+        if tree.thermal is not None:
+            record_solve(tree)                           # its time, for the next estimate
         self.tree = tree
         self.tree_panel.set_tree(tree, self._tree_verdict())
         self.thermal_panel.set_tree(tree, self._thermal_verdict_html())
@@ -1345,6 +1349,23 @@ class MainWindow(QMainWindow):
             apply_thermal_limits(self.tree, self.merged.project.thermal)
             self.tree_panel.set_tree(self.tree, self._tree_verdict())
             self.thermal_panel.set_tree(self.tree, self._thermal_verdict_html())
+
+    def _thermal_go(self) -> bool:
+        """Before an electro-thermal solve: its rough cost in the Temperature tab and, when its
+        model could exceed this machine's memory, "Solve anyway?" (No by default). Nothing
+        else changes before the answer."""
+        text, risk = self.thermal_panel.show_estimate(self.board, self.merged.project.thermal)
+        if not risk:
+            return True
+        answer = QMessageBox.warning(
+            self, "This solve could exceed the memory",
+            f"{text}\n\nSolve anyway? It could make this computer swap; a coarser grid "
+            "(Temperature tab → Grid) lowers it.", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if answer == QMessageBox.Yes:
+            return True
+        self.statusBar().showMessage("Not solved: the board temperature's model could exceed this "
+                                     "machine's memory (see the estimate in the Temperature tab)")
+        return False
 
     def _thermal_verdict_html(self) -> str:
         tv = thermal_verdict(self.tree)

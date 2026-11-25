@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import dataclasses
 import html
+import json
 import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -37,7 +38,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app import APP_NAME
 from coppernicus.app.panels import DecimalSpinBox, DecimalValidator
+from coppernicus.engine.ac import total_memory_bytes
+from coppernicus.engine.thermal import thermal_cost_text, thermal_ram_estimate, thermal_size
 from coppernicus.project import ThermalOptions
 from coppernicus.temperature import THERMAL_LIMITS, thermal_summary, thermal_verdict
 
@@ -47,6 +51,7 @@ LOAD_HEADERS = ["Load", "Group", "Drop at ambient (mV)", "Electro-thermal (mV)",
 REGULATOR_HEAT_LABELS = (("output_pads", "output pads"), ("part_pads", "all the part's pads"))
 FAIL_COLOR = "#c0392b"
 CANCELLING = "Cancelling: stops at the next iteration"
+LAST_SOLVE_SETTING = "thermal/last_solve"   # the last electro-thermal solve's time and size (QSettings)
 NO_MAP = ("No board temperature: tick Electro-thermal in the Temperature tab and solve the power tree "
           "(Ctrl+T)")
 NOT_SOLVED_TEXT = ("<b>Board temperature</b>: not solved. Tick Electro-thermal and solve the power "
@@ -123,6 +128,52 @@ def load_rows(doc: Mapping[str, Any]) -> List[Tuple[str, ...]]:
     against the electro-thermal drop."""
     return [(ld["name"], ld["group"], _num(ld["drop_ambient_mv"], ".3f"), _num(ld["drop_mv"], ".3f"),
              _num(ld.get("change_pct"), "+.1f")) for ld in doc.get("loads") or []]
+
+
+def estimate_text(cost: str, ram) -> str:
+    """The pre-solve estimate: KiPI's grid and the last solve's time (``cost``), and the
+    memory of the model (:func:`coppernicus.engine.thermal.thermal_ram_estimate`)."""
+    risk = "It could exceed this machine's memory. " if ram.risk else ""
+    return f"Before solving: {cost}. {risk}{ram.text}"
+
+
+def stats_text(st: Mapping[str, Any], cells: int, layers: int) -> str:
+    """One line of an electro-thermal solve's stats, with the memory peak and whether this
+    solve raised it (the AC tab's wording)."""
+    parts = [f"solved in {float(st.get('seconds', 0.0)):.1f} s",
+             f"{cells * layers:,} unknowns ({cells:,} cells × {layers} layers)"]
+    mb = st.get("memory_peak_mb")
+    if mb is None:
+        parts.append("memory peak cannot be read on this system")
+    elif st.get("memory_peak_raised"):
+        parts.append(f"memory peak {mb:.0f} MB (this solve raised the process's peak)")
+    else:
+        parts.append(f"memory peak {mb:.0f} MB: the process's peak so far; this solve stayed at or below it")
+    return " · ".join(parts)
+
+
+def _settings() -> QSettings:
+    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
+
+
+def last_solve() -> Optional[Dict[str, float]]:
+    """The last electro-thermal solve on this computer: ``seconds`` and ``unknowns``; None
+    without one (or a damaged setting)."""
+    try:
+        text = _settings().value(LAST_SOLVE_SETTING, "")
+        return json.loads(text) if text else None
+    except (TypeError, ValueError):
+        return None
+
+
+def record_solve(tree) -> None:
+    """Keep an electro-thermal solve's time and size for the next estimate."""
+    try:
+        t = tree.thermal
+        _settings().setValue(LAST_SOLVE_SETTING, json.dumps(
+            {"seconds": float(tree.stats["seconds"]), "unknowns": float(t.grid_cells * len(t.maps))}))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        pass
 
 
 # ---------------------------------------------------------------------- the form (pure)
@@ -267,6 +318,10 @@ class ThermalPanel(QWidget):
         row.addWidget(self.cancel)
         row.addWidget(self.state, 1)
         ll.addLayout(row)
+        self.estimate = QLabel()           # before an electro-thermal solve: its cost and memory
+        self.estimate.setWordWrap(True)
+        self.estimate.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        ll.addWidget(self.estimate)
         ll.addStretch(1)
         scroll = QScrollArea()                       # the form is taller than the dock
         scroll.setWidget(left)
@@ -381,6 +436,20 @@ class ThermalPanel(QWidget):
         self.cancel.setEnabled(False)
         self.state.setText(CANCELLING)
 
+    def show_estimate(self, board, options: ThermalOptions) -> Tuple[str, bool]:
+        """Before an electro-thermal solve: its rough cost and memory, shown in the tab; True
+        when the model could exceed this machine's memory. An estimate never stops a solve."""
+        try:
+            size = thermal_size(board, options)
+        except Exception as e:                       # noqa: BLE001 - shown, never raised
+            text = f"Before solving: no estimate ({e})"
+            self.estimate.setText(text)
+            return text, False
+        ram = thermal_ram_estimate(size.unknowns, size.layers, total_memory_bytes())
+        text = estimate_text(thermal_cost_text(size, last_solve()), ram)
+        self.estimate.setText(text)
+        return text, ram.risk
+
     # ------------------------------------------------------------------ results
     def clear(self, text: str = ""):
         self.summary.setText(text or NOT_SOLVED_TEXT)
@@ -407,8 +476,10 @@ class ThermalPanel(QWidget):
         if doc["limits"]:
             head += f"<br>{html.escape(doc['verdict_note'])}"
         self.summary.setText(head)
-        self.details.setText("<br>".join(html.escape(t) for t in (peak_text(doc), history_text(doc),
-                                                                   heat_text(doc))))
+        temp = tree.thermal
+        self.details.setText("<br>".join(html.escape(t) for t in (
+            peak_text(doc), history_text(doc), heat_text(doc),
+            stats_text(tree.stats, temp.grid_cells, len(temp.maps)))))
         rows = layer_rows(doc, stuck)
         self._fill(self.layers, rows, {i for i, r in enumerate(rows) if r[-1] == "FAIL"})
         self._points = [(r["layer"], float(r["x_mm"]), float(r["y_mm"]), r["group"]) for r in doc["layers"]]
