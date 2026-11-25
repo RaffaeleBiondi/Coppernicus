@@ -1448,12 +1448,132 @@ def run_hover(window, check: Checks, args, out: Path):
     tree = solve_tree_and_wait(window, args.timeout)
     window.group_box.setCurrentIndex(window.group_box.findData("GND"))
     QApplication.processEvents()
-    window.view._on_double_click((97.5, -1.0))
+    if args.window:                    # a real move and a real double-click on the same pixel
+        window.view.reset_view()
+        QApplication.processEvents()
+        hovered = hover_vs_double_click(window, view_point(window, 97.5, 1.0))[0]
+    else:
+        view.probe_at(97.5, 1.0)
+        hovered = view.hover_at(97.5, 1.0)
     clicked = window.statusBar().currentMessage()
-    hovered = view.hover_at(97.5, 1.0)
     rise = clicked.split("rise = ")[1].split(" mV")[0] if "rise = " in clicked else "?"
     check("hover: on the GND group it reads the double-click's rise", tree is not None
           and f"rise = {rise} mV above 0 V (ground rise)" in hovered, f"{hovered!r} | {clicked}")
+    window.dirty = False
+
+
+def readout(text: str):
+    """What a hover label or a double-click message reads: ("nothing",) off the copper,
+    ("not connected",) on copper joined to no source, else ("values", V, drop) as printed."""
+    import re
+    if not text or "no copper of this net" in text:
+        return ("nothing",)
+    if "not connected" in text:
+        return ("not connected",)
+    v = re.search(r"V = (-?[\d.]+) V", text)
+    d = re.search(r"(?:drop|rise|shift) = (-?[\d.]+) mV", text)
+    return ("values", v and v.group(1), d and d.group(1))
+
+
+def double_click_view(window, pos):
+    """A left double-click on the view widget at ``pos`` (logical pixels) as a mouse sends it:
+    press, release, double-click (Qt hands it to VTK as a second press) and release.
+    QTest.mouseDClick sends no press or release, which leaves VTK panning. Real window only."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    widget = window.view.plotter.interactor
+    for kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.MouseButtonDblClick,
+                 QEvent.MouseButtonRelease):
+        held = Qt.NoButton if kind == QEvent.MouseButtonRelease else Qt.LeftButton
+        QApplication.sendEvent(widget, QMouseEvent(kind, QPointF(pos), QPointF(widget.mapToGlobal(pos)),
+                                                   Qt.LeftButton, held, Qt.NoModifier))
+    QApplication.processEvents()
+
+
+def hover_vs_double_click(window, pos):
+    """At the view widget's pixel ``pos`` (logical, y down): the hover label after a real move
+    there ("" when hidden), the readouts a real double-click there emitted, and the board
+    point (mm) under the pixel. Real window only."""
+    view = window.view
+    mouse_move(window, pos)
+    view._hover_timer.stop()
+    view._hover_tick()
+    hovered = view.hover_label.text() if view.hover_label.isVisible() else ""
+    messages = []
+    view.probed.connect(messages.append)
+    double_click_view(window, pos)
+    view.probed.disconnect(messages.append)
+    return hovered, messages, board_point(window, pos)
+
+
+def run_hover_pixels(window, check: Checks, args, out: Path):
+    """The hover readout and the double-click read the same point: at real pixels of the
+    demo's drop map (a grid on and off the copper, beside every via, terminal and outline
+    corner), with the current-flow arrows off and on, a real move shows the label and a real
+    double-click the readout of the point exactly under the pointer (real window)."""
+    from collections import Counter
+
+    import numpy as np
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QApplication
+    view = window.view
+    for key, act in view.hover_actions.items():
+        act.setChecked(key in ("v", "drop", "layer"))
+    window.dirty = False
+    window.open_project(ROOT / "examples" / "demo" / "demo.coppernicus.yml")
+    window.nets.select("+3V3")
+    QApplication.processEvents()
+    res = solve_and_wait(window, args.timeout)
+    check("hover vs double-click: solve the demo project", res is not None)
+    if res is None:
+        return
+    widget = view.plotter.interactor
+    outline = np.vstack([np.asarray(r, float) for r in window.board.outline()])
+    total, bad, wrong_count, examples, where, misread = 0, Counter(), 0, [], Counter(), 0
+    for layer, arrows in (("B.Cu", False), ("B.Cu", True), ("F.Cu", True)):
+        window.group_box.setCurrentIndex(0)
+        window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+        window.layer_box.setCurrentIndex(window.layer_box.findText(layer))
+        window.show_arrows.setChecked(arrows)
+        view.reset_view()
+        QApplication.processEvents()
+        w, h = widget.width(), widget.height()
+        pixels = [("grid", QPoint(x, y)) for x in range(12, w - 12, max(w // 14, 1))
+                  for y in range(12, h - 12, max(h // 10, 1))]
+        near = [("via", v.position) for v in res.vias if v.current > 0]
+        near += [("terminal", p) for t in res.sources + res.loads for p in t.positions[:1]]
+        near += [("outline", tuple(p)) for p in outline]
+        for kind, (x, y) in near:
+            at = view_point(window, float(x), float(y))
+            pixels += [(kind, at + d) for d in (QPoint(3, 0), QPoint(0, 4), QPoint(-5, -2))]
+        pixels = [(k, p) for k, p in pixels if 1 <= p.x() < w - 1 and 1 <= p.y() < h - 1]
+        for kind, pos in pixels:
+            hovered, messages, (bx, by) = hover_vs_double_click(window, pos)
+            total += 1
+            where[readout(hovered)[0]] += 1
+            if len(messages) != 1:
+                wrong_count += 1
+                continue
+            msg = messages[0]
+            same_reading = readout(hovered) == readout(msg)
+            misread += not same_reading
+            if not (same_reading and msg.startswith(f"({bx:.3f}, {by:.3f}) mm")):
+                bad[(layer, "arrows" if arrows else "no arrows", kind)] += 1
+                if len(examples) < 4:
+                    examples.append(f"{layer} {kind} px ({pos.x()}, {pos.y()}) board ({bx:.3f}, {by:.3f}): "
+                                    f"hover {hovered!r} | double-click {msg!r}")
+    window.show_arrows.setChecked(False)
+    n_bad = sum(bad.values())
+    print(f"  hover vs double-click: {total} pixels (hover: {dict(where)}), {n_bad} disagreed "
+          f"({misread} in what they read, the rest in the point only) {dict(bad)}, {wrong_count} "
+          "double-click(s) without exactly one readout", flush=True)
+    for line in examples:
+        print("   ", line, flush=True)
+    check(f"hover vs double-click: each of {total} real double-clicks gave one readout", wrong_count == 0,
+          f"{wrong_count} did not")
+    check(f"... and it reads what the hover reads, at the point under the pointer, at all {total} pixels",
+          total > 0 and n_bad == 0, f"{n_bad} disagreed")
     window.dirty = False
 
 
@@ -1620,6 +1740,8 @@ def main(argv=None) -> int:
         run_report(window, check, args, out)
         run_open_asks(window, check, out)
         run_hover(window, check, args, out)
+        if args.window:
+            run_hover_pixels(window, check, args, out)
         run_copper_thickness(window, check, args, out)
         run_close_asks(window, check, args, out)
     finally:

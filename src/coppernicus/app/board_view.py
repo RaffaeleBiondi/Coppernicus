@@ -184,7 +184,9 @@ class BoardView(QWidget):
         self.plotter.set_background("white")
         self.plotter.enable_parallel_projection()
         self.plotter.enable_2d_style()
-        self.plotter.track_click_position(self._on_double_click, side="left", double=True)
+        # viewport=True: pyvista hands over the click's display position and runs no picker
+        # (its picker snaps to the nearest vertex of any actor, tens of pixels away).
+        self.plotter.track_click_position(self._double_clicked, side="left", double=True, viewport=True)
         self._click_mode: Optional[str] = None
         self._press_at: Optional[Tuple[int, int]] = None
         self._press_is_double = False
@@ -487,16 +489,28 @@ class BoardView(QWidget):
             self.plotter.add_mesh(line, color=MEASURE_COLOR, line_width=2.0, name="measure_line")
 
     # ------------------------------------------------------------------ probe
+    def _double_clicked(self, *_):
+        """A double-click: the readout of the board point exactly under the pointer, read as
+        the hover, pick and Measure read it (:meth:`display_to_board` of the event's display
+        position)."""
+        self.probe_at(*self.display_to_board(*self._event_xy()))
+
     def _on_double_click(self, point):
+        """The double-click's readout at ``point`` in the view's frame (x, −y), for scripts
+        (the docs screenshots, tools/gui_check.py)."""
+        self.probe_at(float(point[0]), -float(point[1]))
+
+    def probe_at(self, x: float, y: float) -> str:
+        """The double-click's readout at board point (x, y) mm on the shown layer: V, the
+        drop and |J| (and the change of drop on the Δ map), emitted as :attr:`probed`.
+        Empty, and not emitted, before a solve."""
         if self._layer is None or self._finder is None or self._result is None:
-            return
-        x, y = float(point[0]), -float(point[1])
+            return ""
         p = probe(self._layer, self._finder, x, y)
         if p is None:
-            self.probed.emit(f"({x:.3f}, {y:.3f}) mm: no copper of this net on {self._layer.name}")
+            msg = f"({x:.3f}, {y:.3f}) mm: no copper of this net on {self._layer.name}"
         elif not np.isfinite(p.voltage_v):
-            self.probed.emit(f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: copper not connected "
-                             "to a source")
+            msg = f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: copper not connected to a source"
         else:
             delta = ""
             if self._difference_mv is not None:          # the Δ map is shown: read Δ too
@@ -504,10 +518,11 @@ class BoardView(QWidget):
                 d = float(self._finder.weights(p.triangle, x, y) @ self._difference_mv[nodes])
                 delta = (f", Δ drop vs baseline = {d:+.3f} mV" if np.isfinite(d)
                          else ", Δ drop vs baseline: no baseline copper here")
-            self.probed.emit(f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: V = {p.voltage_v:.5f} V, "
-                             f"{self._result.drop_word()} = "
-                             f"{float(drop_mv(self._result, p.voltage_v)):.3f} mV, "
-                             f"|J| = {p.current_density_a_mm2:.2f} A/mm²{delta}")
+            msg = (f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: V = {p.voltage_v:.5f} V, "
+                   f"{self._result.drop_word()} = {float(drop_mv(self._result, p.voltage_v)):.3f} mV, "
+                   f"|J| = {p.current_density_a_mm2:.2f} A/mm²{delta}")
+        self.probed.emit(msg)
+        return msg
 
     # ------------------------------------------------------------------ hover
     def hover_at(self, x: float, y: float) -> str:
