@@ -556,3 +556,217 @@ junction temperature; transients); what is judged (above).
 - **No cancel inside the factorization.** KiPI checks for cancel once per iteration and inside
   the tree solve, not during the thermal model's one factorization (most of the time on a large
   board).
+
+---
+
+## Task 9: AC PDN impedance |Z|(f) → `kipi/ac` (`kipi/ac/solver/sweep.py`, `kipi/ac/model.py`)
+
+Code: `coppernicus.engine.ac` (`ac_setup`, `solve_ac_rail`, `ac_rails`, `ac_size`,
+`cost_estimate`, `ram_estimate`, `read_cap_file`, `write_cap_file`, `capacitor_candidates`),
+`coppernicus.impedance` (verdicts, summary, text, CSV, PNG; no engine), `results.ImpedanceResult`
+and `ProbeImpedance`, `coppernicus ac` in `cli.py`.
+
+KiPI's entry point is `solve_ac(snap, setup, vrm_name, gnd, progress)` (sweep.py:390-511): its
+third argument names a VRM. The rail is that VRM's output net plus the nets series links join
+to it; the ground is `gnd` plus the nets links join to it (checks.py:53-69). The method is a
+2.5D FEM of rail and ground copper with two faces per sheet (fem.py:1-37); the port matrix is
+solved at the field frequencies, PCHIP-interpolated as jω·Z on log f and terminated by the
+parts. VRMs carry no impedance (checks.py:6-7): the result is the **open-loop** impedance.
+The board snapshot carries each dielectric's thickness and εr (core/model/board.py:36-91),
+which the solve reads; where a stackup gives none, `ac.default_er` is used (fem.py:575-581).
+
+### Probe → `kipi.ac.model.Probe` (new: `probes:`)
+
+| Coppernicus | KiPI | Unit | Default | Notes |
+|---|---|---|---|---|
+| `name` | `name` | — | required | Unique in the project. |
+| `ref`, `pins` on `net` | `rail = PinRef(ref, net, pins)` | — | all pins | Resolved as in Task 6; a missing pin raises `EngineError` naming the probe. |
+| `ground` (`{ref, net, pins}`) | `ground = PinRef(…)` | — | none | `ref` defaults to the probe's part. Solving without it raises `EngineError`. |
+| `target_ohm`, `target_hz` | not passed | Ω, Hz | none | Flat target up to `target_hz` (the whole sweep if unset), with KiPI's `target_at` (target.py:76-95). `target_hz` without `target_ohm`: refused. |
+| `target_points` | not passed | [[Hz, Ω]…] | `[]` | Log-log mask (`mask_at`) that applies **only between its first and last points** (coordinator's ruling): KiPI's `mask_at` holds it flat beyond them, which would judge against values the user never gave, so outside them nothing is judged. Together with `target_ohm` or `target_hz`: refused. |
+| `ac_tolerance_v`, `step_a`, `slew_a_per_us` | not passed | V, A, A/µs | none | With `target_ohm` empty and all three set, the target is KiPI's `target_from_transient(v, i, slew·1e6)`: Z = V_ac/I_step up to 1/(π·t_rise), t_rise = I_step/slew (target.py:53-60). `step_a` and `slew_a_per_us` are kept for Task 11. |
+
+KiPI gets no target, step or slew, so it logs no PASS/FAIL of its own; its "Targets apply
+above…" and per-probe worst lines are dropped from the progress. Only the solved rail's
+probes and models are passed, so a half-made probe or model on another rail does not block it.
+Unknown keys in a probe or a capacitor model are refused, as in `ac:`.
+
+### CapModel → `kipi.ac.model.CapModel` (new: `capacitors:`)
+
+| Coppernicus | KiPI | Unit | Default | Notes |
+|---|---|---|---|---|
+| `name` | `name` | — | required | Unique. |
+| `capacitance_f`, `esl_h`, `esr_ohm` | same | F, H, Ω | 0 = not entered | KiPI refuses a model that has parts and a value ≤ 0 (checks.py:145-148): no default ESL or ESR. |
+| `refs` | `refs` | — | `[]` | A ref in two models is refused at load. A ref off the board raises `EngineError`. KiPI uses a ref only if it matches `C<number>` with all its pads on rail or ground nets (parts.py:72, checks.py:92-114); a non-`C<n>` part between rail and ground is left out with a warning. |
+| `rated_v` | same | V | none | Turns on KiPI's DC-bias derating at the source's set voltage (no DC result is passed): C/(1 + k(V/V_rated)^1.5) (model.py:96-102). Not for C0G. |
+| `kept_at_rated_pct` | same | % | none → KiPI's 40 | 0 < x ≤ 100. The assumption says when KiPI's typical value is used. |
+| `dielectric` | same | — | `""` | "C0G" (no bias), and the typical temperature curve when `copper_temp_c` ≠ 20 °C. |
+| — | `aging_pct_per_decade`, `mfg_tolerance_pct`, `spice` | — | off | Not kept; `read_cap_file` (a KiPI model file, cap_file.py) warns when it drops one. |
+
+### AcOptions → `ACSettings` and the rail's VRM (new: `ac:`; keys omitted at their default)
+
+| Coppernicus (`ac:`) | KiPI | Unit | Default | Notes |
+|---|---|---|---|---|
+| `f_start_hz`, `f_stop_hz`, `points_per_decade` | same | Hz, — | 1e3, 300e6, 250 | KiPI's (model.py:237-239); a test checks they match. The point counts must be finite whole numbers. |
+| `field_points_per_decade` | same | — | 20 | 0 = every sweep point. Run time scales with it. |
+| `max_edge_mm` | `ac.max_edge_mm` | mm | 1.0 | The AC mesh's own; `settings.max_edge_mm` stays DC's. |
+| `loss_tangent`, `default_er` | same | — | 0.02, 4.3 | |
+| `bandwidth_hz: {source: Hz}` | `Vrm.bandwidth_khz` (÷1e3) | Hz | none | Keyed by the source's name, else its ref. Always written onto the solved VRM: KiPI's `Vrm` defaults to 50 kHz (dc/pi/model.py:127). Without it: below. |
+| `link_esl_h: {link: H}` | `DcLink.esl_h` | H | none | Keyed by the link's ref, else its name. Without it a link is a plain R in AC. |
+| — | `grading` 0.3, `min_edge_mm` 0.03, near-rail grading, `coarsen_far`, `far_max_edge_mm` 5 | | KiPI's | Stated in the assumptions. |
+| `settings.copper_temp_c` | `ac.temperature` "fixed" at that value when ≠ 20 °C, else "none" | °C | 20 | As in DC. |
+| `settings.via_plating_um`, `copper_thickness_mm` | `settings.via_rules`; restacked board | | | Through `engine_settings()` and `with_copper_thickness`, as in DC. |
+
+Unknown keys of `bandwidth_hz` or `link_esl_h` (no such source or link) are warnings, since
+the KiCad footprint fields can add sources after the file is read. The ground is the source's
+`ground_net`, else the first probe's. A net with no source of its own (behind a ferrite) is
+solved with the rail whose links join it, and a note says so (`resolve_rail()` gives that rail
+without solving); a net the project uses as a ground is refused by name. `probe_rails()` gives
+each probe's rail (None when no rail with a source reaches its net) and `ac_rails()` the rails
+with a probe after link joins. KiPI's `ACError`, `SolveError` (pads) and `MeshError` become
+`EngineError`. `solve_ac_rail`'s `progress` callback is also called from KiPI's worker threads
+(frequencies solved side by side), `fraction` and `cancelled` from the solving thread: a GUI
+must only emit signals from them.
+
+### No bandwidth given (coordinator's Q2; a deviation from the gate's placeholder)
+
+KiPI refuses an AC solve without a VRM bandwidth (checks.py:124-128), but the bandwidth never
+enters |Z|: `solve_ac` uses it only in `judged_from`, the transient and the log
+(sweep.py:468-508). So without `ac.bandwidth_hz` the solve runs with **KiPI's bandwidth for a
+new VRM, 50 kHz** (`DEFAULT_BANDWIDTH_KHZ`, dc/pi/model.py:57), not with `f_start_hz` as the
+gate proposed (that would mark an empty band). KiPI's AC model has no regulator impedance, so
+|Z| does not depend on it: no target is judged and no worst point is given;
+`ImpedanceResult.bandwidth_hz` stays `None` (Task 11 must not feed a placeholder into a
+transient) and `assumed_bandwidth_hz` holds 50 kHz; the assumption line names the source and
+the value, and says |Z| does not depend on it; the plot hatches the band below it, labelled
+"below the regulator's control-loop bandwidth (not given; 50 kHz assumed): not judged" (the
+value is the placeholder's); the summary and the CSV have `bandwidth_hz` empty (null),
+`assumed_bandwidth_hz` 50000 and `bandwidth_assumed` true.
+
+### Results (`results.py`, at the end)
+
+- `ProbeImpedance`: `name`, `ref`, `pins`, `net`, `ground_net`; `z_ohm` (complex Ω at
+  `freq_hz`); `target_ohm`, `target_hz`, `target_points`; `target_curve_ohm` (KiPI's
+  `target_at` above the bandwidth, given or assumed; NaN where none applies; a flat target
+  ending below the sweep applies nowhere and a mask only between its first and last points,
+  where KiPI would hold both flat);
+  `target_note`, `judged_from_hz`, `fallback_note`; `worst_z_ohm`, `worst_hz`, `worst_ratio`;
+  `passed`, `not_judged`; `step_a`, `slew_a_per_us`; `mag_ohm`, `phase_deg`, `has_target`, `limit`.
+- `ImpedanceResult`: `rail`, `rail_nets`, `ground`, `source`, `bandwidth_hz`,
+  `assumed_bandwidth_hz`, `freq_hz`, `field_freq_hz`, `probes`, `plane_capacitance_f`, `caps`,
+  `missing_caps`, `links`, `cap_derated_f`, `load_line_ohm` (0: not exposed), `stats`,
+  `warnings`, `assumptions`, `dielectric_assumed`.
+- `stats`: `seconds`, `triangles`, `nodes`, `unknowns`, `ports`, `method`,
+  `field_frequencies`, `sweep_points`, `field_seconds`, `setup_seconds`, `memory_peak_mb` (this
+  process's high-water mark when the solve ended: `ru_maxrss`, or `PeakWorkingSetSize` on
+  Windows; KiPI's mesher worker processes are not counted) and `memory_peak_raised` (whether
+  this solve raised it; if not, its own peak was at most that).
+
+### Verdicts (only against the user's target)
+
+Per probe, worst point with KiPI's rule (sweep.py:67-83): where |Z|/target is highest where the
+target applies; without a target, the highest |Z| above the bandwidth. No worst point without
+a given bandwidth.
+- **No target:** no verdict and no entry; the probe is ranked.
+- **Not judged, whatever |Z|:** no bandwidth given; KiPI's `judged_from` fallback (the
+  bandwidth at or above `target_hz`, or above the sweep: KiPI would judge the open-loop rise,
+  target.py:110-125); capacitors between rail and ground without a model (`missing_caps`: they
+  move the resonances); an assumed dielectric (a stackup not read from the board, or
+  dielectrics without εr, named in the reason with the copper layers around them).
+- **Otherwise** `fail` if |Z| > target anywhere it applies; else `not_judged` if [max(bandwidth,
+  first mask point), `target_hz` or last mask point] is not inside the sweep (the reason says
+  which of `ac.f_start_hz` or `ac.f_stop_hz` to move, and to what), if a mask ends below the
+  bandwidth ("entirely below the bandwidth"), or if a target ends below the sweep (it applies
+  nowhere); else `pass`.
+
+A not-judged entry is `{"item": probe, "net", "limit": "target_ohm" | "target_points",
+"reason"}` (plus `"rail"` at the top level); a failed entry has the same keys. A rail fails if a
+probe fails; else it is `not_judged` if a probe with a target was not judged; `pass` if one was
+judged; `not_judged` with no target at all (and no entry). A project combines its rails the
+same way. A probe no solved rail reaches is not solved: with a target it is a project-level
+not-judged entry (`"rail": ""`), without one a project-level warning; with no probe reached at
+all, `coppernicus ac` stops with an error naming them (`--rail` solves only the rails asked for,
+each resolved first and solved once, and leaves the other probes as chosen). `coppernicus ac` exits as `solve` does (`_exit_for`):
+0, 1 when a target is exceeded, 3 when a target could not be judged, 2 on an error. (The gate
+said 0, 1 or 2: it predates exit code 3.)
+
+### Assumption lines
+
+In order: the AC model; the open loop (with the bandwidth, or naming the source, "no control
+loop bandwidth is set for it (ac.bandwidth_hz)", the 50 kHz marked for the plot and that |Z|
+does not depend on it); KiPI's
+`dielectric_summary` (plus the `ac.default_er` sentence where εr was defaulted; a what-if
+restack reads "[rebuilt for the copper_thickness_mm what-if]"); the loss tangent; the sweep and
+field frequencies; the AC mesh (KiPI's grading defaults); the capacitors (modelled, and those
+without a model by ref); DC bias, when a modelled part has a rating; one line per link in the
+model (R, and + jω·L when `link_esl_h` gives it); net ties as shorts; the via plating and the
+what-if thickness, as in DC; the copper temperature when ≠ 20 °C; one line per target
+("entered", a mask's "entered; applies only between its first and last points", or "computed
+by KiPI … from ac_tolerance_v, step_a, slew_a_per_us").
+
+### Outputs
+
+- `impedance.write_csv` → `<project>_<rail>_impedance.csv`: `freq_hz`, then per probe
+  `<p>_re_ohm`, `<p>_im_ohm`, `<p>_mag_ohm`, `<p>_target_ohm` (empty where no target applies),
+  then on every row `bandwidth_hz` (as given; empty when not), `assumed_bandwidth_hz` (the
+  placeholder; empty when given) and `bandwidth_assumed`.
+- `impedance.write_png` → `<project>_<rail>_impedance.png` (`draw_impedance`, the GUI's
+  drawing): log-log |Z| per probe, each target where it applies, the band below the bandwidth
+  (grey "open loop: the source's control loop holds the rail here", or hatched "below the
+  regulator's control-loop bandwidth (not given; 50 kHz assumed): not judged"), each worst
+  point, the verdict in the title (plus
+  "bandwidth not given (50 kHz assumed)", visible even when the sweep starts above it).
+- `<project>_ac_summary.json` (`allow_nan=False`): top level `kind: "ac_impedance"`, `verdict`,
+  `verdict_note`, `failed`, `not_judged`, `warnings`, `rails[]`, `summary_file`. Per rail: `rail`,
+  `rail_nets`, `ground`, `source`, `bandwidth_hz`, `bandwidth_assumed`, `assumed_bandwidth_hz`,
+  `f_start_hz`,
+  `f_stop_hz`, `sweep_points`, `field_points`, `plane_capacitance_f`, `caps_modelled`,
+  `caps_missing` (lists of refs), `links`, `verdict`, `not_judged`, `csv_file`, `png_file`,
+  `assumptions`, `warnings`, `stats{seconds, triangles, unknowns, ports, method,
+  memory_peak_mb, memory_peak_raised}`, `probes[]`. Per probe: `name`, `net`, `ground_net`,
+  `z_min_ohm`, `z_max_ohm`, `worst_z_ohm`, `worst_hz`, `worst_ratio`, `target_ohm`,
+  `target_hz`, `target_points`, `target_note`, `judged_from_hz`, `passed`, `step_a`,
+  `slew_a_per_us`. Beyond the gate's list: the top-level `warnings`, `bandwidth_assumed`,
+  `assumed_bandwidth_hz`, `probes`, the two memory keys. A rail's `bandwidth_hz` is the
+  bandwidth as given, null when not; `assumed_bandwidth_hz` is then the placeholder (50000),
+  and null when the bandwidth is given.
+- `coppernicus ac PROJECT [--rail NET ...] [--out DIR] [--json] [-v]`: CSV and PNG per rail and
+  the summary into `--out` (default `results/` next to the project). The KiCad footprint fields
+  apply, as in the other solves.
+
+### Cost and memory before a solve (coordinator's Q7)
+
+- `ac_size(board, project, rail)` meshes the rail and its ground as the solve does (KiPI's
+  `mesh_rail_and_ground`, seconds on a large board) and counts triangles, nodes, ports and
+  frequencies; it checks the setup as the solve does.
+- `cost_estimate(triangles, ports, field_frequencies, last=None)`: triangles × ports and the
+  field frequencies; with the `stats` of an earlier AC solve, a time: its field solves
+  (`field_seconds`) scaled with KiPI's work per frequency, n^1.5 + 5·n·rhs (core/eta.py:37-41;
+  KiPI's right-hand sides are n − n_free + ports, field.py:44, taken as the ports since n_free
+  is known only once the model is built), the rest (mesh and model) in proportion to the
+  triangles. No earlier solve, no time.
+- `ram_estimate(unknowns, total_memory_bytes(), free_memory_bytes())`: the memory of the mesh,
+  the model and **one factorization**, measured on `ac_plane_board` meshed at 2.0, 1.4, 1.0
+  and 0.7 mm, two frequencies one after the other, each size in its own process (19 196 to
+  147 110 unknowns: 254 MB to 2.75 GB above an 85 MB process), fitted as 2466.6 · n^1.1706
+  bytes (within 1.2 % of each point), about one unknown per triangle (0.98 to 1.0 there).
+  Measured on synthetic plane pairs only: other boards may need more or less. `risk` when one
+  factorization exceeds the machine's memory. The run's peak is higher: after
+  the first frequency KiPI solves others side by side, each with its own factorization, as many
+  as fit in half the memory free (field.py:68-82; `threads_bytes`, and the text says how much);
+  that part is sized to the memory, so one factorization is the risk. Measured here: 1.5 to
+  1.6 GB peak for the 20 k-unknown boards, where one factorization is 0.25 GB.
+- A run on this machine (M5, SuperLU): `coppernicus ac examples/pdn/pdn.coppernicus.yml`
+  takes 8.5 s (solve 7.5 s: 20 587 triangles, 2 ports, 111 field frequencies), 1.6 GB peak.
+
+### Validation (KiPI's `tests/accuracy/test_ac_accuracy.py`, same tolerances)
+
+`engine.synthetic` copies KiPI's `ac_plane`, `ac_decap` and `ac_ferrite`
+(examples/validation/make_boards.py; `four_layer_stackup`, `AcPlane`, `AcDecap`, `AcFerrite`,
+`ac_*_board()`, `ac_*_project()`). Here:
+
+| Board | Asserted | Measured |
+|---|---|---|
+| `ac_plane` (19 596 triangles, 121 field frequencies, 6.9 s) | C_plane = ε₀·4.5·(100² − 1.2²)/0.2, rel 1e-3; Z at 1 kHz, 100 kHz, 1 MHz = 1/(jωC(1 − j·tanδ)), rel 5e-3; largest peak in [0.5, 1.2]·f10, f10 = c/(2·100·√4.5), rel 1.5e-2 | C 1.99191 nF (hand 1.99191 nF); peak 707.95 MHz vs 706.62 MHz (+0.19 %) |
+| `ac_decap` (20 587 triangles, 4.4 s) | C_plane with 2 cut-outs, rel 1e-3; Z at 1 and 10 kHz; mounted L flat within 3 %, ESL < L < ESL + 2 nH; min\|Z\| at 1/(2π√(LC)), rel 3e-2; ESR ≤ min\|Z\| ≤ 1.15·ESR | C 0.49747 nF (hand 0.49747 nF); min\|Z\| 22.01 mΩ at 1.479 MHz, 1.10 × ESR |
+| `ac_ferrite` (17 706 triangles, 3.6 s) | \|Z\| ÷ lumped model within 1 % away from f0 up to 100 MHz, 0.9–1 above; one peak in [f0/3, 3f0] at f0 rel 1.5e-2, height rel 0.05 | peak 23.862 MHz vs f0 23.848 MHz (+0.06 %) |
