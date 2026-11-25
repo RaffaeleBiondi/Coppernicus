@@ -41,8 +41,15 @@ from kipi.dc.thermal.cosim import (
     solve_electrothermal,
 )
 from kipi.dc.thermal.materials import coating_k
-from kipi.dc.thermal.model import H_NATURAL_W_M2K, H_PER_M_S, BoardThermalModel, ThermalSettings
+from kipi.dc.thermal.model import (
+    H_NATURAL_W_M2K,
+    H_PER_M_S,
+    BoardThermalModel,
+    ThermalSettings,
+    board_geometry,
+)
 
+from coppernicus.engine.ac import peak_rss_bytes
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import to_pisetup
 from coppernicus.engine.solve import TCR_CU, Cancelled, _Progress
@@ -177,6 +184,7 @@ def solve_thermal_tree(board: Board, project: Project, setup, thickness: Dict[st
     """The power tree solved electro-thermally (called by ``solve_project_tree``, which has
     checked the grounds and built the setup on the what-if board)."""
     options = project.thermal
+    peak0 = peak_rss_bytes()
     t0 = time.perf_counter()
     try:
         run = _electrothermal(board.snapshot, setup, thermal_settings(options),
@@ -185,8 +193,13 @@ def solve_thermal_tree(board: Board, project: Project, setup, thickness: Dict[st
         raise Cancelled("solve cancelled") from e
     except SolveError as e:
         raise EngineError(f"Power tree: {e}") from e
-    return _finish(board, project, setup, thickness, run.tree, run.first_drops,
-                   time.perf_counter() - t0)
+    out = _finish(board, project, setup, thickness, run.tree, run.first_drops, time.perf_counter() - t0)
+    # This process's high-water mark when the solve ended (KiPI's mesher worker processes not
+    # counted), as the AC solve records it; this solve's own peak when it raised it.
+    peak1 = peak_rss_bytes()
+    out.stats["memory_peak_mb"] = peak1 / 1e6 if peak1 else None
+    out.stats["memory_peak_raised"] = bool(peak0 and peak1 and peak1 > peak0)
+    return out
 
 
 def solve_kipi_reference(board: Board, project: Project) -> TreeResult:
@@ -383,3 +396,112 @@ def _finish(board: Board, project: Project, setup, thickness: Dict[str, float], 
     out.thermal = temp
     apply_thermal_limits(out, options)
     return out
+
+
+# ---------------------------------------------------------------------- cost and memory
+
+# Above this many grid points the cells inside the board are counted from its area, not one
+# by one (the estimate runs on the GUI thread).
+EXACT_CELLS_MAX = 4_000_000
+
+
+@dataclass(frozen=True)
+class ThermalSize:
+    """KiPI's thermal grid of a board before the model is built: the square cell, the grid,
+    the cells inside the board and the copper layers; one unknown per cell and layer."""
+    cell_mm: float
+    nx: int
+    ny: int
+    cells: int                     # inside the board
+    layers: int
+    automatic: bool                # grid_mm 0: KiPI's automatic size
+    exact: bool                    # counted cell by cell (False: board area / cell area)
+
+    @property
+    def unknowns(self) -> int:
+        return self.cells * self.layers
+
+
+def thermal_size(board: Board, options: ThermalOptions) -> ThermalSize:
+    """The grid KiPI's ``BoardThermalModel`` will build (kipi/dc/thermal/model.py:179-188, the
+    board shape of ``board_geometry``), without building it."""
+    geom = board_geometry(board.snapshot)
+    minx, miny, maxx, maxy = geom.bounds
+    span = max(maxx - minx, maxy - miny)
+    automatic = not options.grid_mm > 0
+    d = max(span / 250.0, 0.2) if automatic else float(options.grid_mm)
+    nx, ny = max(2, int(math.ceil((maxx - minx) / d))), max(2, int(math.ceil((maxy - miny) / d)))
+    exact = nx * ny <= EXACT_CELLS_MAX
+    if exact:
+        X, Y = np.meshgrid(minx + (np.arange(nx) + 0.5) * d, miny + (np.arange(ny) + 0.5) * d)
+        cells = int(np.count_nonzero(shapely.contains_xy(geom, X, Y)))
+    else:
+        cells = int(round(geom.area / d ** 2))
+    return ThermalSize(d, nx, ny, cells, len(board.snapshot.stackup.copper), automatic, exact)
+
+
+# Memory of KiPI's thermal model (its grid and one SuperLU factorization) above the process it
+# is built in: the peak resident memory added by BoardThermalModel on plain square boards of 2
+# to 10 copper layers (0.035 mm copper, 0.2 mm FR4), one fresh process each (macOS arm64,
+# SuperLU): (copper layers, unknowns, MB). The laminate couples every cell, so the matrix is the
+# full grid whatever the copper.
+MEM_POINTS = ((2, 25_088, 62), (2, 100_352, 308), (2, 399_618, 1578), (4, 24_964, 99), (4, 79_524, 704),
+              (4, 200_704, 1777), (6, 30_246, 200), (6, 119_286, 1206), (10, 25_000, 254),
+              (10, 59_290, 804), (10, 148_840, 2297))
+# Least-squares fit of those points, bytes = A · unknowns ** B · layers ** C: within -31 % to
+# +20 % of each.
+MEM_FIT_A, MEM_FIT_B, MEM_FIT_C = 95.9033, 1.2511, 0.9480
+MEM_UNKNOWNS = (min(p[1] for p in MEM_POINTS), max(p[1] for p in MEM_POINTS))
+MEM_LAYERS = (min(p[0] for p in MEM_POINTS), max(p[0] for p in MEM_POINTS))
+
+
+def _size_text(n: float) -> str:
+    return f"{n / 1e6:.0f} MB" if n < 1e9 else f"{n / 1e9:.3g} GB"
+
+
+@dataclass(frozen=True)
+class ThermalRam:
+    bytes: float                   # the thermal model: its grid and one factorization
+    total_bytes: Optional[float]   # this machine's memory; None when it can't be read
+    risk: bool                     # it exceeds this machine's memory
+    text: str
+
+
+def thermal_ram_estimate(unknowns: float, layers: int, total_bytes: Optional[float]) -> ThermalRam:
+    """Whether KiPI's thermal model of ``unknowns`` (cells × ``layers``) could exceed this
+    machine's memory, from the fit of :data:`MEM_POINTS` (other boards may need more or less).
+    The power tree's own meshes and factors come on top."""
+    need = MEM_FIT_A * float(unknowns) ** MEM_FIT_B * float(layers) ** MEM_FIT_C
+    outside = not (MEM_UNKNOWNS[0] <= unknowns <= MEM_UNKNOWNS[1]
+                   and MEM_LAYERS[0] <= layers <= MEM_LAYERS[1])
+    how = (f"estimated from a fit measured on synthetic square boards of {MEM_LAYERS[0]} to {MEM_LAYERS[1]} "
+           f"copper layers and {MEM_UNKNOWNS[0]:,} to {MEM_UNKNOWNS[1]:,} unknowns (SuperLU), within about "
+           "-30 % / +20 % of each" + ("; this solve is outside the measured range" if outside else "")
+           + "; other boards may need more or less")
+    head = (f"The board temperature's model ({int(unknowns):,} unknowns: its grid and one factorization) "
+            f"needs about {_size_text(need)}")
+    tail = " The power tree's own meshes and factors come on top."
+    if not total_bytes:
+        return ThermalRam(need, None, False, f"{head} ({how}); this machine's memory cannot be read.{tail}")
+    if need > total_bytes:
+        return ThermalRam(need, float(total_bytes), True, (
+            f"{head}, more than this machine's {_size_text(total_bytes)} of memory ({how}), so it could "
+            f"swap: a coarser grid (Grid, mm) lowers it.{tail}"))
+    return ThermalRam(need, float(total_bytes), False,
+                      f"{head} of this machine's {_size_text(total_bytes)} ({how}).{tail}")
+
+
+def thermal_cost_text(size: ThermalSize, last: Optional[Dict[str, float]] = None) -> str:
+    """A rough cost of an electro-thermal solve before it starts: KiPI's grid and its unknowns,
+    and the time of the last electro-thermal solve on this computer (``last``: its
+    ``seconds`` and ``unknowns``), shown as measured, not scaled."""
+    how = "automatic" if size.automatic else "set"
+    count = "inside the board" if size.exact else "inside the board (from its area)"
+    text = (f"{size.nx} × {size.ny} cells of {size.cell_mm:.3g} mm ({how}), {size.cells:,} {count}, "
+            f"× {size.layers} copper layers: {size.unknowns:,} unknowns")
+    try:
+        seconds, unknowns = float(last["seconds"]), int(float(last["unknowns"]))
+    except (TypeError, KeyError, ValueError):
+        return text + "; no earlier electro-thermal solve on this computer to compare with"
+    return (text + f"; the last electro-thermal solve on this computer took {seconds:.2g} s for "
+            f"{unknowns:,} unknowns")
