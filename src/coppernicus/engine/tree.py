@@ -37,6 +37,7 @@ from coppernicus.results import (
     TreeResult,
     VrmReport,
 )
+from coppernicus.temperature import apply_thermal_limits
 
 REGULATING = ("ldo", "smps")
 
@@ -64,7 +65,7 @@ def check_grounds(project: Project) -> None:
             "ground net (engine_options: excluded_nets)")
 
 
-def _assumptions(project: Project, setup, rho_note: Optional[str] = None) -> List[str]:
+def _assumptions(project: Project, setup, rho_note: Optional[List[str]] = None) -> List[str]:
     # Only what KiPI solves: excluded groups dropped, a regulator fed from one an ideal source.
     setup = active_setup(setup)[0]
     names = terminal_names(project)
@@ -72,7 +73,7 @@ def _assumptions(project: Project, setup, rho_note: Optional[str] = None) -> Lis
     links = {k.name for k in setup.links}
     settings_notes = engine_settings(project.settings)[1][:3]      # plating, ρ(T), mesh
     if rho_note is not None:                   # electro-thermal: the copper's own temperature
-        settings_notes[1] = rho_note
+        settings_notes[1:2] = rho_note
     out = settings_notes + [
         "Power tree: each net group (nets joined by links and net ties) is solved from its one "
         "source. A regulator's input pins are a load on the group feeding it: LDO "
@@ -154,12 +155,19 @@ def _group(board: Board, key: str, g, assumptions: List[str]) -> RailResult:
 
 def solve_project_tree(board: Board, project: Project,
                        progress: Optional[Callable[[str], None]] = None,
-                       cancelled: Callable[[], bool] = lambda: False) -> TreeResult:
-    """Every rail and ground group of the project, solved together (KiPI ``solve_tree``)."""
+                       cancelled: Callable[[], bool] = lambda: False,
+                       thermal: Optional[bool] = None) -> TreeResult:
+    """Every rail and ground group of the project, solved together (KiPI ``solve_tree``).
+    With ``thermal`` (``None``: the project's ``thermal.enabled``) the tree is solved
+    electro-thermally and the result carries the board temperature
+    (:mod:`coppernicus.engine.thermal`)."""
     check_grounds(project)
     thickness = dict(project.settings.copper_thickness_mm or {})
     board = board.with_copper_thickness(thickness) if thickness else board
     setup = to_pisetup(board, project)
+    if project.thermal.enabled if thermal is None else thermal:
+        from coppernicus.engine.thermal import solve_thermal_tree
+        return solve_thermal_tree(board, project, setup, thickness, progress, cancelled)
     temperature = None
     if project.settings.copper_temp_c != REF_TEMP_C:
         t_c = float(project.settings.copper_temp_c)
@@ -172,7 +180,9 @@ def solve_project_tree(board: Board, project: Project,
     except SolveError as e:
         raise EngineError(f"Power tree: {e}") from e
     seconds = time.perf_counter() - t0
-    return convert_tree(board, project, setup, kt, seconds, thickness)
+    out = convert_tree(board, project, setup, kt, seconds, thickness)
+    apply_thermal_limits(out, project.thermal)       # listed as not judged, if any is set
+    return out
 
 
 def group_keys(project: Project, kt) -> Dict[str, str]:
@@ -201,7 +211,7 @@ def load_drop(ld) -> Tuple[float, float]:
 
 
 def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
-                 thickness: Dict[str, float], rho_note: Optional[str] = None) -> TreeResult:
+                 thickness: Dict[str, float], rho_note: Optional[List[str]] = None) -> TreeResult:
     """KiPI's tree result ``kt`` as a :class:`TreeResult`, judged against the project's
     limits. ``rho_note`` replaces the copper-temperature assumption (an electro-thermal
     solve sets the copper temperature)."""

@@ -190,6 +190,9 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
         problem.temperature = lambda xy: np.full(len(np.atleast_2d(xy)), t_c)
     assumptions += tree_only_fields(rail) + estimate_note(draws) + sign_note(rail, sign)
     assumptions += thickness_note(thickness, board.file_thickness_mm)
+    if project is not None and project.thermal.enabled:      # coordinator's ruling (T8)
+        assumptions.append("Copper not heated by its own losses here: the board temperature is "
+                           "solved with the power tree only (Ctrl+T / solve --tree).")
     if ties:
         assumptions.append("Net ties solved as shorts: " + ", ".join(
             f"{t.ref} ({t.net_a} ↔ {t.net_b})" for t in ties) + ".")
