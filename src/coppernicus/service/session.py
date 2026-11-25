@@ -902,8 +902,9 @@ class Session:
         the project's limits only. The groups are not kept as results: no maps or probes.
 
         The board temperature (electro-thermal): ``thermal`` True solves it, False not, None
-        as the project's ``thermal.enabled``; ``thermal_options`` override the project's
-        ``thermal:`` keys for this solve. Before it, its cost is estimated
+        as the project's ``thermal.enabled``, or True when ``thermal_options`` are given (they
+        override the project's ``thermal:`` keys for this solve; with False they are refused).
+        Before it, its cost is estimated
         (:func:`thermal_estimate`, in the document as ``thermal_estimate``); when that exceeds
         this machine's memory the solve is refused (``solve_too_large``) unless
         ``confirm_large``: never a silent multi-GB solve."""
@@ -912,9 +913,14 @@ class Session:
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
         project = merged.project
+        if thermal_options and thermal is False:
+            raise ServiceError(E.INVALID_INPUT, "thermal_options with thermal: false: the options "
+                               "would not be used", "drop thermal: false to solve the board "
+                               "temperature with them, or drop thermal_options")
         if thermal_options:
             project = dataclasses.replace(project, thermal=thermal_with(project.thermal, thermal_options))
-        heat = bool(project.thermal.enabled) if thermal is None else bool(thermal)
+        # thermal_options imply the temperature: never ignored silently.
+        heat = (bool(project.thermal.enabled) or bool(thermal_options)) if thermal is None else bool(thermal)
         estimate = thermal_estimate(entry.board, project.thermal) if heat else None
         if estimate is not None and estimate["exceeds_memory"] and not confirm_large:
             raise ServiceError(E.SOLVE_TOO_LARGE, f"{path.name}: board temperature: {estimate['text']}",

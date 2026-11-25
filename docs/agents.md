@@ -456,7 +456,8 @@ power-tree solve only: `solve_tree` with `thermal: true`, or the project's `ther
 `enabled: true` (`coppernicus solve PROJECT --thermal` on the command line).
 
 - `thermal`: true solves it, false not, omitted follows the project's `thermal.enabled`.
-- `thermal_options`: for this solve only (the file is not changed), any of the project's
+- `thermal_options` imply `thermal: true` when `thermal` is omitted (with `thermal: false` they
+  are refused, `invalid_input`). For this solve only (the file is not changed), any of the project's
   `thermal:` keys: `ambient_c` (default 25), `iterations` (3), `airflow_m_s` (0), `grid_mm`
   (0 = automatic, about 250 cells across), `load_heat`, `regulator_heat` (`output_pads` or
   `part_pads`), and the limits `max_temp_c` and `max_rise_c`. Unknown keys are refused.

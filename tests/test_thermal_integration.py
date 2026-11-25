@@ -169,3 +169,17 @@ def test_ci_judges_the_board_temperature_when_the_tree_solves_it(relaxed, tmp_pa
     assert "#### Board temperature" in md and "| F.Cu |" in md and "Grid peak" in md
     without = ci.solve_all(["demo/demo-relaxed.coppernicus.yml"], Path("ci2"), html=False)
     assert without["exit_code"] == EXIT_NOT_JUDGED                 # no tree: not judged, exit 3
+
+
+
+def test_thermal_options_imply_the_board_temperature(relaxed, tmp_path):
+    """thermal_options with thermal omitted solve the temperature even when the project does
+    not enable it (they are never ignored silently); thermal: false with options is refused."""
+    from coppernicus.service import ServiceError
+    session = Session(out_dir=tmp_path / "o")
+    assert Project.load(relaxed).thermal.enabled is False
+    doc = session.solve_tree(relaxed, thermal_options={"iterations": 1})
+    assert doc["thermal"]["iterations"] == 1 and "thermal_estimate" in doc
+    with pytest.raises(ServiceError) as e:
+        session.solve_tree(relaxed, thermal=False, thermal_options={"iterations": 1})
+    assert e.value.code == "invalid_input" and "thermal" in e.value.hint

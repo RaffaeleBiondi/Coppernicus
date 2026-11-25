@@ -385,7 +385,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                                    "thermal.enabled.")] = None,
                    thermal_options: Annotated[Optional[ThermalSpec], Field(
                        description="Overrides of the project's thermal: block for this solve "
-                                   "(not saved).")] = None,
+                                   "(not saved); given, they imply thermal: true.")] = None,
                    confirm_large: Annotated[bool, Field(
                        description="Solve even when the estimate exceeds this machine's memory "
                                    "(otherwise refused with the estimate: solve_too_large). Ask "
