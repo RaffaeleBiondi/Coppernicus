@@ -616,6 +616,7 @@ def _cmd_tolerance(args) -> int:
         LOAD_PART_KEYS,
         LOAD_TOLERANCE_KEYS,
         SOURCE_ACCURACY_KEYS,
+        Load,
         Project,
         ProjectError,
     )
@@ -646,23 +647,34 @@ def _cmd_tolerance(args) -> int:
     except (board_fields.FieldError, EngineError) as e:
         return fail("invalid_board_field", str(e), FIELD_HINT)
     project = merged.project
-    warnings, dropped = list(merged.warnings), []
-    for net in merged.from_fields:        # the fields' rail replaces the project's terminals
-        own = loaded.rail(net)
+    warnings, dropped, lost_accuracy = list(merged.warnings), [], {}
+    for net in merged.from_fields:        # the fields' rail keeps by ref what the project gives
+        own, kept = loaded.rail(net), project.rail(net)
         if own is None:
             continue
+        refs = {t.ref for t in kept.sources + kept.loads} if kept is not None else set()
         keys = ((own.loads, LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS), (own.sources, SOURCE_ACCURACY_KEYS))
-        refs = [t.ref for ts, k in keys for t in ts if any(getattr(t, x) is not None for x in k)]
-        if refs:
-            why = (f"rail {net} comes from the board's KiCad footprint fields, which hold no tolerance "
-                   "yet: set override_board_fields: true on the rail to use the project's")
-            warnings.append(f"Rail {net} comes from the board's KiCad footprint fields: the tolerances, "
-                            f"accuracy and entered parts of {', '.join(refs)} in the project file are not "
-                            "used (no KiCad field holds them yet); set override_board_fields: true on the "
-                            "rail to use the project's")
-            # A tolerance the user set that cannot be judged: not judged (exit 3), never a pass.
-            dropped += [{"item": ld.label, "net": net, "limit": key, "reason": why}
-                        for ld in own.loads for key in LOAD_TOLERANCE_KEYS if getattr(ld, key) is not None]
+        lost = [t for ts, k in keys for t in ts
+                if t.ref not in refs and any(getattr(t, x) is not None for x in k)]
+        if not lost:
+            continue
+        others = ", ".join(s.label for s in kept.sources) if kept is not None and kept.sources else "none"
+        why = (f"rail {net} comes from the board's KiCad footprint fields, which have no {{ref}}: set "
+               "override_board_fields: true on the rail to use the project's")
+        warnings.append(f"Rail {net} comes from the board's KiCad footprint fields: the tolerances, accuracy "
+                        f"and entered parts of {', '.join(t.ref for t in lost)} in the project file are not "
+                        "used (those parts are not on the fields' rail); set override_board_fields: true on "
+                        "the rail to use the project's")
+        # A tolerance the user set that cannot be judged: not judged (exit 3), never a pass.
+        dropped += [{"item": t.label, "net": net, "limit": key, "reason": why.format(ref=t.ref)}
+                    for t in lost if isinstance(t, Load) for key in LOAD_TOLERANCE_KEYS
+                    if getattr(t, key) is not None]
+        for t in lost:                    # an accuracy entered, then lost: say so, not "enter it"
+            key = next((k for k in SOURCE_ACCURACY_KEYS if getattr(t, k, None) is not None), None)
+            if key is not None:
+                lost_accuracy[net] = (f"{t.label}'s {key} in the project file was lost: rail {net} comes "
+                                      f"from the board's KiCad footprint fields, whose source is {others} "
+                                      "(set override_board_fields: true on the rail to use the project's)")
     stream = sys.stderr if quiet else sys.stdout
     progress = (lambda m: print(f"    … {m}", file=stream)) if args.verbose else None
     estimates = []
@@ -733,7 +745,8 @@ def _cmd_tolerance(args) -> int:
             warnings.append(f"Noise solve of {a.name} failed: {e}")
             noise_notes[a.name] = "its noise solve failed"
     merged.annotate(tree)
-    result = compose(project, tree, impedance, noise, pairs, ac_notes, noise_notes, warnings, dropped)
+    result = compose(project, tree, impedance, noise, pairs, ac_notes, noise_notes, warnings, dropped,
+                     lost_accuracy)
     merged.annotate(result)               # the KiCad-field notes, as the other commands
     result.estimates = estimates
     peak = peak_rss_bytes()

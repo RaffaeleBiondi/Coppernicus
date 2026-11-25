@@ -921,3 +921,24 @@ def test_one_load_passing_and_another_not_judged_is_not_judged_overall():
     r = _compose(project, tree=tree, pairs={"U2": "P1", "U3": None})
     assert [row.verdict for row in r.rows] == ["pass", "not_judged"]
     assert r.verdict == "not_judged" and [e["item"] for e in r.not_judged] == ["U3"]
+
+
+def test_the_kicad_fields_merge_carries_tolerances_and_accuracy_by_ref():
+    """(a): a fields rail and a project rail on the same net; the project's tolerances, entered
+    parts and accuracy survive the merge on the parts of the same ref, with a note."""
+    from coppernicus.board_fields import merge
+    from coppernicus.project import Rail
+    fields = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V"}, "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}}
+    project = Project(rails=[Rail("VCC", sources=[Source("J1", 3.3, accuracy_mv=(-10, 12))],
+                                  loads=[Load("U1", 1.0, tol_pct=5, ac_tol_mv=30, transient_mv=20)])])
+    m = merge(project, fields)
+    rail = m.project.rail("VCC")
+    assert m.origins["VCC"].source == "fields"
+    assert rail.sources[0].accuracy_mv == (-10.0, 12.0)
+    ld = rail.loads[0]
+    assert (ld.tol_pct, ld.ac_tol_mv, ld.transient_mv) == ((-5.0, 5.0), (-30.0, 30.0), (-20.0, 20.0))
+    notes = m.origins["VCC"].notes
+    assert "Rail VCC: tol_pct, ac_tol_mv, transient_mv of U1 from the project file (no KiCad field holds "\
+           "them yet)." in notes
+    assert "Rail VCC: accuracy_mv of J1 from the project file (no KiCad field holds them yet)." in notes
+    assert project.rail("VCC").loads[0].tol_pct == (-5.0, 5.0)          # the loaded project unchanged

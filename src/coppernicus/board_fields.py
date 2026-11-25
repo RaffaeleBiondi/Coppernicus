@@ -75,7 +75,20 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
-from coppernicus.project import SOURCE_KINDS, Limits, Link, Load, PinSpec, Project, Rail, Source, parse_pins
+from coppernicus.project import (
+    LOAD_PART_KEYS,
+    LOAD_TOLERANCE_KEYS,
+    SOURCE_ACCURACY_KEYS,
+    SOURCE_KINDS,
+    Limits,
+    Link,
+    Load,
+    PinSpec,
+    Project,
+    Rail,
+    Source,
+    parse_pins,
+)
 
 PREFIX = "PI_"
 # What the part is (its library symbol): no PI_RAIL needed; with PI_RAIL, one value for every
@@ -958,6 +971,21 @@ def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = N
                 setattr(s, k, copy.deepcopy(getattr(p, k)))
             origin.notes.append(f"Rail {fr.net}: remote sense pins of {s.ref} from the project file "
                                 "(sense is not a KiCad field yet).")
+    # Tolerance stack-up (Task 11): a load's tolerances and entered parts, a source's DC accuracy,
+    # carried by ref, as remote sense is (no KiCad field holds them yet).
+    for terms, own_terms, keys in ((rail.sources, own.sources, SOURCE_ACCURACY_KEYS),
+                                   (rail.loads, own.loads, LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS)):
+        unused = [o for o in own_terms if any(getattr(o, k) is not None for k in keys)]
+        for t in terms:
+            p = next((o for o in unused if o.ref == t.ref), None)
+            if p is None:
+                continue
+            unused.remove(p)
+            carried = [k for k in keys if getattr(p, k) is not None]
+            for k in carried:
+                setattr(t, k, copy.deepcopy(getattr(p, k)))
+            origin.notes.append(f"Rail {fr.net}: {', '.join(carried)} of {t.ref} from the project file "
+                                "(no KiCad field holds them yet).")
     return rail, origin
 
 

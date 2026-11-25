@@ -112,26 +112,50 @@ def test_errors(write, tmp_path, capsys):
     assert err["code"] == "invalid_project" and "below" in err["message"]
 
 
-def test_a_rail_from_kicad_fields_warns_that_the_project_tolerances_are_not_used(tmp_path, capsys):
+def _strip(tmp_path, sources, loads):
+    """The strip as a .kicad_pcb whose J1 and U1 define VCC in KiCad fields, and a project
+    file with its own VCC rail."""
     from coppernicus.engine.synthetic import write_strip_kicad_pcb
-    from coppernicus.project import Load, Rail, Source
+    from coppernicus.project import Rail
     write_strip_kicad_pcb(tmp_path / "s.kicad_pcb", {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V"},
                                                      "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}})
-    path = Project(board="s.kicad_pcb", rails=[Rail("VCC", sources=[Source("J1", 3.3, accuracy_pct=1)],
-                                                    loads=[Load("U1", 1.0, tol_pct=5)])]
+    return Project(board="s.kicad_pcb", rails=[Rail("VCC", sources=sources, loads=loads)]
                    ).save(tmp_path / "s.coppernicus.yml")
-    # The fields' U1 has no tolerance: the one the user set is not judged, never a silent pass.
+
+
+def test_a_kicad_fields_rail_carries_the_project_tolerances_by_ref(tmp_path, capsys):
+    from coppernicus.project import Load, Source
+    path = _strip(tmp_path, [Source("J1", 3.3, accuracy_pct=1)], [Load("U1", 1.0, tol_pct=5, ripple_mv=2,
+                                                                       transient_mv=3)])
+    assert main(["tolerance", str(path), "--json", "--out", str(tmp_path / "o")]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
+    (ld,) = doc["loads"]
+    assert ld["verdict"] == "pass" and ld["parts"]["accuracy"]["source"] == "accuracy_pct of J1"
+    notes = doc["assumptions"]
+    assert any("tol_pct, ripple_mv, transient_mv of U1 from the project file" in a for a in notes)
+    assert any("accuracy_pct of J1 from the project file" in a for a in doc["assumptions"])
+    assert not [w for w in doc["warnings"] if "not used" in w]
+    assert main(["tolerance", str(path), "--json", "--no-board-fields", "--out", str(tmp_path / "o")]
+                ) == EXIT_OK                  # the project's own rail
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["verdict"] == "pass" and not [a for a in doc["assumptions"] if "from the project file" in a]
+
+
+def test_a_tolerance_on_a_part_the_kicad_fields_rail_lacks_is_lost_and_not_judged(tmp_path, capsys):
+    from coppernicus.project import Load, Source
+    # J5 and U9 are not in the fields' VCC: J5's accuracy and U9's tolerance are lost.
+    path = _strip(tmp_path, [Source("J5", 3.3, accuracy_pct=1)],
+                  [Load("U1", 1.0, tol_pct=5, ripple_mv=2, transient_mv=3), Load("U9", 1.0, tol_pct=4)])
     assert main(["tolerance", str(path), "--json", "--out", str(tmp_path / "o")]) == EXIT_NOT_JUDGED
     doc = json.loads(capsys.readouterr().out)
-    assert any("KiCad footprint fields" in w and "U1" in w and "J1" in w for w in doc["warnings"])
-    assert doc["loads"][0]["verdict"] == "" and doc["verdict"] == "not_judged"
-    (e,) = doc["not_judged"]
-    assert (e["item"], e["net"], e["limit"]) == ("U1", "VCC", "tol_pct")
-    assert "override_board_fields" in e["reason"]
-    assert main(["tolerance", str(path), "--json", "--no-board-fields", "--out", str(tmp_path / "o")]
-                ) == EXIT_NOT_JUDGED
-    doc = json.loads(capsys.readouterr().out)
-    assert doc["loads"][0]["verdict"] == "not_judged" and not doc["warnings"]
+    assert any("KiCad footprint fields" in w and "U9" in w and "J5" in w and "U1" not in w
+               for w in doc["warnings"])
+    lost = [e for e in doc["not_judged"] if e["item"] == "U9"]
+    assert len(lost) == 1 and lost[0]["limit"] == "tol_pct" and "override_board_fields" in lost[0]["reason"]
+    hint = doc["loads"][0]["hints"]["accuracy"]
+    assert hint.startswith("J5's accuracy_pct in the project file was lost: rail VCC comes from the "
+                           "board's KiCad footprint fields, whose source is J1")
+    assert "enter" not in hint.split(":")[0]
 
 
 # ---------------------------------------------------------------------- the example

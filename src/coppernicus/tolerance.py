@@ -93,12 +93,15 @@ def _dc(tree: TreeResult, rep: Optional[LoadReport]) -> Tuple[Optional[Tolerance
     return TolerancePart(max(nominal - low, 0.0), max(high - nominal, 0.0), source, detail), ""
 
 
-def _accuracy(source: Optional[Source], nominal: Optional[float]) -> Tuple[Optional[TolerancePart], str]:
+def _accuracy(source: Optional[Source], nominal: Optional[float],
+              lost: str = "") -> Tuple[Optional[TolerancePart], str]:
     from coppernicus.engine.tolerance import accuracy_sides
     if source is None or nominal is None:
         return None, "no source drives its rail, so there is no DC accuracy"
     sides = accuracy_sides(nominal, source)
     if sides is None:
+        if lost and source.accuracy_pct is None and source.accuracy_mv is None:
+            return None, lost             # entered in the project file, lost to the fields' rail
         if source.accuracy_pct is not None:
             return None, (f"{source.label}'s accuracy_pct is a % of 0 V, which places nothing: "
                           "enter accuracy_mv")
@@ -298,7 +301,8 @@ def _fail_reason(c: ToleranceCheck, floors: Dict[str, TolerancePart]) -> str:
 def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
          rep: Optional[LoadReport], sources: Dict[str, Source], probe: Optional[str],
          shown: Dict[str, ProbeImpedance], noise: Dict[str, NoiseResult],
-         ac_notes: Dict[str, str], noise_notes: Dict[str, str], rail_source: Dict[str, str]) -> ToleranceRow:
+         ac_notes: Dict[str, str], noise_notes: Dict[str, str], rail_source: Dict[str, str],
+         lost_accuracy: Dict[str, str], source_net: Dict[str, str]) -> ToleranceRow:
     from coppernicus.engine.tolerance import load_limits, stack
     driver = next((v.name for v in tree.vrms if rep is not None and v.group == rep.group), None)
     driver = driver if driver is not None else rail_source.get(rail)
@@ -308,7 +312,8 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
                        None if nominal is None else float(nominal),
                        source.label if source is not None else "", probe or "")
     from coppernicus.temperature import _not_settled
-    found = {"dc": _dc(tree, rep), "accuracy": _accuracy(source, nominal)}
+    found = {"dc": _dc(tree, rep),
+             "accuracy": _accuracy(source, nominal, lost_accuracy.get(source_net.get(driver or ""), ""))}
     unsettled = _not_settled(tree.thermal) if tree.thermal is not None else ""
     if unsettled and found["dc"][0] is not None:      # temperature.py's rule: fail, never pass
         dc = found["dc"][0]
@@ -398,14 +403,16 @@ def assumptions(project: Project, tree: TreeResult) -> List[str]:
 def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceResult] = (),
             noise: Sequence[NoiseResult] = (), pairs: Optional[Dict[str, Optional[str]]] = None,
             ac_notes: Optional[Dict[str, str]] = None, noise_notes: Optional[Dict[str, str]] = None,
-            warnings: Sequence[str] = (), not_judged: Sequence[Dict[str, Any]] = ()) -> ToleranceResult:
+            warnings: Sequence[str] = (), not_judged: Sequence[Dict[str, Any]] = (),
+            lost_accuracy: Optional[Dict[str, str]] = None) -> ToleranceResult:
     """Every load's stack-up from the power ``tree``, the AC results (``impedance``: KiPI's
     transient estimate at each probe, shown), the ``noise`` results (the ripple at each probe)
     and what the project enters. ``pairs``: engine load name -> its probe
     (:func:`coppernicus.engine.tolerance.load_probes`); ``ac_notes``: probe -> why its rail was
     not solved in AC; ``noise_notes``: aggressor -> why it was not solved; ``not_judged``: more
     not-judged entries ``{item, net, limit, reason}`` (a tolerance set on a load the solve does
-    not hold: a rail from KiCad fields)."""
+    not hold: a rail from KiCad fields); ``lost_accuracy``: rail net -> why the accuracy entered
+    for its source in the project file was lost (the accuracy hint says so)."""
     from coppernicus.engine.pisetup import terminal_names
     from coppernicus.engine.tolerance import loads_by_name, mismatch_warnings
     pairs, ac_notes, noise_notes = pairs or {}, ac_notes or {}, noise_notes or {}
@@ -413,6 +420,7 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
     sources = {name: project.rail(net).sources[i] for (what, net, i), name in names.items()
                if what == "source"}
     rail_source = {net: name for (what, net, i), name in names.items() if what == "source" and i == 0}
+    source_net = {name: net for (what, net, _i), name in names.items() if what == "source"}
     reports = {ld.name: ld for ld in tree.loads}
     shown = {p.name: p for r in impedance for p in r.probes}
     by_noise = {r.aggressor: r for r in noise}
@@ -420,7 +428,7 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
                                    "bw_limit_20mhz": project.tolerance.bw_limit_20mhz})
     for name, (rail, load) in loads_by_name(project).items():
         row = _row(project, tree, name, rail, load, reports.get(name), sources, pairs.get(name),
-                   shown, by_noise, ac_notes, noise_notes, rail_source)
+                   shown, by_noise, ac_notes, noise_notes, rail_source, lost_accuracy or {}, source_net)
         out.rows.append(row)
         for c in row.checks.values():
             if c.passed is False:
