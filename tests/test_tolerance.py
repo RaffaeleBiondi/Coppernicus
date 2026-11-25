@@ -961,9 +961,10 @@ def test_the_kicad_fields_merge_carries_tolerances_and_accuracy_by_ref():
     ld = rail.loads[0]
     assert (ld.tol_pct, ld.ac_tol_mv, ld.transient_mv) == ((-5.0, 5.0), (-30.0, 30.0), (-20.0, 20.0))
     notes = m.origins["VCC"].notes
-    assert "Rail VCC: tol_pct, ac_tol_mv, transient_mv of U1 from the project file (no KiCad field holds "\
-           "them yet)." in notes
-    assert "Rail VCC: accuracy_mv of J1 from the project file (no KiCad field holds them yet)." in notes
+    assert "Rail VCC: tol_pct, ac_tol_mv, transient_mv of U1 from the project file (the part's KiCad "\
+           "fields do not give them)." in notes
+    assert "Rail VCC: accuracy_mv of J1 from the project file (the part's KiCad fields do not give "\
+           "them)." in notes
     assert project.rail("VCC").loads[0].tol_pct == (-5.0, 5.0)          # the loaded project unchanged
 
 

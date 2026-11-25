@@ -41,6 +41,15 @@ Fields, on the part (every one optional; ``PI_RAIL`` is required with any per-ra
                                  then takes ``REF.PAD`` entries, or a pad for every listed part.
 ``PI_GND_REF``      ``BT4``      The part whose pads are the source's (or load's) ground pins
                                  on ``PI_GND``, when not this part (one part).
+``PI_TOL``          ``-3%,+5%``  A load's tolerance band (``tol_pct`` / ``tol_mv``): % of
+                                 nominal or mV from it, ± one value or ``below,above``.
+``PI_DC_TOL``       ``2%``       Its DC share (``dc_tol_*``); ``PI_AC_TOL`` its AC share.
+``PI_ACC``          ``1%``       A source's DC accuracy (``accuracy_pct`` / ``accuracy_mv``).
+``PI_C``            ``10uF``     A capacitor's capacitance (else its footprint Value's).
+``PI_ESR``          ``5mOhm``    A capacitor's ESR (``5m`` too); ``PI_ESL`` (``0.5nH``) its ESL.
+``PI_VRATED``       ``16V``      A capacitor's rated voltage (DC-bias derating).
+``PI_DIELECTRIC``   ``X7R``      C0G (NP0), X5R, X6S, X7R, X7S, X7T, X8R, Y5V, Z5U, TANT,
+                                 POLY or ALU.
 ==================  ===========  ===========================================================
 
 **Library and instance.** ``PI_KIND``, ``PI_EFF``, ``PI_IQ``, ``PI_VOUT``, ``PI_IMAX`` and
@@ -49,6 +58,14 @@ that carries only them is part data, used once its instance has ``PI_RAIL``. Wit
 ``PI_RAIL``, one such value applies to every rail where the part is a source (on a rail where
 it is a load it is not used), or one per rail with ``;``. The other fields say where the part
 sits (the schematic instance) and need ``PI_RAIL``.
+
+``PI_TOL``, ``PI_DC_TOL`` and ``PI_AC_TOL`` (a load's) and ``PI_ACC`` (a source's) are part
+data too: one value applies to every rail where the part is a load (or a source), or one per
+rail; without ``PI_RAIL`` they reach a project-file rail's terminal of that part. **Component
+models**: a capacitor (``C<n>``) with ``PI_ESR``, ``PI_ESL``, ``PI_DIELECTRIC`` and a capacitance
+(``PI_C``, else its footprint Value) has a model for the AC impedance and the noise; a class II
+dielectric also needs ``PI_VRATED``. Never a default behind a verdict: with any of them missing
+it has no model (a project file's model is used, if any), and the reason names what it lacks.
 
 Remote sense stays in the project file for now: when the fields replace a project rail, the
 sense pins of its sources are carried over by part.
@@ -61,7 +78,10 @@ all are errors that name the part, the field and its text.
 **KiCad wins.** For a net the fields define, the fields give the design data (sources,
 loads, pins, converter data); a project-file rail of that net is ignored, with a warning
 listing the differences, unless it sets ``override_board_fields: true``. ``PI_LIMIT_DROP``
-wins over the project's ``max_drop_pct``; the other limits come from the project file.
+wins over the project's ``max_drop_pct``; the other limits come from the project file. A
+field's tolerance, accuracy or capacitor model wins over the project's for the same part (a
+warning when they differ), unless the project rail or capacitor model sets
+``override_board_fields``.
 """
 
 from __future__ import annotations
@@ -80,6 +100,7 @@ from coppernicus.project import (
     LOAD_TOLERANCE_KEYS,
     SOURCE_ACCURACY_KEYS,
     SOURCE_KINDS,
+    CapModel,
     Limits,
     Link,
     Load,
@@ -94,11 +115,30 @@ PREFIX = "PI_"
 # What the part is (its library symbol): no PI_RAIL needed; with PI_RAIL, one value for every
 # rail where the part is a source, or one per rail.
 LIBRARY_FIELDS = ("PI_KIND", "PI_EFF", "PI_IQ", "PI_VOUT", "PI_IMAX", "PI_FSW")
+# A load's tolerances (the chip's datasheet: its library symbol) and a source's DC accuracy (a
+# fixed-output part's library symbol, an adjustable one's instance): part data like the above,
+# one value for every rail where the part is a load (a source), or one per rail.
+LOAD_FIELDS = ("PI_TOL", "PI_DC_TOL", "PI_AC_TOL")
+ACCURACY_FIELDS = ("PI_ACC",)
+TOLERANCE_STEMS = {"PI_TOL": "tol", "PI_DC_TOL": "dc_tol", "PI_AC_TOL": "ac_tol", "PI_ACC": "accuracy"}
+PART_FIELDS = (*LIBRARY_FIELDS, *ACCURACY_FIELDS, *LOAD_FIELDS)
+# A capacitor's model (its library symbol): no PI_RAIL, never per rail.
+CAP_FIELDS = ("PI_C", "PI_ESR", "PI_ESL", "PI_VRATED", "PI_DIELECTRIC")
+CAP_REQUIRED = ("PI_ESR", "PI_ESL", "PI_DIELECTRIC")
 # Where it sits (the schematic instance): one value per rail of PI_RAIL.
 RAIL_FIELDS = ("PI_SOURCE", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP", "PI_INPUT", "PI_INPUT_PINS",
                "PI_GND", "PI_GND_PINS", "PI_SOURCE_REF", "PI_GND_REF")
-PER_RAIL = (*RAIL_FIELDS, *LIBRARY_FIELDS)
-FIELDS = ("PI_RAIL", *PER_RAIL, "PI_LINK", "PI_LINK_PINS")
+PER_RAIL = (*RAIL_FIELDS, *PART_FIELDS)
+FIELDS = ("PI_RAIL", *PER_RAIL, "PI_LINK", "PI_LINK_PINS", *CAP_FIELDS)
+# Dielectrics: class I (no DC bias), class II ceramics (derated for DC bias: PI_VRATED needed),
+# and capacitors that are not ceramic (no DC-bias loss: not derated). KiPI knows the ceramics'
+# names (kipi/ac/model.py TEMP_CURVES) and spares only "C0G" from the derating.
+CLASS_I = ("C0G",)
+CLASS_II = ("X5R", "X6S", "X7R", "X7S", "X7T", "X8R", "Y5V", "Z5U")
+NON_CERAMIC = ("TANT", "POLY", "ALU")
+DIELECTRICS = (*CLASS_I, *CLASS_II, *NON_CERAMIC)
+DIELECTRIC_ALIASES = {"NP0": "C0G", "NPO": "C0G", "COG": "C0G"}   # NP0, and the letter O
+_CAPACITOR_REF = re.compile(r"^C\d")         # KiPI models only these (kipi/core/model/parts.py)
 INSTANCE_FIELDS = ("PI_RAIL", "PI_SOURCE", "PI_SOURCE_REF", "PI_LOAD", "PI_PINS", "PI_LIMIT_DROP",
                    "PI_INPUT", "PI_INPUT_PINS", "PI_GND", "PI_GND_PINS", "PI_GND_REF", "PI_LINK",
                    "PI_LINK_PINS")
@@ -116,13 +156,23 @@ UNITS: Dict[str, Dict[str, float]] = {
     "PI_VOUT": {"V": 1.0},
     "PI_IMAX": {"A": 1.0, "mA": 1e3},
     "PI_FSW": {"Hz": 1.0, "kHz": 1e-3, "MHz": 1e-6},
+    # A capacitor's values: the unit, or its prefix alone ("5m" is 5 mΩ, "0.5n" 0.5 nH).
+    "PI_C": {"F": 1.0, "mF": 1e3, **{f"{m}F": 1e6 for m in _MICRO}, **{m: 1e6 for m in _MICRO},
+             "nF": 1e9, "n": 1e9, "pF": 1e12, "p": 1e12},
+    "PI_ESR": {**{o: 1.0 for o in _OHM}, **{f"m{o}": 1e3 for o in _OHM}, "m": 1e3},
+    "PI_ESL": {"H": 1.0, **{f"{m}H": 1e6 for m in _MICRO}, **{m: 1e6 for m in _MICRO},
+               "nH": 1e9, "n": 1e9, "pH": 1e12, "p": 1e12},
+    "PI_VRATED": {"V": 1.0},
 }
 SHOWN = {"PI_SOURCE": "V", "PI_LOAD": "A or mA", "PI_LIMIT_DROP": "%", "PI_EFF": "%",
          "PI_IQ": "A, mA or uA", "PI_LINK": "Ohm or mOhm", "PI_VOUT": "V", "PI_IMAX": "A or mA",
-         "PI_FSW": "Hz, kHz or MHz"}
+         "PI_FSW": "Hz, kHz or MHz", "PI_C": "F, uF, nF or pF (or u, n, p alone)",
+         "PI_ESR": "Ohm or mOhm (Ω, mΩ, or m alone)", "PI_ESL": "nH, pH or uH (or n, p, u alone)",
+         "PI_VRATED": "V"}
 EXAMPLES = {"PI_SOURCE": "3.3V or -5V", "PI_LOAD": "2A or 250mA", "PI_LIMIT_DROP": "2%",
             "PI_EFF": "90%", "PI_IQ": "2mA or 50uA", "PI_LINK": "50mOhm", "PI_VOUT": "3.3V or -5V",
-            "PI_IMAX": "2A or 500mA", "PI_FSW": "500kHz or 2.2MHz"}
+            "PI_IMAX": "2A or 500mA", "PI_FSW": "500kHz or 2.2MHz", "PI_C": "100nF or 10u",
+            "PI_ESR": "5mOhm or 5m", "PI_ESL": "0.5nH or 0.5n", "PI_VRATED": "16V"}
 _QUANTITY = re.compile(r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s?(\S*)$")
 
 
@@ -134,10 +184,14 @@ class FieldError(ValueError):
 @dataclass
 class BoardFields:
     """What a board file says in its footprints: ``fields`` (reference → {field name:
-    text}, ``PI_*`` only) and ``pad_nets`` (reference → {pad number: net}) for those parts.
-    Plain data, so the app can pass what it read."""
+    text}, ``PI_*`` only) and ``pad_nets`` (reference → {pad number: net}) for those parts;
+    ``values``, their footprint Value, and ``farads``, the capacitance the engine read from it
+    where it carries its unit (a capacitor's, without ``PI_C``). Plain data, so the app can pass
+    what it read."""
     fields: Dict[str, Dict[str, str]] = field(default_factory=dict)
     pad_nets: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    values: Dict[str, str] = field(default_factory=dict)
+    farads: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -267,7 +321,109 @@ def quantity(ref: str, name: str, text: str) -> float:
         raise FieldError(f"{shown}: a drop limit is > 0")
     if name == "PI_EFF" and not 0 < x <= 1:
         raise FieldError(f"{shown}: an efficiency is above 0 and at most 100 %")
+    if name in CAP_FIELDS and x <= 0:
+        raise FieldError(f"{shown}: a capacitor's {name} is above 0 (a model cannot use 0)")
     return x
+
+
+def dielectric(ref: str, text: str) -> str:
+    """A ``PI_DIELECTRIC`` as Coppernicus and KiPI name it (``NP0`` is ``C0G``), in any case.
+    Raises FieldError."""
+    key = text.strip().upper()
+    key = DIELECTRIC_ALIASES.get(key, key)
+    if key not in DIELECTRICS:
+        raise FieldError(f'{ref}: PI_DIELECTRIC = "{text}": PI_DIELECTRIC is one of C0G (or NP0), '
+                         f"{', '.join(CLASS_II)} (ceramics), TANT (tantalum), POLY (polymer) or ALU "
+                         "(aluminium electrolytic)")
+    return key
+
+
+_TOL_ITEM = re.compile(r"^([+-]?)((?:\d+(?:\.\d*)?|\.\d+))\s?(\S*)$")
+_TOL_EXAMPLE = "3%, 50mV or -3%,+5%"
+
+
+def tolerance(ref: str, name: str, text: str) -> Tuple[str, Tuple[float, float]]:
+    """A ``PI_TOL``, ``PI_DC_TOL``, ``PI_AC_TOL`` or ``PI_ACC`` as ``(key, (below, above))``: the
+    key ``tol_pct``, ``dc_tol_mv``, ``accuracy_pct``... (% of nominal or mV from it) and the pair
+    signed as datasheets write it. One value is ± that (``3%``, ``±3%``); two are ``below,above``
+    (``-3%,+5%``), below ≤ 0 ≤ above, in one unit. Raises FieldError."""
+    shown = f'{ref}: {name} = "{text}"'
+    items = [t.strip() for t in text.strip().replace("−", "-").split(",")]
+    if len(items) > 2:
+        raise FieldError(f"{shown}: give one value (± that) or two values, below and above, e.g. "
+                         "-3%,+5%")
+    if len(items) == 1:
+        for sign in ("±", "+/-", "+-"):
+            if items[0].startswith(sign):
+                items[0] = "+" + items[0][len(sign):].strip()
+                break
+    parsed = []
+    for item in items:
+        m = _TOL_ITEM.match(item)
+        if m is None or any(c.isdigit() for c in m.group(3)):
+            raise FieldError(f"{shown} is not a value with its unit; write it as {_TOL_EXAMPLE}")
+        sign, number, unit = m.groups()
+        if not unit:
+            if len(items) == 2:
+                raise FieldError(f"{shown}: give each value its unit (% or mV), e.g. -3%,+5%; the comma "
+                                 "separates below and above, so write decimals with a dot")
+            raise FieldError(f"{shown}: give the unit (% or mV), e.g. {_TOL_EXAMPLE}; a bare number is "
+                             "refused so that no unit is guessed")
+        if unit not in ("%", "mV"):
+            raise FieldError(f"{shown}: {name} takes % (of nominal) or mV (from nominal), not {unit}; "
+                             f"e.g. {_TOL_EXAMPLE}")
+        parsed.append((sign, float(number), unit))
+    if len({u for _, _, u in parsed}) > 1:
+        raise FieldError(f"{shown}: give both values in the same unit, e.g. -3%,+5% or -30mV,+50mV")
+    unit = parsed[0][2]
+    if len(parsed) == 1:
+        sign, x, _ = parsed[0]
+        if sign == "-":
+            raise FieldError(f"{shown}: one value is ± that, so it cannot be negative; give below and "
+                             f"above, e.g. -{x:g}{unit},+0{unit}")
+        below, above = -x, x
+    else:
+        (s1, x1, _), (s2, x2, _) = parsed
+        below, above = (-x1 if s1 == "-" else x1), (-x2 if s2 == "-" else x2)
+        if below > 0:
+            raise FieldError(f"{shown}: below ({below:g}{unit}) is ≤ 0 and above ≥ 0, as datasheets "
+                             "write −3 % / +5 %: -3%,+5%")
+        if above < 0:
+            raise FieldError(f"{shown}: above ({above:g}{unit}) is ≥ 0 and below ≤ 0, as datasheets "
+                             "write −3 % / +5 %: -3%,+5%")
+    return f"{TOLERANCE_STEMS[name]}_{'pct' if unit == '%' else 'mv'}", (below, above)
+
+
+def pair_text(key: str, pair: Tuple[float, float]) -> str:
+    """A tolerance as shown: ``tol_pct ±5 %``, ``tol_mv -30/+50 mV``."""
+    unit = " %" if key.endswith("_pct") else " mV"
+    below, above = pair
+    if below == -above:
+        return f"{key} ±{above:g}{unit}"
+    return f"{key} {below:g}/+{above:g}{unit}"
+
+
+def tolerance_text(key: str, pair: Tuple[float, float]) -> str:
+    """A tolerance pair as field text, read back exactly by :func:`tolerance`: ``5%``,
+    ``-30mV,+20mV``."""
+    unit = "%" if key.endswith("_pct") else "mV"
+    below, above = (float(x) for x in pair)
+
+    def num(x: float) -> str:
+        return format(Decimal(repr(x)).normalize(), "f")
+    if below == -above:
+        return f"{num(above)}{unit}"
+    return f"{'-' + num(-below) if below < 0 else '0'}{unit},+{num(above)}{unit}"
+
+
+def _family(key: str) -> str:
+    """``tol_pct`` → ``tol``, ``dc_tol_mv`` → ``dc_tol``, ``accuracy_pct`` → ``accuracy``."""
+    return key.rsplit("_", 1)[0]
+
+
+def _same_pair(a: Optional[Tuple[float, float]], b: Optional[Tuple[float, float]]) -> bool:
+    return a is not None and b is not None and all(
+        math.isclose(x, y, rel_tol=1e-9, abs_tol=1e-12) for x, y in zip(a, b))
 
 
 def _split(text: Optional[str]) -> Optional[List[str]]:
@@ -323,6 +479,7 @@ def field_rails(fields: Mapping[str, Mapping[str, str]],
             if placed:
                 raise FieldError(f"{ref}: {', '.join(placed)} without PI_RAIL: set PI_RAIL to the "
                                  "net it is on (e.g. +3V3)")
+            _check_part_tolerances(ref, f)
             continue                          # library fields only: part data, no rail yet
         if any(not n for n in nets):
             raise FieldError(f'{ref}: PI_RAIL = "{f["PI_RAIL"]}" has an empty net name')
@@ -331,30 +488,33 @@ def field_rails(fields: Mapping[str, Mapping[str, str]],
                              "voltage it holds (PI_SOURCE, e.g. 3.3V, or PI_VOUT on a fixed-output "
                              "part) or the current it draws (PI_LOAD, e.g. 2A)")
         for name, vals in values.items():
-            if vals is None or len(vals) == len(nets) or (name in LIBRARY_FIELDS and len(vals) == 1):
+            if vals is None or len(vals) == len(nets) or (name in PART_FIELDS and len(vals) == 1):
                 continue
             rule = ("give one value for every rail, or one per rail separated by ';'"
-                    if name in LIBRARY_FIELDS else
+                    if name in PART_FIELDS else
                     "give one per rail, separated by ';' (leave one empty to skip that rail)")
             raise FieldError(f'{ref}: {name} = "{f[name]}" has {len(vals)} value(s) for '
                              f'{len(nets)} rail(s) (PI_RAIL = "{f["PI_RAIL"]}"): {rule}')
         positions = []
         for i in range(len(nets)):
             v: Dict[str, Optional[str]] = {}
-            explicit = set()                  # library fields given rail by rail
+            explicit = set()                  # part data given rail by rail
             for n in PER_RAIL:
                 vals = values[n]
-                if vals is not None and n in LIBRARY_FIELDS and len(vals) == 1:
+                if vals is not None and n in PART_FIELDS and len(vals) == 1:
                     v[n] = vals[0] or None    # one value for every rail of the part
                 else:
                     v[n] = _at(vals, i)
-                    if vals is not None and n in LIBRARY_FIELDS:
+                    if vals is not None and n in PART_FIELDS:
                         explicit.add(n)
             positions.append((v, explicit))
         if not any(v["PI_SOURCE"] or (v["PI_VOUT"] and not v["PI_LOAD"]) for v, _ in positions):
             # A source nowhere: its library data cannot be part data for a source rail, so it
             # is a mistake (a regulator placed as a load) and is refused, rail by rail.
-            positions = [(v, set(LIBRARY_FIELDS)) for v, _ in positions]
+            positions = [(v, e | set(LIBRARY_FIELDS) | set(ACCURACY_FIELDS)) for v, e in positions]
+        if not any(v["PI_LOAD"] for v, _ in positions):
+            # A load nowhere: a load's tolerance on it is a mistake too.
+            positions = [(v, e | set(LOAD_FIELDS)) for v, e in positions]
         for i, (net, (v, explicit)) in enumerate(zip(nets, positions)):
             term, limit = _term(ref, net, i, v, explicit)
             rail = rails.setdefault(net, FieldRail(net))
@@ -399,6 +559,47 @@ def _check_part(owner: str, field_name: str, ref: str, net: str,
                          f"{hint}")
 
 
+def _check_part_tolerances(ref: str, f: Mapping[str, str]) -> None:
+    """A part without PI_RAIL: its PI_TOL, PI_DC_TOL, PI_AC_TOL and PI_ACC are read (an error now,
+    not when a project rail takes them) and are one value each, since no PI_RAIL places more."""
+    for name in (*LOAD_FIELDS, *ACCURACY_FIELDS):
+        vals = _split(f.get(name))
+        if vals is None:
+            continue
+        if len(vals) > 1:
+            what = "source" if name in ACCURACY_FIELDS else "load"
+            raise FieldError(f'{ref}: {name} = "{f[name]}" has {len(vals)} values but no PI_RAIL to '
+                             f"place them: give one value (it applies to every rail where {ref} is a "
+                             f"{what}), or set PI_RAIL")
+        if vals[0]:
+            tolerance(ref, name, vals[0])
+
+
+def _part_value(f: Mapping[str, str], name: str, net: str) -> Optional[str]:
+    """The text of part-data field ``name`` for the part's terminal on ``net``: its value at
+    that rail's position in PI_RAIL, else its one value; None when it gives none there."""
+    vals = _split(f.get(name))
+    if vals is None:
+        return None
+    nets = _split(f.get("PI_RAIL"))
+    if nets and net in nets and len(vals) == len(nets):
+        return vals[nets.index(net)] or None
+    return (vals[0] or None) if len(vals) == 1 else None
+
+
+def _tolerances(ref: str, v: Mapping[str, Optional[str]], names: Sequence[str],
+                values: List) -> Dict[str, Tuple[float, float]]:
+    """The tolerance keys the fields ``names`` give at this rail position, each noted in
+    ``values``."""
+    out = {}
+    for name in names:
+        if v[name]:
+            key, pair = tolerance(ref, name, v[name])
+            out[key] = pair
+            values.append((pair_text(key, pair), FieldValue(ref, name, v[name])))
+    return out
+
+
 def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=frozenset()
           ) -> Tuple[FieldTerm, Optional[Tuple[float, FieldValue]]]:
     """The source or load at rail position ``i`` of a part, and its drop limit. ``explicit``:
@@ -417,7 +618,8 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=f
     values: List[Tuple[str, FieldValue]] = []
     warnings: List[str] = []
     if load:
-        extra = [n for n in SOURCE_ONLY if v[n]] + [n for n in LIBRARY_FIELDS if n in explicit and v[n]]
+        extra = [n for n in SOURCE_ONLY if v[n]] + [n for n in (*LIBRARY_FIELDS, *ACCURACY_FIELDS)
+                                                    if n in explicit and v[n]]
         if extra:
             raise FieldError(f"{ref}: {extra[0]} is for a source (PI_SOURCE or PI_VOUT), not a load "
                              f"on {net}" + ("; a regulator holds its output rail and draws its input "
@@ -427,8 +629,13 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=f
         pins = _pins(ref, v["PI_PINS"], "PI_PINS", values)
         ground, gpins, gref = _ground(ref, v, values)
         term: Union[Source, Load] = Load(ref, current, pins, ground_ref=gref if gref != ref else "",
-                                         ground_pins=gpins, ground_net=ground)
+                                         ground_pins=gpins, ground_net=ground,
+                                         **_tolerances(ref, v, LOAD_FIELDS, values))
     else:
+        wrong = [n for n in LOAD_FIELDS if n in explicit and v[n]]
+        if wrong:
+            raise FieldError(f"{ref}: {wrong[0]} is for a load (PI_LOAD), not the source on {net}: a "
+                             "source's DC accuracy is PI_ACC")
         if src:
             voltage = quantity(ref, "PI_SOURCE", src)
             values.append((f"{voltage:g} V", FieldValue(ref, "PI_SOURCE", src)))
@@ -503,7 +710,7 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=f
                       input_ref=ref if out_ref and v["PI_INPUT"] else "", input_pins=ipins,
                       input_net=v["PI_INPUT"] or "", ground_ref=gref if gref != anchor else "",
                       ground_pins=gpins, ground_net=ground, current_limit_a=imax, fsw_hz=fsw,
-                      extra_pins=extra)
+                      extra_pins=extra, **_tolerances(ref, v, ACCURACY_FIELDS, values))
         if out_ref:
             return _limited(FieldTerm(term, values, owner=ref, warnings=warnings), ref, v)
     return _limited(FieldTerm(term, values, warnings=warnings), ref, v)
@@ -616,6 +823,121 @@ def _link_sides(ref: str, text: str, pads: Mapping[str, str]) -> List[Tuple[str,
     return out
 
 
+# ---------------------------------------------------------------------- component models
+
+_BARE_NUMBER = re.compile(r"^\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*$")
+_SI = ((1e-12, "p"), (1e-9, "n"), (1e-6, "µ"), (1e-3, "m"), (1.0, ""))
+
+
+def si_text(x: float, unit: str) -> str:
+    """``x`` with an SI prefix, four digits: 1e-05 F is "10 µF", 0.005 Ω "5 mΩ"."""
+    scale, prefix = next(((s, p) for s, p in reversed(_SI) if abs(x) >= s * (1 - 1e-9)), _SI[0])
+    return f"{x / scale:.4g} {prefix}{unit}"
+
+
+@dataclass
+class FieldCap:
+    """What a capacitor's library fields say: its model, each value with where it came from, or
+    (``model`` None) why it has none: ``missing`` names the part and what it lacks."""
+    ref: str
+    fields: Dict[str, str]
+    model: Optional[CapModel] = None
+    values: List[Tuple[str, str]] = field(default_factory=list)    # (what, where it came from)
+    capacitance_from: str = ""
+    missing: Optional[str] = None
+    unused: bool = False              # not a C<n> part: KiPI models none, so the fields are not used
+
+    def summary(self) -> str:
+        """``10 µF, ESR 5 mΩ, ESL 500 pH, X7R, rated 16 V``; "" without a model."""
+        return ", ".join(what for what, _ in self.values)
+
+    def text(self) -> str:
+        """Each value with the field (or the footprint Value) it came from."""
+        return f"{self.ref} " + ", ".join(f"{what} ({where})" for what, where in self.values)
+
+    def listing(self) -> Dict[str, Any]:
+        m = self.model
+        model = None if m is None else {
+            "name": m.name, "capacitance_f": m.capacitance_f, "capacitance_from": self.capacitance_from,
+            "esr_ohm": m.esr_ohm, "esl_h": m.esl_h, "rated_v": m.rated_v, "dielectric": m.dielectric,
+            "derated_for_dc_bias": bool(m.rated_v) and m.dielectric != "C0G"}
+        return {"ref": self.ref, "fields": dict(self.fields), "complete": m is not None,
+                "model": model, "missing": self.missing, "summary": self.summary(),
+                "note": f"Capacitor {self.text()}." if m is not None else None}
+
+
+def field_caps(fields: Mapping[str, Mapping[str, str]], values: Optional[Mapping[str, str]] = None,
+               farads: Optional[Mapping[str, float]] = None) -> Dict[str, FieldCap]:
+    """The capacitor models the parts' library fields (``PI_C``, ``PI_ESR``, ``PI_ESL``,
+    ``PI_VRATED``, ``PI_DIELECTRIC``) describe, by reference: every part with any of them.
+    ``values``: each part's footprint Value, ``farads``: the capacitance read from it (by the
+    engine, where it carries its unit), used without ``PI_C``.
+
+    Never a default behind a verdict: a model needs ``PI_ESR``, ``PI_ESL``, ``PI_DIELECTRIC`` and
+    a capacitance, and a class II dielectric ``PI_VRATED``; without them the part has no model and
+    ``missing`` says what it lacks ("C45: PI_ESR missing"). A value that cannot be read raises
+    FieldError, partial or not. A tantalum, polymer or aluminium part keeps its capacitance under
+    DC bias: its rating is not passed on (KiPI derates every rated model but C0G)."""
+    out: Dict[str, FieldCap] = {}
+    for ref in sorted(fields, key=_ref_key):
+        f = fields[ref]
+        given = {n: f[n] for n in CAP_FIELDS if f.get(n) is not None and f[n].strip()}
+        if not given:
+            continue
+        cap = out[ref] = FieldCap(ref, dict(given))
+        read = {n: quantity(ref, n, given[n]) for n in ("PI_C", "PI_ESR", "PI_ESL", "PI_VRATED")
+                if n in given}
+        diel = dielectric(ref, given["PI_DIELECTRIC"]) if "PI_DIELECTRIC" in given else None
+        if not _CAPACITOR_REF.match(ref):
+            cap.unused = True
+            cap.missing = (f"{ref}: capacitor fields ({', '.join(given)}) on a part not named "
+                           "C<number>: KiPI models only C<number> parts, so they are not used")
+            continue
+        problems = []
+        lacks = [n for n in CAP_REQUIRED if n not in given]
+        if lacks:
+            problems.append(f"{', '.join(lacks)} missing")
+        capacitance = read.get("PI_C")
+        if capacitance is not None:
+            cap.capacitance_from = f'KiCad field PI_C "{given["PI_C"]}"'
+            where = FieldValue(ref, "PI_C", given["PI_C"]).origin()
+        else:
+            text = (values or {}).get(ref)
+            capacitance = (farads or {}).get(ref)
+            if capacitance is not None:
+                cap.capacitance_from = f'footprint Value "{text}"'
+                where = f'from the footprint Value "{text}" of {ref}'
+            elif text is None or not text.strip():
+                problems.append("no capacitance: no PI_C, and no footprint Value was read (set PI_C, "
+                                "e.g. 100nF)")
+            elif _BARE_NUMBER.match(text):
+                problems.append(f'no capacitance: no PI_C, and the footprint Value "{text}" has no '
+                                "unit (set PI_C, e.g. 100nF, or write the unit in the Value)")
+            else:
+                problems.append(f'no capacitance: no PI_C, and the footprint Value "{text}" is not '
+                                "one (set PI_C, e.g. 100nF)")
+        if diel in CLASS_II and "PI_VRATED" not in read:
+            problems.append(f"{diel} without PI_VRATED: capacitance not derated for DC bias")
+        if problems:
+            cap.missing = f"{ref}: " + "; ".join(problems)
+            continue
+        rated = read.get("PI_VRATED")
+        cap.model = CapModel(f"{ref} (KiCad)", capacitance, read["PI_ESL"], read["PI_ESR"], [ref],
+                             rated_v=None if diel in NON_CERAMIC else rated, dielectric=diel)
+
+        def origin(name: str) -> str:
+            return FieldValue(ref, name, given[name]).origin()
+        cap.values = [(si_text(capacitance, "F"), where),
+                      (f"ESR {si_text(read['PI_ESR'], 'Ω')}", origin("PI_ESR")),
+                      (f"ESL {si_text(read['PI_ESL'], 'H')}", origin("PI_ESL")),
+                      (diel, origin("PI_DIELECTRIC"))]
+        if rated is not None:
+            cap.values.append((f"rated {rated:g} V" + (f", not derated for DC bias (a {diel} capacitor "
+                                                       "is not a ceramic)" if diel in NON_CERAMIC else ""),
+                               origin("PI_VRATED")))
+    return out
+
+
 # ---------------------------------------------------------------------- merging
 
 @dataclass
@@ -641,14 +963,16 @@ class Merged:
     link_notes: List[str] = field(default_factory=list)
     # The warnings about each link, under both of its nets (a net need not be a rail).
     link_warnings: Dict[str, List[str]] = field(default_factory=dict)
+    # The capacitor models of the KiCad fields (their warnings are in ``warnings``).
+    cap_notes: List[str] = field(default_factory=list)
 
     @property
     def from_fields(self) -> List[str]:
         return [n for n, o in self.origins.items() if o.source == "fields"]
 
     def notes(self) -> List[str]:
-        """Every assumption line, once (rails, then links)."""
-        lines = [n for o in self.origins.values() for n in o.notes] + self.link_notes
+        """Every assumption line, once (rails, then links, then capacitor models)."""
+        lines = [n for o in self.origins.values() for n in o.notes] + self.link_notes + self.cap_notes
         return list(dict.fromkeys(lines))
 
     def annotate(self, result) -> None:
@@ -668,12 +992,13 @@ def apply(project: Project, read: Callable[[], BoardFields], use: Optional[bool]
     found = read()
     if not found.fields:
         return Merged(project)
-    return merge(project, found.fields, found.pad_nets, ties)
+    return merge(project, found.fields, found.pad_nets, ties, found.values, found.farads)
 
 
 def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
           pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None,
-          ties: Sequence[Tuple[str, str]] = ()) -> Merged:
+          ties: Sequence[Tuple[str, str]] = (), values: Optional[Mapping[str, str]] = None,
+          farads: Optional[Mapping[str, float]] = None) -> Merged:
     """The project with the KiCad fields merged in, as the owner decided:
 
     * a net the fields define completely takes its sources, loads, pins and converter data
@@ -690,7 +1015,15 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
       net that holds only limits stays as it is (with a ``PI_LIMIT_DROP`` there applied to
       it); with none, a ``PI_LIMIT_DROP`` there stays on that net, in a rail that holds only
       the limit;
-    * ``PI_LINK`` parts replace project links on the same part (a warning when they differ).
+    * ``PI_LINK`` parts replace project links on the same part (a warning when they differ);
+    * a part's ``PI_TOL``, ``PI_DC_TOL``, ``PI_AC_TOL`` (a load) or ``PI_ACC`` (a source) wins over
+      the project's value of the same part (a warning when they differ), on the fields' rails and
+      on the project's, unless the rail sets ``override_board_fields``;
+    * a capacitor whose fields give a complete model (:func:`field_caps`) takes it; a project
+      ``capacitors:`` model naming it loses that ref (a warning when they differ) unless the
+      model sets ``override_board_fields``. Partial fields keep the project's model (a warning),
+      or with none leave the part without one, its reason in the project's ``capacitor_gaps``.
+      ``values`` / ``farads``: each part's footprint Value and the capacitance read from it.
     """
     rails = field_rails(fields, pad_nets)
     links = field_links(fields, pad_nets or {})
@@ -786,8 +1119,126 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
     out.rails = new_rails
     for driver, notes in tie_notes.items():
         merged.origins[driver].notes += notes
+    _library_tolerances(merged, fields)
     merged.warnings = [w for o in merged.origins.values() for w in o.warnings] + merged.warnings
+    _merge_caps(merged, field_caps(fields, values, farads))
     return merged
+
+
+def _set_tolerance(t: Union[Source, Load], key: str, pair: Tuple[float, float], fv: FieldValue,
+                   net: str, origin: Origin) -> None:
+    """Set a field's tolerance (or accuracy) on a project rail's terminal: the field wins over
+    the project's value of its family (``tol``: ``tol_pct`` or ``tol_mv``), a warning when it
+    differs."""
+    stem = _family(key)
+    old = [(k, getattr(t, k)) for k in (f"{stem}_pct", f"{stem}_mv") if getattr(t, k) is not None]
+    if old and not (old[0][0] == key and _same_pair(old[0][1], pair)):
+        origin.warnings.append(_tolerance_warning(fv, key, pair, t.label, net, *old[0]))
+    setattr(t, f"{stem}_pct", None)
+    setattr(t, f"{stem}_mv", None)
+    setattr(t, key, pair)
+    origin.notes.append(f"Rail {net}: {pair_text(key, pair)} of {t.label} ({fv.origin()}).")
+
+
+def _tolerance_warning(fv: FieldValue, key: str, pair, label: str, net: str, old_key: str,
+                       old_pair) -> str:
+    return (f'KiCad field {fv.field} "{fv.text}" on {fv.ref} gives {pair_text(key, pair)} for {label} '
+            f"on {net}; the project file's {pair_text(old_key, old_pair)} is not used (set "
+            "override_board_fields: true on the rail to use the project's)")
+
+
+def _library_tolerances(merged: Merged, fields: Mapping[str, Mapping[str, str]]) -> None:
+    """A part's PI_TOL, PI_DC_TOL, PI_AC_TOL and PI_ACC on the project file's rails (a rail the
+    fields do not define, or leave incomplete; not one that sets override_board_fields): by part,
+    a source's on the part whose fields describe it (an external-inductor buck's IC)."""
+    for rail in merged.project.rails:
+        origin = merged.origins.get(rail.net)
+        if origin is None or origin.source != "project" or rail.override_board_fields:
+            continue
+        for terms, names in ((rail.loads, LOAD_FIELDS), (rail.sources, ACCURACY_FIELDS)):
+            for t in terms:
+                part = _source_part(t) if isinstance(t, Source) else t.ref
+                f = fields.get(part)
+                for name in names if f else ():
+                    text = _part_value(f, name, rail.net)
+                    if text is not None:
+                        key, pair = tolerance(part, name, text)
+                        _set_tolerance(t, key, pair, FieldValue(part, name, text), rail.net, origin)
+
+
+def _norm_dielectric(text: str) -> str:
+    key = (text or "").strip().upper()
+    return DIELECTRIC_ALIASES.get(key, key)
+
+
+def _cap_text(m: CapModel) -> str:
+    s = f"C {m.capacitance_f:g} F ESR {m.esr_ohm:g} Ω ESL {m.esl_h:g} H"
+    if m.dielectric:
+        s += f" {m.dielectric}"
+    if m.rated_v is not None:
+        s += f" rated {m.rated_v:g} V"
+    if m.kept_at_rated_pct is not None:
+        s += f" {m.kept_at_rated_pct:g} % kept at rated"
+    return s
+
+
+def _same_cap(a: CapModel, b: CapModel) -> bool:
+    def close(x, y):
+        return (x is None) == (y is None) and (x is None or math.isclose(x, y, rel_tol=1e-9))
+    return (all(close(getattr(a, k), getattr(b, k)) for k in ("capacitance_f", "esr_ohm", "esl_h",
+                                                                 "rated_v", "kept_at_rated_pct"))
+            and _norm_dielectric(a.dielectric) == _norm_dielectric(b.dielectric))
+
+
+def _merge_caps(merged: Merged, caps: Mapping[str, FieldCap]) -> None:
+    """The fields' capacitor models into the merged project, as :func:`merge` says."""
+    out = merged.project
+    taken = set()                    # refs a project model keeps (override, or partial fields)
+    for c in caps.values():
+        if c.unused:
+            merged.warnings.append(c.missing)
+    for m in out.capacitors:         # copies: the loaded project is never changed
+        refs = []
+        for ref in m.refs:
+            c = caps.get(ref)
+            if c is None or c.unused:
+                refs.append(ref)
+            elif m.override_board_fields:
+                refs.append(ref)
+                taken.add(ref)
+                merged.cap_notes.append(f"Capacitor {ref}: the project file's model {m.name} is used: it "
+                                        "sets override_board_fields, so its KiCad fields are not "
+                                        f"({c.summary() or c.missing}).")
+            elif c.model is None:
+                refs.append(ref)
+                taken.add(ref)
+                merged.warnings.append(f"KiCad fields on {ref} are incomplete ({c.missing}): the project "
+                                       f"file's capacitor model {m.name} is used")
+            elif not _same_cap(c.model, m):
+                merged.warnings.append(f"project file capacitor model {m.name} ignored for {ref}: KiCad "
+                                       f"fields define it (KiCad {_cap_text(c.model)}, project "
+                                       f"{_cap_text(m)}); set override_board_fields: true on the model "
+                                       "to use the project's values")
+        m.refs = refs
+    names = {m.name for m in out.capacitors}
+    used = []
+    for ref, c in caps.items():
+        if c.model is None or ref in taken:
+            continue
+        model = copy.deepcopy(c.model)
+        name, n = model.name, 2
+        while name in names:
+            name, n = f"{model.name} {n}", n + 1
+        model.name = name
+        names.add(name)
+        out.capacitors.append(model)
+        used.append(c)
+    if used:
+        merged.cap_notes.insert(0, "Capacitor models from KiCad fields (never a default: each has "
+                                   "PI_ESR, PI_ESL, PI_DIELECTRIC, a capacitance and, class II, "
+                                   f"PI_VRATED): {'; '.join(c.text() for c in used)}.")
+    out.capacitor_gaps = {ref: c.missing for ref, c in caps.items()
+                          if c.model is None and not c.unused and ref not in taken}
 
 
 def _group(net: str, joins: Sequence[Tuple[str, str]]) -> set:
@@ -972,16 +1423,29 @@ def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = N
             origin.notes.append(f"Rail {fr.net}: remote sense pins of {s.ref} from the project file "
                                 "(sense is not a KiCad field yet).")
     # Tolerance stack-up (Task 11): a load's tolerances and entered parts, a source's DC accuracy,
-    # carried by ref, as remote sense is (no KiCad field holds them yet).
+    # carried by ref, as remote sense is, where the part's own fields (PI_TOL, PI_ACC...) give
+    # none: a field wins, with a warning when the project's value differs.
+    made = {id(t): ft for ft, t in zip(fr.sources + fr.loads, rail.sources + rail.loads)}
     for terms, own_terms, keys in ((rail.sources, own.sources, SOURCE_ACCURACY_KEYS),
                                    (rail.loads, own.loads, TOLERANCE_KEYS)):
         pairs, _lost = carried_by_ref(terms, own_terms, keys)
         for t, p in pairs:
-            carried = [k for k in keys if getattr(p, k) is not None]
-            for k in carried:
-                setattr(t, k, copy.deepcopy(getattr(p, k)))
-            origin.notes.append(f"Rail {fr.net}: {', '.join(carried)} of {t.ref} from the project file "
-                                "(no KiCad field holds them yet).")
+            carried = []
+            for k in (k for k in keys if getattr(p, k) is not None):
+                stem = _family(k)
+                fv = next((fv for _, fv in made[id(t)].values if TOLERANCE_STEMS.get(fv.field) == stem),
+                          None)
+                if fv is None:
+                    setattr(t, k, copy.deepcopy(getattr(p, k)))
+                    carried.append(k)
+                    continue
+                mine = next(kk for kk in (f"{stem}_pct", f"{stem}_mv") if getattr(t, kk) is not None)
+                if not (mine == k and _same_pair(getattr(t, mine), getattr(p, k))):
+                    origin.warnings.append(_tolerance_warning(fv, mine, getattr(t, mine), t.label,
+                                                              fr.net, k, getattr(p, k)))
+            if carried:
+                origin.notes.append(f"Rail {fr.net}: {', '.join(carried)} of {t.ref} from the project "
+                                    "file (the part's KiCad fields do not give them).")
     return rail, origin
 
 
@@ -1114,14 +1578,20 @@ def _link_text(k: Link) -> str:
 
 def listing(fields: Mapping[str, Mapping[str, str]],
             pad_nets: Optional[Mapping[str, Mapping[str, str]]] = None,
-            ties: Sequence[Tuple[str, str]] = ()) -> Dict[str, Any]:
+            ties: Sequence[Tuple[str, str]] = (), values: Optional[Mapping[str, str]] = None,
+            farads: Optional[Mapping[str, float]] = None) -> Dict[str, Any]:
     """The fields' rails and links as plain data, each value with the field it came from
     (for the MCP tool and the CLI). Each rail is complete as the merge judges the fields
     alone (:func:`judge`: their links and the board's net ties, ``ties``, no project file),
     and a rail completed by a link, a net tie or a regulator input it feeds says so in
-    ``complete_through`` and its note. Raises FieldError like :func:`field_rails`."""
+    ``complete_through`` and its note. With any, ``capacitors`` gives each capacitor's model
+    from its fields, or what it lacks (:func:`field_caps`; ``values`` / ``farads`` as there),
+    and ``part_tolerances`` the parts whose PI_TOL, PI_DC_TOL, PI_AC_TOL or PI_ACC has no
+    PI_RAIL (they reach a project-file rail by part). Raises FieldError like
+    :func:`field_rails`."""
     rails = field_rails(fields, pad_nets)
     links = field_links(fields, pad_nets or {})
+    caps = field_caps(fields, values, farads)
     judged = judge(copy.deepcopy(rails), Project(links=[k for k, _ in links]), ties)
 
     def note(fr: FieldRail) -> Optional[str]:
@@ -1132,7 +1602,7 @@ def listing(fields: Mapping[str, Mapping[str, str]],
             return fr.note()
         return (f"{fr.note()} Complete without a {'load' if fr.sources else 'source'} of its "
                 f"own: {through}.")
-    return {
+    out: Dict[str, Any] = {
         "rails": [{**fr.listing(judged.missing[net], judged.through.get(net)),
                    "missing": judged.missing[net], "note": note(fr)}
                   for net, fr in sorted(rails.items())],
@@ -1140,6 +1610,26 @@ def listing(fields: Mapping[str, Mapping[str, str]],
                    "pins_b": k.pins_b, "resistance_ohm": k.resistance_ohm, "from": fv.origin()}
                   for k, fv in links],
     }
+    if caps:
+        out["capacitors"] = [c.listing() for c in caps.values()]
+    parts = []
+    for ref in sorted(fields, key=_ref_key):
+        f = fields[ref]
+        given = {n: f[n] for n in (*LOAD_FIELDS, *ACCURACY_FIELDS) if _split(f.get(n))}
+        if not given or _split(f.get("PI_RAIL")) is not None:
+            continue
+        entry: Dict[str, Any] = {"ref": ref, "fields": given}
+        for name, text in given.items():
+            key, pair = tolerance(ref, name, text)
+            entry[key] = list(pair)
+        what = " and ".join(w for w, names in (("a load", LOAD_FIELDS), ("a source", ACCURACY_FIELDS))
+                            if any(n in given for n in names))
+        entry["note"] = (f"No PI_RAIL: applies by part to every project-file rail where {ref} is "
+                         f"{what}.")
+        parts.append(entry)
+    if parts:
+        out["part_tolerances"] = parts
+    return out
 
 
 def _ref_key(ref: str):
@@ -1163,7 +1653,13 @@ _WRITE_UNITS = {"PI_SOURCE": [(math.inf, "V", 1)],
                 "PI_VOUT": [(math.inf, "V", 1)],
                 "PI_IMAX": [(1.0, "mA", 1000), (math.inf, "A", 1)],
                 "PI_FSW": [(1e3, "Hz", 1), (1e6, "kHz", Decimal("0.001")),
-                           (math.inf, "MHz", Decimal("0.000001"))]}
+                           (math.inf, "MHz", Decimal("0.000001"))],
+                "PI_C": [(1e-9, "pF", 10 ** 12), (1e-6, "nF", 10 ** 9), (1e-3, "uF", 10 ** 6),
+                         (1.0, "mF", 1000), (math.inf, "F", 1)],
+                "PI_ESR": [(1.0, "mOhm", 1000), (math.inf, "Ohm", 1)],
+                "PI_ESL": [(1e-10, "pH", 10 ** 12), (1e-6, "nH", 10 ** 9), (1e-3, "uH", 10 ** 6),
+                           (math.inf, "H", 1)],
+                "PI_VRATED": [(math.inf, "V", 1)]}
 
 
 def field_text(name: str, value: float) -> str:
@@ -1172,6 +1668,11 @@ def field_text(name: str, value: float) -> str:
     :func:`quantity`."""
     units = _WRITE_UNITS[name]
     preferred = next(i for i, (below, _, _) in enumerate(units) if abs(value) < below)
+    if name in CAP_FIELDS:       # a capacitor's values: the preferred prefix, 12 digits
+        _, unit, scale = units[preferred]
+        text = f"{format((Decimal(f'{float(value):.12g}') * scale).normalize(), 'f')}{unit}"
+        if math.isclose(quantity("", name, text), value, rel_tol=1e-12):
+            return text
     texts = []
     for _, unit, scale in units[preferred:] + units[:preferred]:
         number = format((Decimal(repr(float(value))) * scale).normalize(), "f")
@@ -1239,14 +1740,64 @@ def _source_fields(s: Source, net: str, blocked: List[str], notes: List[str]) ->
     if s.sense_net or s.ground_sense_net:
         notes.append("remote sense (sense, ground_sense): keep it in the project file")
     _ground_fields(s, out, blocked, part)
+    _tolerance_fields(s, ACCURACY_FIELDS, out)
     return out
 
 
-def _load_fields(ld: Load, blocked: List[str]) -> Dict[str, str]:
+def _tolerance_fields(t: Union[Source, Load], names: Sequence[str], out: Dict[str, str]) -> None:
+    """PI_TOL, PI_DC_TOL, PI_AC_TOL (a load's) or PI_ACC (a source's) from its keys."""
+    for name in names:
+        stem = TOLERANCE_STEMS[name]
+        key = next((k for k in (f"{stem}_pct", f"{stem}_mv") if getattr(t, k) is not None), None)
+        if key is not None:
+            out[name] = tolerance_text(key, getattr(t, key))
+
+
+def _load_fields(ld: Load, blocked: List[str], notes: Optional[List[str]] = None) -> Dict[str, str]:
     out = {"PI_LOAD": field_text("PI_LOAD", ld.current)}
     if ld.pins:
         out["PI_PINS"] = ",".join(ld.pins)
     _ground_fields(ld, out, blocked)
+    _tolerance_fields(ld, LOAD_FIELDS, out)
+    for key in LOAD_PART_KEYS:
+        if getattr(ld, key) is not None and notes is not None:
+            notes.append(f"{key} (an entered part of the tolerance stack-up): keep it in the project file")
+    return out
+
+
+def _cap_fields(m: CapModel, ref: str, not_expressed: List[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+    """A capacitor model's library fields for ``ref``, or None (with the reason in
+    ``not_expressed``) when the fields would give no model or another one."""
+    def unsaid(what: str, reason: str) -> None:
+        not_expressed.append({"rail": None, "part": ref, "what": what, "reason": reason})
+    if not _CAPACITOR_REF.match(ref):
+        unsaid(f"capacitor model {m.name} on {ref}", "KiPI models only parts named C<number>, so it "
+               "is not proposed")
+        return None
+    lacks = [k for k in ("capacitance_f", "esl_h", "esr_ohm") if not getattr(m, k) > 0]
+    diel = _norm_dielectric(m.dielectric)
+    why = (f"{', '.join(lacks)} not entered" if lacks else
+           "no dielectric (the fields need PI_DIELECTRIC)" if not diel else
+           f"dielectric {m.dielectric} (PI_DIELECTRIC is one of {', '.join(DIELECTRICS)})"
+           if diel not in DIELECTRICS else
+           f"{diel} without rated_v (a class II capacitor needs PI_VRATED)"
+           if diel in CLASS_II and not m.rated_v else "")
+    if why:
+        unsaid(f"capacitor model {m.name}: {why}", "as KiCad fields it would have no model, so it is "
+               "not proposed")
+        return None
+    out = {"PI_C": field_text("PI_C", m.capacitance_f), "PI_ESR": field_text("PI_ESR", m.esr_ohm),
+           "PI_ESL": field_text("PI_ESL", m.esl_h)}
+    if m.rated_v:
+        out["PI_VRATED"] = field_text("PI_VRATED", m.rated_v)
+    out["PI_DIELECTRIC"] = diel
+    if m.kept_at_rated_pct is not None:
+        unsaid(f"kept_at_rated_pct {m.kept_at_rated_pct:g} of capacitor model {m.name}",
+               "no KiCad field holds it: the fields' model takes KiPI's typical class II value; keep "
+               "the model in the project file with override_board_fields: true to use it")
+    if diel in NON_CERAMIC and m.rated_v:
+        unsaid(f"rated_v of capacitor model {m.name} ({diel})", "PI_VRATED is kept, but the fields do "
+               "not derate a capacitor that is not a ceramic for DC bias (the project file's model is)")
     return out
 
 
@@ -1278,7 +1829,7 @@ def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]
             blocked: List[str] = []
             notes: List[str] = []
             fields = (_source_fields(t, rail.net, blocked, notes) if isinstance(t, Source)
-                      else _load_fields(t, blocked))
+                      else _load_fields(t, blocked, notes))
             part = _source_part(t) if isinstance(t, Source) else t.ref
             if t.name and t.name not in (t.ref, part):
                 notes.append(f"its name ({t.name}): fields name a terminal by its part")
@@ -1331,6 +1882,11 @@ def propose(project: Project, pad_nets: Optional[Mapping[str, Mapping[str, str]]
                                   "reason": "a PI_LINK is named by its part"})
         links[k.ref] = {"PI_LINK": field_text("PI_LINK", k.resistance_ohm),
                         **({"PI_LINK_PINS": sides} if sides else {})}
+    for m in project.capacitors:             # library fields of each part, PI_C always (the
+        for ref in m.refs:                   # footprint Value is not known here)
+            cap = _cap_fields(m, ref, not_expressed)
+            if cap is not None:
+                links[ref] = {**links.get(ref, {}), **cap}
     check_pads = dict(pad_nets or {})        # a link without known pads: checked with its own
     for k in project.links:
         if k.ref in links and k.ref not in check_pads:
@@ -1368,12 +1924,15 @@ def _assemble(staged: Mapping[str, List[Tuple[str, Dict[str, str]]]],
         positions = by_ref.get(ref, [])
         if positions:
             joined["PI_RAIL"] = ";".join(net for net, _ in positions)
-            for name in [*INSTANCE_FIELDS, *LIBRARY_FIELDS]:
+            for name in [*INSTANCE_FIELDS, *PART_FIELDS]:
                 if name != "PI_RAIL" and any(name in f for _, f in positions):
                     joined[name] = ";".join(f.get(name, "") for _, f in positions)
+        # A source's accuracy sits with its PI_SOURCE on the instance (an adjustable output's);
+        # a fixed-output part's, with PI_VOUT, belongs on the library symbol.
+        library, instance = (*LIBRARY_FIELDS, *LOAD_FIELDS, *CAP_FIELDS), (*INSTANCE_FIELDS, "PI_ACC")
         out.append({"ref": ref,
-                    "library_symbol": {k: joined[k] for k in LIBRARY_FIELDS if k in joined},
-                    "schematic_instance": {k: joined[k] for k in INSTANCE_FIELDS if k in joined}})
+                    "library_symbol": {k: joined[k] for k in library if k in joined},
+                    "schematic_instance": {k: joined[k] for k in instance if k in joined}})
     return out
 
 

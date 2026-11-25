@@ -133,6 +133,12 @@ def _cmd_fields(args) -> int:
     for link in doc["links"]:
         print(f"Link {link['ref']} {link['resistance_ohm']:g} Ω between {link['net_a']} and "
               f"{link['net_b']} ({link['from']})")
+    for cap in doc.get("capacitors", []):
+        print(f"Capacitor {cap['ref']}: " + (cap["summary"] if cap["complete"] else
+                                             f"no model: {cap['missing']}"))
+    for part in doc.get("part_tolerances", []):
+        print(f"Part {part['ref']}: " + "  ".join(f"{k}={v}" for k, v in part["fields"].items())
+              + f" ({part['note']})")
     return EXIT_OK
 
 

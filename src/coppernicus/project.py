@@ -507,6 +507,9 @@ class CapModel:
     rated_v: Optional[float] = None
     kept_at_rated_pct: Optional[float] = None
     dielectric: str = ""
+    # Keep this model for its refs even where their KiCad library fields (PI_ESR, PI_ESL, ...)
+    # give a complete model, which otherwise wins (coppernicus.board_fields). Saved only when on.
+    override_board_fields: bool = False
 
 
 @dataclass
@@ -530,7 +533,7 @@ _AC_INTS = ("points_per_decade", "field_points_per_decade")
 PROBE_KEYS = ("name", "ref", "net", "pins", "ground", "target_ohm", "target_hz", "target_points",
               "ac_tolerance_v", "step_a", "slew_a_per_us")
 CAP_KEYS = ("name", "capacitance_f", "esl_h", "esr_ohm", "refs", "rated_v", "kept_at_rated_pct",
-            "dielectric")
+            "dielectric", "override_board_fields")
 
 
 def _known_keys(d: Dict[str, Any], keys: Sequence[str], what: str, name: str) -> None:
@@ -567,6 +570,8 @@ def _cap_out(m: CapModel) -> Dict[str, Any]:
             d[key] = getattr(m, key)
     if m.dielectric:
         d["dielectric"] = m.dielectric
+    if m.override_board_fields:
+        d["override_board_fields"] = True
     return d
 
 
@@ -650,7 +655,8 @@ def _cap_in(d: Any) -> CapModel:
                              f"the rated voltage, above 0 and at most 100, not {kept:g}")
     return CapModel(name=name, refs=[str(r).strip() for r in refs if str(r).strip()],
                     rated_v=_positive(d.get("rated_v"), f"{owner}: rated_v"),
-                    kept_at_rated_pct=kept, dielectric=str(d.get("dielectric") or ""), **values)
+                    kept_at_rated_pct=kept, dielectric=str(d.get("dielectric") or ""),
+                    override_board_fields=_flag(d, "override_board_fields", False), **values)
 
 
 def _ac_options_in(d: Any) -> AcOptions:
@@ -1135,6 +1141,9 @@ class Project:
     noise: NoiseOptions = field(default_factory=NoiseOptions)
     # Tolerance stack-up (Task 11): how ripple adds, full band or 20 MHz. Saved only when set.
     tolerance: ToleranceOptions = field(default_factory=ToleranceOptions)
+    # Capacitors whose KiCad fields give no model (partial: PI_ESR missing...), ref -> why, set
+    # by the fields merge (coppernicus.board_fields) for the AC and noise reasons. Not saved.
+    capacitor_gaps: Dict[str, str] = field(default_factory=dict)
 
     # ------------------------------------------------------------------ queries
     def board_path(self) -> Path:

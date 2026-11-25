@@ -10,13 +10,26 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
+from kipi.core.model.parts import parse_capacitance
 from kipi.sources.kicad_pcb.reader import KiCadFileError, Nets, load_tree
 from kipi.sources.kicad_pcb.sexpr import child, children, xy
 
 from coppernicus.board_fields import PREFIX, BoardFields
 from coppernicus.engine.board import EngineError
+
+# A capacitance written with its unit: a prefix or F right after the number ("10u", "4n7",
+# "100 nF"). KiPI reads a bare number as µF (kipi/core/model/parts.py); that unit is a guess,
+# never used behind a verdict.
+_WITH_UNIT = re.compile(r"^\s*\d*\.?\d*\s*[pnuµμmFf]")
+
+
+def value_farads(text: str) -> Optional[float]:
+    """The capacitance of a footprint Value (KiPI's ``parse_capacitance``), only when the text
+    gives its unit; None otherwise ("0.1", "C_0402")."""
+    farads = parse_capacitance(text)
+    return farads if farads is not None and _WITH_UNIT.match(text) else None
 
 
 def read_board_fields(path, prefix: str = PREFIX) -> BoardFields:
@@ -65,6 +78,15 @@ def read_board_fields(path, prefix: str = PREFIX) -> BoardFields:
                               f"{prefix}* fields; give each part its own reference")
         out.fields[ref] = mine
         out.pad_nets[ref] = pad_nets(fp)
+        value = props.get("Value")
+        if value is None:                     # KiCad 7 and older: (fp_text value "10u" ...)
+            value = next((t[2] for t in children(fp, "fp_text")
+                          if len(t) > 2 and t[1] == "value" and isinstance(t[2], str)), None)
+        if value is not None:
+            out.values[ref] = value
+            farads = value_farads(value)
+            if farads is not None:
+                out.farads[ref] = farads
     named = {r.strip() for f in out.fields.values() for k, v in f.items()
              if k.upper() in (f"{prefix.upper()}SOURCE_REF", f"{prefix.upper()}GND_REF")
              for r in v.replace(";", ",").split(",") if r.strip()}

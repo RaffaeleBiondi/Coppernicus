@@ -103,8 +103,10 @@ def probe_verdict(p: ProbeImpedance, r: ImpedanceResult) -> Tuple[Optional[bool]
     if r.missing_caps:
         listed = ", ".join(r.missing_caps[:MISSING_LISTED])
         more = "…" if len(r.missing_caps) > MISSING_LISTED else ""
+        gaps = [r.cap_gaps[x] for x in r.missing_caps if x in r.cap_gaps]
         reasons.append(f"{len(r.missing_caps)} capacitor(s) between {' / '.join(r.rail_nets)} and "
-                       f"{r.ground} have no model, so the resonances may move: {listed}{more}")
+                       f"{r.ground} have no model, so the resonances may move: {listed}{more}"
+                       + (f" (their KiCad fields give no model: {'; '.join(gaps)})" if gaps else ""))
     if r.dielectric_assumed:
         reasons.append(f"the dielectric εr is assumed: {r.dielectric_assumed}")
     if reasons:

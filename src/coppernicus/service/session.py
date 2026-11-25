@@ -737,7 +737,8 @@ class Session:
         found = self._board_fields(entry)
         try:
             listed = BF.listing(found.fields, found.pad_nets,
-                                [(t.net_a, t.net_b) for t in entry.board.net_ties()])
+                                [(t.net_a, t.net_b) for t in entry.board.net_ties()],
+                                values=found.values, farads=found.farads)
         except BF.FieldError as e:
             raise ServiceError(E.INVALID_BOARD_FIELD, str(e), FIELD_HINT) from None
         return C.jsonable({

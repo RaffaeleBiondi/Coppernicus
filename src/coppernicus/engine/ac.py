@@ -449,6 +449,7 @@ def _convert(board: Board, project: Project, c: _Context, res, thickness,
         bandwidth_hz=c.bandwidth_hz, freq_hz=freqs, field_freq_hz=np.asarray(res.field_freqs, float),
         probes=probes, plane_capacitance_f=float(res.plane_capacitance_f), caps=list(res.caps),
         missing_caps=list(res.missing_caps), links=list(res.links),
+        cap_gaps={r: project.capacitor_gaps[r] for r in res.missing_caps if r in project.capacitor_gaps},
         cap_derated_f={ref: float(farads) for ref, (_v, farads) in res.cap_bias.items()},
         warnings=list(dict.fromkeys(c.notes + list(res.warnings))),
         assumed_bandwidth_hz=None if c.bandwidth_hz is not None else ASSUMED_BANDWIDTH_HZ,
@@ -505,6 +506,9 @@ def _assumptions(board: Board, project: Project, c: _Context, res, summary: str,
     if res.missing_caps:
         line += (f"; {len(res.missing_caps)} between {rail_text} and {res.ground} have no model "
                  f"and are left out: {', '.join(res.missing_caps)}")
+        gaps = [project.capacitor_gaps[r] for r in res.missing_caps if r in project.capacitor_gaps]
+        if gaps:
+            line += f"; their KiCad fields give no model: {'; '.join(gaps)}"
     out.append(line + ".")
     out += _bias_lines(project, c, res)
     for k in c.setup.links:

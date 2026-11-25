@@ -495,7 +495,9 @@ def _stand_ins(board: Board, project: Project, c: _Context, res, hot: List[HotLo
             out.append(f"Qrr not entered on phase {h.phase}: KiPI's {DEFAULT_QRR_C * 1e9:g} nC sets "
                        "the hard edge (enter 0 for a Schottky or GaN low side)")
     if missing:
-        out.append(f"capacitors on the converter's rails without a model: {_listed(missing)}")
+        gaps = [project.capacitor_gaps[r] for r in missing if r in project.capacitor_gaps]
+        out.append(f"capacitors on the converter's rails without a model: {_listed(missing)}"
+                   + (f" (their KiCad fields give no model: {'; '.join(gaps)})" if gaps else ""))
     out += _loop_stand_ins(c, res)
     assumed = _dielectric(board, project.ac.default_er)[1]
     if assumed:

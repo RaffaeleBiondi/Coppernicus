@@ -459,6 +459,8 @@ class ImpedanceResult:
     plane_capacitance_f: float = 0.0
     caps: List[str] = field(default_factory=list)           # capacitors in the model
     missing_caps: List[str] = field(default_factory=list)   # rail-to-ground, no model
+    # Of those, the ones whose KiCad fields give no model: ref -> what they lack ("C1: PI_ESR missing").
+    cap_gaps: Dict[str, str] = field(default_factory=dict)
     links: List[str] = field(default_factory=list)          # links in the model
     cap_derated_f: Dict[str, float] = field(default_factory=dict)   # ref -> derated farads
     load_line_ohm: float = 0.0     # not exposed yet: no load line
