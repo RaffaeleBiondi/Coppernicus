@@ -31,7 +31,7 @@ Fields, on the part (every one optional; ``PI_RAIL`` is required with any per-ra
                                  (load switch, MOSFET, 3-pin fuse): side A's pads ; side B's.
 ``PI_VOUT``         ``3.3V``     A fixed-output part's voltage: the source voltage when the
                                  instance has ``PI_RAIL`` and no ``PI_SOURCE``.
-``PI_IMAX``         ``2A``       A source's rated output current (shown, not judged yet).
+``PI_IMAX``         ``2A``       A source's rated output current (judged in the power tree).
 ``PI_FSW``          ``1.2MHz``   A switcher's fixed switching frequency (stored, not used yet).
 ``PI_SOURCE_REF``   ``L1``       The part whose pads hold the rail (an external-inductor
                                  buck's inductor); ``PI_PINS`` then selects that part's pads,
@@ -466,7 +466,7 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=f
         imax = fsw = None
         if v["PI_IMAX"]:
             imax = quantity(ref, "PI_IMAX", v["PI_IMAX"])
-            values.append((f"I_max {imax:g} A (shown, not judged yet)",
+            values.append((f"I_max {imax:g} A",
                            FieldValue(ref, "PI_IMAX", v["PI_IMAX"])))
         if v["PI_FSW"]:
             if kind != "smps":
