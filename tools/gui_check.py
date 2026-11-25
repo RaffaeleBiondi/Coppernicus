@@ -2225,7 +2225,8 @@ def run_ac(window, check: Checks, args, out: Path):
           str(spin.value()))
     res, _ = solve_ac_and_wait(window, args.timeout)
     ax = panel.figure.axes[0]
-    legend = [t.get_text() for t in ax.get_legend().get_texts()] if ax.get_legend() else []
+    # The legend's labels as shown (the panel wraps them to fit the column: compare unwrapped).
+    legend = [" ".join(t.get_text().split()) for t in ax.get_legend().get_texts()] if ax.get_legend() else []
     # The band as draw_impedance drew it (its wording is the core's): from the sweep's start
     # to the assumed bandwidth, in the legend.
     panel.canvas.draw()
@@ -2233,13 +2234,13 @@ def run_ac(window, check: Checks, args, out: Path):
              for pt in ax.patches if pt.get_label() and not pt.get_label().startswith("_")]
     band_ok = res is not None and res.bandwidth_assumed and any(
         abs(x[0] / res.freq_hz[0] - 1) < 0.05 and abs(x[1] / res.open_loop_hz - 1) < 0.05
-        and label in legend for x, label in bands)
+        and " ".join(label.split()) in legend for x, label in bands)
     check("ac: without a bandwidth the band to the assumed bandwidth is drawn, nothing judged",
           band_ok and rail_verdict(res)[0] == "not_judged" and panel.table.item(0, 8).text() == "not judged",
           f"{[(list(map(float, x)), lb) for x, lb in bands]} | {legend}")
     check("ac: ... solved at the quick preset's 10 per decade, as its assumption says",
           res is not None and res.stats["field_frequencies"] == 56
-          and any("(10 per decade)" in a for a in res.assumptions),
+          and any("(10 per decade; KiPI's default 20)" in a for a in res.assumptions),
           str(res.stats.get("field_frequencies") if res else None))
     if res is not None:
         csv_path, png_path = panel.export_files(out / "results" / "pdn_P3V3_impedance.csv")
