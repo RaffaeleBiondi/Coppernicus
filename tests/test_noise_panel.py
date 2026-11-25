@@ -398,6 +398,15 @@ def test_the_notes_carry_every_stand_in_and_warning_verbatim():
     r.warnings = ["C9 is on the rails but in no phase's list: the hot loop does not include it"]
     text = notes_text(r)
     assert v.stand_ins[0] in text and r.warnings[0] in text and "No capacitor loops: x" in text
+    ranked = _victim("W", 0.5, margin=None,
+                     stand_ins=["capacitive coupling of phase 1 left out: no switch net"])
+    noted = _victim("X", 0.5, margin=None, stand_ins=["εr assumed: x"])
+    noted.margin_note = "logic_v 0.9 V is not in KiPI's JESD8 table: enter noise_margin_v"
+    r = _result([ranked, noted])
+    r.stand_ins = ["Qrr not entered on phase 1: y"]
+    text = notes_text(r)                          # no reason carries them here: listed on their own
+    assert "capacitive coupling of phase 1 left out: no switch net" in text and "εr assumed: x" in text
+    assert "Qrr not entered on phase 1: y" in text
 
 
 def test_the_radiated_estimate_is_for_scale_and_the_header_never_judges_ripple():
@@ -519,11 +528,39 @@ def test_edits_write_the_project_merge_again_and_conflicts_are_refused():
         assert [a.name for a in window.project.aggressors] == ["U1"]
         panel.use_quick_preset()
         assert window.project.noise.field_per_decade == 5 and panel.opt["field_per_decade"].value() == 5
+        window.project.rails[1].sources[0].fsw_hz = 1.2e6                # the source's own fsw
+        window._remerge()
+        panel.set_field_text("fsw_hz", "")
+        assert window.project.aggressors[0].fsw_hz is None
+        hint = panel.fsw_hint.text()
+        assert hint == "Empty: 1.2 MHz from the source U1 (the project file)", hint
         panel.add_victim()
         assert len(window.project.victims) == 3                           # a draft is not written
         panel.victims.item(3, 1).setText("SIG_NEW")
         panel.set_preset(3, "analog")
         assert window.project.victims[-1].net == "SIG_NEW" and window.project.victims[-1].preset == "analog"
+    ''')
+
+
+def test_the_ripple_probes_follow_a_probe_added_in_the_impedance_tab():
+    run_in_window(f'''
+        window.show()
+        window.open_project({NOISE!r})
+        app.processEvents()
+        ac, panel = window.ac_panel, window.noise_panel
+        window.results_tabs.setCurrentWidget(ac)
+        app.processEvents()
+        ac.add_probe()
+        for col, text in ((0, "VINP"), (1, "U1"), (2, "VIN")):
+            ac.probes.item(1, col).setText(text)
+        assert [p.name for p in window.project.probes] == ["LOAD", "VINP"]
+        window.results_tabs.setCurrentWidget(panel)
+        app.processEvents()
+        items = [panel.probe_list.item(i) for i in range(panel.probe_list.count())]
+        assert [(i.data(QtCore.Qt.UserRole), i.checkState() == QtCore.Qt.Checked) for i in items] == \\
+            [("LOAD", True), ("VINP", False)], [i.text() for i in items]
+        items[1].setCheckState(QtCore.Qt.Checked)
+        assert window.project.aggressors[0].ripple_probes == ["LOAD", "VINP"]
     ''')
 
 

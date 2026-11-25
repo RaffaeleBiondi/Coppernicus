@@ -2457,15 +2457,20 @@ def run_noise(window, check: Checks, args, out: Path):
           (ph.inductor, ph.switch_net, ph.input_caps, ph.output_caps, ph.coss_f, ph.qrr_nc)
           == ("L1", "SW", ["C1"], ["C2"], None, None)
           and panel.phases.item(0, 12).toolTip().startswith("Not entered: KiPI's"), str(ph))
+    panel.victims.item(2, 7).setText("0.9")             # SIG_BURIED: a logic_v off KiPI's JESD8 table
     res, _, _ = solve_noise_and_wait(window, args.timeout)
     loop = res.victim("SIG_LOOP") if res is not None else None
     row = {h: panel.victim_table.item(1, c).text() for c, h in enumerate(VICTIM_HEADERS)}
+    buried = {h: panel.victim_table.item(2, c).text() for c, h in enumerate(VICTIM_HEADERS)}
     check("noise: with the stand-ins (Coss, Qrr, guessed ends) the victims are not judged",
           res is not None and res.verdict == "not_judged" and loop.passed is None
           and "Coss not entered on phase 1" in loop.not_judged
           and "driver and receiver not both entered: KiPI guessed" in loop.not_judged
           and row["Verdict"] == "NOT JUDGED" and row["Ends"].endswith("(guessed by KiPI)"),
           loop.not_judged[:200] if loop else panel.status.text())
+    check("noise: a logic_v off KiPI's JESD8 table is NOT JUDGED with the core's note; the stand-ins listed",
+          buried["Verdict"] == "NOT JUDGED" and "logic_v 0.9 V is not in KiPI's JESD8 table" in buried["Why"]
+          and "stand-in: Coss not entered on phase 1" in panel.notes.toPlainText(), str(buried)[:200])
     saved = out / "noise-edited.coppernicus.yml"
     window._save(saved)
     window.open_project(saved)
@@ -2473,7 +2478,8 @@ def run_noise(window, check: Checks, args, out: Path):
     back = window.project
     check("noise: saved and reopened, the filled phase is kept and the guessed ends were never entered",
           back.aggressors[0].phases[0].coss_f is None and back.victims[1].driver_ref == ""
-          and back.victims[0].driver_ref == "U3" and panel.phases.rowCount() == 1 and not window.dirty,
+          and back.victims[0].driver_ref == "U3" and back.victims[2].logic_v == 0.9
+          and panel.phases.rowCount() == 1 and not window.dirty,
           str(back.to_dict().get("victims", [])[1:2]))
     shot = out / "noise_panel.png"
     window.results_tabs.setCurrentWidget(panel)

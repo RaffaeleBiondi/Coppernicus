@@ -645,10 +645,13 @@ def victim_rows(r) -> List[Tuple[str, ...]]:
 
 
 def notes_text(r) -> str:
-    """The result's report as the CLI prints it (verdict, not-judged reasons with every
-    stand-in, assumptions, warnings: verbatim), then each victim's own warnings from KiPI."""
+    """The result's report as the CLI prints it (verdict, not-judged reasons, assumptions,
+    warnings: verbatim), then every stand-in, the aggressor's and each victim's own (a victim
+    without a margin has no reason to carry them), and each victim's warnings from KiPI."""
     from coppernicus.coupled_noise import noise_summary, noise_text
     lines = [line.strip("\n") for line in noise_text(noise_summary([r]))]
+    lines += [f"  stand-in: {x}" for x in r.stand_ins]
+    lines += [f"  stand-in ({v.name}): {x}" for v in r.victims for x in v.stand_ins if x not in r.stand_ins]
     lines += [f"  warning ({v.name}): {w}" for v in r.victims for w in v.warnings]
     return "\n".join(lines)
 
@@ -1766,10 +1769,12 @@ class NoisePanel(QWidget):
         return entry is not None and project_key(self.project) != entry[1]
 
     def _setup_changed(self):
-        """The rail setup changed elsewhere: the switcher list, the fsw hint and the probes
-        follow, and the shown result is checked again."""
+        """The setup changed elsewhere (the rail setup; the Impedance tab's probes, seen when
+        this tab is shown): the switcher list, the probes and the fsw hint follow, and the shown
+        result is checked again."""
         if not self._loading:
             self._fill_vrm_box()
+            self._fill_probes()                     # a probe added in the Impedance tab
             self._show_fsw_hint()
         self._check_stale()
 
