@@ -473,6 +473,7 @@ def test_the_progress_hooks_and_a_partial_result():
     r = _quick(_project(), progress=seen.append, partial=parts.append, fraction=fractions.append)
     assert any(m.startswith("== Waveforms") for m in seen)
     assert parts and parts[0].partial and parts[0].victims == [] and parts[0].verdict == ""
+    assert parts[0].stand_ins == [] and parts[0].assumptions == []
     assert len(parts[0].switch_node_v[0]) == len(r.switch_node_v[0]) and fractions
     assert not r.partial and r.verdict
 

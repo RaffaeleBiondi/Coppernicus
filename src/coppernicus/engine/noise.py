@@ -603,7 +603,8 @@ def _convert(board: Board, project: Project, c: _Context, res, stats: Dict[str, 
     if used or not partial:
         ripple += _device_ripple(board, c, res, used, n, t)
     have, missing = _caps(board, c, used)
-    common = _stand_ins(board, project, c, res, hot, capped, f_max, used, missing)
+    # A partial result comes before the board model has run: no stand-ins, no assumptions.
+    common = [] if partial else _stand_ins(board, project, c, res, hot, capped, f_max, used, missing)
     warnings = list(dict.fromkeys(c.notes + list(res.warnings)))
     kv = {x.name: x for x in c.setup.victims}
     victims = [_victim(board, c, v, kv[v.label], vr, common, used, n, warnings)
@@ -622,7 +623,8 @@ def _convert(board: Board, project: Project, c: _Context, res, stats: Dict[str, 
         inductor_a=[ph.inductor.samples(n) for ph in wf.phases], edges=[ph.edges for ph in wf.phases],
         ripple=ripple, victims=victims, board=board_info, emi=_near_field(res.emi), stand_ins=common,
         partial=partial, warnings=warnings, stats=dict(stats))
-    out.assumptions = _assumptions(board, project, c, out, have, missing)
+    if not partial:
+        out.assumptions = _assumptions(board, project, c, out, have, missing)
     return out
 
 
