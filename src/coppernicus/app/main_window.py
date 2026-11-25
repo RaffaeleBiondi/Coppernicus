@@ -146,7 +146,7 @@ class MainWindow(QMainWindow):
         self._diff_cache: Optional[Tuple] = None      # (baseline, run, layer, (Δ mV, note))
         self._fallback_reason = ""                     # why the Δ map was not shown, last draw
         self.tree: Optional[TreeResult] = None          # the last power-tree solve, if still valid
-        self._revision = 0            # +1 per edit of the setup: a tree solved before is stale
+        self._revision = 0            # +1 per edit of the setup: a solve started before is stale
         self.tree_worker: Optional[TreeWorker] = None
         self._rail_draft: Optional[Rail] = None       # the shown net's rail while it is set up
         self._kicad_shown = False                     # the panel shows a rail from KiCad fields
@@ -1032,6 +1032,7 @@ class MainWindow(QMainWindow):
         self.worker = SolveWorker(self.board, rail, project.settings, self, project=project,
                                   notes=notes, warnings=warnings)
         self.worker.generation = self._generation
+        self.worker.revision = self._revision
         # What produced the result, as it is now (the user may edit while it runs).
         self.worker.run_inputs = (copy.deepcopy(rail), copy.deepcopy(project.settings),
                                   self._board_stamp)
@@ -1047,6 +1048,12 @@ class MainWindow(QMainWindow):
 
     def _solved(self, res: RailResult):
         if self._is_stale():
+            return
+        if getattr(self.sender(), "revision", self._revision) != self._revision:
+            msg = f"The setup changed while {res.net} was solving: press Solve (F5) again"
+            if res.net == self.net:
+                self.problems.clear(msg)
+            self.statusBar().showMessage(msg)
             return
         self.results[res.net] = res
         inputs = getattr(self.sender(), "run_inputs", None)

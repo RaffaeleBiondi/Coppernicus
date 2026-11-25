@@ -101,3 +101,50 @@ def test_the_compare_tab_labels_the_largest_drop_with_its_side():
         assert "Largest drop on the rail, mV above -1 V (toward 0 V)" in labels, labels
         assert "U1: drop at its worst pin (mV)" in labels, labels
     ''')
+
+
+def test_a_rail_solve_that_finishes_after_the_setup_changed_is_dropped():
+    """A rail solve started before a settings change or a rail edit ran on the old setup: the
+    window drops its result with a status line, as it drops such a power tree. A solve with
+    no change while it ran is kept."""
+    run_in_window('''
+        from pathlib import Path
+
+        import coppernicus
+        import coppernicus.app.main_window as mw
+
+        for kind in ("critical", "warning", "information", "question"):     # never block
+            setattr(QtWidgets.QMessageBox, kind,
+                    staticmethod(lambda *_a, **_k: QtWidgets.QMessageBox.Discard))
+
+        class HeldWorker(mw.SolveWorker):
+            """The real rail solve, run when the test says so."""
+            def start(self):
+                pass
+
+        mw.SolveWorker = HeldWorker
+        root = Path(coppernicus.__file__).resolve().parents[2]
+        window.open_project(root / "examples" / "demo" / "demo.coppernicus.yml")
+        window.nets.select("+3V3")
+        app.processEvents()
+
+        def solve_then(change):
+            window.solve()
+            worker = window.worker
+            change()                          # while it runs, on the setup it copied
+            worker.run()
+            app.processEvents()
+            return window.statusBar().currentMessage()
+
+        msg = solve_then(lambda: None)
+        assert "+3V3" in window.results and "+3V3 solved in" in msg, msg
+        temp = window.rail_panel.temp
+        msg = solve_then(lambda: temp.setValue(temp.value() + 40.0))
+        assert "+3V3" not in window.results and "+3V3" not in window.runs, msg
+        assert msg == "The setup changed while +3V3 was solving: press Solve (F5) again", msg
+        assert "press Solve (F5) again" in window.problems.summary.text()
+        msg = solve_then(lambda: window.rail_panel.loads.table.cellWidget(0, 3).setValue(0.75))
+        assert "+3V3" not in window.results and "changed while +3V3 was solving" in msg, msg
+        msg = solve_then(lambda: None)
+        assert "+3V3" in window.results and "+3V3 solved in" in msg, msg
+    ''')
