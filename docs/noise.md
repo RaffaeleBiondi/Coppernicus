@@ -77,7 +77,10 @@ noise:                     # optional; KiPI's defaults otherwise
 
 ## Run it
 
-- **App:** the desktop app has no noise tab yet; use the command line, an agent or CI.
+- **App:** the **Ripple & noise** tab edits the same: add an aggressor (its source, switching
+  frequency and edges), **Fill from board** for its phases, add the victims (**Guess ends**,
+  then enter them), then **Solve noise** (Ctrl+Shift+N). **Export…** saves each aggressor's
+  CSV and PNGs and the summary, named as the command line names them.
 - **Command line:** `coppernicus noise PROJECT` solves every aggressor (`--aggressor NAME` for
   some) and writes, per aggressor, a CSV of one period, the waveforms PNG and the H and E
   field-map PNGs, and `<project>_noise_summary.json` into `--out` (default `results/` next to the
@@ -88,18 +91,19 @@ noise:                     # optional; KiPI's defaults otherwise
 - **CI:** the Action's `noise` input, off by default (see [CI](ci.md)).
 
 It is heavy: minutes and gigabytes on a large board. Before each aggressor, Coppernicus says
-what it will cost: it checks the setup and meshes the board model as the solve will, then gives
-the harmonics, the mesh, the ports, the field solves and the whole solve's memory against this
-machine's:
+what it will cost, from the same estimate the app shows: it checks the setup and meshes the
+board model as the solve will, then gives the mesh, the ports, the field solves, the harmonics
+and the whole solve's memory against this machine's:
 
 ```text
-Noise of U1: 1592 harmonics to 1.592 GHz; board model 15,534 triangles × 8 ports, the copper solved at 34 frequencies: no earlier solve on this computer to time it from. About 14,757 unknowns: the noise solve may peak at up to 0.731 GB of this machine's 25.8 GB (an upper bound measured on synthetic boards, ...).
+Noise of U1: 15,534 triangles × 8 ports, the copper solved at 34 frequencies: no earlier solve on this computer to time it from; 1592 harmonics to 1.592 GHz. About 14,757 unknowns: the noise solve may peak at up to 0.731 GB of this machine's ...
 ```
 
 The memory figure is an upper bound measured on synthetic boards; a real board's copper may
 need less. A coarser AC mesh (`ac: max_edge_mm`) or fewer field solves (`noise:
-field_per_decade`) lower it. A person's run is only warned; an agent's call that could exceed
-the memory is refused (`solve_too_large`) until the user confirms.
+field_per_decade`) lower it. The command line only warns, and the app asks before it goes on;
+an agent's call that could exceed the memory is refused (`solve_too_large`) until the user
+confirms.
 
 ## Reading the results
 
