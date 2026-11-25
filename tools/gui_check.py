@@ -601,6 +601,136 @@ def run_report(window, check: Checks, args, out: Path):
     window.dirty = False
 
 
+def edit_copper(window, script):
+    """Click Edit… of the copper thickness row; ``script(dialog)`` plays the user in place of
+    the modal loop (it ends with ``accept()`` or ``reject()``). Returns the dialog, or None
+    when none was opened."""
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.app.copper_thickness import CopperThicknessDialog
+    opened = []
+
+    def scripted(dialog):
+        opened.append(dialog)
+        script(dialog)
+        return dialog.result()
+    real = CopperThicknessDialog.exec
+    CopperThicknessDialog.exec = scripted
+    try:
+        window.rail_panel.copper_edit.click()
+    finally:
+        CopperThicknessDialog.exec = real
+    QApplication.processEvents()
+    return opened[0] if opened else None
+
+
+def run_copper_thickness(window, check: Checks, args, out: Path):
+    """The copper thickness of the solve settings: Edit… opens one field per copper layer
+    with the board file's value as placeholder; a typed value shows in the summary, drops
+    the results and is saved; a cleared field removes the key; a value out of bounds keeps
+    the dialog open; a key for a layer not on the board is listed and removable. Also the
+    window's minimum width (the map bar on two rows) and that a long summary wraps."""
+    import yaml
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.project import Project, Settings
+    width = window.minimumSizeHint().width()
+    check("copper: the window fits a 1440 px wide screen", width <= 1440, f"minimum width {width} px")
+    panel = window.rail_panel
+    if not hasattr(panel, "copper_edit"):
+        check("copper: the solve settings have a copper thickness row", False)
+        return
+    path = out / "copper.coppernicus.yml"
+    Project.load(ROOT / "examples" / "demo" / "demo.coppernicus.yml").save(path)
+    window.open_project(path)
+    QApplication.processEvents()
+    check("copper: the summary reads 'board file' with nothing set",
+          panel.copper_summary.text() == "board file", panel.copper_summary.text())
+    res = solve_and_wait(window, args.timeout)
+    check("copper: solve the demo project", res is not None)
+
+    def type_b(text):
+        def script(dialog):
+            dialog.fields["B.Cu"].setText(text)
+            dialog.accept()
+        return script
+    dialog = edit_copper(window, lambda d: d.reject())
+    check("copper: Edit… opens a field per copper layer of the board",
+          dialog is not None and list(dialog.fields) == ["F.Cu", "B.Cu"]
+          and not dialog.remove_buttons, str(list(getattr(dialog, "fields", []))))
+    if dialog is None:
+        return
+    check("... with the board file's value as placeholder and no text",
+          all(e.placeholderText().startswith("0.035") and not e.text() for e in dialog.fields.values()),
+          str([e.placeholderText() for e in dialog.fields.values()]))
+    check("... Cancel changes nothing", window.project.settings.copper_thickness_mm == {}
+          and bool(window.results) and not window.dirty)
+    edit_copper(window, lambda d: d.accept())
+    check("... OK without a change keeps the results", bool(window.results) and not window.dirty)
+
+    edit_copper(window, type_b("0.07"))
+    check("copper: a typed value is set", window.project.settings.copper_thickness_mm == {"B.Cu": 0.07},
+          str(window.project.settings.copper_thickness_mm))
+    check("... shown in the summary", panel.copper_summary.text() == "B.Cu 0.07 mm",
+          panel.copper_summary.text())
+    check("... makes the project dirty and drops the results", window.dirty and not window.results)
+    window._save(path)
+    saved = yaml.safe_load(path.read_text(encoding="utf-8"))["settings"]
+    check("... and is saved", saved.get("copper_thickness_mm") == {"B.Cu": 0.07}, str(saved))
+    window.open_project(path)
+    QApplication.processEvents()
+    check("... and read back", panel.copper_summary.text() == "B.Cu 0.07 mm", panel.copper_summary.text())
+
+    dialog = edit_copper(window, type_b("35"))
+    check("copper: 35 (µm written as mm) keeps the dialog open with the error",
+          dialog.result() == 0 and dialog.error.isVisibleTo(dialog) and "B.Cu" in dialog.error.text()
+          and window.project.settings.copper_thickness_mm == {"B.Cu": 0.07}, dialog.error.text())
+    edit_copper(window, type_b("0.035"))
+    check("copper: a value equal to the board file's keeps its key",
+          window.project.settings.copper_thickness_mm == {"B.Cu": 0.035},
+          str(window.project.settings.copper_thickness_mm))
+    edit_copper(window, type_b(""))
+    check("copper: a cleared field removes the key", window.project.settings.copper_thickness_mm == {}
+          and panel.copper_summary.text() == "board file", panel.copper_summary.text())
+    window._save(path)
+    saved = yaml.safe_load(path.read_text(encoding="utf-8"))["settings"]
+    check("... and the saved file has none", "copper_thickness_mm" not in saved, str(saved))
+
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw["settings"]["copper_thickness_mm"] = {"B.Cu": 0.07, "In3.Cu": 0.05}
+    off = out / "copper_off_board.coppernicus.yml"
+    off.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    window.open_project(off)
+    QApplication.processEvents()
+    before = panel.minimumSizeHint().width()
+    check("copper: a key for a layer not on the board is read",
+          panel.copper_summary.text() == "B.Cu 0.07 mm, In3.Cu 0.05 mm", panel.copper_summary.text())
+    dialog = edit_copper(window, lambda d: d.reject())
+    check("... listed with a Remove button", list(dialog.remove_buttons) == ["In3.Cu"]
+          and dialog.fields["B.Cu"].text() == "0.07", str(list(dialog.remove_buttons)))
+
+    def remove(d):
+        d.remove_buttons["In3.Cu"].click()
+        d.accept()
+    edit_copper(window, remove)
+    check("... and removed", window.project.settings.copper_thickness_mm == {"B.Cu": 0.07},
+          str(window.project.settings.copper_thickness_mm))
+    long = {"F.Cu": 0.07, "B.Cu": 0.105, "In1.Cu": 0.035, "In2.Cu": 0.035, "In3.Cu": 0.0175,
+            "In4.Cu": 0.0175}
+    panel.set_settings(Settings(copper_thickness_mm=long))
+    for _ in range(5):                          # each layout level relays out on its own event
+        QApplication.processEvents()
+    after = panel.minimumSizeHint().width()
+    check("copper: a long summary wraps (the rail panel keeps its width)", after == before,
+          f"{before} → {after} px")
+    label = panel.copper_summary
+    need = label.heightForWidth(label.width())
+    check("... onto lines all shown", label.height() >= need > label.fontMetrics().height(),
+          f"{label.height()} px high, needs {need} px at {label.width()} px wide")
+    panel.set_settings(window.project.settings)
+    window.dirty = False
+
+
 def run_close_asks(window, check: Checks, args, out: Path):
     """Closing with only hand-marked rails asks to save (the dialog answers Discard), and
     closing while a report is being written waits for it."""
@@ -1347,6 +1477,7 @@ def main(argv=None) -> int:
         run_report(window, check, args, out)
         run_open_asks(window, check, out)
         run_hover(window, check, args, out)
+        run_copper_thickness(window, check, args, out)
         run_close_asks(window, check, args, out)
     finally:
         if window.isVisible():
