@@ -9,7 +9,7 @@ import html
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QDoubleValidator
+from PySide6.QtGui import QBrush, QColor, QDoubleValidator, QValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -73,6 +73,17 @@ class DecimalValidator(QDoubleValidator):
 
     def validate(self, text, pos):
         return super().validate(text.replace(",", "."), pos)
+
+
+class LimitValidator(DecimalValidator):
+    """A limit: a number, or empty for "no limit". A plain number validator calls an empty
+    field unfinished, and a line edit then never emits editingFinished (on Return or on focus
+    loss), so a cleared limit would never reach the project."""
+
+    def validate(self, text, pos):
+        if not text.strip():
+            return QValidator.Acceptable, text, pos
+        return super().validate(text, pos)
 
 
 # ---------------------------------------------------------------------- nets
@@ -576,7 +587,7 @@ class RailPanel(QWidget):
         self.max_rise.setToolTip("For a ground net: the largest rise above its 0 V reference. Judged "
                                  "on its group in Solve power tree, and when this net is solved alone.")
         for e in (self.max_drop, self.max_j, self.max_via, self.max_rise):
-            e.setValidator(DecimalValidator(0.0, 1e9, 6))
+            e.setValidator(LimitValidator(0.0, 1e9, 6))
         self.max_drop.setToolTip("For a supply net: the largest load drop, % of the source voltage.")
         self._tips = {e: e.toolTip() for e in (self.max_drop, self.max_rise)}
         form = QFormLayout(limits)
