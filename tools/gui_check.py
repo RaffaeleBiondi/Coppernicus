@@ -1287,8 +1287,9 @@ def run_hover(window, check: Checks, args, out: Path):
     """The hover readout: View → Hover shows lists the values (V, drop and layer by default,
     kept in the settings); over the demo board the readout shows them beside the pointer,
     nothing off the copper, "not connected" on a copper island and, on a ground group of the
-    power tree, the rise the double-click reads. Hidden after the pointer leaves and while
-    panning. Times 200 moves."""
+    power tree, the rise the double-click reads (the shift below 0 V under a negative rail).
+    Hidden after the pointer leaves and while panning; a zoom (wheel, Problems row) or Fit
+    under a still pointer reads the point now under it. Times 200 moves."""
     import numpy as np
     from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, Qt
     from PySide6.QtGui import QWheelEvent
