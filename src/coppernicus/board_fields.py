@@ -446,6 +446,8 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
       link (it draws their estimated current), through the board's net ties (``ties``: pairs
       of nets a net-tie footprint joins) as the solve does; a net the fields leave incomplete keeps the
       project's rail (a warning) or, with none, is an error naming the missing field;
+    * loads on a net tied to a driven net go into the driven rail; a project rail of the tied
+      net that holds only limits stays as it is, and its limits judge that net;
     * ``PI_LINK`` parts replace project links on the same part (a warning when they differ).
     """
     rails = field_rails(fields)
@@ -474,11 +476,14 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
 
     own = {r.net: r for r in out.rails}
     # Loads on a net that a net tie joins to a driven net go into that rail: the per-rail
-    # solve joins tied copper, and finds their pads on the tied net.
+    # solve joins tied copper, and finds their pads on the tied net. A project rail of the
+    # tied net that holds only limits stays, limits only: they judge that net (per net).
     tie_notes: Dict[str, List[str]] = {}
+    folded: Dict[str, Tuple[FieldRail, str]] = {}       # tied net -> (its fields, the driver)
     for net in sorted(rails):
         fr = rails[net]
-        if fr.sources or not fr.loads or net in own:
+        if fr.sources or not fr.loads or (net in own and (own[net].sources or own[net].loads
+                                                          or own[net].override_board_fields)):
             continue
         drivers = sorted(n for n in _group(net, ties) - {net}
                          if (n in rails and rails[n].sources) or (n in own and own[n].sources))
@@ -493,6 +498,7 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
         tie_notes.setdefault(driver, []).append(
             f"Rail {driver}: loads {', '.join(t.term.ref for t in fr.loads)} on {net}, joined to it "
             f"by a net tie (from KiCad field PI_RAIL {net}).")
+        folded[net] = (fr, driver)
         del rails[net]
     trial = copy.deepcopy(out)                # every field rail with a source in place, to
     for net, fr in rails.items():             # see what a source-only rail feeds
@@ -512,7 +518,16 @@ def merge(project: Project, fields: Mapping[str, Mapping[str, str]],
     new_rails: List[Rail] = []
     for r in out.rails:
         fr = rails.get(r.net)
-        if fr is None:
+        if fr is None and r.net in folded:            # limits only, its loads tied into a rail
+            tied, driver = folded[r.net]
+            new_rails.append(r)
+            origin = merged.origins[r.net] = Origin(
+                r.net, "project",
+                [f"Rail {r.net}: limits only, from the project file; its loads "
+                 f"{', '.join(t.term.ref for t in tied.loads)} (from KiCad field PI_RAIL {r.net}) "
+                 f"are in rail {driver}, joined to it by a net tie."] + link_notes.get(r.net, []))
+            _kicad_drop_limit(tied, r, origin, f"on a net tied into rail {driver}")
+        elif fr is None:
             new_rails.append(r)
             merged.origins[r.net] = Origin(r.net, "project", list(link_notes.get(r.net, [])))
         elif r.override_board_fields:

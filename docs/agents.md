@@ -209,7 +209,10 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
   no load that feeds a regulator's input or a link (through net ties too): it draws their
   estimated current. Completeness is per group of nets joined by links and net ties:
   - loads on a net that a **net tie** joins to a driven net go into that rail (its solve joins
-    the tied copper and finds their pads there);
+    the tied copper and finds their pads there). A project-file rail of the tied net that
+    holds only limits does not stop this: it stays, limits only, and its limits judge that
+    net (per net in the power tree; per rail it is skipped and they are listed as not
+    judged). A `PI_LIMIT_DROP` on the tied net still wins over its `max_drop_pct`;
   - loads behind a **link** (`PI_LINK`, a ferrite), on a net with no source of its own, make
     a loads-only rail, as in a project file. Per rail it is skipped ("its loads are drawn
     through link FB1 by rail +3V3", estimated there; its limits are listed as not judged),

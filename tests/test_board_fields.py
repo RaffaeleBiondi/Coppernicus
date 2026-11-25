@@ -499,6 +499,37 @@ def test_a_loads_only_net_behind_a_link_or_a_net_tie_is_complete():
         merge(Project(), tied)
 
 
+def test_a_limits_only_rail_on_a_tied_net_adds_its_limits_and_the_loads_still_move():
+    """The peer's app case (the CLI too): a project rail that holds only limits on a tied net
+    must not stop the fields' loads there from moving into the driven rail. It stays as it is,
+    limits only: the limits judge that net (per net, as the power tree looks them up)."""
+    fields = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V"},
+              "U2": {"PI_RAIL": "VCC_B", "PI_LOAD": "1A"}}
+    ties = [("VCC", "VCC_B")]
+    only_limits = Rail("VCC_B", limits=Limits(max_drop_pct=2.0, max_current_density=30.0))
+    merged = merge(Project(rails=[only_limits]), fields, ties=ties)
+    rails = {r.net: r for r in merged.project.rails}
+    assert rails["VCC"] == Rail("VCC", [Source("J1", 3.3)], [Load("U2", 1.0)])
+    assert rails["VCC_B"] == only_limits
+    assert merged.warnings == []
+    assert merged.origins["VCC_B"].source == "project"
+    assert any("VCC_B" in n and "net tie" in n for n in merged.origins["VCC"].notes)
+    assert any("U2" in n and "VCC" in n for n in merged.origins["VCC_B"].notes)
+    # The same when the project file drives the rail.
+    driven = Rail("VCC", [Source("J1", 3.3)])
+    merged = merge(Project(rails=[driven, only_limits]), {"U2": fields["U2"]}, ties=ties)
+    rails = {r.net: r for r in merged.project.rails}
+    assert rails["VCC"] == Rail("VCC", [Source("J1", 3.3)], [Load("U2", 1.0)])
+    assert rails["VCC_B"] == only_limits
+    # A PI_LIMIT_DROP on the tied net still wins over the project's max_drop_pct there.
+    strict = {**fields, "U2": {**fields["U2"], "PI_LIMIT_DROP": "1%"}}
+    merged = merge(Project(rails=[only_limits]), strict, ties=ties)
+    rails = {r.net: r for r in merged.project.rails}
+    assert rails["VCC_B"].limits == Limits(max_drop_pct=1.0, max_current_density=30.0)
+    assert rails["VCC"].limits == Limits()
+    assert any("PI_LIMIT_DROP" in w and "VCC_B" in w for w in merged.warnings)
+
+
 def test_pins_are_compared_as_pads_not_as_spelling():
     project = Project(rails=[Rail("VCC", [Source("J1", 1.0, ["1"])], [Load("U1", 1.0, ["1"])])])
     fields = {"J1": {"PI_RAIL": "VCC", "PI_SOURCE": "1V"}, "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A"}}

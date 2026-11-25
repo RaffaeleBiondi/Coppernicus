@@ -148,7 +148,8 @@ So the custom fields are parsed with the rest of the file and then dropped.
 5. **Completeness is per group of nets joined by links and net ties.** A rail with a source
    and no load is complete when it feeds a regulator's input or a link (from the fields or the
    project): it draws their estimated current. Loads on a net a net tie joins to a driven net
-   go into that rail; loads behind a link on a net with no source make a loads-only rail (per
+   go into that rail, even when the project file has a rail on the tied net that holds only
+   limits (it stays, and its limits judge that net); loads behind a link on a net with no source make a loads-only rail (per
    rail it is skipped, its loads drawn through the link by the driven rail; the tree solves
    it). A net with loads and no source in its group, or a source feeding nothing, is an error
    naming the missing field, unless the project file defines the rail; then that rail is used,
