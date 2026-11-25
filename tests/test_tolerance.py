@@ -881,3 +881,24 @@ def test_a_dc_drop_from_an_unsettled_board_temperature_can_fail_but_never_pass()
     once = _comp_tree()
     once.thermal = types.SimpleNamespace(settled=None, history=[{"dt_max_c": 5.0}])
     assert "one iteration: settling not checked" in _compose(project, tree=once).rows[0].hints["dc"]
+
+
+def test_the_result_carries_the_assumptions_and_warnings_behind_its_numbers():
+    """The tree's, those of each noise result it uses (named by aggressor), and the AC result's
+    warnings beside KiPI's estimate (I3)."""
+    project = _comp_project(load={"tol_pct": 5, "ripple_mv": 1}, source={"accuracy_pct": 1},
+                            aggressors=[("A1", True), ("A2", False)])
+    tree = _comp_tree()
+    tree.assumptions, tree.warnings = ["Power tree: each net group is solved from its source."], ["tree warn"]
+    a1, a2 = _noise_result("A1", (0.004, 0.006, 0.003, 0.004)), _noise_result("A2", (0.1, 0.1, 0.1, 0.1))
+    a1.assumptions, a1.warnings = ["Coupled noise: 1592 harmonics."], ["noise warn"]
+    a2.assumptions, a2.warnings = ["A2's own line."], ["A2's warning"]
+    z = _impedance()
+    z.warnings = ["1 capacitor between VOUT and GND has no model: C9"]
+    r = _compose(project, tree=tree, impedance=[z], noise=[a1, a2])
+    assert "Power tree: each net group is solved from its source." in r.assumptions
+    assert "tree warn" in r.warnings
+    assert "A1: Coupled noise: 1592 harmonics." in r.assumptions and "A1: noise warn" in r.warnings
+    assert not [x for x in r.assumptions + r.warnings if "A2" in x]       # A2 lists no probe: unused
+    assert ("AC VOUT, behind KiPI's transient estimate at P1 (shown, never judged): 1 capacitor between "
+            "VOUT and GND has no model: C9") in r.warnings

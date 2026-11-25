@@ -703,6 +703,7 @@ class ToleranceRow:
     stand_ins: List[str] = field(default_factory=list)   # KiPI stand-ins behind a part not used
     # A missing part's least value, when known: it can make a check fail, never pass.
     floors: Dict[str, TolerancePart] = field(default_factory=dict)
+    ripple_from: List[str] = field(default_factory=list)   # the aggressors whose ripple is used
     # KiPI's transient estimate at its probe, shown, never judged: (below, above, the same
     # through 20 MHz) V, already swapped on a negative rail; None without one.
     transient_estimate_v: Optional[Tuple[float, float, float, float]] = None

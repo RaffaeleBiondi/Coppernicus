@@ -161,11 +161,11 @@ def _probe_ripple(r: NoiseResult, probe: str) -> Optional[RippleResult]:
 
 def _ripple(project: Project, load: Load, probe: Optional[str], source: Optional[Source],
             source_name: str, noise: Dict[str, NoiseResult], notes: Dict[str, str]
-            ) -> Tuple[Optional[TolerancePart], str, List[str], Optional[TolerancePart]]:
+            ) -> Tuple[Optional[TolerancePart], str, List[str], Optional[TolerancePart], List[str]]:
     """The ripple from every aggressor listing the load's probe (any of them unsolved, with
     stand-ins, or showing no ripple there: missing), added by ``tolerance.ripple_sum``, the
     larger per side with an entered ``ripple_mv``; with none listing it, the entered
-    ``ripple_mv``; else missing (never 0). ``(part, hint, stand-ins, floor)``: while it is
+    ``ripple_mv``; else missing (never 0). ``(part, hint, stand-ins, floor, aggressors used)``: while it is
     missing, its least value where known (the usable aggressors added by the same rule, and
     ``ripple_mv``, the larger per side; a stand-in's value never)."""
     bw = project.tolerance.bw_limit_20mhz
@@ -205,7 +205,7 @@ def _ripple(project: Project, load: Load, probe: Optional[str], source: Optional
                 what.append("ripple_mv")
             least = (None if floor is None else
                      TolerancePart(float(floor[0]), float(floor[1]), " and ".join(what)))
-            return None, hint, stand_ins, least
+            return None, hint, stand_ins, least, [n for n, _ in values]
         each = "; ".join(f"{name} {_pair_mv(rp.below_v, rp.above_v)} "
                          f"(20 MHz {_pair_mv(rp.below_bw_v, rp.above_bw_v)})" for name, rp in values)
         band = "through 20 MHz" if bw else "full band"
@@ -216,20 +216,20 @@ def _ripple(project: Project, load: Load, probe: Optional[str], source: Optional
             below, above = max(below, eb), max(above, ea)
             detail += f"; ripple_mv {_entered(entered)} entered: the larger per side"
             what += " and ripple_mv"
-        return TolerancePart(float(below), float(above), what, detail), "", [], None
+        return TolerancePart(float(below), float(above), what, detail), "", [], None, [n for n, _ in values]
     if entered is not None:
-        return TolerancePart(*_deviation(entered), "entered (ripple_mv)", ""), "", [], None
+        return TolerancePart(*_deviation(entered), "entered (ripple_mv)", ""), "", [], None, []
     switching = source is not None and (source.kind == "smps"
                                         or any(a.vrm == source_name for a in project.aggressors))
     if not switching:
-        return None, f"enter ripple_mv for {load.label} (no switcher's ripple is solved here)", [], None
+        return None, f"enter ripple_mv for {load.label} (no switcher's ripple is solved here)", [], None, []
     where = f"probe {probe}" if probe is not None else f"a probe on {load.ref}'s pins"
     on = [a.name for a in project.aggressors if a.vrm == source_name]
     if on:
         return None, (f"add {where} to {', '.join(on)}'s ripple probes, or enter ripple_mv for "
-                      f"{load.label}"), [], None
+                      f"{load.label}"), [], None, []
     return None, (f"add an aggressor for {source.label} with {where} in its ripple probes, or enter "
-                  f"ripple_mv for {load.label}"), [], None
+                  f"ripple_mv for {load.label}"), [], None, []
 
 
 def _sides(rp: RippleResult, bw: bool) -> Pair:
@@ -318,8 +318,8 @@ def _row(project: Project, tree: TreeResult, name: str, rail: str, load: Load,
     part, hint, row.transient_estimate_v = _transient(project, load, nominal, probe, shown.get(probe or ""),
                                                     source, ac_notes)
     found["transient"] = (part, hint)
-    part, hint, row.stand_ins, least = _ripple(project, load, probe, source, driver or "", noise,
-                                               noise_notes)
+    part, hint, row.stand_ins, least, row.ripple_from = _ripple(project, load, probe, source, driver or "",
+                                                                noise, noise_notes)
     found["ripple"] = (part, hint)
     if least is not None:
         row.floors["ripple"] = least
@@ -430,9 +430,22 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
     out.verdict = ("fail" if out.failed else "not_judged" if out.not_judged else
                    "pass" if any(r.verdict == "pass" for r in out.rows) else "not_judged")
     out.verdict_note = _note(out.verdict, out.failed, out.not_judged)
-    out.assumptions = assumptions(project, tree)
+    # What the numbers rest on (I3): the tree's assumptions and warnings, those of each noise
+    # result used (named by aggressor), and the AC warnings behind each estimate shown.
+    used = list(dict.fromkeys(a for r in out.rows for a in r.ripple_from))
+    carried = list(tree.assumptions) + [f"{a}: {x}" for a in used for x in by_noise[a].assumptions
+                                        if x not in tree.assumptions]
+    out.assumptions = list(dict.fromkeys(assumptions(project, tree) + carried))
     nominal = {r.name: r.nominal_v for r in out.rows}
-    out.warnings = list(dict.fromkeys(list(warnings) + mismatch_warnings(project, pairs, nominal)))
+    behind = []
+    for r in out.rows:
+        z = next((x for x in impedance if r.transient_estimate_v is not None and x.probe(r.probe)), None)
+        if z is not None:
+            behind += [f"AC {z.rail}, behind KiPI's transient estimate at {r.probe} (shown, never "
+                       f"judged): {w}" for w in z.warnings if w not in tree.warnings]
+    noise_warnings = [f"{a}: {w}" for a in used for w in by_noise[a].warnings if w not in tree.warnings]
+    out.warnings = list(dict.fromkeys(list(warnings) + list(tree.warnings) + noise_warnings + behind
+                                      + mismatch_warnings(project, pairs, nominal)))
     return out
 
 

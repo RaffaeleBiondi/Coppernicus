@@ -180,6 +180,8 @@ def test_a_rail_only_in_the_kicad_fields_solves(tmp_path, capsys):
     assert main(["tolerance", str(path), "--json", "--out", str(tmp_path / "o")]) == EXIT_OK
     doc = json.loads(capsys.readouterr().out)
     assert doc["verdict"] == "not_judged" and doc["not_judged"] == [] and len(doc["loads"]) == 1
+    # The KiCad-field notes, as the other commands carry them (merged.annotate).
+    assert any(a.startswith("Rail VCC from KiCad footprint fields") for a in doc["assumptions"])
 
 
 def test_a_project_with_the_board_temperature_prints_its_estimate_first(tmp_path, capsys):

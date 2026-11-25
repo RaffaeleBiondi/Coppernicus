@@ -606,14 +606,9 @@ def _cmd_tolerance(args) -> int:
 
     from coppernicus import board_fields
     from coppernicus.engine import Board, EngineError
-    from coppernicus.engine.ac import peak_rss_bytes, probe_rails, solve_ac_rail, total_memory_bytes
+    from coppernicus.engine.ac import peak_rss_bytes, probe_rails, solve_ac_rail
     from coppernicus.engine.kicad_fields import read_board_fields
-    from coppernicus.engine.noise import (
-        mesh_estimate,
-        noise_cost_estimate,
-        noise_ram_estimate,
-        solve_aggressor,
-    )
+    from coppernicus.engine.noise import solve_aggressor
     from coppernicus.engine.tolerance import load_probes, loads_by_name
     from coppernicus.engine.tree import solve_project_tree
     from coppernicus.maps import safe_file_name
@@ -624,7 +619,7 @@ def _cmd_tolerance(args) -> int:
         Project,
         ProjectError,
     )
-    from coppernicus.service.session import FIELD_HINT, ac_estimate, thermal_estimate
+    from coppernicus.service.session import FIELD_HINT, ac_estimate, noise_estimate, thermal_estimate
     from coppernicus.tolerance import compose, tolerance_summary, tolerance_text, write_csv
 
     quiet = args.json
@@ -723,24 +718,23 @@ def _cmd_tolerance(args) -> int:
         if args.skip_noise:
             noise_notes[a.name] = "--skip-noise"
             continue
-        try:
-            size = mesh_estimate(board, project, a.name, fields_rails=merged.from_fields)
-            ram = noise_ram_estimate(size.unknowns, total_memory_bytes())
-            text = f"{noise_cost_estimate(size).text}. {ram.text}" + (f" {size.note}." if size.note else "")
-            estimates.append({"solve": f"noise {a.name}", "unknowns": size.unknowns,
-                              "memory_bytes": ram.bytes, "machine_memory_bytes": ram.total_bytes,
-                              "exceeds_memory": ram.risk, "text": text})
-            print(f"Noise of {a.name}: {text}", file=stream, flush=True)
-            if ram.risk:
+        try:                              # its cost first, as coppernicus noise
+            estimate = noise_estimate(board, project, a.name, progress, fields_rails=merged.from_fields)
+            estimates.append({"solve": f"noise {a.name}", **estimate})
+            print(f"Noise of {a.name}: {estimate['text']}", file=stream, flush=True)
+            if estimate["exceeds_memory"]:
                 print(f"warning: the noise solve of {a.name} could exceed this machine's memory; a "
                       "coarser AC mesh (ac: max_edge_mm) or fewer field solves (noise: "
                       "field_per_decade) lowers it", file=sys.stderr, flush=True)
-            noise.append(solve_aggressor(board, project, a.name, progress=progress,
-                                         fields_rails=merged.from_fields))
+            res = solve_aggressor(board, project, a.name, progress=progress, fields_rails=merged.from_fields)
+            merged.annotate(res)
+            noise.append(res)
         except EngineError as e:          # its ripple is missing: not judged, never a pass
             warnings.append(f"Noise solve of {a.name} failed: {e}")
             noise_notes[a.name] = "its noise solve failed"
+    merged.annotate(tree)
     result = compose(project, tree, impedance, noise, pairs, ac_notes, noise_notes, warnings, dropped)
+    merged.annotate(result)               # the KiCad-field notes, as the other commands
     result.estimates = estimates
     peak = peak_rss_bytes()
     result.stats = {"seconds": time.perf_counter() - t0, "tree_seconds": tree.stats.get("seconds"),
