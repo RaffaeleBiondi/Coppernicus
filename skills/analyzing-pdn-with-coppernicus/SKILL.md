@@ -65,13 +65,18 @@ why, and ask for what is missing.
    (supply minus ground, from nominal), the VRMs' `regulation`, and each group's problems.
    It returns no result ids: for maps, use `solve_project`, or point the user to
    `coppernicus solve PROJECT --tree --html` (every group's maps and the VRM and load tables).
-9. Setting up a project: `write_project(project_path, board_path, rails=[...])` saves the
+9. Before and after a change in KiCad: solve the rail (`result_a`), let the user change and save
+   the board, `open_board` again (new `board_id`), solve the same rail with the same sources and
+   loads (`result_b`), then `compare_revisions(result_a, result_b)`: per-load drop deltas, via
+   current changes, where the drop grew or shrank most, and what could not be matched. Report its
+   warnings (different currents mix copper and current).
+10. Setting up a project: `write_project(project_path, board_path, rails=[...])` saves the
    rails you agreed with the user to a `*.coppernicus.yml` they can solve again (CLI, app,
    CI). Ask before `overwrite: true` (it replaces their file and drops its comments); report
    every warning, e.g. that the KiCad fields win over a rail you wrote. To move the setup into
    KiCad, `propose_fields(project_path)` gives the `PI_*` text per part (library symbol vs
    schematic instance) for the user to paste; you never edit KiCad files.
-10. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
+11. Hand-off: `report(result_ids?)` writes one offline HTML page for the user. It has every
    layer's maps with zoom, pan and a hover readout, plus the problems, worst values and
    assumptions. Give the user its `path`; you cannot read the page yourself.
 

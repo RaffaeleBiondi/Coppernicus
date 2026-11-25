@@ -359,6 +359,18 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                      progress=bridge.progress, cancelled=bridge.cancelled,
                      use_board_fields=use_board_fields)
 
+    @mcp.tool(annotations=WRITES_FILE)
+    def compare_revisions(result_a: Annotated[str, Field(description="The result before the change.")],
+                          result_b: Annotated[str, Field(description="The result after it.")],
+                          ) -> dict[str, Any]:
+        """Compare two revisions of a board: results from different board files (or the same
+        file edited and saved in KiCad, then opened again), whose meshes differ. Per-load drop
+        deltas (matched by part), per-layer loss deltas, via currents matched by position and
+        drill, where the drop grew or shrank most (B's drop mapped onto A's mesh; a PNG map per
+        layer), and what could not be matched: parts moved, removed or added, a renamed net,
+        copper only one of them has. Warns when the currents, sources or settings differ."""
+        return _call("compare_revisions", session.compare_revisions, result_a, result_b)
+
     @mcp.tool(annotations=READ_ONLY)
     def copper_step(result_id: str, layer: Annotated[str, Field(description="A copper layer, e.g. B.Cu.")],
                     ctx: Context,

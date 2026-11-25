@@ -17,7 +17,8 @@ DEMO_BOARD = Path(__file__).resolve().parents[1] / "examples" / "demo" / "demo.k
 PNG = b"\x89PNG\r\n\x1a\n"
 TOOLS = {"open_board", "list_nets", "net_parts", "solve_rail", "get_problems", "render_map", "probe",
          "cut_current", "compare_results", "solve_project", "solve_tree", "report",
-         "board_fields", "read_project", "write_project", "propose_fields", "copper_step"}
+         "board_fields", "read_project", "write_project", "propose_fields", "copper_step",
+         "compare_revisions"}
 
 
 def run_with_client(tmp_path, scenario):

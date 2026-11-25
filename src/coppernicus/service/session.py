@@ -1125,6 +1125,48 @@ class Session:
                             f"is not changed and {kicad}.", *barrel],
             "warnings": list(cmp_.get("warnings", []))})
 
+    def compare_revisions(self, result_a: str, result_b: str, out_dir=None) -> Dict[str, Any]:
+        """Two results from different board files (before and after a change in KiCad),
+        whose meshes differ: per-load drops matched by part, per-layer losses, via currents
+        matched by position and drill, B's drop mapped onto A's mesh (where it grew or shrank
+        most, with a map per layer), and what could not be matched."""
+        from coppernicus.maps import render_delta_map
+        from coppernicus.service import revisions as RV
+        la, lb = self._live(result_a), self._live(result_b)
+        sa, sb = la.rec.summary, lb.rec.summary
+        loads, unmatched, warnings = RV.compare_loads(sa, sb)
+        base = compare_summaries(sa, sb)
+        if base["settings_changed"]:
+            warnings.append("The settings differ (" + ", ".join(base["settings_changed"]) + "): the "
+                            "deltas mix the board change and the settings.")
+        if la.rec.board_id == lb.rec.board_id:
+            warnings.append("Both results are of the same board file: compare_results is the tool "
+                            "for a what-if on one board.")
+        drop_map, deltas, map_warnings = RV.drop_map(la.res, lb.res)
+        folder = Path(out_dir) if out_dir else self.out_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        maps = []
+        for lf in la.res.layers:
+            if lf.name in deltas:
+                name = f"{safe_name(la.res.net)}_{result_a}_vs_{result_b}_{safe_name(lf.name)}"
+                path = folder / f"{name}_delta.png"
+                render_delta_map(la.res, lf, deltas[lf.name], la.outline, path,
+                                 f"{la.res.net} — {lf.name}: drop change, {result_b} − {result_a}")
+                maps.append(path)
+        return C.jsonable({
+            "result_a": result_a, "result_b": result_b, "board_a": la.rec.board_id,
+            "board_b": lb.rec.board_id, "net_a": sa["net"], "net_b": sb["net"],
+            "loads": loads, "losses": base["losses"],
+            "max_drop_mv": base["max_drop_mv"], "power_loss_w": base["power_loss_w"],
+            "vias": RV.compare_vias(la.res, lb.res), "drop_map": drop_map, "maps": maps,
+            "unmatched": unmatched, "verdict_a": sa["verdict"], "verdict_b": sb["verdict"],
+            "assumptions": [
+                "Deltas are B − A. Loads are matched by name (the part, unless named), losses by "
+                "layer name, vias by position (within 0.01 mm) and drill.",
+                "B's drop is interpolated onto A's mesh (the meshes differ); copper only one of "
+                "them has cannot be compared there and is given as an area, both ways."],
+            "warnings": warnings + map_warnings})
+
     def compare_results(self, result_a: str, result_b: str) -> Dict[str, Any]:
         """Per-load and per-layer deltas, b − a (works on evicted results too)."""
         a, b = self._record(result_a, heavy=False), self._record(result_b, heavy=False)
