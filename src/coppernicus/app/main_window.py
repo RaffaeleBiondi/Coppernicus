@@ -38,6 +38,7 @@ from coppernicus.app import fields_view
 from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
+from coppernicus.app.noise_panel import NoisePanel
 from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel, TreePanel
 from coppernicus.app.picking import add_picked_pin, pick_nets
 from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel, record_solve
@@ -278,6 +279,8 @@ class MainWindow(QMainWindow):
         self.results_tabs.addTab(self.tree_panel, "Power tree")
         self.ac_panel = AcPanel(self)
         self.results_tabs.addTab(self.ac_panel, "Impedance")
+        self.noise_panel = NoisePanel(self)              # DC-DC ripple and coupled noise
+        self.results_tabs.addTab(self.noise_panel, "Ripple & noise")
         self._dock("Nets", self.nets, Qt.LeftDockWidgetArea)
         rail_scroll = QScrollArea()             # the rail setup is taller than a laptop screen
         rail_scroll.setWidget(self.rail_panel)
@@ -377,6 +380,7 @@ class MainWindow(QMainWindow):
                               "again on the next start")
             remove.triggered.connect(self.remove_mesher)
             self.help_menu.addAction(remove)
+        self.noise_panel.add_solve_action(tb)         # "Solve noise" (Ctrl+Shift+N), the Ripple & noise tab's
 
     # ------------------------------------------------------------------ files
     def open_path(self, path):
@@ -457,6 +461,7 @@ class MainWindow(QMainWindow):
         self._refresh_results()                       # no net yet: nothing of the old board shown
         self.rail_panel.set_settings(self.project.settings)
         self.thermal_panel.set_options(self.project.thermal)
+        self.noise_panel.board_changed()
         self.nets.set_board(board, self._configured_nets(), self.project.marked_rails, self._kicad_nets())
         self.problems.clear()
         self.ac_panel.board_changed()
@@ -1578,6 +1583,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Finishing the {what} solve before closing…")
             self.statusBar().repaint()
             self.tree_worker.wait()
+        self.noise_panel.close_workers()
         if self.report_worker is not None and self.report_worker.isRunning():
             # A report cannot be cancelled halfway: finish the file, without asking to open it.
             self.report_worker.succeeded.disconnect()
