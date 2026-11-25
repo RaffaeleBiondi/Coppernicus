@@ -457,6 +457,15 @@ def _cmd_ac(args) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     results, files = [], {}
     for net in rails:
+        try:                              # its cost first: a heavy solve is never a surprise
+            from coppernicus.service.session import ac_estimate
+            estimate = ac_estimate(board, project, net)
+        except EngineError as e:
+            return fail("solve_failed", str(e), hint)
+        print(f"Impedance of {net}: {estimate['text']}", file=stream, flush=True)
+        if estimate["exceeds_memory"]:
+            print(f"warning: the AC solve of {net} could exceed this machine's memory; a coarser "
+                  "AC mesh (ac: max_edge_mm) lowers it", file=sys.stderr, flush=True)
         try:
             res = solve_ac_rail(board, project, net, progress=progress)
         except EngineError as e:
@@ -469,6 +478,11 @@ def _cmd_ac(args) -> int:
     doc = ac_summary(results, files, not_solved, warnings)
     summary_path = out_dir / f"{stem}_ac_summary.json"
     doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
+    if args.html is not None:                  # one offline page: each rail's |Z|(f) and probes
+        from coppernicus.report import write_ac_report
+        html_path = Path(args.html) if args.html else out_dir / f"{stem}_ac_report.html"
+        doc["report_file"] = write_ac_report(doc, html_path, project=Path(args.project).name,
+                                             board_name=board.name).as_posix()
     summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
                             encoding="utf-8")
     if quiet:
@@ -477,6 +491,8 @@ def _cmd_ac(args) -> int:
         print(f"Board: {board.name}")
         print("\n".join(ac_text(doc)))
         print(f"Summary: {summary_path}")
+        if "report_file" in doc:
+            print(f"Report: {doc['report_file']}")
     return _exit_for(doc)
 
 
@@ -602,6 +618,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="show the engine's progress")
     p.add_argument("--json", action="store_true",
                    help="print a JSON summary on stdout (for scripts and agents)")
+    p.add_argument("--html", nargs="?", const="", default=None, metavar="PATH",
+                   help="also write an offline HTML page of the impedance (default path: "
+                        "<out>/<project>_ac_report.html)")
     p.set_defaults(func=_cmd_ac)
     return ap
 

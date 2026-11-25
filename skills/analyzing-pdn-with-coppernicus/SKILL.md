@@ -77,6 +77,10 @@ why, and ask for what is missing.
      If the call is refused with `solve_too_large`, tell the user the estimate and ask before
      calling again with `confirm_large: true` (or a coarser `grid_mm`); never confirm on your
      own. The temperature is judged only against the user's `max_temp_c` / `max_rise_c`.
+   - PDN impedance |Z|(f): `solve_ac(project_path)` at the project's probes. It is heavy; each
+     rail's `estimate` comes first, and `solve_too_large` means: tell the user, ask, then
+     `confirm_large: true`. Judged only against each probe's own target; below the source's
+     control-loop bandwidth nothing is judged. Point the user to the `png_file` of each rail.
 9. Before and after a change in KiCad: solve the rail (`result_a`), let the user change and save
    the board, `open_board` again (new `board_id`), solve the same rail with the same sources and
    loads (`result_b`), then `compare_revisions(result_a, result_b)`: per-load drop deltas, via

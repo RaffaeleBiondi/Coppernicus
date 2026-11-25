@@ -67,7 +67,7 @@ def _board_folder(project: Path) -> Optional[Path]:
 
 
 def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool = True,
-              tree: bool = False) -> Dict[str, Any]:
+              tree: bool = False, ac: bool = False) -> Dict[str, Any]:
     """Solve every matching project; return the index written to ``out_dir/INDEX``. With
     ``tree``, each project is also solved as a whole power tree (``solve --tree --json``):
     its document goes into the entry's ``tree``, for the summary's tables; it does not set
@@ -120,6 +120,9 @@ def solve_all(patterns: Sequence[str], out_dir: Path, top: int = 5, html: bool =
         if tree and "doc" in entry:
             entry["tree"] = _solve_tree(project, folder, top, env)
             _judge_board_temperature(entry)
+        if ac and "doc" in entry and _has_probes(project):     # opt-in: heavy
+            entry["ac"] = _solve_ac(project, folder, env)
+            _judge_ac(entry)
         entries.append(entry)
     exit_code = EXIT_ERROR if unmatched else overall_exit_code(entries)
     verdict = "error" if unmatched else overall_verdict(entries)
@@ -213,6 +216,71 @@ def _judge_board_temperature(entry: Dict[str, Any]) -> None:
     doc["board_temperature_verdict"] = thermal.get("verdict")
     entry["exit_code"] = (EXIT_LIMIT if verdict == "fail" else EXIT_ERROR if verdict == "error"
                           else EXIT_NOT_JUDGED if doc["not_judged"] else EXIT_OK)
+
+
+def _has_probes(project: Path) -> bool:
+    try:
+        from coppernicus.project import Project
+        return bool(Project.load(project).probes)
+    except Exception:                    # the rail-by-rail run reports a bad project
+        return False
+
+
+def _solve_ac(project: Path, folder: Path, env) -> Dict[str, Any]:
+    """The AC impedance document of a project (``coppernicus ac --json``), or its error."""
+    cmd = [sys.executable, "-m", "coppernicus", "ac", str(project), "--json", "--out", str(folder)]
+    print(f"coppernicus: solving the impedance of {project.as_posix()}", file=sys.stderr, flush=True)
+    run = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env)
+    if run.stderr:
+        sys.stderr.write(run.stderr)
+    try:
+        return json.loads(run.stdout)
+    except json.JSONDecodeError:
+        return {"error": {"code": "internal_error",
+                          "message": f"coppernicus ac exited with {run.returncode} and no JSON",
+                          "hint": "see the log above"}}
+
+
+def _judge_ac(entry: Dict[str, Any]) -> None:
+    """The impedance verdict joins the project's: fail sets 1, a target that could not judge
+    sets 3 (its entries are added to the project's not_judged), an error sets 2."""
+    acdoc, doc = entry.get("ac") or {}, entry.get("doc")
+    if doc is None:
+        return
+    if "error" in acdoc:
+        doc["verdict"] = "error"
+        entry["exit_code"] = EXIT_ERROR
+        return
+    doc["not_judged"] = list(doc.get("not_judged", [])) + [
+        {"rail": e.get("rail") or None, "item": f"impedance at {e.get('item')}", "limit": e.get("limit"),
+         "reason": e.get("reason")} for e in acdoc.get("not_judged", [])]
+    if acdoc.get("verdict") == "fail" and doc.get("verdict") != "error":
+        doc["verdict"] = "fail"
+    elif doc["not_judged"] and doc.get("verdict") in ("pass", "pass_partially_judged"):
+        doc["verdict"] = "not_judged"
+    doc["impedance_verdict"] = acdoc.get("verdict")
+    code = (EXIT_LIMIT if acdoc.get("verdict") == "fail" else
+            EXIT_NOT_JUDGED if acdoc.get("not_judged") else EXIT_OK)
+    entry["exit_code"] = next(c for c in PRECEDENCE if c in (entry["exit_code"], code))
+
+
+def ac_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
+    """The impedance of a project, for the job summary: the verdict and each probe's worst
+    |Z| against its target."""
+    from coppernicus.impedance import hz_text, ohm_text
+    lines = ["", f"### Impedance: `{_cell(project)}`", ""]
+    if "error" in doc:
+        return lines + [f"**Error:** {_cell(doc['error'].get('message', ''))}"]
+    lines += [f"Verdict: **{_cell(doc.get('verdict'))}**. {_cell(doc.get('verdict_note', ''))}", "",
+              "| Probe | Rail | Worst \\|Z\\| | At | Target | Verdict |", "|---|---|---:|---:|---:|---|"]
+    for r in doc.get("rails", []):
+        for p in r.get("probes", []):
+            passed = p.get("passed")
+            verdict = "**FAIL**" if passed is False else "pass" if passed else "not judged"
+            worst, at = ohm_text(p.get("worst_z_ohm")), hz_text(p.get("worst_hz"))
+            lines.append(f"| {_cell(p['name'])} | {_cell(r['rail'])} | {_cell(worst)} | {_cell(at)} | "
+                         f"{_cell(ohm_text(p.get('target_ohm')))} | {verdict} |")
+    return lines
 
 
 def tree_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
@@ -391,6 +459,9 @@ def summary_markdown(index: Dict[str, Any], artifact_url: str = "", problems_per
         lines += ["", "**Warnings (KiCad footprint fields):**", ""]
         lines += [f"- {_cell(w)}" for w in field_warnings]
     lines += details
+    for e in entries:                         # the impedance of each project, when asked
+        if "ac" in e:
+            lines += ac_markdown(e["project"], e["ac"])
     for e in entries:                         # the power tree of each project, when asked
         if "tree" in e:
             lines += tree_markdown(e["project"], e["tree"])
@@ -420,6 +491,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--no-html", action="store_true", help="skip the HTML reports")
     p.add_argument("--tree", action="store_true",
                    help="also solve each project's power tree; its tables go into the summary")
+    p.add_argument("--ac", action="store_true",
+                   help="also solve the AC impedance of each project with probes (heavy); its "
+                        "verdict sets the code")
     p = sub.add_parser("summary", help="print the Markdown summary of a solve")
     p.add_argument("--out", required=True, help="results folder of the solve")
     p.add_argument("--artifact-url", default="", help="link to the uploaded results")
@@ -438,7 +512,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 def _run(args) -> int:
     if args.command == "solve":
         index = solve_all(args.patterns, Path(args.out), top=args.top, html=not args.no_html,
-                          tree=args.tree)
+                          tree=args.tree, ac=args.ac)
         if "error" in index:
             print(f"error: {index['error']['message']}", file=sys.stderr)
         return index["exit_code"]

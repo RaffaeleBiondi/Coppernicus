@@ -39,6 +39,12 @@ inputs:
       summary. The tree's verdict is shown there; it does not set the exit code, except for
       the board temperature: a project that enables it is judged by it (1 fail, 3 not judged).
     default: "false"
+  ac:
+    description: >-
+      Also solve the AC PDN impedance |Z|(f) of each project that has probes (heavy: minutes and
+      GBs on a large board; its size and memory estimate is printed in the log first). Its
+      verdict, against the probes' own targets, sets the step's result (1 fail, 3 not judged).
+    default: "false"
   python-version:
     description: Python used to run Coppernicus (3.12 or 3.13).
     default: "3.12"
@@ -94,6 +100,7 @@ runs:
         COPPERNICUS_TOP: ${{ inputs.top }}
         COPPERNICUS_HTML: ${{ inputs.html }}
         COPPERNICUS_TREE: ${{ inputs.tree }}
+        COPPERNICUS_AC: ${{ inputs.ac }}
       run: |
         # The results go to their own folder; nothing is written next to a board and nothing
         # is committed.
@@ -101,10 +108,12 @@ runs:
         if [ "$COPPERNICUS_HTML" != "true" ]; then html_flag="--no-html"; fi
         tree_flag=""
         if [ "$COPPERNICUS_TREE" = "true" ]; then tree_flag="--tree"; fi
+        ac_flag=""
+        if [ "$COPPERNICUS_AC" = "true" ]; then ac_flag="--ac"; fi
         index="$COPPERNICUS_OUT/coppernicus-ci.json"
         rm -f "$index"
         uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -m coppernicus.ci solve \
-          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag $tree_flag "$COPPERNICUS_PROJECTS" || true
+          --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag $tree_flag $ac_flag "$COPPERNICUS_PROJECTS" || true
         # The exit code and verdict come from the index the helper writes: a crash also exits
         # with 1, which must not read as "limit exceeded". No index means an error.
         result=$(uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -c \
