@@ -144,7 +144,7 @@ def test_the_form_writes_the_options_and_emits_only_on_a_change():
         from coppernicus.project import ThermalOptions
         panel = window.thermal_panel
         heard = []
-        panel.options_changed.connect(lambda: heard.append("options"))
+        panel.options_changed.connect(lambda *_: heard.append("options"))
         panel.limits_changed.connect(lambda: heard.append("limits"))
         options = ThermalOptions(grid_mm=0.2435)
         panel.set_options(options)
@@ -190,7 +190,7 @@ def test_the_wheel_over_the_form_changes_no_field_that_is_not_focused():
         options = ThermalOptions()
         panel.set_options(options)
         heard = []
-        panel.options_changed.connect(lambda: heard.append("options"))
+        panel.options_changed.connect(lambda *_: heard.append("options"))
         window.show()
         app.processEvents()
         for field in (panel.ambient, panel.iterations, panel.grid, panel.regulator_heat):
@@ -230,4 +230,162 @@ def test_a_cancelled_tree_solve_pops_no_box_and_clears_the_temperature_tab():
         assert "cancelled" in status, status
         assert "cancelled" in window.thermal_panel.summary.text(), window.thermal_panel.summary.text()
         assert not window.thermal_panel.cancel.isEnabled()
+    ''')
+
+
+# ---------------------------------------------------------------------- solves in the window
+
+HELPERS = '''
+        import tempfile
+        from pathlib import Path
+        import coppernicus
+        QtCore.QSettings.setDefaultFormat(QtCore.QSettings.IniFormat)       # never the user's
+        QtCore.QSettings.setPath(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, tempfile.mkdtemp())
+        EXAMPLES = Path(coppernicus.__file__).resolve().parents[2] / "examples"
+        boxes = []
+        QtWidgets.QMessageBox.warning = staticmethod(lambda *a, **k: boxes.append(a[1:3]))
+
+        def solve_tree():
+            window.solve_tree()
+            window.tree_worker.wait(120000)
+            app.processEvents()
+            app.processEvents()
+            return window.tree
+'''
+
+
+def test_a_cancelled_re_solve_shows_the_previous_tree_again():
+    """Ctrl+T, Ctrl+T again, Cancel: the previous tree stays in use (Group box, map, limit
+    edits), so both tabs show it again."""
+    run_in_window(HELPERS + '''
+        window.open_project(EXAMPLES / "demo" / "demo-thermal.coppernicus.yml")
+        first = solve_tree()
+        assert first is not None and first.thermal is not None
+        rows = window.thermal_panel.shown_layer_rows()
+        window.solve_tree()
+        assert "solving" in window.thermal_panel.summary.text()
+        window.cancel_tree()
+        window.tree_worker.wait(120000)
+        app.processEvents()
+        app.processEvents()
+        status = window.statusBar().currentMessage()
+        assert boxes == [], boxes
+        assert window.tree is first
+        assert "solve cancelled: the previous result is shown" in status, status
+        shown = window.thermal_panel.shown_layer_rows()
+        assert rows and shown == rows, shown
+        summary = window.tree_panel.summary.text()
+        assert window.tree_panel.vrm_rows() and "limit(s) exceeded" in summary, summary
+    ''')
+
+
+def test_a_real_failure_after_cancel_still_shows_its_box_and_the_previous_tree():
+    run_in_window(HELPERS + '''
+        window.open_project(EXAMPLES / "demo" / "demo-thermal.coppernicus.yml")
+        first = solve_tree()
+        worker = window.tree_worker = RunningWorker()
+        worker.cancelled = True
+        worker.failed.connect(window._tree_failed)
+        worker.failed.emit("Power tree: the matrix is singular")
+        app.processEvents()
+        assert boxes == [("Cannot solve the power tree", "Power tree: the matrix is singular")], boxes
+        status = window.statusBar().currentMessage()
+        assert "failed: the previous result is shown" in status, status
+        assert window.tree is first and window.thermal_panel.shown_layer_rows()
+    ''')
+
+
+def test_a_plain_tree_solve_says_where_cancel_is():
+    run_in_window(HELPERS + '''
+        window.open_project(EXAMPLES / "demo" / "demo.coppernicus.yml")
+        window.solve_tree()
+        text = window.tree_panel.summary.text()
+        window.tree_worker.wait(120000)
+        app.processEvents()
+        assert "Cancel: Temperature tab" in text, text
+    ''')
+
+
+def test_options_of_an_electro_thermal_solve_that_is_off_keep_a_plain_tree():
+    run_in_window(HELPERS + '''
+        window.open_project(EXAMPLES / "demo" / "demo.coppernicus.yml")
+        tree = solve_tree()
+        assert tree is not None and tree.thermal is None
+        revision, panel = window._revision, window.thermal_panel
+        panel.ambient.setValue(30.0)
+        panel.grid.setValue(0.5)
+        panel.iterations.setValue(5)
+        panel.max_rise.setText("10")
+        panel.max_rise.editingFinished.emit()
+        assert window.tree is tree and window._revision == revision, (window.tree, window._revision)
+        assert window.project.thermal.ambient_c == 30.0 and window.dirty
+        assert window.tree_panel.vrm_rows()
+        panel.enabled.setChecked(True)                       # ticking it changes the tree
+        assert window.tree is None and window._revision == revision + 1
+        panel.ambient.setValue(31.0)                         # on: an option makes a tree stale
+        assert window._revision == revision + 2
+    ''')
+
+
+def test_the_power_tree_status_keeps_why_the_temperature_map_is_not_shown():
+    run_in_window(HELPERS + '''
+        from coppernicus.app.thermal_panel import NO_MAP
+        window.open_project(EXAMPLES / "demo" / "demo.coppernicus.yml")
+        tree = solve_tree()
+        window.field_box.blockSignals(True)                  # the map left on Board temperature
+        window.field_box.setCurrentIndex(window.field_box.findData("temperature"))
+        window.field_box.blockSignals(False)
+        window._tree_solved(tree)                            # a tree with no board temperature
+        status = window.statusBar().currentMessage()
+        assert status.startswith("Power tree solved") and NO_MAP in status, status
+        assert window.field_box.currentData() == "drop"
+    ''')
+
+
+def test_closing_during_a_thermal_solve_waits_for_it_to_end():
+    """KiPI checks Cancel once per iteration, never in a factorization (about 30 s on a big
+    board): closing must not destroy the running thread after a 5 s wait."""
+    run_in_window('''
+        class Solving(RunningWorker):
+            thermal = True
+
+            def __init__(self):
+                super().__init__()
+                self.cancelled, self.waits = False, []
+
+            def cancel(self):
+                self.cancelled = True
+
+            def wait(self, ms=None):
+                self.waits.append(ms)
+                return True
+
+        worker = window.tree_worker = Solving()
+        window.close()
+        app.processEvents()
+        assert worker.cancelled and worker.waits == [None], worker.waits
+        status = window.statusBar().currentMessage()
+        assert status == "Finishing the board temperature solve before closing…", status
+    ''')
+
+
+def test_thermal_edits_reach_the_merged_project_of_a_board_with_fields():
+    """With KiCad fields the solved project is a deep copy (merged): the Temperature tab's
+    edits must reach it, the options the solve, the limits the judging."""
+    run_in_window(HELPERS + '''
+        window.open_project(EXAMPLES / "fields" / "fields.coppernicus.yml")
+        assert window.merged.project is not window.project
+        panel = window.thermal_panel
+        panel.enabled.setChecked(True)
+        panel.ambient.setValue(30.0)
+        assert window.merged.project.thermal.ambient_c == 30.0
+        tree = solve_tree()
+        assert tree is not None and tree.thermal is not None and tree.thermal.ambient_c == 30.0, boxes
+        limit = f"{tree.thermal.copper[0].t_max_c - 0.5:.2f}"
+        panel.max_temp.setText(limit)
+        panel.max_temp.editingFinished.emit()
+        assert window.merged.project.thermal.max_temp_c == float(limit)
+        assert window.tree is tree, window.tree
+        assert tree.thermal_limits == {"max_temp_c": float(limit)}, tree.thermal_limits
+        assert panel.shown_layer_rows()[0][-1] == "FAIL", panel.shown_layer_rows()
     ''')

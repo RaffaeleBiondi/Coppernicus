@@ -40,7 +40,7 @@ from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel, TreePanel
 from coppernicus.app.picking import add_picked_pin, pick_nets
 from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel
-from coppernicus.app.worker import ReportWorker, SolveWorker, TreeWorker
+from coppernicus.app.worker import CANCELLED, ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
@@ -1171,12 +1171,13 @@ class MainWindow(QMainWindow):
         if self.tree_worker is not None and self.tree_worker.isRunning():
             self.statusBar().showMessage("The power tree is already being solved")
             return
-        self.tree_panel.clear("<b>Power tree</b>: solving…")
+        self.tree_panel.clear("<b>Power tree</b>: solving… · Cancel: Temperature tab")
         thermal = self.merged.project.thermal.enabled   # the Temperature tab holds Cancel
         self.thermal_panel.clear("<b>Board temperature</b>: solving…" if thermal else "")
         self.results_tabs.setCurrentWidget(self.thermal_panel if thermal else self.tree_panel)
         self.tree_worker = TreeWorker(self.board, self.merged.project, self)
         self.tree_worker.merged = self.merged          # its notes and warnings, for the result
+        self.tree_worker.thermal = thermal
         self.tree_worker.generation = self._generation
         self.tree_worker.revision = self._revision
         self.tree_worker.message.connect(self._tree_message)
@@ -1210,25 +1211,34 @@ class MainWindow(QMainWindow):
         for key, res in tree.groups.items():
             self.group_box.addItem(f"{key} ({res.kind})" if res.kind == "ground" else key, key)
         self.group_box.blockSignals(False)
+        reason = ""
         if self.field_box.currentData() == "temperature":
             self.refresh_view()                          # the map showed the last tree's
+            reason = f" · {self._fallback_reason}" if self._fallback_reason else ""
         peak = (f" · board peak {tree.thermal.peak_c:.2f} °C (Temperature tab, Board temperature map)"
                 if tree.thermal is not None else "")
         self.statusBar().showMessage(f"Power tree solved in {tree.stats['seconds']:.1f} s: "
-                                     f"{len(tree.groups)} groups · pick one in Group to see it{peak}")
+                                     f"{len(tree.groups)} groups · pick one in Group to see it{peak}{reason}")
 
     def _tree_failed(self, message: str):
         self.thermal_panel.set_solving(False)
         if self._is_stale():
             return
-        if getattr(self.sender(), "cancelled", False):          # Cancel: expected, no box
-            self.tree_panel.clear("<b>Power tree</b>: solve cancelled")
-            self.thermal_panel.clear("<b>Board temperature</b>: solve cancelled")
-            self.statusBar().showMessage("Power tree solve cancelled")
-            return
-        self.tree_panel.clear("<b>Power tree</b>: cannot solve")
-        self.thermal_panel.clear("<b>Board temperature</b>: cannot solve")
-        QMessageBox.warning(self, "Cannot solve the power tree", message)
+        # Cancel is expected (no box), but only its own report: an error after it is shown.
+        cancelled = getattr(self.sender(), "cancelled", False) and message == CANCELLED
+        if self.tree is not None:          # the previous tree is still in use: show it again
+            self.tree_panel.set_tree(self.tree, self._tree_verdict())
+            self.thermal_panel.set_tree(self.tree, self._thermal_verdict_html())
+            self.statusBar().showMessage(f"Power tree solve {'cancelled' if cancelled else 'failed'}: "
+                                         "the previous result is shown")
+        else:
+            what = "solve cancelled" if cancelled else "cannot solve"
+            self.tree_panel.clear(f"<b>Power tree</b>: {what}")
+            self.thermal_panel.clear(f"<b>Board temperature</b>: {what}")
+            if cancelled:
+                self.statusBar().showMessage("Power tree solve cancelled")
+        if not cancelled:
+            QMessageBox.warning(self, "Cannot solve the power tree", message)
 
     def _tree_verdict(self) -> str:
         if self.tree is None:
@@ -1312,12 +1322,17 @@ class MainWindow(QMainWindow):
         self.problems.set_result(tree_header_html(key, res, gv), gv.problems, res.warnings + res.assumptions)
 
     # ------------------------------------------------------------------ board temperature
-    def _thermal_edited(self):
-        """An electro-thermal option changed (Temperature tab): the power tree's board
-        temperature is stale. The rails solved alone stay: Solve (F5) does not heat copper."""
+    def _thermal_edited(self, key: str = ""):
+        """An electro-thermal option ``key`` changed (Temperature tab). Ticking or unticking
+        Electro-thermal, or any option while it is ticked (or while the tree holds a board
+        temperature), makes the power tree stale; with it off, the other options change no
+        solve. The rails solved alone stay: Solve (F5) does not heat copper."""
         self._remerge()                           # the merged project holds a copy of them
         self.dirty = True
         self._update_title()
+        heated = self.merged.project.thermal.enabled or getattr(self.tree, "thermal", None) is not None
+        if key != "enabled" and not heated:
+            return
         self._revision += 1
         self._drop_tree("Electro-thermal options changed: solve the power tree again (Ctrl+T)")
 
@@ -1506,7 +1521,12 @@ class MainWindow(QMainWindow):
             for signal in (self.tree_worker.message, self.tree_worker.succeeded, self.tree_worker.failed):
                 signal.disconnect()
             self.tree_worker.cancel()
-            self.tree_worker.wait(5000)
+            # KiPI checks Cancel once per iteration, never inside a factorization (about 30 s on a
+            # big board): wait for the thread to end rather than destroy it running.
+            what = "board temperature" if getattr(self.tree_worker, "thermal", False) else "power-tree"
+            self.statusBar().showMessage(f"Finishing the {what} solve before closing…")
+            self.statusBar().repaint()
+            self.tree_worker.wait()
         if self.report_worker is not None and self.report_worker.isRunning():
             # A report cannot be cancelled halfway: finish the file, without asking to open it.
             self.report_worker.succeeded.disconnect()

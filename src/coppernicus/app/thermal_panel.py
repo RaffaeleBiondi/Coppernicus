@@ -203,7 +203,7 @@ class _LimitValidator(DecimalValidator):
 
 class ThermalPanel(QWidget):
     """The Temperature tab (see the module)."""
-    options_changed = Signal()                       # the tree's board temperature is stale
+    options_changed = Signal(str)                    # the option's name: may make the tree stale
     limits_changed = Signal()                        # re-judge only, no solve
     layer_requested = Signal(str, float, float, str)    # layer, x mm, y mm, group
     cancel_requested = Signal()
@@ -366,7 +366,10 @@ class ThermalPanel(QWidget):
         if value == getattr(self._options, key):
             return
         setattr(self._options, key, value)
-        (self.limits_changed if is_limit(key) else self.options_changed).emit()
+        if is_limit(key):
+            self.limits_changed.emit()
+        else:
+            self.options_changed.emit(key)
 
     # ------------------------------------------------------------------ solve state
     def set_solving(self, on: bool):

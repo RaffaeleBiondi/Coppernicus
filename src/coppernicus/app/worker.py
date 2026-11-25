@@ -11,6 +11,8 @@ from PySide6.QtCore import QThread, Signal
 from coppernicus.engine import Board, Cancelled, EngineError, solve_rail
 from coppernicus.project import Project, Rail, Settings
 
+CANCELLED = "Solve cancelled"           # what a cancelled solve reports through ``failed``
+
 
 class SolveWorker(QThread):
     message = Signal(str)
@@ -74,7 +76,7 @@ class TreeWorker(QThread):
             result = solve_project_tree(self._board, self._project, progress=self.message.emit,
                                         cancelled=lambda: self._cancel)
         except Cancelled:
-            self.failed.emit("Solve cancelled")
+            self.failed.emit(CANCELLED)
         except EngineError as e:
             self.failed.emit(str(e))
         except Exception:                                   # noqa: BLE001 - shown to the user
