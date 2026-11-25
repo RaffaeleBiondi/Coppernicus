@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 from coppernicus import __version__, bootstrap_triangle
 from coppernicus import board_fields as BF
 from coppernicus.app import fields_view
+from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel, TreePanel
@@ -265,6 +266,8 @@ class MainWindow(QMainWindow):
         self.thermal_panel.cancel_requested.connect(self.cancel_tree)
         self.results_tabs.addTab(self.compare, "Compare")
         self.results_tabs.addTab(self.tree_panel, "Power tree")
+        self.ac_panel = AcPanel(self)
+        self.results_tabs.addTab(self.ac_panel, "Impedance")
         self._dock("Nets", self.nets, Qt.LeftDockWidgetArea)
         rail_scroll = QScrollArea()             # the rail setup is taller than a laptop screen
         rail_scroll.setWidget(self.rail_panel)
@@ -445,6 +448,7 @@ class MainWindow(QMainWindow):
         self.thermal_panel.set_options(self.project.thermal)
         self.nets.set_board(board, self._configured_nets(), self.project.marked_rails, self._kicad_nets())
         self.problems.clear()
+        self.ac_panel.board_changed()
         self.dirty = project is None
         self._update_title()
         warn = f" — {len(board.warnings)} import warning(s), see Problems notes" if board.warnings else ""
@@ -1049,6 +1053,7 @@ class MainWindow(QMainWindow):
         """Esc: leave pick and measure modes."""
         self.rail_panel.set_pick("")
         self.measure.setChecked(False)
+        self.ac_panel.stop_pick()
 
     def _measure_toggled(self, on: bool):
         if on:
@@ -1554,5 +1559,6 @@ class MainWindow(QMainWindow):
             self.report_worker.failed.disconnect()
             self.statusBar().showMessage("Finishing the report before closing…")
             self.report_worker.wait()
+        self.ac_panel.close_workers()
         self.view.close()
         super().closeEvent(event)
