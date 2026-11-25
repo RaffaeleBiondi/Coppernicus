@@ -621,7 +621,7 @@ def _cmd_tolerance(args) -> int:
         ProjectError,
     )
     from coppernicus.service.session import FIELD_HINT, ac_estimate, noise_estimate, thermal_estimate
-    from coppernicus.tolerance import compose, tolerance_summary, tolerance_text, write_csv
+    from coppernicus.tolerance import compose, misspelt_keys, tolerance_summary, tolerance_text, write_csv
 
     quiet = args.json
     t0 = time.perf_counter()
@@ -648,6 +648,13 @@ def _cmd_tolerance(args) -> int:
         return fail("invalid_board_field", str(e), FIELD_HINT)
     project = merged.project
     warnings, dropped, lost_accuracy = list(merged.warnings), [], {}
+    import yaml
+    try:                                  # a misspelt tolerance key must never end in a silent pass
+        with open(args.project, encoding="utf-8") as fh:
+            typos, dropped = misspelt_keys(yaml.safe_load(fh))
+        warnings += typos
+    except (OSError, yaml.YAMLError):     # Project.load read it a moment ago
+        pass
     for net in merged.from_fields:        # the fields' rail keeps by ref what the project gives
         own, kept = loaded.rail(net), project.rail(net)
         if own is None:

@@ -218,3 +218,18 @@ def test_a_project_with_the_board_temperature_prints_its_estimate_first(tmp_path
         encoding="utf-8"))
     assert doc["estimates"][0]["solve"] == "board temperature"
     assert doc["loads"][0]["parts"]["dc"]["source"] == "power tree (electro-thermal)"
+
+
+def test_a_misspelt_tolerance_key_is_not_judged_with_a_suggestion(write, tmp_path, capsys):
+    """The file loads (unknown keys are ignored, as ever), the load's ripple and transient are
+    complete, but its tolerance was misspelt: not judged (exit 3), never a silent pass."""
+    path = write(tol_pct=None, ripple_mv=12.0, listed=False)
+    text = path.read_text(encoding="utf-8").replace("ripple_mv: 12.0", "ripple_mv: 12.0\n    tol_pc: 6")
+    path.write_text(text, encoding="utf-8")
+    code = main(["tolerance", str(path), "--json", "--skip-ac", "--out", str(tmp_path / "o")])
+    assert code == EXIT_NOT_JUDGED
+    doc = json.loads(capsys.readouterr().out)
+    assert "Load U2 on VOUT: unknown key 'tol_pc' in the project file, ignored: did you mean 'tol_pct'?" \
+        in doc["warnings"]
+    (e,) = doc["not_judged"]
+    assert (e["item"], e["net"], e["limit"]) == ("U2", "VOUT", "tol_pc") and "did you mean" in e["reason"]

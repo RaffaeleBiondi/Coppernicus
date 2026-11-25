@@ -119,11 +119,29 @@ def test_an_editor_keeps_the_tolerances_it_does_not_show():
     assert src[0].accuracy_pct == (-1.0, 1.0) and src[0].voltage == 5.0
 
 
-def test_an_unknown_load_key_is_ignored_as_before():
-    """Loads and sources never refused unknown keys (only the blocks do): a typo in a tolerance
-    key leaves the load without that tolerance. Recorded, not changed (T11a)."""
-    p = _project(load={"tol_pc": 5})
-    assert p.rails[0].loads[0].tol_pct is None
+def test_a_misspelt_tolerance_key_loads_but_is_never_a_silent_pass():
+    """(d): loading still ignores an unknown key (old files keep loading), but the tolerance
+    command reads the raw file: a key that looks like a tolerance gets a warning with the key
+    it most likely meant, and a not-judged entry for its load."""
+    from coppernicus.tolerance import misspelt_keys
+    p = _project(load={"tol_pc": 5, "notes": "x"}, source={"acuracy_pct": 1})
+    assert p.rails[0].loads[0].tol_pct is None and p.rails[0].sources[0].accuracy_pct is None
+    raw = p.to_dict()
+    raw["rails"][0]["loads"][0].update({"tol_pc": 5, "notes": "x"})
+    raw["rails"][0]["sources"][0]["acuracy_pct"] = 1
+    warnings, entries = misspelt_keys(raw)
+    assert warnings == [
+        "Source J1 on VCC: unknown key 'acuracy_pct' in the project file, ignored: did you mean "
+        "'accuracy_pct'?",
+        "Load U1 on VCC: unknown key 'tol_pc' in the project file, ignored: did you mean 'tol_pct'?"]
+    assert {(e["item"], e["net"], e["limit"]) for e in entries} == {("J1", "VCC", "acuracy_pct"),
+                                                                   ("U1", "VCC", "tol_pc")}
+    assert all("did you mean" in e["reason"] for e in entries)
+    # "notes" does not look like a tolerance: left alone, as before.
+    assert misspelt_keys({"rails": [{"net": "VCC", "loads": [{"ref": "U1", "current": 1, "notes": 1}]}]}) \
+        == ([], [])
+    r = _compose(_comp_project(**COMPLETE), not_judged=entries[1:])
+    assert r.rows[0].verdict == "pass" and r.verdict == "not_judged"     # never a silent pass
 
 
 # ---------------------------------------------------------------------- the tree: worst pins

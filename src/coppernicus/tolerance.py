@@ -20,7 +20,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from coppernicus.impedance import hz_text
-from coppernicus.project import Load, Project, Source
+from coppernicus.project import (
+    LOAD_PART_KEYS,
+    LOAD_PIN_REFS,
+    LOAD_TOLERANCE_KEYS,
+    SOURCE_ACCURACY_KEYS,
+    SOURCE_PIN_REFS,
+    Load,
+    Project,
+    Source,
+)
 from coppernicus.results import (
     DISCONNECTED,
     NOT_CONVERGED,
@@ -463,6 +472,56 @@ def compose(project: Project, tree: TreeResult, impedance: Sequence[ImpedanceRes
     out.warnings = list(dict.fromkeys(list(warnings) + list(tree.warnings) + noise_warnings + behind
                                       + mismatch_warnings(project, pairs, nominal)))
     return out
+
+
+# ---------------------------------------------------------------------- misspelt keys
+
+# What a project file's load and source mappings hold (project.py _load_in / _source_in);
+# loading ignores any other key, as it always has.
+LOAD_KEYS = ("name", "ref", "pins", "current", *LOAD_PIN_REFS, *LOAD_TOLERANCE_KEYS, *LOAD_PART_KEYS)
+SOURCE_KEYS = ("name", "ref", "pins", "voltage", "kind", "efficiency", "quiescent_a", "current_limit_a",
+               "fsw_hz", "extra_pins", *SOURCE_PIN_REFS, *SOURCE_ACCURACY_KEYS)
+# An unknown key looks like a tolerance with one of these in it (tol_pc), or close to a known
+# one (acuracy_pct: difflib's ratio at least LOOKS_CLOSE).
+LOOKS_LIKE = ("tol", "acc", "ripple", "transient")
+LOOKS_CLOSE = 0.8
+
+
+def misspelt_keys(data: Any) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """``(warnings, not-judged entries)`` for the unknown keys of a project file's loads and
+    sources (``data``: the file as read, before loading) that look like a tolerance: each with
+    the key it most likely meant (difflib). Loading ignores them, so the tolerance they were
+    meant to set would be missing: the entry ``{item, net, limit: the misspelt key, reason}``
+    keeps the verdict from a silent pass."""
+    import difflib
+    known = list(LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS + SOURCE_ACCURACY_KEYS)
+    warnings, entries = [], []
+    rails = data.get("rails") if isinstance(data, dict) else None
+    for rd in rails if isinstance(rails, list) else []:
+        if not isinstance(rd, dict):
+            continue
+        net = str(rd.get("net", ""))
+        for what, items, keys in (("Source", rd.get("sources"), SOURCE_KEYS),
+                                  ("Load", rd.get("loads"), LOAD_KEYS)):
+            for t in items if isinstance(items, list) else []:
+                if not isinstance(t, dict):
+                    continue
+                label = str(t.get("name") or t.get("ref") or "?")
+                for key in (str(k) for k in t if k not in keys):
+                    if not (any(stem in key.lower() for stem in LOOKS_LIKE)
+                            or difflib.get_close_matches(key, known, n=1, cutoff=LOOKS_CLOSE)):
+                        continue
+                    guess = difflib.get_close_matches(key, known, n=1, cutoff=0.0)[0]
+                    if (guess in SOURCE_ACCURACY_KEYS) != (what == "Source"):
+                        guess += f"' (a {'source' if what == 'Load' else 'load'} key"
+                        meant = f"did you mean '{guess})?"
+                    else:
+                        meant = f"did you mean '{guess}'?"
+                    text = f"unknown key '{key}' in the project file, ignored: {meant}"
+                    warnings.append(f"{what} {label} on {net}: {text}")
+                    entries.append({"item": label, "net": net, "limit": key,
+                                    "reason": f"{text} What it was meant to set is not judged"})
+    return warnings, entries
 
 
 # ---------------------------------------------------------------------- summary and text
