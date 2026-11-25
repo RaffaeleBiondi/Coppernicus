@@ -439,8 +439,9 @@ ground net is solved, each regulator's and load's `ground` pins (see
   sets), `verdict`, `not_judged` and `problems`: `load` on a rail, the regulator inputs it
   feeds among them as `"U1 (input)"` (`current_a` is the input current; `drop_mv` can be
   `null`); `rise` and `return` on a ground; `hotspot` and `via` on both. Each problem has
-  `severity`, `kind`, `title` and `detail` (the line that says, among others, which limit
-  judged it: "limit 2 % (from +5V)"). A `load` (a regulator input included) also has
+  `severity`, `kind`, `title`, `detail` (the line that says, among others, which limit
+  judged it: "limit 2 % (from +5V)"), and its place as in a rail summary: `layer`, `x_mm`,
+  `y_mm` (`null` when it has none). A `load` (a regulator input included) also has
   `limit_pct` (the `max_drop_pct` that judged it) and `limit_from` (the net that limit came
   from: its own, the rail it is listed in, or the group's driving net); a `return` has
   `limit_mv` (`max_ground_rise_mv`) and `limit_from`; both `null` when no limit is set;

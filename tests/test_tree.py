@@ -1221,6 +1221,35 @@ def test_a_tree_problem_says_which_net_s_limit_judged_it():
     assert u2["limit_pct"] is None and u2["limit_from"] is None and "no limit set" in u2["detail"]
 
 
+def test_a_tree_problem_has_its_place_on_the_board(monkeypatch):
+    """As a rail summary's problems: x_mm, y_mm (at U1's input pad, U2's pad) and layer (a
+    hotspot's); a position that is not finite is null, so the document stays plain JSON."""
+    import json
+
+    from coppernicus import power_tree
+    tree = _link_input_tree(max_drop_pct=2.0)
+    doc = power_tree.tree_summary(tree)
+    [inp] = [p for p in _group_doc(doc, "+5V")["problems"] if p.get("name") == "U1 (input)"]
+    assert (inp["x_mm"], inp["y_mm"], inp["layer"]) == (pytest.approx(20.0), pytest.approx(0.0), None)
+    [u2] = [p for p in _group_doc(doc, "+3V3")["problems"] if p.get("name") == "U2"]
+    assert (u2["x_mm"], u2["y_mm"]) == (pytest.approx(30.0), pytest.approx(5.0))
+    hot = [p for g in doc["groups"] for p in g["problems"] if p["kind"] == "hotspot"]
+    assert hot and all(p["layer"] and math.isfinite(p["x_mm"]) for p in hot)
+    real = power_tree.tree_verdicts
+
+    def nowhere(*args, **kw):                # a problem with no place: NaN, as for an unsolved pin
+        overall, verdicts = real(*args, **kw)
+        for gv in verdicts.values():
+            for p in gv.problems:
+                p.x = p.y = float("nan")
+        return overall, verdicts
+    monkeypatch.setattr(power_tree, "tree_verdicts", nowhere)
+    doc = power_tree.tree_summary(tree)
+    placed = [p for g in doc["groups"] for p in g["problems"]]
+    assert placed and all(p["x_mm"] is None and p["y_mm"] is None for p in placed)
+    json.dumps(doc, allow_nan=False)
+
+
 def test_a_ground_return_problem_says_which_net_s_limit_judged_it(board):
     from coppernicus.power_tree import tree_summary
     from coppernicus.project import Rail
