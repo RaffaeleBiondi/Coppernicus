@@ -481,7 +481,7 @@ def test_the_progress_hooks_and_a_partial_result():
 def test_stand_ins_for_coss_models_ends_switch_node_and_harmonics():
     p = _project()
     ph = p.aggressors[0].phases[0]
-    ph.coss_f, ph.qrr_nc, ph.switch_net = None, None, ""
+    ph.coss_f, ph.qrr_nc, ph.switch_net, ph.input_caps = None, None, "", []
     p.capacitors = [p.capacitors[0]]                     # C2 loses its model
     p.victims[0].driver_ref, p.victims[0].receiver_ref = "", ""
     p.noise = NoiseOptions(board_model=False, max_harmonics=100)
@@ -492,7 +492,8 @@ def test_stand_ins_for_coss_models_ends_switch_node_and_harmonics():
     text = "; ".join(r.stand_ins)
     for words in ("Coss not entered on phase 1: KiPI's 200 pF", "Qrr not entered on phase 1",
                   "without a model: C2", "capacitive coupling left out: no switch net on any phase",
-                  "harmonics stop at 100 MHz (noise.max_harmonics 100)"):
+                  "harmonics stop at 100 MHz (noise.max_harmonics 100)",
+                  "no input capacitors on phase 1: KiPI takes the hot loop as the package alone"):
         assert words in text, words
     sw = r.victim("SIG_SW")
     assert "driver and receiver not both entered: KiPI guessed U3[1] and U4[1]" in sw.stand_ins
@@ -685,3 +686,95 @@ def test_the_example_passes_and_its_tight_copy_fails(tmp_path, capsys):
                  "--out", str(tmp_path)]) == EXIT_LIMIT
     doc = json.loads(capsys.readouterr().out)
     assert [e["item"] for e in doc["failed"]] == ["SIG_LOOP"]
+
+
+def test_a_phase_without_its_hot_loop_capacitors_is_not_judged():
+    """Without the phase's input capacitors KiPI takes a buck's hot loop as the package alone:
+    SIG_LOOP's 655 mV falls to under 1 mV. That must never pass."""
+    from coppernicus.engine.noise import solve_aggressor
+    from coppernicus.engine.synthetic import coupled_noise_project
+    p = coupled_noise_project(qrr_nc=5.0, logic_v=3.3)
+    p.aggressors[0].phases[0].input_caps = []
+    r = solve_aggressor(_board(), p, "U1")
+    loop = r.victim("SIG_LOOP")
+    assert loop.peak_v < 0.01 and loop.passed is None
+    assert loop.not_judged.startswith("no input capacitors on phase 1:")
+    assert r.verdict == "not_judged"
+
+
+def test_an_off_table_logic_v_sets_no_margin_and_a_rated_model_is_derated():
+    p = _project()
+    for v in p.victims:
+        v.logic_v = 0.9
+    p.capacitors[0].rated_v = 25.0
+    r = _quick(p)
+    assert all(v.margin_v is None and v.passed is None for v in r.victims)
+    assert r.not_judged == [] and r.verdict == "not_judged"
+    assert "Victim SIG_SW: logic_v 0.9 V is not in KiPI's JESD8 table: enter noise_margin_v" in r.warnings
+    assert "DC bias: rated capacitors derated at the rails' nominal voltages, 12 V and 1.8 V; no DC " \
+        "solve is passed." in r.assumptions
+
+
+def test_no_current_loops_at_all_leave_inductive_coupling_out():
+    """No inductor and no capacitors on the phase: KiPI's own "No capacitor loops" flag."""
+    p = _project()
+    ph = p.aggressors[0].phases[0]
+    ph.inductor, ph.input_caps, ph.output_caps = "", [], []
+    for v in p.victims:
+        v.noise_margin_v = 1.0
+    r = _quick(p)
+    assert all("inductive coupling left out: no capacitor loops (set the switching device's pins and "
+               "the capacitors)" in v.stand_ins for v in r.victims)
+
+
+def test_an_assumed_dielectric_is_a_stand_in():
+    from coppernicus.engine import Board
+    from coppernicus.engine.noise import solve_aggressor
+    from coppernicus.engine.synthetic import coupled_noise_board
+    snap = coupled_noise_board()
+    snap.stackup.dielectrics[1].epsilon_r = 0.0
+    p = _project()
+    p.noise = NoiseOptions(board_model=False)
+    r = solve_aggressor(Board(snap), p, "U1")
+    assert any(x.startswith("εr assumed: the stackup gives no εr for FR4 1000 µm (In1.Cu–In2.Cu), so "
+                            "4.3 is used (ac.default_er)") for x in r.stand_ins)
+    assert any("Where the stackup gives no εr, 4.3 is used (ac.default_er)." in a for a in r.assumptions)
+
+
+def test_the_assumption_lines(entered):
+    lines = entered.assumptions
+    for lead in ("Coupled noise (KiPI): the converter's waveforms are exact Fourier series of "
+                 "piecewise-linear periods, 1592 harmonics of 1 MHz to 1592 MHz (ten times",
+                 "Operating point: Topology: buck (from the voltages); Vin 12 V",
+                 "Phase 1: hot loop 2.07 nH (traced through the copper), switch node 303.9 pF (Coss "
+                 "300 pF entered + copper 3.87 pF); rings at 200.5 MHz, ζ 0.05 (at least min_ring_zeta",
+                 "Phase 1: hard edge with Qrr 5 nC (entered); soft edge damped at least soft_edge_zeta "
+                 "0.5; dead time 20 ns (noise.dead_time_ns, KiPI's 20 unless set); on-resistance 10 mΩ "
+                 "for damping (KiPI's 10 mΩ); package loop 0 nH.",
+                 "Capacitors on VIN and VOUT: ESR + jω·ESL + 1/(jω·C), 2 modelled.",
+                 "Board model: the copper of VIN / VOUT and GND as AC mode's 2.5D field model,",
+                 "Dielectric εr, top to bottom: FR4 200 µm εr 4.5, FR4 1000 µm εr 4.5, FR4 200 µm εr "
+                 "4.5; solder mask εr 3.5 (KiPI's typical LPI)",
+                 "Victims: traces cut every 0.5 mm with copper within 3 mm",
+                 "Victim SIG_LOOP: CMOS push-pull, driver 33 Ω, receiver 1e+06 Ω ∥ 3 pF; ends U5[1] → "
+                 "U6[1] (entered).",
+                 "Victim SIG_LOOP: margin 800 mV from the JESD8 levels of a 3.3 V family",
+                 "Victim sw lvds: Differential leg (LVDS), driver 50 Ω, receiver 1e+06 Ω ∥ 3 pF, "
+                 "termination 50 Ω;",
+                 "Victim sw lvds: margin 100 mV from preset lvds;",
+                 "Inductor L1: shielded, winding axis vertical (KiPI's defaults: vertical, shielded).",
+                 "Near field 5 mm over the top copper and a radiated estimate at 3 m",
+                 "Via plating:",
+                 "Ripple at LOAD: the board model's voltage between its pins (VOUT − GND)",
+                 "Ripple at input: the board model's voltage between its pins (VIN − GND)"):
+        assert any(x.startswith(lead) for x in lines), lead
+
+
+def test_the_estimate_leaves_the_board_model_out_where_the_solve_would():
+    from coppernicus.engine.noise import mesh_estimate
+    p = _project()
+    ph = p.aggressors[0].phases[0]
+    ph.low_side_ref, ph.low_side_pins, ph.low_side_net = "", None, ""
+    size = mesh_estimate(_board(), p, "U1")
+    assert not size.board_model and size.note.startswith("Board model left out (phase 1 needs")
+    assert mesh_estimate(_board(), _project(), "U1").board_model

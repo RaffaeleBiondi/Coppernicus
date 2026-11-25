@@ -366,8 +366,10 @@ def solve_aggressor(board: Board, project: Project, name: str,
     ``fsw_hz``, else its regulator's (``Source.fsw_hz``; ``fields_rails`` as
     :func:`noise_setup`), else the solve is refused. ``partial`` receives the result as KiPI
     hands it over during the solve (the waveforms first, ``partial=True``, no verdict).
-    ``progress``, ``fraction``, ``partial`` and ``cancelled`` are called from the thread that
-    solves: a GUI must only emit signals from them. KiPI's ``NoiseError`` and the board
+    ``progress`` (and ``cancelled``, checked with each message) is also called from KiPI's
+    worker threads while the board model solves frequencies side by side (kipi/ac/solver/
+    field.py:85-126); ``fraction`` and ``partial`` from the thread that solves: a GUI must
+    only emit signals from them. KiPI's ``NoiseError`` and the board
     model's mesh and pad errors become :class:`EngineError`, a cancel :class:`Cancelled`; no
     KiPI object is kept."""
     from coppernicus.coupled_noise import judge
@@ -493,6 +495,17 @@ def _stand_ins(board: Board, project: Project, c: _Context, res, hot: List[HotLo
                        "the hard edge (enter 0 for a Schottky or GaN low side)")
     if missing:
         out.append(f"capacitors on the converter's rails without a model: {_listed(missing)}")
+    # KiPI draws current loops only for the phases' own capacitors (parasitics.py:661-669):
+    # without them on the hot-loop side the hot loop is the package alone and couples
+    # nothing; without them on the other side those loops' coupling is left out.
+    hot_side = "input" if res.operating.topology == "buck" else "output"
+    for i, ph in enumerate(c.agg.phases, 1):
+        for side in ("input", "output"):
+            if getattr(ph, f"{side}_caps"):
+                continue
+            what = ("KiPI takes the hot loop as the package alone, so its loop couples nothing"
+                    if side == hot_side else "their current loops' inductive coupling is left out")
+            out.append(f"no {side} capacitors on phase {i}: {what} (set the phase's {side}_caps)")
     assumed = _dielectric(board, project.ac.default_er)[1]
     if assumed:
         out.append(f"εr assumed: {assumed}")
@@ -749,12 +762,13 @@ class _Warnings:
 # A whole noise solve's peak memory, measured on synthetic boards (gate T10 §9: KiPI's buck
 # board with two probes, its coupled-noise board meshed at 1.0 and 0.3 mm, KiPI's four-phase
 # example; 9 691 to 175 084 unknowns, peak RSS 0.55 to 5.05 GB): 0.2 GB plus 26 to 36 kB per
-# unknown. The larger figure is used: an upper bound (a real rail of T9's took about 8 kB per
-# unknown; fill-in depends on the copper).
+# unknown. The larger figure is used: an upper bound (fill-in depends on the copper: other
+# boards may need less).
 NOISE_MEM_BASE_BYTES = 0.2e9
 NOISE_MEM_PER_UNKNOWN = 36e3
 NOISE_MEM_UNKNOWNS = (9_691, 175_084)
-# Unknowns per triangle of the noise mesh: 0.80 to 0.85 on those boards, 0.95 on T9's rail.
+# Unknowns per triangle of the noise mesh: 0.80 to 0.85 on those boards; 0.95 is a chosen
+# upper figure.
 NOISE_UNKNOWNS_PER_TRIANGLE = 0.95
 
 
@@ -771,6 +785,7 @@ class NoiseSize:
     harmonics: int
     f_max_hz: float
     mesh_seconds: float
+    note: str = ""                 # why the board model will be left out, as the solve warns
 
     @property
     def unknowns(self) -> int:
@@ -784,7 +799,9 @@ def mesh_estimate(board: Board, project: Project, name: str,
                   fields_rails: Sequence[str] = ()) -> NoiseSize:
     """Mesh the aggressor's rails and ground as the solve's board model will (KiPI's
     ``board_ports`` and ``mesh_rail_and_ground``) and count its ports and field solves; it
-    checks the setup as the solve does. Seconds on a large board; no field solve runs."""
+    checks the setup as the solve does. Seconds on a large board; no field solve runs. Where
+    the board model cannot be built the solve leaves it out with a warning, and so does this:
+    ``board_model`` False and ``note`` saying why."""
     thickness = dict(project.settings.copper_thickness_mm or {})
     board = board.with_copper_thickness(thickness) if thickness else board
     c = _context(board, project, name, fields_rails)
@@ -812,8 +829,11 @@ def mesh_estimate(board: Board, project: Project, name: str,
                                            _NoiseProgress(progress, cancelled, None))
     except Canceled as e:
         raise Cancelled("cancelled") from e
-    except (NoiseError, ACError, SolveError, MeshError) as e:
+    except NoiseError as e:
         raise EngineError(f"Noise solve of {name}: {e}") from e
+    except (ACError, SolveError, MeshError) as e:          # the solve warns and goes on
+        return NoiseSize(name, False, 0, 0, 0, 0, k, f_max, time.perf_counter() - t0,
+                         f"Board model left out ({e})")
     return NoiseSize(name, True, int(mesh.n_tris), int(mesh.n_nodes), len(bp.ports), solves, k,
                      f_max, time.perf_counter() - t0)
 

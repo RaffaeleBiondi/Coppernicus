@@ -892,9 +892,12 @@ these defaults; `engine.noise.kipi_noise_choices()` reads KiPI's and a test comp
   field_solves, field_seconds (read from KiPI's progress lines), memory_peak_mb,
   memory_peak_raised}.
 - `solve_aggressor(…, partial=)` hands over KiPI's partial results converted
-  (`partial=True`, no verdict): the waveforms first (solver.py:283). Its `progress`, `fraction`,
-  `partial` and `cancelled` run in the solving thread. `NoiseError`, `ACError`, `SolveError`
-  and `MeshError` become `EngineError`; KiPI's `Canceled` becomes `Cancelled`.
+  (`partial=True`, no verdict, no stand-ins, no assumptions): the waveforms first
+  (solver.py:283). `NoiseError`, `ACError`, `SolveError`
+  and `MeshError` become `EngineError`; KiPI's `Canceled` becomes `Cancelled`. `progress` (and
+  `cancelled`, checked with each message) is also called from KiPI's worker threads while the
+  board model solves frequencies side by side (kipi/ac/solver/field.py:85-126); `fraction` and
+  `partial` from the solving thread: a GUI must only emit signals from them.
 
 ### Verdicts (brief Q2-Q4; only the user's margins)
 
@@ -915,7 +918,11 @@ while any KiPI stand-in is in play:
   model: {refs}" (KiPI's `rail_caps` with the board model, else the phases' capacitors); "εr
   assumed: {why}" (T9's rule); "capacitive coupling left out: no switch net on any phase";
   "harmonics stop at {f} MHz (noise.max_harmonics {k})"; "shared-ground coupling left out: board
-  model off (noise.board_model)" or "… board model left out ({KiPI's reason})";
+  model off (noise.board_model)" or "… board model left out ({KiPI's reason})"; "no {input |
+  output} capacitors on phase {i}: …" (KiPI draws current loops only for the phases' own
+  capacitors, parasitics.py:661-669: without them on the hot-loop side the hot loop is the
+  package alone and couples nothing, a false pass this rule closes; on the other side those
+  loops' coupling is left out);
 - per victim: "driver and receiver not both entered: KiPI guessed {d} and {r}"; "inductive
   coupling left out: no capacitor loops (set the switching device's pins and the capacitors)";
   "nothing coupled: {net} has no tracks"; "driver or receiver pins not on the board";
@@ -989,16 +996,18 @@ never judged); the via plating and what-if thickness, as in DC; the copper tempe
   board; no field solve) and counts triangles, nodes, ports and the field solves, the latter
   from the edges or `noise.f_max_hz` (the ringing may add a few: KiPI takes 3·f_ring when
   higher). Without the board model it meshes nothing. A test checks its triangles, ports and
-  field solves equal the solve's.
+  field solves equal the solve's. Where the board model cannot be built (a phase without its
+  pins or an inductor pad on the rail) the solve leaves it out with a warning, and so does the
+  estimate (`board_model` False, `note` saying why).
 - `noise_cost_estimate(size, last)`: T9's `cost_estimate` with the field solves as its
   frequencies, scaled from an earlier noise solve's `stats`.
 - `noise_ram_estimate(unknowns, total)`: the whole solve's peak, an **upper bound** measured on
   synthetic boards (gate T10 §9: 0.2 GB + 26 to 36 kB per unknown from 9 691 to 175 084
-  unknowns; 36 kB is used), unknowns ≈ 0.95 × triangles (0.80 to 0.85 on those boards, 0.95 on
-  T9's real rail). T9's fit (one factorization, ~3.4 GB at 175 k unknowns) is not reused: that
-  point measured 5.05 GB for the whole noise solve. A real board's copper may need less (T9's
-  real rail took about 8 kB per unknown). `risk` above the machine's memory.
-- A run on this machine (M-series, other agents running): `coppernicus noise
+  unknowns; 36 kB is used), unknowns ≈ 0.95 × triangles (0.80 to 0.85 on those boards; 0.95 is a
+  chosen upper figure). T9's fit (one factorization, ~3.4 GB at 175 k unknowns) is not reused:
+  that point measured 5.05 GB for the whole noise solve. Fill-in depends on the copper: other
+  boards may need less. `risk` above the machine's memory.
+- A run on this machine (M-series): `coppernicus noise
   examples/noise/noise.coppernicus.yml` takes 5.2 s wall (3.8 s in the solve: 15 534 triangles,
   12 101 unknowns, 8 ports, 34 field solves), 680 MB peak RSS. Larger meshes start KiPI's
   mesher worker processes: scripts that solve need `if __name__ == "__main__":`.
