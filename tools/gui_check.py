@@ -1577,6 +1577,43 @@ def run_hover_pixels(window, check: Checks, args, out: Path):
     window.dirty = False
 
 
+def run_hover_close(window, check: Checks, out: Path):
+    """A board view closed (as when the window closes) ignores a late mouse move: no hover
+    readout, no timer, no traceback."""
+    from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.app.board_view import BoardView
+    other = BoardView()
+    other.resize(400, 300)
+    other.show()
+    QApplication.processEvents()
+    other.close()
+    QApplication.processEvents()
+    errors, hook = [], sys.excepthook
+    sys.excepthook = lambda kind, value, tb: errors.append(f"{kind.__name__}: {value}")
+    try:
+        widget, at = other.plotter.interactor, QPoint(200, 150)
+        move = QMouseEvent(QEvent.MouseMove, QPointF(at), QPointF(widget.mapToGlobal(at)), Qt.NoButton,
+                           Qt.NoButton, Qt.NoModifier)
+        QApplication.sendEvent(widget, move)
+        armed = other._hover_timer.isActive()
+        QTest.qWait(80)                                    # a timer left running fires now
+        other._hover_at = QPoint(200, 150)                 # and a tick already queued returns
+        try:
+            other._hover_tick()
+        except Exception as e:                             # noqa: BLE001 - reported below
+            errors.append(f"{type(e).__name__}: {e}")
+    finally:
+        sys.excepthook = hook
+    check("hover: a mouse move after the view closed starts no readout and raises nothing",
+          not armed and not errors and not other.hover_label.isVisible(),
+          f"timer started {armed}, errors {errors}")
+    other.deleteLater()
+
+
 def run_hover_local(window, check: Checks, args):
     """The hover readout on the local rail run_local left shown: one reading, and 200 moves
     timed (real window)."""
@@ -1740,6 +1777,7 @@ def main(argv=None) -> int:
         run_report(window, check, args, out)
         run_open_asks(window, check, out)
         run_hover(window, check, args, out)
+        run_hover_close(window, check, out)
         if args.window:
             run_hover_pixels(window, check, args, out)
         run_copper_thickness(window, check, args, out)

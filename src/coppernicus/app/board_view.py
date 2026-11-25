@@ -577,7 +577,7 @@ class BoardView(QWidget):
         return super().eventFilter(watched, event)
 
     def _hover_tick(self):
-        if self._hover_at is None:
+        if self._hover_at is None or self.plotter.iren is None:     # None: the view has closed
             return
         # The pointer's display point as VTK received it, as a click in pick mode reads it.
         text = self.hover_at(*self.display_to_board(*self._event_xy()))
@@ -602,7 +602,8 @@ class BoardView(QWidget):
         self.hover_label.hide()
 
     def closeEvent(self, event):
-        self._hover_timer.stop()
+        self.plotter.interactor.removeEventFilter(self)    # a late move starts no readout
+        self._hide_hover()
         self.plotter.close()
         super().closeEvent(event)
 
