@@ -1,0 +1,5 @@
+# The build tools of the packaged app (packaging/build_macos.sh, build_windows.ps1), installed
+# into the build environment only: they are not dependencies of Coppernicus, and uv.lock does
+# not list them.
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
