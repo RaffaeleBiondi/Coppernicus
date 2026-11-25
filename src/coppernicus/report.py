@@ -766,6 +766,125 @@ def write_noise_report(doc: Mapping[str, Any], path, *, project: str = "", board
     return out
 
 
+TOLERANCE_PAGE_CSS = NOISE_PAGE_CSS + "\n" + "td.missing { color: #b26a00; font-style: italic; }"
+
+
+def write_tolerance_report(doc: Mapping[str, Any], path, *, project: str = "", board_name: str = "",
+                           title: str = "") -> Path:
+    """One offline HTML page of a ``tolerance`` document (``coppernicus tolerance``'s summary):
+    the verdict, every failed and not-judged entry (those with no load row too: a misspelt key,
+    a tolerance lost to a KiCad-fields rail), the warnings, and per load its four parts (mV
+    below / above nominal, where each came from; a missing one says so, with its least value
+    and what to do, never as 0), KiPI's transient estimate (shown, never judged) and the three
+    checks (tolerance, total, allowed, margin, verdict, reason); then the assumptions and each
+    solve's estimate."""
+    from coppernicus.tolerance import CHECK_NAMES, PART_NAMES, PARTS
+
+    def esc(x) -> str:
+        return html.escape(str(x if x is not None else "–"))
+
+    def side(x) -> str:
+        return "–" if x is None else f"{x:.4g}"
+
+    def pair(below, above) -> str:
+        return f"{side(below)} / {side(above)} mV"
+    failed = list(doc.get("failed", []))
+    entries = "".join(
+        f"<tr><td>{esc(e.get('item'))}</td><td>{esc(e.get('net'))}</td><td>{esc(e.get('limit'))}</td>"
+        f"<td{' class=fail' if tag == 'FAIL' else ''}>{tag}</td><td>{esc(e.get('reason'))}</td></tr>"
+        for tag, items in (("FAIL", failed), ("not judged", doc.get("not_judged", []))) for e in items)
+    parts = []
+    for ld in doc.get("loads", []):
+        nominal = "no nominal" if ld.get("nominal_v") is None else f"nominal {ld['nominal_v']:g} V"
+        via = f" from {ld['source']}" if ld.get("source") else ""
+        probe = f", probe {ld['probe']}" if ld.get("probe") else ""
+        verdict = {"pass": "PASS", "fail": "FAIL", "not_judged": "NOT JUDGED"}.get(
+            ld.get("verdict"), "No tolerance set: the parts are shown, not judged")
+        rows = []
+        for kind in PARTS:
+            p = (ld.get("parts") or {}).get(kind)
+            if p is None:                 # missing, never 0: its least value where known, and why
+                f = (ld.get("floors") or {}).get(kind)
+                least = f"; at least {pair(f['below_mv'], f['above_mv'])} ({f['source']})" if f else ""
+                rows.append(f"<tr><td>{esc(PART_NAMES[kind])}</td><td colspan=2 class=missing>"
+                            f"{esc('missing' + least)}</td><td>–</td>"
+                            f"<td>{esc((ld.get('hints') or {}).get(kind, ''))}</td></tr>")
+            else:
+                rows.append(f"<tr><td>{esc(PART_NAMES[kind])}</td>"
+                            f"<td class=num>{esc(side(p['below_mv']))}</td>"
+                            f"<td class=num>{esc(side(p['above_mv']))}</td><td>{esc(p.get('source'))}</td>"
+                            f"<td>{esc(p.get('detail') or '')}</td></tr>")
+        checks = []
+        for kind, c in (ld.get("checks") or {}).items():
+            if not c.get("limit"):
+                continue
+            passed = c.get("passed")
+            tag = "FAIL" if passed is False else "PASS" if passed else "not judged"
+            if passed is False:           # a failed check's words are in the document's failed list
+                key = (ld.get("load"), ld.get("net"), c["limit"])
+                reason = next((e.get("reason") for e in failed
+                               if (e.get("item"), e.get("net"), e.get("limit")) == key), c.get("reason"))
+            elif passed:
+                reason = "within it on both sides, every part known"
+            else:
+                reason = c.get("reason")
+            total = pair(c.get("below_mv"), c.get("above_mv"))
+            allowed = pair(c.get("allowed_below_mv"), c.get("allowed_above_mv"))
+            margin = pair(c.get("margin_below_mv"), c.get("margin_above_mv"))
+            if not c.get("complete"):     # its sum is a least value, so its margin a most
+                total += f" (at least: {', '.join(c.get('missing') or [])} missing)"
+                margin += " (at most)" if c.get("margin_below_mv") is not None else ""
+            checks.append(f"<tr><td>{esc(CHECK_NAMES.get(kind, kind))}</td><td>{esc(c['limit'])}</td>"
+                          f"<td class=num>{esc(total)}</td><td class=num>{esc(allowed)}</td>"
+                          f"<td class=num>{esc(margin)}</td><td{' class=fail' if tag == 'FAIL' else ''}>"
+                          f"{tag}</td><td>{esc(reason)}</td></tr>")
+        e = ld.get("transient_estimate")
+        estimate = (f"<p>KiPI's transient estimate at {esc(ld.get('probe'))} (shown, never judged): "
+                    f"{esc(pair(e.get('below_mv'), e.get('above_mv')))} below / above nominal, "
+                    f"{esc(pair(e.get('below_20mhz_mv'), e.get('above_20mhz_mv')))} through 20 MHz.</p>"
+                    if e else "")
+        stand = ("<p>KiPI stand-ins behind an aggressor's ripple (its value not used): "
+                 + esc("; ".join(ld["stand_ins"])) + "</p>" if ld.get("stand_ins") else "")
+        parts += [f"<section><h2>Load {esc(ld.get('load'))} on {esc(ld.get('net'))} <span class=muted>"
+                  f"({esc(nominal + via + probe)})</span></h2>", f"<p class=verdict>{esc(verdict)}</p>",
+                  "<h3>Parts</h3><div class=scroll><table><thead><tr><th>Part</th>"
+                  "<th class=num>Below nominal (mV)</th><th class=num>Above nominal (mV)</th><th>From</th>"
+                  f"<th>Detail, or what to do</th></tr></thead><tbody>{''.join(rows)}</tbody></table></div>",
+                  estimate, stand,
+                  ("<h3>Checks</h3><div class=scroll><table><thead><tr><th>Check</th><th>Tolerance</th>"
+                   "<th class=num>Total below / above</th><th class=num>Allowed below / above</th>"
+                   "<th class=num>Margin below / above</th><th>Verdict</th><th>Reason</th></tr></thead>"
+                   f"<tbody>{''.join(checks)}</tbody></table></div>") if checks else "", "</section>"]
+    head = title or f"Coppernicus tolerance stack-up: {project or board_name}"
+    where = " · ".join(x for x in (f"Project {project}" if project else "",
+                                   f"board {board_name}" if board_name else "") if x)
+    warns = "".join(f"<li>{esc(w)}</li>" for w in doc.get("warnings", []))
+    notes = "".join(f"<li>{esc(a)}</li>" for a in doc.get("assumptions", []))
+    costs = "".join(f"<li>{esc(e.get('solve'))}: {esc(e.get('text'))}</li>" for e in doc.get("estimates", []))
+    page = "\n".join([
+        "<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
+        '<meta name="viewport" content="width=device-width, initial-scale=1">',
+        f"<title>{esc(head)}</title>", f"<style>{TOLERANCE_PAGE_CSS}</style></head><body>",
+        f"<h1>{esc(head)}</h1>", f"<p class=muted>{esc(where)}</p>",
+        f"<p class=verdict>Verdict: {esc(doc.get('verdict'))}. {esc(doc.get('verdict_note', ''))}</p>",
+        ("<h3>Failed and not judged</h3><div class=scroll><table><thead><tr><th>Load</th><th>Net</th>"
+         "<th>Tolerance</th><th>Verdict</th><th>Reason</th></tr></thead>"
+         f"<tbody>{entries}</tbody></table></div>") if entries else "",
+        f"<h3>Warnings</h3><ul>{warns}</ul>" if warns else "",
+        *parts,
+        f"<details><summary>Assumptions</summary><ul>{notes}</ul></details>",
+        f"<details><summary>Each solve's cost, estimated before it ran</summary><ul>{costs}</ul></details>"
+        if costs else "",
+        f"<p class=muted>Generated by Coppernicus {esc(__version__)}. Board files were only read. This "
+        "page works offline: everything it shows is inside this file. Verdicts only against the "
+        "tolerances set in the project file, a check judged only when every part is known (a missing "
+        "part is never 0); KiPI's transient estimate is shown, never judged.</p>", "</body></html>", ""])
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(page, encoding="utf-8")
+    return out
+
+
 def kind_label(p: Problem) -> str:
     """The word for a problem's kind on the page, from its own title: a ground's "rise" is a
     "ground shift" when its title says so (a ground below 0 V)."""

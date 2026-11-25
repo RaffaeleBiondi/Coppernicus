@@ -44,7 +44,10 @@ From a project file: solve_project (rails one by one, with maps) or solve_tree (
 power tree at once, ground return included; tables only; the board temperature with thermal);
 solve_ac for the PDN impedance |Z|(f) at the project's probes; solve_noise for a switcher's
 ripple and the noise it couples into victim nets, judged only against the user's noise
-margins (ripple and radiated estimate never judged). Both are heavy: read the estimate, and
+margins (ripple and radiated estimate never judged); solve_tolerance for each load's
+tolerance stack-up (DC drop + accuracy, ripple + transient), judged only against the
+tolerances the user set and only when every part is known (KiPI's transient estimate shown,
+never judged). All three are heavy: read the estimate, and
 ask the user before confirm_large. Set up a project for the user with
 write_project (read_project to see one); describe it as KiCad fields with propose_fields (the
 user pastes them; KiCad files are never written). Before/after a change in KiCad:
@@ -466,6 +469,43 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         (solve_too_large) unless confirm_large. Files go to this server's output folder."""
         bridge = _Bridge(ctx)
         return _call("solve_noise", session.solve_noise, project_path, aggressors,
+                     progress=bridge.progress, cancelled=bridge.cancelled,
+                     confirm_large=confirm_large, use_board_fields=use_board_fields)
+
+    @mcp.tool(annotations=WRITES_FILE)
+    def solve_tolerance(project_path: Annotated[str, Field(description="Absolute path to a "
+                                                                        "*.coppernicus.yml project file.")],
+                        ctx: Context,
+                        skip_ac: Annotated[bool, Field(
+                            description="No AC solve: KiPI's transient estimate (shown, never judged) "
+                                        "is left out.")] = False,
+                        skip_noise: Annotated[bool, Field(
+                            description="No noise solve: the ripple of the aggressors is left missing "
+                                        "(not judged).")] = False,
+                        confirm_large: Annotated[bool, Field(
+                            description="Solve even when an estimate exceeds this machine's memory "
+                                        "(otherwise refused with the estimate: solve_too_large). Ask the "
+                                        "user first.")] = False,
+                        use_board_fields: Annotated[Optional[bool], Field(
+                            description="false: ignore the board's KiCad footprint fields.")] = None,
+                        ) -> dict[str, Any]:
+        """Each load's tolerance stack-up (tol_*, dc_tol_*, ac_tol_* on the loads, accuracy_* on
+        the sources, ripple_mv / transient_mv entered, tolerance: in the project file): per load
+        and per side (below and above nominal) the DC drop on its worst pins (power tree) + its
+        source's DC accuracy, against the DC tolerance; ripple (the aggressors listing its
+        probe, or ripple_mv) + transient (transient_mv), against the AC tolerance; their total,
+        against the tolerance. The same document as `coppernicus tolerance --json` (kind
+        tolerance, verdict, failed, not_judged, per load its parts with where each came from,
+        hints for a missing part, floors, checks with allowed, margin and reason; assumptions,
+        warnings, estimates, csv_file). The verdict comes only from the tolerances the user set,
+        and a check is judged only when every part is known: a missing part is never 0, so a
+        check can fail on its known parts but passes only with all of them. KiPI's transient
+        estimate is shown, never judged. Heavy where a load with a tolerance needs an AC or
+        noise solve: every solve is sized first, in `estimates`; over this machine's memory
+        nothing is solved and the call is refused (solve_too_large) unless confirm_large. Files
+        go to this server's output folder."""
+        bridge = _Bridge(ctx)
+        return _call("solve_tolerance", session.solve_tolerance, project_path, skip_ac, skip_noise,
                      progress=bridge.progress, cancelled=bridge.cancelled,
                      confirm_large=confirm_large, use_board_fields=use_board_fields)
 

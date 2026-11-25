@@ -52,6 +52,14 @@ inputs:
       first). Its verdict, against the victims' noise margins only, sets the step's result (1
       fail, 3 not judged); the ripple and the radiated estimate are never judged.
     default: "false"
+  tolerance:
+    description: >-
+      Also run the tolerance stack-up of each project that sets a tolerance on a load (DC drop +
+      accuracy, ripple + transient; heavy only where a load needs an AC or noise solve, whose
+      size and memory estimate is printed in the log first). Its verdict, only against the
+      tolerances set and only when every part is known, sets the step's result (1 fail, 3 not
+      judged); KiPI's transient estimate is never judged.
+    default: "false"
   python-version:
     description: Python used to run Coppernicus (3.12 or 3.13).
     default: "3.12"
@@ -109,6 +117,7 @@ runs:
         COPPERNICUS_TREE: ${{ inputs.tree }}
         COPPERNICUS_AC: ${{ inputs.ac }}
         COPPERNICUS_NOISE: ${{ inputs.noise }}
+        COPPERNICUS_TOLERANCE: ${{ inputs.tolerance }}
       run: |
         # The results go to their own folder; nothing is written next to a board and nothing
         # is committed.
@@ -120,11 +129,13 @@ runs:
         if [ "$COPPERNICUS_AC" = "true" ]; then ac_flag="--ac"; fi
         noise_flag=""
         if [ "$COPPERNICUS_NOISE" = "true" ]; then noise_flag="--noise"; fi
+        tolerance_flag=""
+        if [ "$COPPERNICUS_TOLERANCE" = "true" ]; then tolerance_flag="--tolerance"; fi
         index="$COPPERNICUS_OUT/coppernicus-ci.json"
         rm -f "$index"
         uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -m coppernicus.ci solve \
           --out "$COPPERNICUS_OUT" --top "$COPPERNICUS_TOP" $html_flag $tree_flag $ac_flag $noise_flag \
-          "$COPPERNICUS_PROJECTS" || true
+          $tolerance_flag "$COPPERNICUS_PROJECTS" || true
         # The exit code and verdict come from the index the helper writes: a crash also exits
         # with 1, which must not read as "limit exceeded". No index means an error.
         result=$(uv run --project "$GITHUB_ACTION_PATH" --frozen --no-dev python -c \

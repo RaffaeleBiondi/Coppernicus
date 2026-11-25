@@ -1117,6 +1117,52 @@ class Session:
         summary_path.write_text(text, encoding="utf-8")
         return json.loads(text)
 
+    def solve_tolerance(self, project_path, skip_ac: bool = False, skip_noise: bool = False, out_dir=None,
+                        confirm_large: bool = False, progress: Progress = None, cancelled: Cancel = None,
+                        use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
+        """Each load's tolerance stack-up, as ``coppernicus tolerance --json`` does, through the
+        same run (:mod:`coppernicus.service.tolerance`: the KiCad fields merged, the project's
+        tolerances carried by ref onto a fields rail, the misspelt keys): the
+        ``<project>_tolerance_summary.json`` document (verdict only against the tolerances the
+        user set, a check judged only when every part is known; KiPI's transient estimate shown,
+        never judged), with the CSV and the summary written into ``out_dir`` (default: this
+        session's folder, never next to the board). Before anything heavy, every solve it needs
+        is sized (the board temperature, each AC and noise solve, in ``estimates``); when one
+        would exceed this machine's memory nothing is solved and the call is refused
+        (``solve_too_large``) unless ``confirm_large``. ``skip_ac`` / ``skip_noise`` leave those
+        solves out: KiPI's estimate is not shown, the aggressors' ripple is missing."""
+        from coppernicus.maps import safe_file_name
+        from coppernicus.service import tolerance as run
+        from coppernicus.tolerance import tolerance_summary, write_csv
+        started = time.perf_counter()
+        path, loaded, _, entry = self._open_project(project_path)
+        merged = self._merge_board_fields(path, loaded, entry, use_board_fields)
+        with self._solve_lock:
+            try:
+                plan = run.plan(entry.board, path, loaded, merged, skip_ac=bool(skip_ac),
+                                skip_noise=bool(skip_noise), progress=progress, cancelled=cancelled,
+                                started=started)
+                big = plan.too_large()
+                if big and not confirm_large:
+                    raise ServiceError(E.SOLVE_TOO_LARGE, f"{path.name}: {big[0]['solve']}: {big[0]['text']}",
+                                       run.too_large_hint(big))
+                result = run.solve(entry.board, plan, progress=progress, cancelled=cancelled)
+            except Cancelled:
+                raise ServiceError(E.CANCELLED, f"{path.name}: solve cancelled") from None
+            except EngineError as e:
+                raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}",
+                                   "fix the project file or the KiCad fields, then solve again") from None
+        folder = Path(out_dir) if out_dir else self.out_dir() / "tolerance"
+        folder.mkdir(parents=True, exist_ok=True)
+        stem = safe_file_name(path.stem)
+        csv_path = write_csv(result, folder / f"{stem}_tolerance.csv")
+        doc = tolerance_summary(result, csv_path.resolve().as_posix())
+        summary_path = folder / f"{stem}_tolerance_summary.json"
+        doc["summary_file"] = summary_path.resolve().as_posix()
+        text = json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False)
+        summary_path.write_text(text, encoding="utf-8")
+        return json.loads(text)
+
     # ================================================================== result queries
     def _record(self, result_id: str, heavy: bool = True) -> _ResultRecord:
         with self._lock:
