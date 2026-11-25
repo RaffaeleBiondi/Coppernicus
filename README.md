@@ -344,7 +344,9 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Board temperature (electro-thermal, with the power tree): temperature per layer, the copper heating the drop; `thermal:` in the project or `solve --thermal`; a verdict only against `max_temp_c` / `max_rise_c`. Example: `examples/demo/demo-thermal` | ✅ CLI and app: Temperature tab (options and limits, hottest copper per layer with the nearest part, history, a cost and memory estimate before solving, Cancel) and a Board temperature map with hover readout |
 | Board temperature for agents and CI: MCP `solve_tree` takes `thermal` and `thermal_options`, gives a size and memory estimate first and refuses a solve over this machine's memory unless confirmed (`solve_too_large`); a Board temperature section with each layer's map in the tree report; CI judges it with the `tree` input (1 fail, 3 not judged); rail by rail its limits are listed as NOT JUDGED | ✅ |
 | AC PDN impedance \|Z\|(f) per probe: `coppernicus ac PROJECT` (CSV + PNG); a verdict only against your target (or KiPI's formula from your tolerance, step and slew). Example: `examples/pdn` | ✅ CLI and app: Impedance tab (probes, capacitor models and sweep edited and picked on the board, cost and memory estimate before solving, \|Z\|(f) plot with your target and the not-judged band, Cancel, CSV/PNG export, Ctrl+I) |
-| DC-DC ripple and noise, tolerance budget | ⏳ (KiPI's engine has them) |
+| Ripple and coupled noise: `coppernicus noise PROJECT` wraps KiPI's solve_noise: the regulators' ripple and each victim's coupled noise at its receiver, judged only against a noise margin you set; not judged while one of KiPI's defaults stands in (Coss/Qrr, a missing switch net, a listed capacitor KiPI draws no loop for, harmonics cut short). Example: `examples/noise` | ✅ CLI; the app tab is next |
+| AC PDN impedance for agents and CI: MCP `solve_ac` (CSV/PNG paths, a size and memory estimate first, refused over this machine's memory unless confirmed), `coppernicus ac --html`, the Action's opt-in `ac` input (1 fail, 3 not judged) | ✅ |
+| Tolerance budget | ⏳ (KiPI's engine has it) |
 | Packaged app: macOS `.dmg`, Windows `.zip`; Triangle fetched once on first start, checked against `uv.lock` ([install](docs/install.md)) | ✅ macOS built and tried; Windows built by CI, not yet tried; unsigned |
 
 Tested on macOS. The test suite runs in CI on Ubuntu, macOS and Windows, all required; the desktop app itself has not been tried on Windows yet. The engine also reads ODB++
@@ -353,6 +355,7 @@ and HyperLynx files, which have not been tried through Coppernicus yet.
 ## More documentation
 
 - [Installing the packaged app](docs/install.md).
+- Feature guides: [power tree](docs/power-tree.md), [KiCad fields](docs/kicad-fields.md), [what-if and compare](docs/what-if-and-compare.md), [HTML report](docs/html-report.md), [board temperature](docs/thermal.md), [PDN impedance](docs/ac-impedance.md), [CI](docs/ci.md), [agents](docs/agents.md).
 - [How it works](docs/technical.md): architecture, physics, validation, repository layout.
 - [Stage-1 analysis of KiPI](docs/kipi-analysis.md), the engine underneath.
 - [Workstreams](docs/workstreams.md) and the [roadmap plan](docs/superpowers/plans/2026-11-24-coppernicus-roadmap.md).
