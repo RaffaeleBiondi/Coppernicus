@@ -44,13 +44,23 @@ MODULES = sorted(".".join(p.relative_to(SRC).with_suffix("").parts).removesuffix
 
 
 def _pyvista_vtk_modules():
-    """The VTK modules pyvista can load: the ones its lazy loader (pyvista._vtk) maps classes
-    to, plus those of its special loaders. PyInstaller cannot see these dynamic imports; it
-    sees instead ``from vtk import *`` under ``if TYPE_CHECKING`` in the same file, which would
-    bundle all of VTK (its ``vtk`` module is excluded below)."""
+    """The VTK modules pyvista can load. It imports them dynamically (its lazy loader,
+    pyvista._vtk, and the side-effect imports of pyvista.plotting._rendering_imports), which
+    PyInstaller cannot see; what it sees instead is ``from vtk import *`` under ``if
+    TYPE_CHECKING``, which would bundle all of VTK (the ``vtk`` module is excluded below).
+    Taken: the modules of the lazy loader's mapping, and every VTK module whose name appears
+    in the sources of pyvista, pyvistaqt, KiPI or Coppernicus."""
+    import importlib.util
+
     import pyvista._vtk as v
     names = set(v._CORE_MODULES) | set(v._PLOTTING_MODULES) | set(v._OPENGL_MODULES)
-    names |= {"vtkPythonContext2D", "vtkRenderingCore", "vtkRenderingOpenGL2", "vtkCommonDataModel"}
+    vtk_dir = Path(importlib.util.find_spec("vtkmodules").origin).parent
+    available = {p.name.split(".")[0] for p in vtk_dir.glob("vtk*.*") if p.suffix in (".so", ".pyd")}
+    roots = [Path(importlib.util.find_spec(p).origin).parent for p in ("pyvista", "pyvistaqt", "kipi")]
+    for root in [*roots, SRC / "coppernicus"]:
+        for source in root.rglob("*.py"):
+            text = source.read_text(encoding="utf-8", errors="replace")
+            names |= set(re.findall(r"\b(vtk[A-Z][A-Za-z0-9]+)\b", text)) & available
     return sorted(f"vtkmodules.{n}" for n in names)
 
 

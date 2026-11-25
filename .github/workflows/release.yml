@@ -31,6 +31,13 @@ jobs:
         run: packaging/build_macos.sh
       - name: The packaged command line starts
         run: dist/Coppernicus.app/Contents/MacOS/Coppernicus --version
+      - name: First start (fetches triangle from PyPI) and the example's power tree
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}/coppernicus-site-packages
+        run: |
+          cp -R examples "$RUNNER_TEMP/examples"
+          dist/Coppernicus.app/Contents/MacOS/Coppernicus solve \
+            "$RUNNER_TEMP/examples/power_chain/power_chain.coppernicus.yml" --tree --html
       - uses: actions/upload-artifact@v7
         with:
           name: coppernicus-macos-arm64
@@ -55,6 +62,14 @@ jobs:
         shell: pwsh
         run: |
           dist\Coppernicus\coppernicus-cli.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: First start (fetches triangle from PyPI) and the example's power tree
+        shell: pwsh
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}\coppernicus-site-packages
+        run: |
+          Copy-Item -Recurse examples "$env:RUNNER_TEMP\examples"
+          dist\Coppernicus\coppernicus-cli.exe solve "$env:RUNNER_TEMP\examples\power_chain\power_chain.coppernicus.yml" --tree --html
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v7
         with:

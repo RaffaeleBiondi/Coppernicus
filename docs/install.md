@@ -84,6 +84,20 @@ it, and on its first start:
 After that Coppernicus works offline. The command line does the same on its first use, with
 progress lines on the standard error stream.
 
+**One copy, checked at every start.** Each start reads the marker file
+`.coppernicus-triangle.json` in that folder (the version installed and the SHA-256 of the wheel
+it came from) and checks the SHA-256 of every installed file against the list the wheel
+carries (its `RECORD`). This takes milliseconds and needs no network. The dialog and the
+download come back only when the pinned version is missing or fails this check. When an update
+of Coppernicus pins another version of `triangle`, the new one is installed in one step and the
+old version's files are deleted: versions never pile up. Anything else found in or beside the
+folder (a damaged or partial copy, a download that was interrupted) is deleted at start.
+
+**The folder and its size.** About 4.5 MB on disk (81 files: the `triangle` package, with
+its example meshes, and its `triangle-<version>.dist-info`), from a 1.4 MB download. Beside it,
+in the same `Coppernicus` folder, the app keeps matplotlib's font cache (`matplotlib`, under
+1 MB) and a zero-byte lock file used while installing.
+
 **If the download fails** (no network, a proxy, PyPI unreachable), Coppernicus says why and
 installs nothing. Check the connection and click **Retry**, or start Coppernicus again later.
 The download uses the system's proxy settings and honours the `HTTPS_PROXY` variable.
@@ -105,7 +119,18 @@ Coppernicus.exe
 The SHA-256 is checked whatever the source. `COPPERNICUS_SITE_PACKAGES` moves the folder
 Triangle goes into (it is used by the tests).
 
-**Removing Triangle.** Delete the `site-packages` folder above; Coppernicus downloads it again
+**Removing Triangle.** Run the app with `--remove-triangle`:
+
+```sh
+/Applications/Coppernicus.app/Contents/MacOS/Coppernicus --remove-triangle
+```
+
+```bat
+coppernicus-cli.exe --remove-triangle
+```
+
+It deletes the folder (and anything an interrupted download left) and says how much it freed.
+Deleting the `site-packages` folder by hand does the same. Coppernicus downloads Triangle again
 on its next start. To remove Coppernicus completely, delete the app (or the extracted folder),
 that `Coppernicus` folder (it also holds matplotlib's font cache), and the app's settings (macOS:
 `~/Library/Preferences/com.coppernicus.Coppernicus.plist`; Windows: the registry key
