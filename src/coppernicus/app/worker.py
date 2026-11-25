@@ -63,6 +63,11 @@ class TreeWorker(QThread):
     def cancel(self):
         self._cancel = True
 
+    @property
+    def cancelled(self) -> bool:
+        """Cancel was asked: its "Solve cancelled" failure is expected, not an error."""
+        return self._cancel
+
     def run(self):
         from coppernicus.engine.tree import solve_project_tree
         try:

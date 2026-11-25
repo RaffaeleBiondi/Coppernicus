@@ -61,6 +61,25 @@ def hover_text(values: Optional[HoverValues], chosen: Iterable[str]) -> str:
     return "\n".join(lines)
 
 
+def temperature_reading(t_c: float, cell_mm: float) -> str:
+    """The board temperature of one grid cell, as the double-click and the hover read it on
+    the "Board temperature" map: "T = 41.8 °C (0.24 mm cell)"; empty outside the board (NaN)."""
+    if not np.isfinite(t_c):
+        return ""
+    return f"T = {t_c:.1f} °C ({cell_mm:.3g} mm cell)"
+
+
+def temperature_hover_text(t_c: float, cell_mm: float, layer: str, chosen: Iterable[str]) -> str:
+    """The hover readout on the board-temperature map: the cell's temperature whenever the
+    readout is on (it replaces V, drop and |J|, which this map does not show), then the layer
+    if chosen. Empty when nothing is chosen or outside the board."""
+    chosen = set(chosen)
+    reading = temperature_reading(t_c, cell_mm)
+    if not chosen or not reading:
+        return ""
+    return f"{reading}\n{layer}" if "layer" in chosen else reading
+
+
 def chosen_from_setting(text: Optional[str]) -> Tuple[str, ...]:
     """The chosen values from their stored setting ("v,drop"): ``None`` (never set) gives
     :data:`HOVER_DEFAULT`, an empty string none. Unknown keys are dropped."""

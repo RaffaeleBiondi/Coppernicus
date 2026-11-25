@@ -35,6 +35,8 @@ from coppernicus.app.hover import (  # noqa: E402
     hover_values,
     label_position,
     setting_from_chosen,
+    temperature_hover_text,
+    temperature_reading,
 )
 
 # TriangleLocator is also re-exported here for code that imported it from this module.
@@ -48,6 +50,8 @@ FIELDS = {
     "current": ("Current density (A/mm²)", "magma"),
     # Before/after: two hues and a light neutral midpoint (no change).
     "difference": ("Δ drop vs baseline (mV)", "RdBu_r"),
+    # The board temperature of the power tree's electro-thermal solve (show_temperature).
+    "temperature": ("Board temperature (°C)", "inferno"),
 }
 J_CLIP_PERCENTILE = 99.5
 SOURCE_COLOR, LOAD_COLOR, OUTLINE_COLOR, COPPER_COLOR = "#1a9850", "#d73027", "#555555", "#b87333"
@@ -57,6 +61,7 @@ CLICK_SLOP_PX = 3                 # a press and release closer than this is a cl
 # Isolines: dark on the drop/voltage map (viridis), light on the current map (magma, dark).
 ISOLINE_COLOR = {"drop": "#111111", "voltage": "#111111", "current": "#e8e8e8", "difference": "#111111"}
 ARROW_COLOR, ARROW_HALO, MEASURE_COLOR = "#ffffff", "#111111", "#0b62d6"
+OUTSIDE_COLOR, HOTTEST_COLOR = "#bfbfbf", "#00bfff"   # temperature map: as temperature.write_png
 ISOLINE_COUNT = 10
 MAX_ARROWS = 2000
 ARROW_CELLS = 36                  # arrows across the layer's larger side, before thinning
@@ -199,6 +204,7 @@ class BoardView(QWidget):
         self._measure: List[Tuple[str, float, float, float]] = []    # (layer, x, y, V): A, then B
         self._difference_mv: Optional[np.ndarray] = None             # per node, on the Δ map
         self._measure_result: Optional[RailResult] = None
+        self._temperature = None            # (TemperatureMap, cell mm) while the temperature map is shown
         # Hover readout: a move stores the pointer and starts the timer if it is idle, so a
         # moving pointer is probed every HOVER_MS, at its latest position.
         self.hover_label = QLabel(self.plotter.interactor)
@@ -225,6 +231,7 @@ class BoardView(QWidget):
         self.plotter.clear()
         self.colorbar.set_scale(None)
         self._layer, self._result, self._finder = None, None, None
+        self._temperature = None
 
     def show_board(self, outline: Sequence[np.ndarray], copper_rings: Sequence[np.ndarray] = (),
                    sources: Sequence[Tuple[str, Sequence]] = (), loads: Sequence[Tuple[str, Sequence]] = (),
@@ -304,6 +311,44 @@ class BoardView(QWidget):
         self._finder = TriangleLocator(layer.points, layer.tris)
         self._add_measure()
         self._finish(fit)
+
+    def show_temperature(self, temp, layer_name: str, outline: Sequence[np.ndarray], fit: bool = False):
+        """The board temperature on copper layer ``layer_name`` of ``temp`` (a
+        :class:`~coppernicus.results.BoardTemperature`): one square per grid cell over the
+        whole board, grey outside it, every layer on one scale from the ambient to the board's
+        peak, the layer's hottest cell marked. The double-click and the hover read the cell
+        under the pointer. No isolines, arrows or measuring: they need a rail's copper."""
+        self.clear()
+        m = temp.map(layer_name)
+        d = m.cell_mm or float(temp.grid_mm) or 1.0
+        title, cmap = FIELDS["temperature"]
+        ny, nx = m.t_c.shape
+        # The view plots (x, −y): its first image row is the cell row with the largest y.
+        rows = m.t_c[::-1] if m.y_mm[-1] >= m.y_mm[0] else m.t_c
+        top = float(max(m.y_mm[0], m.y_mm[-1]))
+        grid = pv.ImageData(dimensions=(nx + 1, ny + 1, 1), spacing=(d, d, 1.0),
+                            origin=(float(m.x_mm[0]) - d / 2, -(top + d / 2), 0.0))
+        grid.cell_data[title] = np.ascontiguousarray(rows, dtype=float).ravel()
+        lo = float(temp.ambient_c)
+        hi = max(float(temp.peak_c), lo + 1e-9)
+        self.plotter.add_mesh(grid, scalars=title, cmap=cmap, clim=[lo, hi], nan_color=OUTSIDE_COLOR,
+                              show_edges=False, name="temperature", show_scalar_bar=False)
+        x, y, t = m.hottest()
+        self.plotter.add_point_labels(_xyz(np.array([[x, y]]), 0.03), [f"hottest {t:.2f} °C"],
+                                      point_color=HOTTEST_COLOR, point_size=12, font_size=11,
+                                      text_color=HOTTEST_COLOR, shape_opacity=0.0,
+                                      render_points_as_spheres=True, always_visible=True, name="hottest")
+        self.colorbar.set_scale(cmap, lo, hi, f"°C, every layer: ambient {lo:g} to the board peak "
+                                f"{hi:.2f}\n{d:.3g} mm cells")
+        self._add_outline(outline)
+        self._temperature = (m, d)
+        self._finish(fit)
+
+    def temperature_at(self, x: float, y: float) -> str:
+        """The double-click's reading on the temperature map at board point (x, y) mm."""
+        m, d = self._temperature
+        reading = temperature_reading(m.at(x, y), d)
+        return f"({x:.3f}, {y:.3f}) mm on {m.layer_name}: {reading or 'outside the board'}"
 
     def _add_isolines(self, result: RailResult, layer: LayerField, color: str) -> Optional[float]:
         """Drop isolines on ``layer`` at levels spread over the rail's whole drop range.
@@ -504,8 +549,13 @@ class BoardView(QWidget):
 
     def probe_at(self, x: float, y: float) -> str:
         """The double-click's readout at board point (x, y) mm on the shown layer: V, the
-        drop and |J| (and the change of drop on the Δ map), emitted as :attr:`probed`.
-        Empty, and not emitted, before a solve."""
+        drop and |J| (and the change of drop on the Δ map), emitted as :attr:`probed`; on the
+        temperature map, the temperature of the cell holding the point. Empty, and not
+        emitted, before a solve."""
+        if self._temperature is not None:
+            msg = self.temperature_at(x, y)
+            self.probed.emit(msg)
+            return msg
         if self._layer is None or self._finder is None or self._result is None:
             return ""
         p = probe(self._layer, self._finder, x, y)
@@ -530,7 +580,11 @@ class BoardView(QWidget):
     def hover_at(self, x: float, y: float) -> str:
         """The hover readout at board point (x, y) mm on the shown layer: the double-click's
         probe on the result it reads (a power-tree group when one is shown). Empty off the
-        copper, before a solve and with no value chosen."""
+        copper, before a solve and with no value chosen. On the temperature map: the cell's
+        temperature, as the double-click reads it."""
+        if self._temperature is not None:
+            m, d = self._temperature
+            return temperature_hover_text(m.at(x, y), d, m.layer_name, self._hover_chosen)
         if self._layer is None or self._finder is None or self._result is None or not self._hover_chosen:
             return ""
         p = probe(self._layer, self._finder, x, y)

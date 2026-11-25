@@ -39,6 +39,7 @@ from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.panels import ComparePanel, LossChart, NetPanel, ProblemsPanel, RailPanel, TreePanel
 from coppernicus.app.picking import add_picked_pin, pick_nets
+from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel
 from coppernicus.app.worker import ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
@@ -58,6 +59,7 @@ from coppernicus.project import Limits, Project, ProjectError, Rail
 from coppernicus.results import RailResult, TreeResult
 from coppernicus.service.convert import not_judged_items
 from coppernicus.service.session import FIELD_HINT
+from coppernicus.temperature import apply_thermal_limits, thermal_verdict
 
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 USER_RESULTS = ("Documents", "Coppernicus", "results")     # under the home folder
@@ -255,6 +257,12 @@ class MainWindow(QMainWindow):
         self.results_tabs = QTabWidget()
         self.results_tabs.addTab(self.problems, "Problems")
         self.results_tabs.addTab(self.losses, "Loss by layer")
+        self.thermal_panel = ThermalPanel()               # the board temperature (power tree)
+        self.results_tabs.addTab(self.thermal_panel, "Temperature")
+        self.thermal_panel.options_changed.connect(self._thermal_edited)
+        self.thermal_panel.limits_changed.connect(self._thermal_limits_edited)
+        self.thermal_panel.layer_requested.connect(self.show_temperature_at)
+        self.thermal_panel.cancel_requested.connect(self.cancel_tree)
         self.results_tabs.addTab(self.compare, "Compare")
         self.results_tabs.addTab(self.tree_panel, "Power tree")
         self._dock("Nets", self.nets, Qt.LeftDockWidgetArea)
@@ -434,6 +442,7 @@ class MainWindow(QMainWindow):
         self.layer_box.blockSignals(False)
         self._refresh_results()                       # no net yet: nothing of the old board shown
         self.rail_panel.set_settings(self.project.settings)
+        self.thermal_panel.set_options(self.project.thermal)
         self.nets.set_board(board, self._configured_nets(), self.project.marked_rails, self._kicad_nets())
         self.problems.clear()
         self.dirty = project is None
@@ -964,6 +973,9 @@ class MainWindow(QMainWindow):
         rail = None if group else self._solved_rail(self.net)
         t0 = time.perf_counter()
         self._fallback_reason = ""
+        if self._draw_temperature(layer_name, fit):          # needs no rail result
+            self.last_render_s = time.perf_counter() - t0
+            return
         if res is not None and res.layer(layer_name) is not None:
             pads = [("source", [i for t in res.sources for i in t.pad_ids]),
                     ("load", [i for t in res.loads for i in t.pad_ids])]
@@ -1160,22 +1172,27 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("The power tree is already being solved")
             return
         self.tree_panel.clear("<b>Power tree</b>: solving…")
-        self.results_tabs.setCurrentWidget(self.tree_panel)
+        thermal = self.merged.project.thermal.enabled   # the Temperature tab holds Cancel
+        self.thermal_panel.clear("<b>Board temperature</b>: solving…" if thermal else "")
+        self.results_tabs.setCurrentWidget(self.thermal_panel if thermal else self.tree_panel)
         self.tree_worker = TreeWorker(self.board, self.merged.project, self)
         self.tree_worker.merged = self.merged          # its notes and warnings, for the result
         self.tree_worker.generation = self._generation
         self.tree_worker.revision = self._revision
-        self.tree_worker.message.connect(lambda m: self.statusBar().showMessage(m))
+        self.tree_worker.message.connect(self._tree_message)
         self.tree_worker.succeeded.connect(self._tree_solved)
         self.tree_worker.failed.connect(self._tree_failed)
+        self.thermal_panel.set_solving(True)
         self.tree_worker.start()
 
     def _tree_solved(self, tree: TreeResult):
+        self.thermal_panel.set_solving(False)
         if self._is_stale():
             return
         if getattr(self.sender(), "revision", self._revision) != self._revision:
             msg = "The setup changed while the power tree was solving: solve it again (Ctrl+T)"
             self.tree_panel.clear(msg)
+            self.thermal_panel.clear(msg)
             self.statusBar().showMessage(msg)
             return
         merged = getattr(self.sender(), "merged", None)
@@ -1183,22 +1200,34 @@ class MainWindow(QMainWindow):
             merged.annotate(tree)                   # where the rails came from, as the CLI says
         # Limits do not change the solve: judge it by the ones set now (one may have been
         # edited while it solved, on the copy the worker took).
-        apply_limits(tree, self.merged.project)
+        apply_limits(tree, self.merged.project)         # the board temperature's too
         self.tree = tree
         self.tree_panel.set_tree(tree, self._tree_verdict())
+        self.thermal_panel.set_tree(tree, self._thermal_verdict_html())
         self.group_box.blockSignals(True)
         while self.group_box.count() > 1:
             self.group_box.removeItem(1)
         for key, res in tree.groups.items():
             self.group_box.addItem(f"{key} ({res.kind})" if res.kind == "ground" else key, key)
         self.group_box.blockSignals(False)
+        if self.field_box.currentData() == "temperature":
+            self.refresh_view()                          # the map showed the last tree's
+        peak = (f" · board peak {tree.thermal.peak_c:.2f} °C (Temperature tab, Board temperature map)"
+                if tree.thermal is not None else "")
         self.statusBar().showMessage(f"Power tree solved in {tree.stats['seconds']:.1f} s: "
-                                     f"{len(tree.groups)} groups · pick one in Group to see it")
+                                     f"{len(tree.groups)} groups · pick one in Group to see it{peak}")
 
     def _tree_failed(self, message: str):
+        self.thermal_panel.set_solving(False)
         if self._is_stale():
             return
+        if getattr(self.sender(), "cancelled", False):          # Cancel: expected, no box
+            self.tree_panel.clear("<b>Power tree</b>: solve cancelled")
+            self.thermal_panel.clear("<b>Board temperature</b>: solve cancelled")
+            self.statusBar().showMessage("Power tree solve cancelled")
+            return
         self.tree_panel.clear("<b>Power tree</b>: cannot solve")
+        self.thermal_panel.clear("<b>Board temperature</b>: cannot solve")
         QMessageBox.warning(self, "Cannot solve the power tree", message)
 
     def _tree_verdict(self) -> str:
@@ -1206,9 +1235,10 @@ class MainWindow(QMainWindow):
             return ""
         overall, groups = tree_verdicts(self.tree)
         unsolved = unsolved_limits(self.tree)
-        return verdict_html(overall, sum(v.failed for v in groups.values()),
-                            [x for v in groups.values() for x in v.not_judged] + unsolved,
-                            any(has_limits(v) for v in groups.values()) or bool(unsolved))
+        tv = thermal_verdict(self.tree)                         # the board temperature counts too
+        return verdict_html(overall, sum(v.failed for v in groups.values()) + tv.failed,
+                            [x for v in groups.values() for x in v.not_judged] + unsolved + tv.not_judged,
+                            any(has_limits(v) for v in groups.values()) or bool(unsolved) or bool(tv.limits))
 
     def _drop_tree(self, reason: str):
         """The power-tree result no longer matches the project (or the board)."""
@@ -1222,8 +1252,11 @@ class MainWindow(QMainWindow):
         self.group_box.blockSignals(False)
         if had or reason == "":
             self.tree_panel.clear(reason)
+            self.thermal_panel.clear(reason)
         if shown and self.net:
             self._show_net_view()
+        elif self.field_box.currentData() == "temperature" and self.net:
+            self.refresh_view()                          # the map showed this tree's temperature
 
     def _set_group(self, key: Optional[str]):
         self.group_box.blockSignals(True)
@@ -1277,6 +1310,83 @@ class MainWindow(QMainWindow):
         res = self.tree.groups[key]
         gv = group_verdict(self.tree, key)
         self.problems.set_result(tree_header_html(key, res, gv), gv.problems, res.warnings + res.assumptions)
+
+    # ------------------------------------------------------------------ board temperature
+    def _thermal_edited(self):
+        """An electro-thermal option changed (Temperature tab): the power tree's board
+        temperature is stale. The rails solved alone stay: Solve (F5) does not heat copper."""
+        self._remerge()                           # the merged project holds a copy of them
+        self.dirty = True
+        self._update_title()
+        self._revision += 1
+        self._drop_tree("Electro-thermal options changed: solve the power tree again (Ctrl+T)")
+
+    def _thermal_limits_edited(self):
+        """A board-temperature limit changed: the power tree is judged again, not solved."""
+        self._remerge()                           # the merged project holds a copy of them
+        self.dirty = True
+        self._update_title()
+        if self.tree is not None:
+            apply_thermal_limits(self.tree, self.merged.project.thermal)
+            self.tree_panel.set_tree(self.tree, self._tree_verdict())
+            self.thermal_panel.set_tree(self.tree, self._thermal_verdict_html())
+
+    def _thermal_verdict_html(self) -> str:
+        tv = thermal_verdict(self.tree)
+        return verdict_html(tv.verdict, tv.failed, tv.not_judged, bool(tv.limits))
+
+    def _draw_temperature(self, layer_name: str, fit: bool) -> bool:
+        """With "Board temperature" chosen, draw the shown layer's map from the power tree's
+        electro-thermal solve and return True; without one, say why and show the drop. The
+        map has no isolines, arrows, vias or ΔV: they need a rail's copper."""
+        shown = False
+        if self.field_box.currentData() == "temperature":
+            temp = self.tree.thermal if self.tree is not None else None
+            if temp is not None and temp.map(layer_name) is not None:
+                self.measure.setChecked(False)
+                self.view.show_temperature(temp, layer_name, self.board.outline(), fit=fit)
+                shown = True
+            else:
+                self._fallback_reason = NO_MAP if temp is None else f"No board temperature on {layer_name}"
+                self.statusBar().showMessage(self._fallback_reason)
+                self.field_box.blockSignals(True)
+                self.field_box.setCurrentIndex(self.field_box.findData("drop"))
+                self.field_box.blockSignals(False)
+        for widget in (self.show_vias, self.show_isolines, self.show_arrows, self.measure):
+            widget.setEnabled(not shown)
+        return shown
+
+    def show_temperature_at(self, layer: str, x: float, y: float, group: str):
+        """A layer row of the Temperature tab double-clicked: that layer's board temperature,
+        zoomed to the row's copper. A layer the shown net has no copper on is reached through
+        the row's group of the power tree."""
+        if self.board is None or self.tree is None or self.tree.thermal is None or not self.net:
+            return
+        if self.layer_box.findText(layer) < 0 and group in self.tree.groups:
+            self.show_group(group)
+        i = self.layer_box.findText(layer)
+        if i < 0:
+            self.statusBar().showMessage(f"{layer} is not a layer of the shown net or group")
+            return
+        for box, index in ((self.field_box, self.field_box.findData("temperature")), (self.layer_box, i)):
+            box.blockSignals(True)
+            box.setCurrentIndex(index)
+            box.blockSignals(False)
+        self.refresh_view()
+        QTimer.singleShot(0, lambda: self.view.zoom_to(x, y))
+
+    def cancel_tree(self):
+        """Cancel (Temperature tab): the power-tree solve stops at its next check, once per
+        iteration (never inside a factorization)."""
+        if self.tree_worker is not None and self.tree_worker.isRunning():
+            self.tree_worker.cancel()
+            self.thermal_panel.set_cancelling()
+            self.statusBar().showMessage(CANCELLING)
+
+    def _tree_message(self, text: str):
+        """A progress line of the power-tree solve; after Cancel, led by the cancelling note."""
+        cancelled = getattr(self.sender(), "cancelled", False)
+        self.statusBar().showMessage(f"{CANCELLING} · {text}" if cancelled else text)
 
     # ------------------------------------------------------------------ before / after
     def pin_baseline(self):
