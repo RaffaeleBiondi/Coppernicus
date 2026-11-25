@@ -1114,3 +1114,219 @@ LOAD, 1.697 mV without; KiPI's test_probe_ripple.py:48 allows 2 %). Every tolera
 - The field-solve count before a solve comes from the edges; a ringing above a third of the
   edges' reach adds a few. The RAM bound comes from synthetic boards.
 - The board model is quasi-static: approximate above about 1 GHz (KiPI's warning says so).
+
+---
+
+## Task 11: Tolerance stack-up → `kipi/tolerance` (`kipi/tolerance/evaluate.py`, `kipi/tolerance/gather.py`)
+
+Code: `coppernicus.engine.tolerance` (`allowed`, `load_limits`, `accuracy_sides`, `stack`,
+`load_probes`, `ac_tolerance_mismatch`, `kipi_reference_stack`), `coppernicus.tolerance`
+(`compose`, `tolerance_summary`, `tolerance_text`, `write_csv`), `results.TolerancePart`,
+`ToleranceCheck`, `ToleranceRow`, `ToleranceResult`, `TransientResult` (in
+`ProbeImpedance.transient`), `LoadReport.v_low_v` / `v_high_v`, `coppernicus tolerance` in
+`cli.py`, `examples/tolerance`.
+
+KiPI (evaluate.py:1-10): per load, each side apart (below and above nominal), every value a
+deviation in volts, never negative: **DC** = the DC drop (or boost) + the VRM's DC accuracy,
+against the DC tolerance; **AC** = ripple + transient, against the AC tolerance; **total** =
+DC + AC, against the tolerance (`CHECK_PARTS`, :23). `judge()` (:96-102): FAIL if a side
+exceeds its allowed deviation (+1e-12 V), PASS only when every part is known, else none.
+Nominal is the target voltage of the VRM driving the load's rail (evaluate.py:110, gather.py
+`driver` :48). Coppernicus keeps this arithmetic and KiPI's limits, and replaces KiPI's
+completeness: a part KiPI counts as a known 0 is **missing** here (§ Known limitations).
+
+### Project fields (each omitted while unset; older files load, save and solve unchanged)
+
+| Coppernicus | KiPI | Unit | Notes |
+|---|---|---|---|
+| `Load.tol_pct` / `tol_mv` | `Load.tol_min`, `tol_max`, `tol_pct` (or `tol_dv`, ÷1000) | % of nominal / mV from it | The whole band. A number `n` is ± n; a signed pair `[below, above]` as datasheets write it (`[-5, 3]`). Below ≤ 0 and above ≥ 0 (Coppernicus's rule, `ProjectError`; KiPI has none). 0 is a value. A `_pct` with its `_mv`: `ProjectError`. |
+| `Load.dc_tol_pct` / `dc_tol_mv` | `dc_tol_*` | same | The DC share (dc/pi/model.py:197-211; KiPI's own model says "nothing reads them yet": only the tolerance stack-up does). |
+| `Load.ac_tol_pct` / `ac_tol_mv` | `ac_tol_*` | same | The AC share. Independent of `Probe.ac_tolerance_v` (T9's impedance target, brief Q9): see below. |
+| `Load.ripple_mv`, `Load.transient_mv` | — (a `Contribution` accepted in KiPI's table) | mV from nominal, below / above | Entered parts (a datasheet or measured figure), same format and sign rule, in volts' direction (below = more negative). |
+| `Source.accuracy_pct` / `accuracy_mv` | `Vrm.acc_min`, `acc_max`, `acc_pct` (or `acc_dv`) | % / mV | Any source kind. Read through KiPI's own `Vrm.accuracy_sides()` (model.py:171-177). |
+| `tolerance: {ripple_sum, bw_limit_20mhz}` | `stack(…, bw)`; KiPI's ripple is always RSS | — | `ripple_sum: linear` (default) or `rss` (brief Q3); `bw_limit_20mhz: false` (default, brief Q4). Unknown keys: `ProjectError`. Omitted at the defaults. |
+
+Validation runs in `__post_init__`, so a `Load` or `Source` made by the app is checked as one
+loaded from a file; `carry_over` (the rail editor) keeps the new keys. Load and source
+mappings still ignore unknown keys as before (only the blocks refuse them), so a misspelt
+`tol_pc` leaves the load without that tolerance. No KiCad field holds these yet (PI_ACC /
+PI_TOL later, the owner's call): a rail taken from the board's KiCad footprint fields replaces
+the project's terminals, so `coppernicus tolerance` warns which loads and sources lose their
+tolerances there (set `override_board_fields: true` on the rail to use them).
+
+Limits: KiPI's `deviation_limits` (evaluate.py:28-36) through `range_volts` (model.py:276):
+a % of a negative rail is of its magnitude (`pct_to_volts`, model.py:254-259, swaps the ends:
+−5 % of −3.3 V lies toward 0 V, **above** it), mV from nominal add as they are. **A % of 0 V
+places nothing** (KiPI would allow 0 V either side, a spurious fail): the check is not judged,
+"{key} is a % of 0 V, which places nothing: enter {…}_mv"; the same for `accuracy_pct` of a 0 V
+source.
+
+### Parts (each a `TolerancePart(below_v, above_v, source, detail)`, or missing with a hint)
+
+- **DC** from the power tree (`solve_project_tree`: links, ground return, the board
+  temperature when `thermal.enabled`). Both sides from the **worst pins** (brief Q1): below =
+  nominal − v_low, above = v_high − nominal, each at least 0, from the additive
+  `LoadReport.v_low_v` / `v_high_v` (KiPI's `v_low` = lowest supply pin − highest ground pin,
+  `v_high` = highest supply pin − lowest ground pin; dc/pi/results.py:63-64). `v_worst_v` and
+  every other tree number are unchanged. KiPI's tolerance table uses the **mean** (gather.py
+  `_dc` :75, `v_effective`); it is in the detail, with an assumption line. On a remote-sensed
+  rail the near pins sit above nominal and the far ones below: both sides are non-zero (the
+  mean would read one). Missing when the load is DISCONNECTED, NOT CONVERGED, VRM OUT OF
+  REGULATION, absent from the tree (an excluded net, a rail solved as a ground), or when
+  `TreeResult.converged` is False.
+- **Accuracy**: the driving source's (`TreeResult.vrms` entry whose `group` is the load's
+  group, so a load behind a link or net tie gets its rail's source). Unset: missing, "enter
+  U1's DC accuracy (accuracy_pct)" (F1).
+- **Transient**: only the load's entered `transient_mv` is judged (brief Q2). KiPI's estimate
+  is **shown, never judged**, in the part's detail or in the hint. It is computed in
+  `engine/ac.py` per probe with a step and a slew rate, **only with a bandwidth the user gave**
+  (`ac.bandwidth_hz`), by calling `kipi.ac.transient.transient(freqs, z, given_bw, step_a,
+  slew·1e6, 0)` and `bandwidth_limited(…, 20 MHz)` itself: `_context` writes the 50 kHz
+  placeholder into KiPI's VRM, so `transients(result)` is never used. `ProbeImpedance.transient`
+  (`TransientResult`: under- and overshoot, both through 20 MHz, `t_s`, `i_a`, `v`, `v_bw`,
+  KiPI's notes, the edge's inductance and dip; no load line: `load_line_ohm` 0); |Z| unchanged
+  bit for bit. On a negative rail its under- and overshoot swap (a step pulls the rail up,
+  gather.py:163). Not entered: missing, "enter transient_mv for U2; KiPI's estimate with a
+  typical loop at 100 kHz: 25.99 / 25.98 mV, … through 20 MHz (shown, never judged)", or "…; no
+  KiPI estimate: {no probe on U2's pins | probe P1 has no load step (step_a, slew_a_per_us) | no
+  control loop bandwidth is given for U1 (ac.bandwidth_hz) | --skip-ac left it out | the AC
+  solve of R failed}".
+- **Ripple**: from every aggressor listing the load's probe in `ripple_probes`, its
+  `RippleResult` at that probe (`where == "probe"`; the four peaks of KiPI's `ripple_peaks`),
+  added per side by `tolerance.ripple_sum`: the **sum of the peaks** (linear, default) or KiPI's
+  root sum of squares (gather.py:201); full band, or through 20 MHz with `bw_limit_20mhz`
+  (both shown). Missing when any listing aggressor is not solved (F2: "A2 not solved
+  (--skip-noise)"), rests on KiPI stand-ins (its `NoiseResult.stand_ins`, T10's rule: not
+  judged whatever the peak; the values in the hint, the stand-ins in `ToleranceRow.stand_ins`),
+  or shows no ripple at the probe (board model off, or the probe not on its rails). With both a
+  usable computed ripple and `ripple_mv`, the larger per side (the detail names both). When no
+  aggressor lists the probe: the entered `ripple_mv`, else missing (F3, brief Q5): on a switching
+  rail (an `smps` source or an aggressor on it) "add probe P1 to A1's ripple probes, or enter
+  ripple_mv for U2" (or "add an aggressor for U1 with probe P1 in its ripple probes, …"), else
+  "enter ripple_mv for U2 (no switcher's ripple is solved here)". **A listing aggressor that
+  gives nothing usable leaves the ripple missing even with `ripple_mv` entered** (the literal
+  reading of "both a usable computed ripple and ripple_mv → the larger"): the hint says
+  "ripple_mv … entered, not used while an aggressor listing P1 gives no usable ripple".
+- The load's probe is KiPI's `probe_for_load` (gather.py:62-71) over all the project's probes
+  (`engine.tolerance.load_probes`: the probe on the same supply pins, and ground pins where
+  both have them, else the same part on the same supply net); a probe whose pins are not on the
+  board is left out, not an error.
+
+The stack itself is `engine.tolerance.stack`, a thin copy of KiPI's `stack()` loop
+(evaluate.py:123-129) with KiPI's own `judge` and `CHECK_PARTS` imported: a check adds the
+parts it knows, is complete only when it knows them all, and so can fail before it is complete
+but passes only once it is. Stand-in parts are missing, so a check fails only if its usable
+parts alone exceed (T10's rule kept, and T8's "fail while incomplete" for what is known).
+
+### Verdicts (only the user's tolerances)
+
+- Per check with a tolerance set (`limit` = the key actually set: `tol_pct`, `dc_tol_mv`, …):
+  `fail` if a side's usable parts exceed (+1e-12 V); `pass` only complete and within; else not
+  judged, the reason every missing part's hint ("accuracy: enter U1's DC accuracy
+  (accuracy_pct)"), or why the tolerance places nothing (no source drives the rail; a % of 0 V).
+- A row: fail > not judged > pass over its checks; a load without any tolerance is shown with
+  its parts and no verdict ("" ; no entry).
+- Entries `{item: load label, net, limit, reason}`; a failed one says which side is over and,
+  while parts are missing, "(from its known parts alone; missing: …)".
+- Overall: `fail` if any check fails; else `not_judged` if one with a tolerance is not judged;
+  else `pass` if one passed; with no tolerance anywhere `not_judged` and no entry ("No tolerance
+  set: the loads' parts are shown, not judged"), as `coppernicus ac` without a target (Task 9,
+  Verdicts). Exit 0 / 1 / 3 / 2 through `_exit_for`. `solve --tree`'s verdict is unchanged.
+- **Q9**: when a load's probe has `ac_tolerance_v` and the load has `ac_tol_*`, they are compared
+  in volts (T9 takes `ac_tolerance_v` as one deviation, Z = V / I_step; the load's on its tighter
+  side, through `allowed`), relative margin 1e-9; a mismatch puts the same warning, naming both
+  values, in the tolerance result and in the AC result (`ImpedanceResult.warnings`). Neither is
+  derived from the other.
+
+### Assumption lines (in `ToleranceResult.assumptions`)
+
+In order: the stack-up (KiPI's three checks, each side apart); nominal = the driving source's
+set voltage; the DC drop on the worst pins (the formulas, and that KiPI's table uses the mean);
+a part not known is missing, never 0 (what KiPI would count as nothing); only an entered
+transient is judged, KiPI's estimate shown (the typical PI loop at the bandwidth given, about
+60°, not the converter's own); entered parts are mV from nominal; the ripple sum rule (linear,
+or "root sum of squares, KiPI's rule for unsynchronised switchers on average; peaks can
+coincide"); full band or 20 MHz. Where each part came from is in its `source` and `detail`.
+
+### Outputs
+
+- `<project>_tolerance_summary.json` (`allow_nan=False`, no arrays): `kind: "tolerance"`,
+  `verdict`, `verdict_note`, `failed`, `not_judged`, `options` {ripple_sum, bw_limit_20mhz},
+  `warnings`, `assumptions`, `estimates[]` (each solve's cost as printed, `solve` "AC VOUT" |
+  "noise U1" | "board temperature"), `stats` {seconds, tree_seconds, ac_rails, aggressors,
+  memory_peak_mb}, `csv_file`, `loads[]`, `summary_file`. Per load: `load`, `name`, `net`,
+  `rail`, `nominal_v`, `source`, `probe`, `verdict`, `parts` {dc, accuracy, ripple, transient:
+  {below_mv, above_mv, source, detail} | null}, `hints` {part: text}, `transient_estimate`
+  {below_mv, above_mv, below_20mhz_mv, above_20mhz_mv} | null, `checks` {dc, ac, total:
+  {limit, below_mv, above_mv, allowed_below_mv, allowed_above_mv, margin_below_mv,
+  margin_above_mv, complete, passed, missing, reason}}, `stand_ins`.
+- `<project>_tolerance.csv`: one row per load: `load`, `net`, `nominal_v`, per part
+  `<part>_below_mv`, `<part>_above_mv`, `<part>_source` (empty when missing), per check
+  `<check>_limit`, `_below_mv`, `_above_mv`, `_allowed_below_mv`, `_allowed_above_mv`,
+  `_margin_below_mv`, `_margin_above_mv`, `_verdict`, then `verdict`.
+- `coppernicus tolerance PROJECT [--skip-ac] [--skip-noise] [--out DIR] [--no-board-fields]
+  [--json] [-v]`: the power tree (KiCad footprint fields merged as `solve --tree`; the board
+  temperature's estimate first when `thermal.enabled`), then **only where a load with a
+  tolerance needs it** one AC solve per rail (a probe with a step and a slew whose source has a
+  bandwidth given) and one noise solve per aggressor listing such a probe, each cost printed
+  first (`ac_estimate`; the noise one from `mesh_estimate`, `noise_cost_estimate`,
+  `noise_ram_estimate`) with the memory warning on stderr. `--skip-ac` / `--skip-noise` leave
+  those parts out (the hint names the flag). A failed AC solve only loses KiPI's estimate (a
+  warning); a failed noise solve leaves the ripple missing (a warning; not judged). Prints per
+  load the four parts (mV below / above, where each came from), the checks with what each
+  allows and the margin, the verdict, what to do about a missing part; then the assumptions,
+  the warnings and the verdict line.
+
+### Cost
+
+The tree is cheap; AC (Task 9's fit, 2466.6·n^1.1706 B for one factorization) and noise
+(0.2 GB + 36 kB per unknown) dominate, and run only where a load with a tolerance needs them.
+`transient()` now runs in every AC solve with a step, a slew and a bandwidth given (the `ac`
+command, the app, MCP): 17 ms on the example (96 566 samples per array, four arrays kept);
+KiPI caps it at 2^21 samples, about 67 MB per probe for the four arrays. A run on this machine
+(M-series): `coppernicus tolerance examples/tolerance/tolerance.coppernicus.yml` takes 2.7 s
+wall (tree 0.08 s; AC 5 708 triangles, 111 field frequencies; noise 14 059 unknowns, 34 field
+solves), 0.72 GB peak RSS.
+
+### Validation
+
+- **Drift** (`test_our_stack_equals_kipis_where_both_rules_agree`): where both rules agree
+  (accuracy set, every part present, one aggressor, the mean = the worst pin), our numbers and
+  verdicts equal KiPI's `stack()` built from KiPI objects (`kipi_reference_stack`: its `Load`,
+  `Vrm`, `LoadEntry` of `Contribution`s), within KiPI's 6-figure rounding of a part, on % and
+  mV tolerances, asymmetric pairs, a negative rail, passes and fails.
+- KiPI's false passes, before → after on the same input: an unset accuracy (KiPI's stack
+  passes, here not judged), a partly solved ripple, a rail without an aggressor (KiPI's
+  `not_applicable`).
+- The RSS ripple equals KiPI's own `Gatherer._ripple` on the same peaks; the transient estimate
+  equals `transient()` / `bandwidth_limited()` called on the same |Z|, bit for bit.
+- Worst pins against the mean on `pins_board` (U1's three pins along a strip), and with J1
+  remote-sensing U1's middle pin: near pin above 3.3 V, far pin below, both sides non-zero.
+- Tolerance fields change no number of the tree or of an AC solve.
+- `examples/tolerance`: DC 27.05 / 0 mV, accuracy 18 / 18 mV, ripple 7.883 / 10.57 mV, entered
+  transient ±30 mV (KiPI's estimate 25.99 / 25.98 mV), total 82.94 / 58.57 mV: ±6 % holds,
+  ±3 % fails.
+
+### Known limitations
+
+KiPI's false passes Coppernicus does not inherit (each a missing part, so not judged; recorded
+here, not reported upstream):
+- **F1** an unset VRM accuracy counts as 0 (`accuracy_sides`, model.py:171-177; `stack()` always
+  uses it, evaluate.py:118, and keeps `accuracy_set` unused).
+- **F2** a partly solved ripple counts as complete: aggressors not solved only add a hint
+  (gather.py:206-209).
+- **F3** a rail without an aggressor counts its ripple as 0 (`NO_SWITCHER`, gather.py:147, :186),
+  whatever the source.
+- **F4** KiPI's transient rests on a loop the user cannot enter (a typical PI compensation,
+  about 60° of phase margin; transient.py:7-18): a real loop with less margin dips more, so it
+  is not a bound either way. Only an entered `transient_mv` is judged.
+- **F5** (judgement) KiPI adds several switchers' ripple as RSS, "on average" (gather.py:201):
+  their peaks can coincide, so the default here is the linear sum.
+
+Also:
+- No KiCad field holds a tolerance or an accuracy yet; a rail from the board's fields loses the
+  project's (a warning names them).
+- Loads and sources still ignore unknown keys (a typo leaves the tolerance unset).
+- KiPI's estimate is shown even when its AC result hangs on something assumed (capacitors
+  without a model, an assumed εr); it is never judged.
+- One-sided tolerances (a `null` end) are not offered: both ends are entered.
