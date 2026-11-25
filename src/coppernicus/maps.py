@@ -117,12 +117,13 @@ def render_layer_map(result: RailResult, layer: LayerField, field: str,
     vrange = _rail_voltage_range(result)
     clipped = False
     if field == "drop":
-        drop_max = max(float(result.drop_at(vrange).max()), 0.0) * 1e3 if vrange else 0.0
+        # The drop as drop_unit names it (on a ground below 0 V, the depth below it).
+        drop_max = max(float(result.shown_drop_at(vrange).max()), 0.0) * 1e3 if vrange else 0.0
         lo, hi, unit = 0.0, max(drop_max, 1e-9), "mV"
-        drop_mv = np.nan_to_num(result.drop_at(layer.voltage) * 1e3)
+        drop_mv = np.nan_to_num(result.shown_drop_at(layer.voltage) * 1e3)
         im = ax.tripcolor(tri, drop_mv, shading="gouraud", cmap=DROP_CMAP, vmin=lo, vmax=hi,
                           rasterized=True)
-        fig.colorbar(im, ax=ax, label=f"{'rise' if result.is_rise() else 'drop'}, {result.drop_unit()}")
+        fig.colorbar(im, ax=ax, label=f"{result.drop_word()}, {result.drop_unit()}")
         title = "voltage drop"
     elif field == "voltage":
         lo, hi = vrange if vrange else (0.0, 1.0)

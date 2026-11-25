@@ -4,8 +4,8 @@ result's drop wording, its place beside the cursor, the stored choice of values)
 
 def _rail(v_ref, **kw):
     from coppernicus.results import RailResult
-    return RailResult(kw.pop("net", "VCC"), kw.pop("nets", ["VCC"]), v_ref, [], [], [], [], 0.0, 0.0, 0.0,
-                      0.0, **kw)
+    return RailResult(kw.pop("net", "VCC"), kw.pop("nets", ["VCC"]), v_ref, [], [], [], [],
+                      kw.pop("max_drop", 0.0), 0.0, 0.0, 0.0, **kw)
 
 
 def _probe(v, j=2.5):
@@ -47,6 +47,23 @@ def test_hover_drop_uses_the_results_wording_for_each_sign():
         "rise = 2.000 mV above 0 V (ground rise)")
     assert drop(_rail(0.0), -0.002) == "drop = 2.000 mV below 0 V"   # a 0 V rail group of a tree draws
     assert drop(_rail(3.3), 3.301) == "drop = -1.000 mV below 3.3 V"  # a boost reads negative, as the map
+
+
+def test_hover_on_a_ground_below_0_v_reads_its_depth_below_0_v():
+    """A ground under a negative rail (its largest deviation, max_drop, below 0 V) is a
+    shift: the readout gives how far below 0 V the point is, never "-2 mV below 0 V" for a
+    point 2 mV below it; a point above 0 V on it reads negative, as a boost does."""
+    from coppernicus.app.hover import hover_text, hover_values
+
+    def drop(result, v):
+        return hover_text(hover_values(result, "F.Cu", _probe(v)), ["drop"])
+    shifted = _rail(0.0, net="GND", nets=["GND"], kind="ground", max_drop=-0.005)
+    assert drop(shifted, -0.002) == "shift = 2.000 mV below 0 V (ground shift)"
+    assert drop(shifted, 0.001) == "shift = -1.000 mV below 0 V (ground shift)"
+    alone = _rail(0.0, net="GND", nets=["GND"], drop_sign=-1.0, max_drop=-0.005)
+    assert drop(alone, -0.002) == "shift = 2.000 mV below 0 V (ground shift)"
+    risen = _rail(0.0, net="GND", nets=["GND"], kind="ground", max_drop=0.005)
+    assert drop(risen, -0.002) == "rise = -2.000 mV above 0 V (ground rise)"
 
 
 def test_hover_on_copper_not_connected_to_a_source_says_so():

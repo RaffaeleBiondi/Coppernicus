@@ -116,9 +116,34 @@ class RailResult:
         solved alone)."""
         return self.kind == "ground" or (self.v_ref == 0 and self.drop_sign < 0)
 
+    def is_shift(self) -> bool:
+        """Whether a rise (:meth:`is_rise`) lies below 0 V: a ground under a negative rail.
+        Decided once for the whole result, by the sign of ``max_drop``, its deviation from
+        0 V with the largest magnitude over all its copper (on a ground group the signed
+        rise :func:`coppernicus.problems._rise` finds on the mesh, and the number
+        :func:`coppernicus.problems.max_drop_text` words): negative is a shift. Zero (nothing
+        solved yet) stays a rise."""
+        return self.is_rise() and self.max_drop < 0
+
+    def drop_word(self) -> str:
+        """What the readouts call the drop: "drop", "rise" (:meth:`is_rise`) or "shift"
+        (:meth:`is_shift`)."""
+        return "shift" if self.is_shift() else "rise" if self.is_rise() else "drop"
+
+    def shown_drop_at(self, v):
+        """The drop (V) at voltages ``v`` as the maps and readouts show it, measured the way
+        :meth:`drop_unit` says: :meth:`drop_at`, negated on a ground shift, where it is the
+        depth below 0 V (a point above 0 V on it reads negative, as a boost does)."""
+        drop = self.drop_at(v)
+        return -drop if self.is_shift() else drop
+
     def drop_unit(self) -> str:
-        """What the drop is measured as, for map labels: "mV below 3.3 V", "mV above
-        -3.3 V (toward 0 V)", "mV above 0 V (ground rise)"."""
+        """What the drop is measured as, for map labels and readouts (the side
+        :func:`coppernicus.problems.drop_words` names): "mV below 3.3 V", "mV above -3.3 V
+        (toward 0 V)", "mV above 0 V (ground rise)", "mV below 0 V (ground shift)" (see
+        :meth:`is_shift`; the values beside it are :meth:`shown_drop_at`)."""
+        if self.is_shift():
+            return "mV below 0 V (ground shift)"
         if self.is_rise():
             return "mV above 0 V (ground rise)"
         if self.sign < 0:

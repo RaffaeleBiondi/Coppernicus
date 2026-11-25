@@ -1,6 +1,7 @@
 """App logic that needs no window: the triangle locator used by the double-click probe."""
 
 import numpy as np
+import pytest
 
 from coppernicus.app.board_view import copper_rings
 from coppernicus.fields import TriangleLocator
@@ -85,6 +86,24 @@ def test_the_drop_map_of_a_negative_rail_is_positive_toward_0_v():
     assert "toward 0 V" in neg.drop_unit()
     gnd_alone = RailResult("GND", ["GND"], 0.0, [], [], [], [], 0.0, 0.0, 0.0, 0.0, drop_sign=-1.0)
     assert np.allclose(drop_mv(gnd_alone, np.array([0.002])), [2.0]) and gnd_alone.is_rise()
+
+
+def test_the_drop_map_of_a_ground_below_0_v_is_its_depth_below_0_v(tmp_path):
+    """A ground under a negative rail sinks below 0 V (max_drop, its largest deviation, is
+    negative): the app's map and the PNG maps show how far below 0 V each point is, under a
+    "mV below 0 V (ground shift)" unit, not a scale that clips it all to zero."""
+    from coppernicus.app.board_view import drop_mv
+    from coppernicus.maps import render_layer_map
+    from coppernicus.results import LayerField, RailResult
+    pts = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 5.0], [0.0, 5.0]])
+    tris = np.array([[0, 1, 2], [0, 2, 3]])
+    layer = LayerField(0, "F.Cu", pts, tris, np.array([0.0, -0.002, -0.005, -0.001]),
+                       np.ones(2), np.zeros(2), np.full(2, 25.0))
+    gnd = RailResult("GND", ["GND"], 0.0, [layer], [], [], [], -0.005, 1.0, 0.0, 0.0, kind="ground")
+    assert gnd.drop_unit() == "mV below 0 V (ground shift)"
+    assert np.allclose(drop_mv(gnd, layer.voltage), [0.0, 2.0, 5.0, 1.0])
+    scale = render_layer_map(gnd, layer, "drop", [], tmp_path / "gnd_drop.png")
+    assert scale["min"] == 0.0 and scale["max"] == pytest.approx(5.0)
 
 
 def test_the_tree_header_of_a_negative_rail_reads_its_drop_toward_0_v():

@@ -72,6 +72,26 @@ def test_the_worst_drop_reads_above_or_below_its_reference_and_rise_on_a_ground(
     assert max_drop_text(res) == text
 
 
+@pytest.mark.parametrize("res, unit", [
+    (_result("+3V3", 3.3, 0.01234), "mV below 3.3 V"),
+    (_result("-3V3", -3.3, 0.01234, drop_sign=-1.0), "mV above -3.3 V (toward 0 V)"),
+    (_result("GND", 0.0, 0.00567, drop_sign=-1.0), "mV above 0 V (ground rise)"),
+    (_result("GND", 0.0, 0.00567, kind="ground"), "mV above 0 V (ground rise)"),
+    (_result("GND", 0.0, 0.0, kind="ground"), "mV above 0 V (ground rise)"),     # nothing solved yet
+    (_result("GND", 0.0, -0.00567, kind="ground"), "mV below 0 V (ground shift)"),
+    (_result("GND", 0.0, -0.00567, drop_sign=-1.0), "mV below 0 V (ground shift)"),
+    (_result("VZ", 0.0, 0.00567), "mV below 0 V"),
+])
+def test_the_map_unit_names_the_side_the_summary_names(res, unit):
+    """The maps' and the hover's unit (RailResult.drop_unit) says what the summary line
+    (max_drop_text) says: a ground whose largest deviation lies below 0 V is a shift."""
+    from coppernicus.problems import drop_words
+    assert res.drop_unit() == unit
+    what, where = drop_words(res.max_drop, res.v_ref, res.sign, res.is_rise())
+    assert unit.startswith(f"mV {where}")
+    assert (f"({what})" in unit) == res.is_rise()
+
+
 def _demo_loads(voltage):
     """The demo rail's loads declared out of order (neither by drop nor its reverse)."""
     rail = Rail("+3V3", sources=[Source("J1", voltage)],

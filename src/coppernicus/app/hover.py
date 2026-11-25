@@ -22,8 +22,8 @@ LABEL_OFFSET_PX = 14           # from the cursor to the label's corner
 class HoverValues:
     """What the readout can show at one point of a solved layer."""
     voltage_v: float               # NaN on copper not connected to a source
-    drop_mv: float                 # RailResult.drop_at, in mV
-    drop_word: str                 # "rise" on a ground (RailResult.is_rise), else "drop"
+    drop_mv: float                 # RailResult.shown_drop_at, in mV
+    drop_word: str                 # RailResult.drop_word: "drop", "rise" or "shift"
     drop_unit: str                 # RailResult.drop_unit: "mV below 3.3 V", ...
     current_density_a_mm2: float
     layer: str
@@ -32,8 +32,8 @@ class HoverValues:
 
 def hover_values(result: RailResult, layer: str, p: Probe) -> HoverValues:
     """The values at probe ``p`` on ``layer`` of ``result``, with the result's wording."""
-    return HoverValues(p.voltage_v, float(result.drop_at(p.voltage_v)) * 1e3,
-                       "rise" if result.is_rise() else "drop", result.drop_unit(),
+    return HoverValues(p.voltage_v, float(result.shown_drop_at(p.voltage_v)) * 1e3,
+                       result.drop_word(), result.drop_unit(),
                        p.current_density_a_mm2, layer, " + ".join(result.nets) or result.net)
 
 

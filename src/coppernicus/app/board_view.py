@@ -162,8 +162,9 @@ class ColorBar(QWidget):
 
 def drop_mv(result: RailResult, v: np.ndarray) -> np.ndarray:
     """The 'drop' map's values in mV: below the source voltage on a positive rail, toward
-    0 V on a negative one, the rise above 0 V on a ground (``RailResult.drop_at``)."""
-    return result.drop_at(v) * 1e3
+    0 V on a negative one, the rise above 0 V on a ground, the depth below 0 V on a ground
+    under a negative rail (``RailResult.shown_drop_at``, as ``drop_unit`` names it)."""
+    return result.shown_drop_at(v) * 1e3
 
 
 class BoardView(QWidget):
@@ -504,7 +505,7 @@ class BoardView(QWidget):
                 delta = (f", Δ drop vs baseline = {d:+.3f} mV" if np.isfinite(d)
                          else ", Δ drop vs baseline: no baseline copper here")
             self.probed.emit(f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: V = {p.voltage_v:.5f} V, "
-                             f"{'rise' if self._result.is_rise() else 'drop'} = "
+                             f"{self._result.drop_word()} = "
                              f"{float(drop_mv(self._result, p.voltage_v)):.3f} mV, "
                              f"|J| = {p.current_density_a_mm2:.2f} A/mm²{delta}")
 
