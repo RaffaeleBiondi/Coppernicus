@@ -531,3 +531,17 @@ def test_apply_limits_rereads_the_board_temperature_limits_too(strip, demo_tree)
     apply_limits(tree, project)
     assert tree.thermal_limits == {"max_temp_c": 100.0} and all(r.passed for r in tree.thermal.copper)
     assert tree_summary(tree)["verdict"] == "pass"
+
+
+def test_no_change_in_percent_of_a_drop_that_prints_as_zero():
+    """The power chain's U3 is remote-sensed: its drop is ~1e-9 mV at the ambient and after,
+    so a change in percent (+471.6 %) would be round-off. It is null; U4's is given."""
+    project = power_chain_project()
+    project.thermal = ThermalOptions(enabled=True)
+    doc = tree_summary(solve_project_tree(Board(power_chain_board()), project))
+    loads = {ld["name"]: ld for ld in doc["thermal"]["loads"]}
+    assert abs(loads["U3"]["drop_mv"]) < 5e-4 and loads["U3"]["change_pct"] is None
+    assert loads["U4"]["change_pct"] == pytest.approx(
+        100 * (loads["U4"]["drop_mv"] - loads["U4"]["drop_ambient_mv"]) / loads["U4"]["drop_ambient_mv"])
+    text = "\n".join(temperature_text(doc["thermal"]))
+    assert "U3" in text and "471" not in text

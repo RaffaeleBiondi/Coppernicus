@@ -182,8 +182,14 @@ def _pad(ref: str, number: str, distance: Optional[float]) -> Optional[Dict[str,
     return {"ref": ref, "pad": number, "distance_mm": float(distance)}
 
 
+# The drops are printed in mV with 3 decimals: below this the change in percent is round-off.
+DROP_PRINT_MV = 1e-3
+
+
 def _change_pct(before: float, after: float) -> Optional[float]:
-    if not (math.isfinite(before) and math.isfinite(after)) or before == 0:
+    """The change of a load's drop (V), in percent of the drop at the ambient; None when that
+    drop prints as zero (a remote-sensed load: the percent of round-off)."""
+    if not (math.isfinite(before) and math.isfinite(after)) or round(before * 1e3 / DROP_PRINT_MV) == 0:
         return None
     return 100.0 * (after - before) / abs(before)
 
