@@ -688,3 +688,53 @@ def test_summary_text_and_csv(tmp_path):
     assert len(rows) == 1 and rows[0]["load"] == "U2" and rows[0]["verdict"] == "fail"
     assert float(rows[0]["accuracy_below_mv"]) == pytest.approx(18.0) and rows[0]["ac_verdict"] == ""
     assert rows[0]["dc_verdict"] == "fail" and rows[0]["total_limit"] == "tol_pct"
+
+
+def test_a_load_missing_from_the_tree_is_not_judged_never_silent():
+    from coppernicus.results import TreeResult
+    r = _compose(_comp_project(**COMPLETE), tree=TreeResult())
+    (row,) = r.rows
+    assert row.parts["dc"] is None and row.hints["dc"].startswith("not in the power tree")
+    assert row.nominal_v == 1.8 and row.source == "U1"           # from the project's own source
+    assert r.not_judged and r.not_judged[0]["limit"] == "tol_pct" and r.verdict == "not_judged"
+
+
+# ---------------------------------------------------------------------- old files solve as before
+
+def test_tolerance_fields_change_no_number_of_the_tree_or_the_ac_solve():
+    import dataclasses
+
+    import numpy as np
+
+    from coppernicus.engine import Board
+    from coppernicus.engine.ac import solve_ac_rail
+    from coppernicus.engine.synthetic import (
+        ac_decap_board,
+        ac_decap_project,
+        power_chain_board,
+        power_chain_project,
+    )
+    from coppernicus.engine.tree import solve_project_tree
+    from coppernicus.project import AcOptions
+    board, plain = Board(power_chain_board()), power_chain_project()
+    marked = power_chain_project()
+    for r in marked.rails:
+        r.sources = [dataclasses.replace(s, accuracy_pct=(-1, 2)) for s in r.sources]
+        r.loads = [dataclasses.replace(ld, tol_pct=5, dc_tol_mv=[-30, 20], transient_mv=10, ripple_mv=4)
+                   for ld in r.loads]
+    marked.tolerance = ToleranceOptions(ripple_sum="rss", bw_limit_20mhz=True)
+    a, b = solve_project_tree(board, plain), solve_project_tree(board, marked)
+    assert [dataclasses.astuple(x) for x in a.loads] == [dataclasses.astuple(x) for x in b.loads]
+    assert [dataclasses.astuple(x) for x in a.vrms] == [dataclasses.astuple(x) for x in b.vrms]
+    assert a.assumptions == b.assumptions and a.warnings == b.warnings
+    for key in a.groups:
+        for la, lb in zip(a.groups[key].layers, b.groups[key].layers, strict=True):
+            assert np.array_equal(la.voltage, lb.voltage, equal_nan=True)
+    plain, marked = ac_decap_project(), ac_decap_project()
+    for p in (plain, marked):
+        p.ac = AcOptions(**QUICK, bandwidth_hz={"U1": 1e5})
+    marked.rails[0].sources[0] = dataclasses.replace(marked.rails[0].sources[0], accuracy_mv=10)
+    ra = solve_ac_rail(Board(ac_decap_board()), plain, "+3V3")
+    rb = solve_ac_rail(Board(ac_decap_board()), marked, "+3V3")
+    assert np.array_equal(ra.probes[0].z_ohm, rb.probes[0].z_ohm)
+    assert ra.warnings == rb.warnings and ra.assumptions == rb.assumptions
