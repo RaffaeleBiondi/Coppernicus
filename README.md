@@ -325,7 +325,8 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Verdicts list what a set limit could not judge (`not_judged`, with the reason), in JSON, CLI text, report and CI summary | ✅ |
 | Power-tree verdicts: a group passes only when everything its limits apply to was judged. Items that cannot be judged (disconnected, behind a regulator out of regulation, not converged, 0 V nominal, a limit on a net the tree does not solve) give "not judged" and are named | ✅ |
 | Regulator inputs judged as loads on the rail feeding them (across input and ground pins); limits per net, a net without its own limit takes its group's main rail's; copper judged against the strictest limit in the group, and a fail names whose limit it used | ✅ |
-| What-if copper thickness per layer (`copper_thickness_mm`, optional, at most 1 mm per layer) | ✅ (project file and MCP; an app field comes next) |
+| What-if copper thickness per layer (`copper_thickness_mm`, optional, at most 1 mm per layer) | ✅ (project file, MCP, and the app: Solve settings → Copper thickness → Edit…; empty = board file) |
+| The window fits a 1440 px screen (map bar on two rows) | ✅ |
 | Board temperature (electro-thermal) | 🔄 next |
 | AC impedance with decoupling capacitors, DC-DC ripple, tolerance budget | ⏳ (KiPI's engine has them) |
 | Standalone `.app` / `.exe` that needs no uv | ⏳ later |
