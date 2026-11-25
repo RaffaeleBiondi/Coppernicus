@@ -56,6 +56,12 @@ from coppernicus.service.convert import not_judged_items
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 
 
+def initial_size(avail_w: Optional[int], avail_h: Optional[int]) -> Tuple[int, int]:
+    """The window's first size: 1500 × 920, shrunk to the screen's available area (a 1440 ×
+    900 laptop) when one is known."""
+    return (min(1500, avail_w) if avail_w else 1500, min(920, avail_h) if avail_h else 920)
+
+
 def verdict_html(verdict: str, fails: int, not_judged, has_limits: bool) -> str:
     """A power-tree verdict for the summary lines: what failed, and what a limit set could not
     judge (a group passes only when everything was judged)."""
@@ -107,7 +113,9 @@ class MainWindow(QMainWindow):
         QLocale.setDefault(QLocale.c())
         super().__init__()
         self.setWindowTitle(f"Coppernicus {__version__}")
-        self.resize(1500, 920)
+        screen = self.screen()
+        free = screen.availableGeometry() if screen is not None else None
+        self.resize(*initial_size(free.width() if free else None, free.height() if free else None))
         self.project = Project()
         self.board: Optional[Board] = None
         self.net: Optional[str] = None

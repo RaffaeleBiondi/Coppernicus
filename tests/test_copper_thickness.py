@@ -59,3 +59,11 @@ def test_off_board_lists_the_keys_the_board_has_no_copper_layer_for_in_their_ord
     values = {"In3.Cu": 0.05, "B.Cu": 0.07, "In1.Cu": 0.035}
     assert off_board(values, ["F.Cu", "B.Cu"]) == ["In3.Cu", "In1.Cu"]
     assert off_board({}, ["F.Cu", "B.Cu"]) == []
+
+
+def test_the_window_opens_at_most_as_large_as_the_screen_s_free_area():
+    """1500 × 920 on a large screen; shrunk to the available area of a 1440 × 900 one."""
+    from coppernicus.app.main_window import initial_size
+    assert initial_size(2560, 1400) == (1500, 920)
+    assert initial_size(1440, 875) == (1440, 875)
+    assert initial_size(None, None) == (1500, 920)          # no screen known (offscreen)
