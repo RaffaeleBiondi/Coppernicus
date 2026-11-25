@@ -378,6 +378,28 @@ def test_victim_rows_give_peak_margin_verdict_and_why():
     assert rows["ok"]["Mostly"] == "inductive" and rows["ok"]["Capacitive"] == "100 mV"
 
 
+def test_a_logic_v_off_kipis_table_is_not_judged_with_its_note_never_ranked():
+    from coppernicus.app.noise_panel import VICTIM_HEADERS, victim_rows
+    off = _victim("off", 0.2, margin=None)
+    off.margin_note = "logic_v 0.9 V is not in KiPI's JESD8 table: enter noise_margin_v"
+    r = _result([off, _victim("free", 0.2, margin=None)])
+    rows = {row[0]: dict(zip(VICTIM_HEADERS, row)) for row in victim_rows(r)}
+    assert rows["off"]["Verdict"] == "NOT JUDGED" and rows["off"]["Why"] == off.margin_note
+    assert rows["off"]["Margin"] == "-" and r.verdict == "not_judged"
+    assert rows["free"]["Verdict"] == "no margin (ranked)"
+
+
+def test_the_notes_carry_every_stand_in_and_warning_verbatim():
+    from coppernicus.app.noise_panel import notes_text
+    v = _victim("V", 0.5, stand_ins=["C2 on phase 1: KiPI draws no current loop for it (it has no pad on "
+                                     "GND), so its loop's coupling is left out"])
+    v.warnings = ["No capacitor loops: x"]
+    r = _result([v])
+    r.warnings = ["C9 is on the rails but in no phase's list: the hot loop does not include it"]
+    text = notes_text(r)
+    assert v.stand_ins[0] in text and r.warnings[0] in text and "No capacitor loops: x" in text
+
+
 def test_the_radiated_estimate_is_for_scale_and_the_header_never_judges_ripple():
     from coppernicus.app.noise_panel import header_html, radiated_text
     r = _result([_victim("bad", 0.9)])

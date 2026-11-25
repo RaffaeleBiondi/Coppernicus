@@ -611,12 +611,17 @@ VICTIM_HEADERS = ("Victim", "Net", "Peak", "Margin", "% of margin", "Verdict", "
                   "Inductive", "Common", "Ends", "Why")
 
 
+def _meant_a_margin(v) -> bool:
+    """A margin was set, or meant (a logic_v off KiPI's JESD8 table: ``margin_note``)."""
+    return v.margin_v is not None or bool(v.margin_note)
+
+
 def _verdict_word(v) -> str:
     if v.passed is True:
         return "PASS"
     if v.passed is False:
         return "FAIL"
-    return "NOT JUDGED" if v.margin_v is not None else "no margin (ranked)"
+    return "NOT JUDGED" if _meant_a_margin(v) else "no margin (ranked)"
 
 
 def victim_rows(r) -> List[Tuple[str, ...]]:
@@ -627,17 +632,25 @@ def victim_rows(r) -> List[Tuple[str, ...]]:
     for v in r.victims:
         if v.passed is False:
             why = failed.get(v.name, "")
-        elif v.margin_v is not None:
-            why = v.not_judged
+        elif _meant_a_margin(v):
+            why = v.not_judged                      # the core's reason, verbatim
         else:
-            why = next((w for w in r.warnings if w.startswith(f"Victim {v.name}: logic_v")),
-                       "no noise margin set: ranked, not judged")
+            why = "no noise margin set: ranked, not judged"
         ends = f"{v.driver} → {v.receiver} ({'entered' if v.ends_entered else 'guessed by KiPI'})"
         rows.append((v.name, v.net, _volts(v.peak_v), _volts(v.margin_v),
                      f"{100 * v.ratio:.3g}" if v.ratio is not None else "-", _verdict_word(v),
                      v.dominant or "-", *(_volts(v.peak_by_v[k]) if k in v.peak_by_v else "-"
                                           for k in ("capacitive", "inductive", "common")), ends, why))
     return rows
+
+
+def notes_text(r) -> str:
+    """The result's report as the CLI prints it (verdict, not-judged reasons with every
+    stand-in, assumptions, warnings: verbatim), then each victim's own warnings from KiPI."""
+    from coppernicus.coupled_noise import noise_summary, noise_text
+    lines = [line.strip("\n") for line in noise_text(noise_summary([r]))]
+    lines += [f"  warning ({v.name}): {w}" for v in r.victims for w in v.warnings]
+    return "\n".join(lines)
 
 
 def radiated_text(r) -> str:
@@ -939,7 +952,8 @@ class NoisePanel(QWidget):
             self.opt[key] = w
             oform.addRow(label, w)
         self.opt["f_max_hz"].setToolTip("Empty: ten times the faster edge's corner 1/(π·t), or three times "
-                                        "the ringing, at most 3 GHz (KiPI)")
+                                        "the ringing, at most 3 GHz (KiPI). Below that reach the harmonics "
+                                        "stop short, and the victims are then not judged")
         self.opt["dead_time_ns"].setToolTip("Between the two switches (KiPI's 20 ns)")
         self.opt["segment_mm"].setToolTip("Victims are cut into 2D cross-sections this often (KiPI's 0.5 mm)")
         self.opt["window_mm"].setToolTip("Copper this close to a victim is in its cross-section "
@@ -1725,7 +1739,6 @@ class NoisePanel(QWidget):
         if entry is None:
             self._show_empty()
             return
-        from coppernicus.coupled_noise import noise_summary, noise_text
         r = entry[0]
         self._draw_waveforms(r)
         for kind in "HE":
@@ -1734,7 +1747,7 @@ class NoisePanel(QWidget):
         self._fill_rows(self.victim_table, victim_rows(r), VICTIM_HEADERS.index("Verdict"))
         self.radiated.setText(radiated_text(r))
         self.stats.setText(stats_text(r.stats))
-        self.notes.setPlainText("\n".join(line.strip("\n") for line in noise_text(noise_summary([r]))))
+        self.notes.setPlainText(notes_text(r))
         self.export_button.setEnabled(True)
         self._check_stale()
 
