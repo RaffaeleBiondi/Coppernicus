@@ -250,7 +250,9 @@ def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
     for v in out.vrms:
         _judge_input(out, v, sources.get(v.name))
 
-    load_net = {name: net for (what, net, _i), name in names.items() if what == "load"}
+    # A load's supply net is the one its pins are on: past a net tie, not its rail's (R6).
+    rail_of_load = {name: net for (what, net, _i), name in names.items() if what == "load"}
+    pad_net = {k.name: k.supply.net for k in setup.loads}
     for ld in kt.loads:
         key = key_of.get(ld.group, ld.group)
         drop, v_worst = load_drop(ld)
@@ -260,7 +262,8 @@ def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
             name=ld.name, group=key, current_a=float(ld.current), nominal_v=float(ld.nominal),
             v_supply_v=float(ld.v_supply), v_supply_min_v=float(ld.v_supply_min),
             v_ground_v=ld.v_ground, v_across_v=float(across), v_worst_v=float(v_worst),
-            drop_v=float(drop), drop_pct=float(pct), status=ld.status, net=load_net.get(ld.name, "")))
+            drop_v=float(drop), drop_pct=float(pct), status=ld.status,
+            net=pad_net.get(ld.name) or rail_of_load.get(ld.name, ""), rail=rail_of_load.get(ld.name, "")))
     apply_limits(out, project)
     return out
 

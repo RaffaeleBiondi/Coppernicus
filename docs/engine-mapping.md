@@ -252,6 +252,13 @@ Which limit judges what (`power_tree.LIMITS_RULE`, also an assumption line of ev
   from its group's driving net: a rail group's key (the net its source drives), or a ground
   group's key (the first ground net the project names). So a limit on `+3V3` also judges
   `U2 (input)` on `+3V3_F` beyond FB1, unless `+3V3_F` has its own.
+- **A load's supply net is the net its pins are on**, which a net tie can make another net
+  than the rail it is listed in (a load on `VCC_B`, tied to `VCC`, listed in rail `VCC` as
+  the KiCad fields put it): it is judged by `VCC_B`'s limits, and a limit `VCC_B` does not
+  set comes from the rail it is listed in, then from the driving net. So a limit on the tied
+  net (a limits-only rail, or a `PI_LIMIT_DROP` there) judges the loads on it, a looser one
+  too. The tree no longer judges them by their rail's net only, which passed a load over
+  its own net's limit.
 - **Copper per group, strictest.** The largest ground rise, current crowding and vias of a
   group are judged against the strictest (lowest) value set on any of its nets, because the
   solve does not keep which net each triangle belongs to. This is conservative: it may fail

@@ -280,9 +280,9 @@ def test_parallel_links_share_the_estimated_current(board):
     assert sum(t.current for t in est) == pytest.approx(g.I_U3 + g.IQ_LDO, rel=1e-12)
 
 
-def test_a_regulator_input_on_a_tied_net_is_estimated():
+def _tie_input_board():
+    """J1 on +5V → NT1 (net tie) → +5V_B → U1's input; U1's output +3V3 feeds U2."""
     from coppernicus.engine.synthetic import SyntheticBoard, two_layer_stackup
-    from coppernicus.project import Project, Rail
     b = SyntheticBoard("tie_input", two_layer_stackup())
     b.square_pad("J1", "1", "+5V", 0.0, 0.0, 1.5)
     b.square_pad("NT1", "1", "+5V", 9.5, 0.0, 0.5, value="NetTie_2", lib_id="NetTie:NetTie-2")
@@ -293,11 +293,19 @@ def test_a_regulator_input_on_a_tied_net_is_estimated():
     for net, a, z in (("+5V", (0.0, 0.0), (9.5, 0.0)), ("+5V_B", (10.5, 0.0), (20.0, 0.0)),
                       ("+3V3", (20.0, 5.0), (30.0, 5.0))):
         b.track(net, 3, 0.5, a, z)
-    board = Board(b.snapshot())
-    project = Project(rails=[
+    return Board(b.snapshot())
+
+
+def _tie_input_project():
+    from coppernicus.project import Project, Rail
+    return Project(rails=[
         Rail("+5V", sources=[Source("J1", 5.0)]),
         Rail("+3V3", sources=[Source("U1", 3.3, ["2"], kind="smps", efficiency=0.9,
                                      input_pins=["1"], input_net="+5V_B")], loads=[Load("U2", 1.0)])])
+
+
+def test_a_regulator_input_on_a_tied_net_is_estimated():
+    board, project = _tie_input_board(), _tie_input_project()
     res = solve_rail(board, project.rail("+5V"), project.settings, project=project)
     [est] = [t for t in res.loads if t.name == "U1 (input, estimated)"]
     assert est.current == pytest.approx(3.3 * 1.0 / (0.9 * 5.0), rel=1e-12)
@@ -1014,3 +1022,164 @@ def test_an_estimated_draw_on_a_negative_rail_flows_into_the_copper():
     [est] = res.loads
     assert est.name == "U1 (input, estimated)" and est.current == pytest.approx(1.0)
     assert est.v_max > -5.0 and res.drop(est) > 0
+
+
+# ------------------------------------------------------------------ a load past a net tie
+
+def _tie_load_board():
+    """J1 on VCC → NT1 (net tie) → VCC_B → U2, with U3 on VCC before the tie. KiCad saves
+    the tie's copper bridge with no net, so VCC and VCC_B meet only through NT1."""
+    from coppernicus.engine.synthetic import F, SyntheticBoard, two_layer_stackup
+    b = SyntheticBoard("tie_load", two_layer_stackup())
+    lib = "NetTie:NetTie-2_SMD_Pad0.5mm"
+    b.square_pad("J1", "1", "VCC", 0.0, 0.0, 1.5)
+    b.square_pad("U3", "1", "VCC", 15.0, 0.0, 1.0)
+    b.square_pad("NT1", "1", "VCC", 19.5, 0.0, 0.5, value="NetTie_2", lib_id=lib)
+    b.square_pad("NT1", "2", "VCC_B", 20.5, 0.0, 0.5, value="NetTie_2", lib_id=lib)
+    b.square_pad("U2", "1", "VCC_B", 40.0, 0.0, 1.5)
+    b.track("VCC", F, 0.5, (0.0, 0.0), (19.5, 0.0))
+    b.track("VCC_B", F, 0.5, (20.5, 0.0), (40.0, 0.0))
+    return Board(b.snapshot())
+
+
+def _tie_load_tree(vcc=None, vcc_b=None, u3=False):
+    """U2 (pads on VCC_B) listed in rail VCC, as a project file or the KiCad fields put it;
+    ``vcc_b``: a limits-only rail on VCC_B."""
+    from coppernicus.project import Project, Rail
+    loads = [Load("U2", 1.0)] + ([Load("U3", 0.5)] if u3 else [])
+    rails = [Rail("VCC", sources=[Source("J1", 3.3)], loads=loads, limits=Limits(max_drop_pct=vcc))]
+    if vcc_b is not None:
+        rails.append(Rail("VCC_B", limits=Limits(max_drop_pct=vcc_b)))
+    return solve_project_tree(_tie_load_board(), Project(rails=rails))
+
+
+def _load_problem(tree, name):
+    return next(p for p in find_tree_problems(tree, "VCC") if p.kind == "load" and p.data["name"] == name)
+
+
+def test_a_load_past_a_net_tie_is_judged_by_its_own_net_s_drop_limit():
+    """The false pass: U2's pads are on VCC_B, which NT1 ties to VCC. U2 drops between
+    VCC_B's 0.5 % and VCC's 5 %: it is judged by VCC_B's, the net it is on, and fails."""
+    from coppernicus.power_tree import tree_summary
+    tree = _tie_load_tree(vcc=5.0, vcc_b=0.5)
+    u2 = _load(tree, "U2")
+    assert set(tree.groups["VCC"].nets) == {"VCC", "VCC_B"} and u2.group == "VCC"
+    assert 0.5 < u2.drop_pct < 5.0, u2.drop_pct
+    assert u2.net == "VCC_B" and u2.passed is False
+    problem = _load_problem(tree, "U2")
+    assert problem.severity == FAIL and "limit 0.5 %." in problem.detail, problem.detail
+    assert problem.detail.startswith("1 A on VCC_B, supply "), problem.detail   # the net it is on
+    doc = tree_summary(tree)
+    assert _group_doc(doc, "VCC")["verdict"] == "fail" and doc["verdict"] == "fail"
+    assert next(ld for ld in doc["loads"] if ld["name"] == "U2")["exceeds_drop_limit"] is True
+
+
+def test_a_drop_limit_only_on_the_tied_net_judges_the_load_past_the_tie():
+    """VCC has no limit, VCC_B has one: U2, on VCC_B, is the load to judge, not "no load or
+    regulator input to judge"."""
+    from coppernicus.power_tree import group_verdict, tree_summary
+    tree = _tie_load_tree(vcc=None, vcc_b=0.5)
+    u2 = _load(tree, "U2")
+    assert 0.5 < u2.drop_pct < 5.0 and u2.passed is False
+    gv = group_verdict(tree, "VCC")
+    assert gv.verdict == "fail" and gv.not_judged == [], gv.not_judged
+    doc = tree_summary(tree)
+    assert doc["verdict"] == "fail" and "no load" not in doc["verdict_note"], doc["verdict_note"]
+
+
+def test_a_load_past_a_net_tie_takes_the_driving_net_s_limit_its_net_does_not_set():
+    """R6: with no limit of its own, VCC_B's U2 is judged by the driving net's, and the
+    problem says where it came from. Its own limit, when set, wins, a looser one too."""
+    tree = _tie_load_tree(vcc=5.0)
+    u2 = _load(tree, "U2")
+    assert u2.net == "VCC_B" and u2.passed is True
+    assert "limit 5 % (from VCC)." in _load_problem(tree, "U2").detail
+    looser = _tie_load_tree(vcc=0.5, vcc_b=10.0)
+    assert _load(looser, "U2").passed is True
+    assert "limit 10 %." in _load_problem(looser, "U2").detail
+
+
+def test_a_load_on_its_rail_s_own_net_is_judged_as_before_next_to_a_tied_one():
+    """U3's pads are on VCC, its rail's net: VCC's 5 % judges it, not VCC_B's 0.5 %, though
+    it drops more than 0.5 % (the drop of U2 beyond the tie adds to it)."""
+    from coppernicus.power_tree import group_verdict
+    tree = _tie_load_tree(vcc=5.0, vcc_b=0.5, u3=True)
+    u3, u2 = _load(tree, "U3"), _load(tree, "U2")
+    assert 0.5 < u3.drop_pct < 5.0 and 0.5 < u2.drop_pct < 5.0, (u3.drop_pct, u2.drop_pct)
+    assert u3.net == "VCC" and u3.passed is True
+    assert _load_problem(tree, "U3").detail.endswith("limit 5 %."), _load_problem(tree, "U3").detail
+    assert u2.net == "VCC_B" and u2.passed is False
+    assert group_verdict(tree, "VCC").failed == 1
+
+
+def test_a_load_listed_under_a_rail_past_a_link_keeps_that_rail_s_limit_past_a_tie():
+    """J1 on VCC → FB1 (link) → VCC_F → NT1 (net tie) → VCC_G → U2, U2 listed in rail VCC_F
+    with VCC_F's limit: past the tie U2 sits on VCC_G, which sets none, so VCC_F's limit (the
+    rail it is listed in) judges it before the driving net's. VCC_G's own limit wins."""
+    from coppernicus.engine.synthetic import F, SyntheticBoard, two_layer_stackup
+    from coppernicus.project import Link, Project, Rail
+    b = SyntheticBoard("link_tie", two_layer_stackup())
+    lib = "NetTie:NetTie-2_SMD_Pad0.5mm"
+    b.square_pad("J1", "1", "VCC", 0.0, 0.0, 1.5)
+    b.square_pad("FB1", "1", "VCC", 9.5, 0.0, 0.5)
+    b.square_pad("FB1", "2", "VCC_F", 10.5, 0.0, 0.5)
+    b.square_pad("NT1", "1", "VCC_F", 19.5, 0.0, 0.5, value="NetTie_2", lib_id=lib)
+    b.square_pad("NT1", "2", "VCC_G", 20.5, 0.0, 0.5, value="NetTie_2", lib_id=lib)
+    b.square_pad("U2", "1", "VCC_G", 30.0, 0.0, 1.5)
+    for net, x0, x1 in (("VCC", 0.0, 9.5), ("VCC_F", 10.5, 19.5), ("VCC_G", 20.5, 30.0)):
+        b.track(net, F, 0.5, (x0, 0.0), (x1, 0.0))
+    board = Board(b.snapshot())
+    project = Project(
+        rails=[Rail("VCC", sources=[Source("J1", 3.3)]),
+               Rail("VCC_F", loads=[Load("U2", 1.0)], limits=Limits(max_drop_pct=0.5))],
+        links=[Link("FB1", "FB1", ["1"], "VCC", ["2"], "VCC_F", 0.01)])
+    tree = solve_project_tree(board, project)
+    u2 = _load(tree, "U2")
+    assert set(tree.groups["VCC"].nets) == {"VCC", "VCC_F", "VCC_G"} and u2.group == "VCC"
+    assert 0.5 < u2.drop_pct < 5.0 and u2.net == "VCC_G" and u2.passed is False
+    assert "limit 0.5 % (from VCC_F)." in _load_problem(tree, "U2").detail
+    project.rails.append(Rail("VCC_G", limits=Limits(max_drop_pct=5.0)))
+    tree = solve_project_tree(board, project)
+    assert _load(tree, "U2").passed is True and "limit 5 %." in _load_problem(tree, "U2").detail
+
+
+def test_a_kicad_drop_limit_on_a_tied_net_judges_its_load_in_the_tree(tmp_path, capsys):
+    """The same from the KiCad fields alone: U2's PI_LOAD and PI_LIMIT_DROP 0.5 % on VCC_B,
+    tied by NT1 to VCC (J1's PI_SOURCE, PI_LIMIT_DROP 5 %). U2 moves into rail VCC, its limit
+    stays on VCC_B, and `solve --tree` fails it."""
+    import json
+
+    from kicad_fixture import write_board
+
+    from coppernicus.cli import EXIT_LIMIT, main
+    from coppernicus.project import Project
+    j1_fields = {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V", "PI_LIMIT_DROP": "5%"}
+    u2_fields = {"PI_RAIL": "VCC_B", "PI_LOAD": "1A", "PI_LIMIT_DROP": "0.5%"}
+    parts = [("J1", [("1", 0.0, 0.0, "VCC")], j1_fields),
+             ("NT1", [("1", 19.5, 0.0, "VCC"), ("2", 20.5, 0.0, "VCC_B")], {"Value": "NetTie_2"}),
+             ("U2", [("1", 40.0, 0.0, "VCC_B")], u2_fields)]
+    write_board(tmp_path / "tie.kicad_pcb", parts,
+                [("VCC", (0.0, 0.0), (19.5, 0.0), 0.5), ("VCC_B", (20.5, 0.0), (40.0, 0.0), 0.5)])
+    project = Project(board="tie.kicad_pcb").save(tmp_path / "tie.coppernicus.yml")
+    code = main(["solve", str(project), "--tree", "--json", "--out", str(tmp_path / "out")])
+    doc = json.loads(capsys.readouterr().out)
+    [u2] = doc["loads"]
+    assert u2["name"] == "U2" and u2["group"] == "VCC" and 0.5 < u2["drop_pct"] < 5.0, u2
+    assert u2["exceeds_drop_limit"] is True and doc["verdict"] == "fail" and code == EXIT_LIMIT
+    assert _group_doc(doc, "VCC")["limits_by_net"] == {"VCC": {"max_drop_pct": 5.0},
+                                                       "VCC_B": {"max_drop_pct": 0.5}}
+
+
+def test_a_regulator_input_on_a_tied_net_is_judged_by_its_input_net_s_limit():
+    """U1's input pins are on +5V_B, tied by NT1 to +5V (J1): its input is judged by
+    +5V_B's limit, not by +5V's."""
+    from coppernicus.project import Rail
+    board, project = _tie_input_board(), _tie_input_project()
+    project.rail("+5V").limits = Limits(max_drop_pct=5.0)
+    project.rails.append(Rail("+5V_B", limits=Limits(max_drop_pct=0.01)))
+    tree = solve_project_tree(board, project)
+    u1 = _vrm(tree, "U1")
+    assert u1.input_net == "+5V_B" and u1.input_group == "+5V"
+    assert 0.01 < u1.input_drop_pct < 5.0 and u1.input_passed is False, u1.input_drop_pct
+    title = next(p for p in find_tree_problems(tree, "+5V") if p.data.get("name") == "U1 (input)")
+    assert title.severity == FAIL and "limit 0.01 %." in title.detail, title.detail
