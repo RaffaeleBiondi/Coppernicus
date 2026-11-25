@@ -48,8 +48,10 @@ why, and ask for what is missing.
    image), `probe(layer, x_mm, y_mm)` and `cut_current(layer, x1, y1, x2, y2)`. Use the cut to
    **measure** a neck or track width and the current through it. Do not back-compute widths
    from J or read them off a PNG.
-7. What-if: re-solve with `settings={"copper_thickness_mm": {"B.Cu": 0.07}}`,
-   `via_plating_um` or `copper_temp_c`, then `compare_results(a, b)`.
+7. What-if: for copper weight, `copper_step(result_id, layer, "up"|"down")` moves one layer one
+   standard weight (0.5, 1, 2, 3 oz) and returns the comparison; it refuses bigger jumps, which
+   are design changes made in KiCad. For plating or temperature, re-solve with
+   `settings={"via_plating_um": ...}` or `copper_temp_c`, then `compare_results(a, b)`.
    - `copper_thickness_mm` is an optional what-if, in mm (1 oz = 0.035, not 35). It never
      changes the board file; real changes of copper weight are made in KiCad.
    - The stack is rebuilt around the new thickness, so via barrels get longer when it thickens.

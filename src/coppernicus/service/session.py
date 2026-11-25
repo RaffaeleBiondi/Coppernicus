@@ -12,6 +12,7 @@ again for anything that needs the field.
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import fnmatch
 import json
@@ -57,6 +58,10 @@ MAX_SUMMARIES = 256
 LIST_LIMIT = 200
 PIN_LIST_LIMIT = 64
 
+
+# Standard copper weights for copper_step: 0.5, 1, 2 and 3 oz.
+COPPER_STEPS_MM = (0.0175, 0.035, 0.070, 0.105)
+COPPER_STEPS_OZ = ("0.5 oz", "1 oz", "2 oz", "3 oz")
 
 FIELD_HINT = ("fix the field in KiCad (on the symbol, then update the PCB); or give the rail in the "
               "project file with override_board_fields: true; or turn the fields off with "
@@ -116,6 +121,9 @@ class _ResultRecord:
     summary: Dict[str, Any]
     nbytes: int
     queries: Dict[str, Any] = field(default_factory=dict)      # per layer: locator, J, copper
+    # What the solve was given besides the rail and settings (project, notes, warnings,
+    # fields_info), so that a what-if re-solves the very same rail.
+    context: Dict[str, Any] = field(default_factory=dict)
 
 
 class _Live(NamedTuple):
@@ -383,7 +391,10 @@ class Session:
         summary.update({"from_board_fields": False, "overrides_board_fields": False,
                         "board_fields_warnings": [], **(fields_info or {})})
         rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
-                            layer_thickness, res, problems, summary, _result_nbytes(res))
+                            layer_thickness, res, problems, summary, _result_nbytes(res),
+                            context={"project": project, "notes": list(notes),
+                                     "warnings": list(warnings), "fields_info": dict(fields_info or {}),
+                                     "top": top})
         with self._lock:
             self._results[rid] = rec
             self._evict(keep=rid)
@@ -1061,6 +1072,58 @@ class Session:
             ],
             "warnings": warnings,
         })
+
+    def copper_step(self, result_id: str, layer: str, step: str, progress: Progress = None,
+                    cancelled: Cancel = None) -> Dict[str, Any]:
+        """Re-solve a result with one copper layer one standard weight up or down (0.5, 1, 2,
+        3 oz: 0.0175, 0.035, 0.070, 0.105 mm), from the design's own thickness (the project's
+        copper_thickness_mm, else the board file's), and compare it with that result. Bigger
+        jumps, a non-standard start and a result that is already a what-if are refused."""
+        if step not in ("up", "down"):
+            raise ServiceError(E.INVALID_INPUT, f"step is up or down, not {step!r}",
+                               "one standard copper weight at a time")
+        rec = self._record(result_id, heavy=False)
+        entry = self._entry(rec.board_id)
+        names = {lay.name: lay.thickness_mm for lay in entry.board.layers()}
+        if layer not in names:
+            raise ServiceError(E.LAYER_NOT_FOUND, f"No copper layer {layer!r} on this board",
+                               f"copper layers: {', '.join(names)}")
+        project = rec.context.get("project")
+        design = (project.settings.copper_thickness_mm.get(layer) if project is not None else None)
+        design = design if design is not None else entry.board.file_thickness_mm.get(layer, names[layer])
+        now = rec.layer_thickness.get(layer, names[layer])
+        kicad = "real changes of copper weight are made in KiCad (the stack-up), then solved again"
+        if abs(now - design) > 1e-9:
+            raise ServiceError(E.INVALID_INPUT, f"{result_id} already has {layer} at {now:g} mm, not the "
+                               f"design's {design:g} mm: copper_step works one step from the design",
+                               f"step from the result solved with the design's copper; {kicad}")
+        at = next((i for i, mm in enumerate(COPPER_STEPS_MM) if abs(design - mm) <= 0.03 * mm), None)
+        if at is None:
+            weights = ", ".join(f"{n} {mm:g} mm" for n, mm in zip(COPPER_STEPS_OZ, COPPER_STEPS_MM))
+            raise ServiceError(E.INVALID_INPUT, f"{layer} is {design:g} mm, not a standard copper weight "
+                               f"({weights})", f"copper_step starts from a standard weight; {kicad}")
+        to = at + (1 if step == "up" else -1)
+        if not 0 <= to < len(COPPER_STEPS_MM):
+            end = "the thickest" if step == "up" else "the thinnest"
+            raise ServiceError(E.INVALID_INPUT, f"{layer} is {COPPER_STEPS_OZ[at]}, {end} step; one step "
+                               f"{step} is not offered", f"bigger changes are not what-ifs: {kicad}")
+        new_mm = COPPER_STEPS_MM[to]
+        settings = dataclasses.replace(rec.settings, copper_thickness_mm={
+            **rec.settings.copper_thickness_mm, layer: new_mm})
+        ctx = rec.context
+        live = self._solve(entry, rec.rail, settings, ctx.get("top", 5), progress, cancelled,
+                           project=project, notes=ctx.get("notes", ()), warnings=ctx.get("warnings", ()),
+                           fields_info=ctx.get("fields_info"))
+        cmp_ = compare_summaries(rec.summary, live.rec.summary)
+        barrel = [a for a in live.rec.summary["assumptions"] if a.startswith("What-if copper thickness")]
+        return C.jsonable({
+            "result_id": live.rec.id, "baseline": rec.id, "net": rec.rail.net, "layer": layer,
+            "from_mm": design, "to_mm": new_mm, "from_oz": COPPER_STEPS_OZ[at], "to_oz": COPPER_STEPS_OZ[to],
+            "compare": cmp_,
+            "assumptions": [f"One standard step of copper on {layer} ({COPPER_STEPS_OZ[at]} → "
+                            f"{COPPER_STEPS_OZ[to]}), from the design's {design:g} mm; the board file "
+                            f"is not changed and {kicad}.", *barrel],
+            "warnings": list(cmp_.get("warnings", []))})
 
     def compare_results(self, result_a: str, result_b: str) -> Dict[str, Any]:
         """Per-load and per-layer deltas, b − a (works on evicted results too)."""

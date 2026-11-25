@@ -360,6 +360,21 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                      use_board_fields=use_board_fields)
 
     @mcp.tool(annotations=READ_ONLY)
+    def copper_step(result_id: str, layer: Annotated[str, Field(description="A copper layer, e.g. B.Cu.")],
+                    ctx: Context,
+                    step: Annotated[Literal["up", "down"], Field(
+                        description="One standard weight up or down (0.5, 1, 2, 3 oz).")] = "up",
+                    ) -> dict[str, Any]:
+        """What-if: re-solve a result with one copper layer ONE standard weight up or down
+        (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness,
+        and compare it with that result (compare_results' deltas, plus the new result_id).
+        Bigger jumps, a non-standard start and stepping a what-if are refused: real changes are
+        made in KiCad. The stack is rebuilt, so via barrels change length too."""
+        bridge = _Bridge(ctx)
+        return _call("copper_step", session.copper_step, result_id, layer, step,
+                     progress=bridge.progress, cancelled=bridge.cancelled)
+
+    @mcp.tool(annotations=READ_ONLY)
     def propose_fields(project_path: Annotated[Optional[str], Field(
                            description="A *.coppernicus.yml whose rails and links to describe.")] = None,
                        result_id: Annotated[Optional[str], Field(
