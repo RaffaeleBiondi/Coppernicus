@@ -18,6 +18,12 @@ file whose own rail of the same net differs, so the fields win with a warning.
 ``demo.coppernicus.yml`` has a deliberately tight 0.25 % drop budget, so it fails;
 ``demo-relaxed.coppernicus.yml`` is the same rail with a 1 % budget, so it passes. The
 GitHub Action's self-test runs both.
+
+``demo-thermal.coppernicus.yml``: the demo rail at four times its currents with the board
+temperature on (``thermal: {enabled: true, max_rise_c: 15}``); its copper heats about 17 °C
+above the 25 °C ambient, so it fails:
+
+    uv run coppernicus solve examples/demo/demo-thermal.coppernicus.yml --tree --out results/demo
 """
 
 from pathlib import Path
@@ -29,7 +35,7 @@ from coppernicus.engine.synthetic import (
     save_snapshot,
     write_strip_kicad_pcb,
 )
-from coppernicus.project import Limits, Load, Project, Rail, Source
+from coppernicus.project import Limits, Load, Project, Rail, Source, ThermalOptions
 
 ROOT = Path(__file__).resolve().parent
 HERE = ROOT / "demo"
@@ -58,6 +64,16 @@ def write_fields_example(folder: Path) -> None:
         "VCC", sources=[Source("J1", 3.3)], loads=[Load("U1", 1.5)])]).save(folder / "fields.coppernicus.yml")
 
 
+def demo_thermal_project() -> Project:
+    """The demo rail at four times its currents, with the board temperature solved and a
+    15 °C limit on the copper's rise over the ambient (KiPI's defaults otherwise)."""
+    return Project(board="demo.kipi.json.gz", rails=[Rail(
+        "+3V3",
+        sources=[Source("J1", 3.3, name="Supply")],
+        loads=[Load("U1", 8.0), Load("U2", 6.0), Load("U3", 1.2)],
+    )], thermal=ThermalOptions(enabled=True, max_rise_c=15.0))
+
+
 def main(board: bool = True):
     HERE.mkdir(exist_ok=True)
     if board:
@@ -65,6 +81,7 @@ def main(board: bool = True):
         save_snapshot(demo_board(led_net=True), HERE / "demo.kipi.json.gz")
     demo_project(0.25).save(HERE / "demo.coppernicus.yml")
     demo_project(1.0).save(HERE / "demo-relaxed.coppernicus.yml")
+    demo_thermal_project().save(HERE / "demo-thermal.coppernicus.yml")
     print(f"Wrote {HERE}")
 
     CHAIN.mkdir(exist_ok=True)
