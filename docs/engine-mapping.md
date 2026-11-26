@@ -1479,13 +1479,16 @@ Also:
 
 ---
 
-## Solver order options: SuperLU's symmetric mode (`kipi/core/solver/direct.py`, opt-in)
+## Solver order options: SuperLU's symmetric mode (`kipi/core/solver/direct.py`, on by default)
 
 KiPI factorizes with SciPy's SuperLU in the COLAMD column order (`direct._superlu`,
 `direct._superlu_complex`), which ignores that its matrices are symmetric. SuperLU's symmetric
 mode (minimum degree on the pattern of A + Aᵀ, `SymmetricMode`, the diagonal as pivot) fills
 about half as much on them, so it takes less time and memory.
-`src/coppernicus/engine/superlu_order.py` offers it per part, each **off by default**.
+`src/coppernicus/engine/superlu_order.py` applies it per part: **`thermal` and `dc` on by
+default** (the owner's decision, after a private test board's on/off pair: electro-thermal solve about
+half the time and memory; DC factorizations 0.73–0.91×; no fallback), `ac` only when named
+until it is checked on a real board.
 
 | Part | What runs in SuperLU's symmetric mode | Pivoting |
 |------|---------------------------------------|----------|
@@ -1501,9 +1504,12 @@ Where PARDISO loads (the optional `pypardiso`, x86-64 Windows and Linux), KiPI r
 functions only after PARDISO failed: KiPI's own functions then always run, and the memory
 estimates say nothing of the symmetric order.
 
-How to enable: `COPPERNICUS_SUPERLU_ORDER=thermal,ac,dc` in the environment (comma-separated
-parts, read when `coppernicus.engine` is imported), or
-`superlu_order.enable("thermal", "ac", "dc")`.
+The switch, `COPPERNICUS_SUPERLU_ORDER` in the environment, read when `coppernicus.engine` is
+imported: unset, the default (`thermal`, `dc`); `off` or an empty value, nothing installed
+(**KiPI's method, bit-identical**); otherwise the comma-separated parts it names, e.g.
+`thermal,dc,ac` or `thermal`. Or `superlu_order.enable(...)` / `uninstall()`. The test suite runs
+with the default in place; a test that compares with KiPI to the last bit takes it out with the
+`kipis_method` fixture (tests/conftest.py).
 
 Off, nothing is replaced and KiPI's own path runs: bit-identical. KiPI's reference
 electro-thermal solve (`solve_kipi_reference`, for the drift test) runs under a "kipi" thread
@@ -1556,9 +1562,10 @@ hands its factorizations to KiPI's own function. `uninstall()` puts KiPI's back.
 **Open risk (`dc` and `ac`):** KiPI's own comment at `direct._superlu` says this order "takes
 minutes" on its meshes, whose merged pad, ring and port groups give dense rows. On synthetic
 meshes it took 0.5 s even with dense pad rows (20 nodes tied to 1,000 nodes each: COLAMD 15.8 s
-there), but that does not refute a remark made on real boards: neither part is to be made a
-default before a run on a real board on a quiet machine. The heat model's grid (at most 7
-non-zeros a row) has no such rows.
+there), but that does not refute a remark made on real boards. On a large private test board, on a quiet
+machine, it did not happen: the DC factorizations took 0.73–0.91× KiPI's time (the base of the
+`dc` default). `ac` stays opt-in until a real board's AC solve is checked. The heat model's grid
+(at most 7 non-zeros a row) has no such rows.
 
 Recorded for a later ruling, not built: with this order a direct solve beats KiPI's AMG-CG
 (above 200,000 unknowns) at 352,000 unknowns (1.13 s against 2.68 s, but 647 MB against
@@ -1567,4 +1574,5 @@ ceiling would replace CG's 1e-10 relative residual with an exact solve for mid-s
 
 Not refitted: the memory estimates (`thermal_ram_estimate`; the AC `ram_estimate` and
 `noise_ram_estimate`) were measured in KiPI's order; with their part active (on, with SuperLU as
-KiPI's backend) they overstate, and their text says so.
+KiPI's backend) they overstate, and their text says so: by default the board temperature's
+(`thermal` is on), the AC and noise ones only with `ac`. The DC solves have no estimate.

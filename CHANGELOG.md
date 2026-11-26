@@ -5,6 +5,10 @@ line, the MCP server or the GitHub Action. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Coppernicus is pre-alpha: check its
 results against your own judgement.
 
+## Unreleased
+
+Changed: the board temperature and DC solves factor with SuperLU's symmetric ordering by default (about half the time and memory of the electro-thermal solve on a large board); COPPERNICUS_SUPERLU_ORDER=off restores KiPI's method
+
 ## 0.3.0 (2026-11-26)
 
 Three more of KiPI's analyses, each in the app, the command line, the MCP server and the

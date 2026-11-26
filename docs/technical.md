@@ -52,6 +52,15 @@ and net ties) is solved from its one source, ground nets included:
 - a remote-sense regulator holds its set point across the sensed pins.
 The mapping from the project file to KiPI's setup is in [engine-mapping.md](engine-mapping.md).
 
+**Factorization order.** KiPI factorizes its sparse systems with SciPy's SuperLU in the COLAMD
+column order, which ignores that they are symmetric. By default Coppernicus has the board
+temperature's heat model and the DC copper's direct solves factored in SuperLU's symmetric mode
+instead (`engine/superlu_order.py`): about half the fill, so on a large board about half the time
+and memory of the electro-thermal solve (measured on a large private test board). Numbers stay equal within the documented round-off criteria (each factorization is
+checked as KiPI checks the ones it does not trust, and redone by KiPI if it fails); the AC solves
+keep KiPI's order unless `ac` is named. `COPPERNICUS_SUPERLU_ORDER=off` restores KiPI's method
+exactly. Details, criteria and evidence: [engine-mapping.md](engine-mapping.md).
+
 **Current density at sharp corners.** With linear elements, |J| at a re-entrant corner (the inner
 corner of an L, the end of a slot) grows as the mesh gets finer: the point value is singular.
 The Problems panel therefore ranks crowding spots by their area-weighted mean |J| and shows the
