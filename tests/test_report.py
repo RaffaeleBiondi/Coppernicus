@@ -18,8 +18,10 @@ from coppernicus.report import (
     RailReport,
     cell_triangles,
     decode,
+    sample_layer,
     write_report,
 )
+from coppernicus.results import LayerField
 
 RHO = 1.724e-5      # Ω·mm, annealed copper at 20 °C (the engine's constant)
 DEMO_RAIL = Rail("+3V3", sources=[Source("J1", 3.3, name="Supply")],
@@ -235,3 +237,82 @@ def test_the_kind_label_follows_the_problems_own_words(tmp_path, title, label):
                         outline=board.outline())
     [p] = parse(path)[1]["rails"][0]["problems"]
     assert p["kind_label"] == label
+
+
+def _cell_triangles_one_offset_at_a_time(points, tris, grid):
+    """cell_triangles as it was before its blocks of rows: the reference for the same answer,
+    bit for bit, ties on shared edges included."""
+    out = np.full(grid.ny * grid.nx, -1, dtype=np.int64)
+    p = points[tris]
+    lo, hi = p.min(axis=1), p.max(axis=1)
+    i0 = np.maximum(np.ceil((lo[:, 0] - grid.x0) / grid.cell - 0.5), 0).astype(np.int64)
+    i1 = np.minimum(np.floor((hi[:, 0] - grid.x0) / grid.cell - 0.5), grid.nx - 1).astype(np.int64)
+    j0 = np.maximum(np.ceil((lo[:, 1] - grid.y0) / grid.cell - 0.5), 0).astype(np.int64)
+    j1 = np.minimum(np.floor((hi[:, 1] - grid.y0) / grid.cell - 0.5), grid.ny - 1).astype(np.int64)
+    w, h = i1 - i0 + 1, j1 - j0 + 1
+    a, b = p[:, 0, 0] - p[:, 2, 0], p[:, 1, 0] - p[:, 2, 0]
+    c, d = p[:, 0, 1] - p[:, 2, 1], p[:, 1, 1] - p[:, 2, 1]
+    det = a * d - b * c
+    keep = np.flatnonzero((w > 0) & (h > 0) & (np.abs(det) > 1e-18))
+    inv = 1.0 / det[keep]
+    coef = np.column_stack([d[keep] * inv, -b[keep] * inv, -c[keep] * inv, a[keep] * inv])
+    ox = grid.x0 + (i0[keep] + 0.5) * grid.cell - p[keep, 2, 0]
+    oy = grid.y0 + (j0[keep] + 0.5) * grid.cell - p[keep, 2, 1]
+    wk, hk, i0k, j0k = w[keep], h[keep], i0[keep], j0[keep]
+    shape_key = wk * (grid.ny + 1) + hk
+    order = np.argsort(shape_key, kind="stable")
+    for g in np.split(order, np.flatnonzero(np.diff(shape_key[order])) + 1):
+        gw, gh = int(wk[g[0]]), int(hk[g[0]])
+        A, B, C, D = coef[g, 0], coef[g, 1], coef[g, 2], coef[g, 3]
+        for dj in range(gh):
+            qy = oy[g] + dj * grid.cell
+            row = (j0k[g] + dj) * grid.nx + i0k[g]
+            for di in range(gw):
+                qx = ox[g] + di * grid.cell
+                l0, l1 = A * qx + B * qy, C * qx + D * qy
+                inside = (l0 >= -1e-9) & (l1 >= -1e-9) & (l0 + l1 <= 1.0 + 1e-9)
+                out[row[inside] + di] = keep[g][inside]
+    return out.reshape(grid.ny, grid.nx)
+
+
+def _mixed_mesh(seed):
+    """A Delaunay mesh of fine points in one corner and a few far ones: small and very large
+    triangles, many box shapes."""
+    from scipy.spatial import Delaunay
+    rng = np.random.default_rng(seed)
+    pts = np.vstack([rng.uniform(0, 3, (300, 2)), rng.uniform(0, 20, (40, 2)),
+                     [[0, 0], [20, 0], [0, 12], [20, 12]]])
+    return pts, Delaunay(pts).simplices.astype(np.int64)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+@pytest.mark.parametrize("cell", [0.25, 0.05])
+def test_blocks_of_rows_give_the_same_cells_bit_for_bit(seed, cell, monkeypatch):
+    pts, tris = _mixed_mesh(seed)
+    grid = Grid(-0.1, -0.1, cell, int(20.2 / cell) + 1, int(12.2 / cell) + 1)
+    expected = _cell_triangles_one_offset_at_a_time(pts, tris, grid)
+    assert np.array_equal(cell_triangles(pts, tris, grid), expected)
+    monkeypatch.setattr("coppernicus.report.CELL_CHUNK", 7)          # one row per block, or less
+    assert np.array_equal(cell_triangles(pts, tris, grid), expected)
+
+
+def test_centres_on_shared_edges_go_to_the_same_triangle():
+    pts = np.array([[x, y] for y in range(5) for x in range(5)], float)   # a 4 × 4 square grid
+    corners = [5 * j + i for j in range(4) for i in range(4)]
+    tris = np.array([t for n in corners for t in ([n, n + 1, n + 5], [n + 1, n + 6, n + 5])])
+    grid = Grid(-0.25, -0.25, 0.5, 9, 9)                       # centres on every edge and node
+    expected = _cell_triangles_one_offset_at_a_time(pts, tris, grid)
+    assert np.array_equal(cell_triangles(pts, tris, grid), expected)
+
+
+def test_sample_layer_in_blocks_matches_one_block(monkeypatch):
+    pts, tris = _mixed_mesh(3)
+    rng = np.random.default_rng(3)
+    layer = LayerField(0, "F.Cu", pts, tris, rng.uniform(3.2, 3.3, len(pts)), rng.uniform(0, 50, len(tris)),
+                       np.zeros(len(tris)), np.ones(len(tris)))
+    grid = Grid(-0.1, -0.1, 0.1, 203, 123)
+    whole = sample_layer(layer, grid)
+    monkeypatch.setattr("coppernicus.report.CELL_CHUNK", 1000)
+    blocks = sample_layer(layer, grid)
+    for a, b in zip(whole, blocks):
+        assert np.array_equal(a, b, equal_nan=True)
