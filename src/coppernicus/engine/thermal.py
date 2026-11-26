@@ -55,7 +55,7 @@ from coppernicus.engine.ac import peak_rss_bytes
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import to_pisetup
 from coppernicus.engine.solve import TCR_CU, Cancelled, _Progress
-from coppernicus.engine.tree import check_grounds, convert_tree, group_keys, load_drop
+from coppernicus.engine.tree import check_grounds, convert_tree, explain_tree_error, group_keys, load_drop
 from coppernicus.project import Project, ThermalOptions
 from coppernicus.results import BoardTemperature, LayerTemperature, TemperatureMap, TreeResult
 from coppernicus.temperature import apply_thermal_limits
@@ -194,7 +194,7 @@ def solve_thermal_tree(board: Board, project: Project, setup, thickness: Dict[st
     except Canceled as e:
         raise Cancelled("solve cancelled") from e
     except SolveError as e:
-        raise EngineError(f"Power tree: {e}") from e
+        raise EngineError(f"Power tree: {explain_tree_error(board, project, e)}") from e
     out = _finish(board, project, setup, thickness, run.tree, run.first_drops, time.perf_counter() - t0)
     # This process's high-water mark when the solve ended (KiPI's mesher worker processes not
     # counted), as the AC solve records it; this solve's own peak when it raised it.
