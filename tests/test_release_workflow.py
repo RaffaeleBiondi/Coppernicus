@@ -25,6 +25,20 @@ def test_release_builds_both_apps_as_artifacts_only():
         assert not any("release" in u for u in uses) and "gh release" not in runs
 
 
+def test_the_frozen_app_runs_every_solve_with_its_html_page():
+    """Besides solve --tree: ac, noise, tolerance and solve --thermal run frozen on both
+    systems, each with --html on the runner's copy of an example, its exit code checked
+    (the thermal demo fails on purpose)."""
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    for job in doc["jobs"].values():
+        runs = [str(s.get("run", "")) for s in job["steps"]]
+        for word, example, code in ((" ac ", "pdn-relaxed", 0), (" noise ", "noise", 0),
+                                    (" tolerance ", "tolerance", 0), (" --thermal ", "demo-thermal", 1)):
+            [run] = [r for r in runs if word in r]
+            assert f"{example}.coppernicus.yml" in run and "RUNNER_TEMP" in run and "--html" in run
+            assert f"(expected {code})" in run and "smoke" in run
+
+
 def test_the_build_scripts_keep_triangle_out():
     for script in ("build_macos.sh", "build_windows.ps1"):
         text = (ROOT / "packaging" / script).read_text(encoding="utf-8")

@@ -38,6 +38,56 @@ jobs:
           cp -R examples "$RUNNER_TEMP/examples"
           dist/Coppernicus.app/Contents/MacOS/Coppernicus solve \
             "$RUNNER_TEMP/examples/power_chain/power_chain.coppernicus.yml" --tree --html
+      # The other solves on the same copy of the examples, each with its HTML page: the exit
+      # code is checked (some variants fail on purpose), then the files written.
+      - name: "ac: the PDN example's impedance (pdn-relaxed: the target holds, exit 0)"
+        timeout-minutes: 10
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}/coppernicus-site-packages
+        run: |
+          out="$RUNNER_TEMP/smoke/ac"
+          code=0
+          dist/Coppernicus.app/Contents/MacOS/Coppernicus ac \
+            "$RUNNER_TEMP/examples/pdn/pdn-relaxed.coppernicus.yml" --out "$out" --html || code=$?
+          echo "exit code $code (expected 0)"
+          test "$code" -eq 0
+          ls "$out"/*_ac_report.html "$out"/*_ac_summary.json "$out"/*_impedance.csv "$out"/*_impedance.png
+      - name: "noise: the noise example's ripple and coupled noise (passes, exit 0)"
+        timeout-minutes: 10
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}/coppernicus-site-packages
+        run: |
+          out="$RUNNER_TEMP/smoke/noise"
+          code=0
+          dist/Coppernicus.app/Contents/MacOS/Coppernicus noise \
+            "$RUNNER_TEMP/examples/noise/noise.coppernicus.yml" --out "$out" --html || code=$?
+          echo "exit code $code (expected 0)"
+          test "$code" -eq 0
+          ls "$out"/*_noise_report.html "$out"/*_noise_summary.json "$out"/*_noise.csv "$out"/*_noise.png
+      - name: "tolerance: the tolerance example's stack-up (passes, exit 0)"
+        timeout-minutes: 10
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}/coppernicus-site-packages
+        run: |
+          out="$RUNNER_TEMP/smoke/tolerance"
+          code=0
+          dist/Coppernicus.app/Contents/MacOS/Coppernicus tolerance \
+            "$RUNNER_TEMP/examples/tolerance/tolerance.coppernicus.yml" --out "$out" --html || code=$?
+          echo "exit code $code (expected 0)"
+          test "$code" -eq 0
+          ls "$out"/*_tolerance_report.html "$out"/*_tolerance_summary.json "$out"/*_tolerance.csv
+      - name: "solve --thermal: the demo's board temperature (over max_rise_c on purpose, exit 1)"
+        timeout-minutes: 10
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}/coppernicus-site-packages
+        run: |
+          out="$RUNNER_TEMP/smoke/thermal"
+          code=0
+          dist/Coppernicus.app/Contents/MacOS/Coppernicus solve \
+            "$RUNNER_TEMP/examples/demo/demo-thermal.coppernicus.yml" --thermal --out "$out" --html || code=$?
+          echo "exit code $code (expected 1)"
+          test "$code" -eq 1
+          ls "$out"/*_tree_report.html "$out"/*_tree_summary.json "$out"/*_temperature_F.Cu.png
       - uses: actions/upload-artifact@v7
         with:
           name: coppernicus-macos-arm64
@@ -71,6 +121,70 @@ jobs:
           Copy-Item -Recurse examples "$env:RUNNER_TEMP\examples"
           dist\Coppernicus\coppernicus-cli.exe solve "$env:RUNNER_TEMP\examples\power_chain\power_chain.coppernicus.yml" --tree --html
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # The other solves on the same copy of the examples, each with its HTML page: the exit
+      # code is checked (some variants fail on purpose), then the files written. Each script
+      # ends with exit 0: GitHub appends "exit $LASTEXITCODE", the exe's own code.
+      - name: "ac: the PDN example's impedance (pdn-relaxed: the target holds, exit 0)"
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}\coppernicus-site-packages
+        run: |
+          $out = "$env:RUNNER_TEMP\smoke\ac"
+          dist\Coppernicus\coppernicus-cli.exe ac "$env:RUNNER_TEMP\examples\pdn\pdn-relaxed.coppernicus.yml" --out $out --html
+          $code = $LASTEXITCODE
+          Write-Output "exit code $code (expected 0)"
+          if ($code -ne 0) { exit 1 }
+          foreach ($f in "*_ac_report.html", "*_ac_summary.json", "*_impedance.csv", "*_impedance.png") {
+            if (-not (Test-Path (Join-Path $out $f))) { Write-Output "missing: $out\$f"; exit 1 }
+          }
+          exit 0
+      - name: "noise: the noise example's ripple and coupled noise (passes, exit 0)"
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}\coppernicus-site-packages
+        run: |
+          $out = "$env:RUNNER_TEMP\smoke\noise"
+          dist\Coppernicus\coppernicus-cli.exe noise "$env:RUNNER_TEMP\examples\noise\noise.coppernicus.yml" --out $out --html
+          $code = $LASTEXITCODE
+          Write-Output "exit code $code (expected 0)"
+          if ($code -ne 0) { exit 1 }
+          foreach ($f in "*_noise_report.html", "*_noise_summary.json", "*_noise.csv", "*_noise.png") {
+            if (-not (Test-Path (Join-Path $out $f))) { Write-Output "missing: $out\$f"; exit 1 }
+          }
+          exit 0
+      - name: "tolerance: the tolerance example's stack-up (passes, exit 0)"
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}\coppernicus-site-packages
+        run: |
+          $out = "$env:RUNNER_TEMP\smoke\tolerance"
+          dist\Coppernicus\coppernicus-cli.exe tolerance "$env:RUNNER_TEMP\examples\tolerance\tolerance.coppernicus.yml" --out $out --html
+          $code = $LASTEXITCODE
+          Write-Output "exit code $code (expected 0)"
+          if ($code -ne 0) { exit 1 }
+          foreach ($f in "*_tolerance_report.html", "*_tolerance_summary.json", "*_tolerance.csv") {
+            if (-not (Test-Path (Join-Path $out $f))) { Write-Output "missing: $out\$f"; exit 1 }
+          }
+          exit 0
+      - name: "solve --thermal: the demo's board temperature (over max_rise_c on purpose, exit 1)"
+        shell: pwsh
+        timeout-minutes: 10
+        env:
+          COPPERNICUS_SITE_PACKAGES: ${{ runner.temp }}\coppernicus-site-packages
+        run: |
+          $out = "$env:RUNNER_TEMP\smoke\thermal"
+          $PSNativeCommandUseErrorActionPreference = $false   # the exit 1 is checked below, not thrown
+          dist\Coppernicus\coppernicus-cli.exe solve "$env:RUNNER_TEMP\examples\demo\demo-thermal.coppernicus.yml" --thermal --out $out --html
+          $code = $LASTEXITCODE
+          Write-Output "exit code $code (expected 1)"
+          if ($code -ne 1) { exit 1 }
+          foreach ($f in "*_tree_report.html", "*_tree_summary.json", "*_temperature_F.Cu.png") {
+            if (-not (Test-Path (Join-Path $out $f))) { Write-Output "missing: $out\$f"; exit 1 }
+          }
+          exit 0
       - uses: actions/upload-artifact@v7
         with:
           name: coppernicus-windows-x64

@@ -434,6 +434,7 @@ def _cmd_ac(args) -> int:
         return fail("board_unreadable", str(e))
     try:                                  # the KiCad footprint fields, as the other solves
         merged = board_fields.apply(project, lambda: read_board_fields(board.path),
+                                    False if args.no_board_fields else None,
                                     ties=[(t.net_a, t.net_b) for t in board.net_ties()])
     except (board_fields.FieldError, EngineError) as e:
         return fail("invalid_board_field", str(e), FIELD_HINT)
@@ -804,12 +805,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="memory bound for kept results, MB (default: 2048)")
     p.set_defaults(func=_cmd_mcp)
 
-    p = sub.add_parser("ac", help="AC PDN impedance |Z|(f) at the project's probes (CSV + PNG)")
+    p = sub.add_parser("ac", help="AC PDN impedance |Z|(f) at the project's probes (CSV + PNG)",
+                       epilog=EXIT_CODES)
     p.add_argument("project")
     p.add_argument("--out",
                    help="folder for CSV, PNG and summary (default: results/ next to the project file)")
     p.add_argument("--rail", action="append",
                    help="solve only this rail (repeatable; default: every rail with a probe)")
+    p.add_argument("--no-board-fields", action="store_true",
+                   help="ignore the board's KiCad footprint fields (PI_*)")
     p.add_argument("-v", "--verbose", action="store_true", help="show the engine's progress")
     p.add_argument("--json", action="store_true",
                    help="print a JSON summary on stdout (for scripts and agents)")

@@ -138,8 +138,9 @@ class ProjectSourceSpec(BaseModel):
     current_limit_a: Optional[float] = Field(None, gt=0, description="Its rated output current, A "
                                              "(shown next to I_out; in the power tree an I_out "
                                              "above it fails).")
-    fsw_hz: Optional[float] = Field(None, gt=0, description="A switcher's switching frequency, Hz "
-                                    "(stored; not used yet).")
+    fsw_hz: Optional[float] = Field(None, gt=0, description="A switcher's switching frequency, Hz: "
+                                    "used by a noise aggressor on this source that gives no "
+                                    "fsw_hz of its own.")
     extra_pins: Optional[list[str]] = Field(None, description="More pads held at the same voltage on "
                                             "other parts, as REF.PAD (BT5.1, BT5.* for all its pads "
                                             "on the rail): one terminal, e.g. cell holders in "

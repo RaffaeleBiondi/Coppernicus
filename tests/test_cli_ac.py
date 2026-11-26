@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from coppernicus.cli import EXIT_ERROR, EXIT_LIMIT, EXIT_NOT_JUDGED, EXIT_OK, main
+from coppernicus.cli import EXIT_CODES, EXIT_ERROR, EXIT_LIMIT, EXIT_NOT_JUDGED, EXIT_OK, main
 from coppernicus.engine.synthetic import ac_decap_board, ac_decap_project, save_snapshot
 from coppernicus.project import AcOptions, Project
 
@@ -54,6 +54,35 @@ def test_ac_exit_codes_and_json(decap, tmp_path, capsys):
     assert main(["ac", str(decap(target_ohm=1.0, bandwidth_hz=None)), "--json", *out]) == EXIT_NOT_JUDGED
     doc = json.loads(capsys.readouterr().out)
     assert doc["not_judged"][0]["rail"] == "+3V3" and doc["rails"][0]["bandwidth_assumed"] is True
+
+
+def test_ac_takes_the_kicad_fields_unless_no_board_fields(decap, tmp_path, monkeypatch, capsys):
+    """The KiCad footprint fields merge as in noise and tolerance; --no-board-fields reaches
+    the merge as use=False, and the solve runs on the project file alone."""
+    from coppernicus import board_fields
+    path = decap(target_ohm=1.0)                       # the project file's loose target: passes
+    seen = []
+
+    def apply(project, read, use=None, ties=()):
+        seen.append(use)
+        if use is not False:                           # as fields that change the project would
+            project.probes[0].target_ohm = 0.001
+        return board_fields.Merged(project)
+    monkeypatch.setattr(board_fields, "apply", apply)
+    out = ["--json", "--out", str(tmp_path / "o")]
+    assert main(["ac", str(path), *out]) == EXIT_LIMIT
+    assert main(["ac", str(path), "--no-board-fields", *out]) == EXIT_OK
+    assert seen == [None, False]
+
+
+@pytest.mark.parametrize("command", ["ac", "noise", "tolerance", "solve"])
+def test_help_lists_the_exit_codes(command, capsys):
+    """``ac --help`` ends with the exit codes, as noise, tolerance and solve do."""
+    with pytest.raises(SystemExit) as stop:
+        main([command, "--help"])
+    assert stop.value.code == 0
+    text = " ".join(capsys.readouterr().out.split())   # argparse rewraps the epilog
+    assert EXIT_CODES in text and "--no-board-fields" in text
 
 
 def test_ac_errors(decap, tmp_path, capsys):
