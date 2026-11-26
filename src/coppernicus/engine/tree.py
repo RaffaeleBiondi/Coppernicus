@@ -804,6 +804,15 @@ def _owner(name: str) -> str:
     return next((name[:-len(s)] for s in GROUND_TERMINALS if name.endswith(s)), name)
 
 
+def reference_parts(tree: TreeResult) -> List[str]:
+    """The parts whose own ground pins are solved in ``tree`` (each a ``ground_of`` choice for
+    :func:`tree_reference`), sources first, then in the order the tree holds them."""
+    terms = [t for res in tree.groups.values() if res.kind == "ground"
+             for t in res.sources + res.loads if t.name.endswith(GROUND_TERMINALS)]
+    terms.sort(key=lambda t: t.kind != "source")
+    return list(dict.fromkeys(t.ref or _owner(t.name) for t in terms))
+
+
 def _reference(board: Board, label: str, pads: Dict[str, float], given) -> TreeReference:
     """A :class:`TreeReference` from pad id -> V (solve frame; NaN: not connected)."""
     v = np.array([x for x in pads.values() if math.isfinite(x)], dtype=float)

@@ -70,13 +70,16 @@ class HoverReadout:
         return tuple(([self.caption] if self.caption else []) + extras)
 
 
-def hover_values(result: RailResult, layer: str, p: Probe, delta_mv: float = float("nan")) -> HoverValues:
+def hover_values(result: RailResult, layer: str, p: Probe, delta_mv: float = float("nan"),
+                 v_offset: float = 0.0) -> HoverValues:
     """The values at probe ``p`` on ``layer`` of ``result``, with the result's wording;
-    ``delta_mv``: the change of drop there on the Δ map."""
+    ``delta_mv``: the change of drop there on the Δ map; ``v_offset``: a power tree shown from
+    another 0 V (S2), subtracted from the voltage only (the drop and its % are the solve's)."""
     drop_mv = float(result.shown_drop_at(p.voltage_v)) * 1e3
     pct = drop_mv / (10.0 * abs(result.v_ref)) if result.v_ref else float("nan")
-    return HoverValues(p.voltage_v, drop_mv, result.drop_word(), result.shown_drop_unit(),
-                       p.current_density_a_mm2, layer, " + ".join(result.nets) or result.net, delta_mv, pct)
+    return HoverValues(p.voltage_v - v_offset if v_offset else p.voltage_v, drop_mv, result.drop_word(),
+                       result.shown_drop_unit(), p.current_density_a_mm2, layer,
+                       " + ".join(result.nets) or result.net, delta_mv, pct)
 
 
 def _value(values: HoverValues, key: str) -> Tuple[str, str, str]:
