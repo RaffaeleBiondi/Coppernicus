@@ -11,6 +11,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+# The resolution of the input: KiPI nodes the board geometry on a 1 nm grid before meshing
+# (NODING_GRID_MM = 1e-6 mm, kipi/core/mesh/mesher.py:83 in KiPI 1.0.1). A mesh triangle
+# with an edge shorter than that is a degenerate triangle: Steiner points the mesher added
+# below the input's resolution. Its |J| is set by the last bits of the node voltages, so
+# every reported maximum or peak |J| leaves it out (docs/technical.md#current-density-default).
+# Not a physical threshold.
+GEOMETRY_RESOLUTION_MM = 1e-6
+# An edge of exactly one grid step computes a few 1e-15 mm short of it at board coordinates
+# (123.45679 - 123.456789 = 9.99999997e-07): this slack, far above that round-off and far
+# below the grid, keeps it resolved.
+_ROUND_OFF_MM = 1e-12
+
 
 @dataclass
 class LayerField:
@@ -37,6 +49,51 @@ class LayerField:
 
     def centroids(self) -> np.ndarray:
         return self.points[self.tris].mean(axis=1)
+
+    def resolved(self) -> np.ndarray:
+        """(M,) bool: the triangles whose every edge is at least
+        :data:`GEOMETRY_RESOLUTION_MM` long. The others are degenerate: left out of every
+        maximum or peak |J|, kept in the solution, the copper loss and the areas."""
+        short = (GEOMETRY_RESOLUTION_MM - _ROUND_OFF_MM) ** 2
+        ok = np.ones(len(self.tris), dtype=bool)
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            d = self.points[self.tris[:, a]] - self.points[self.tris[:, b]]
+            ok &= np.einsum("ij,ij->i", d, d) >= short
+        return ok
+
+
+def degenerate_triangles(result: "RailResult") -> List[Dict[str, Any]]:
+    """Per layer with degenerate triangles (:meth:`LayerField.resolved`), in stack order:
+    ``{"layer", "triangles", "j_max_a_mm2"}``, the largest |J| among them. Empty when
+    there are none."""
+    out = []
+    for lf in result.layers:
+        bad = ~lf.resolved()
+        if bad.any():
+            out.append({"layer": lf.name, "triangles": int(bad.sum()),
+                        "j_max_a_mm2": float(lf.current_density[bad].max())})
+    return out
+
+
+def exclude_degenerate(result: "RailResult") -> Optional[str]:
+    """Leave the degenerate triangles out of ``result.j_max`` (the largest |J| of the
+    others) and add the warning that says so, once; return it. A result without any is left
+    as it was (its j_max is KiPI's, bit for bit) and None is returned."""
+    rows = degenerate_triangles(result)
+    if not rows:
+        return None
+    kept = [lf.current_density[lf.resolved()] for lf in result.layers]
+    result.j_max = max((float(j.max()) for j in kept if j.size), default=0.0)
+    each = "; ".join(f"{r['layer']} {r['triangles']} triangle{'s' if r['triangles'] != 1 else ''}, "
+                     f"largest |J| {r['j_max_a_mm2']:.3g} A/mm²" for r in rows)
+    note = (f"{result.net}: degenerate mesh triangles (an edge shorter than 1 nm, the resolution "
+            "of KiPI's geometry snap) left out of every maximum |J| (j_point_max_a_mm2, the "
+            f"current-crowding spots and their peaks, the |J| colour scales): {each}. Their |J| "
+            "is a numerical artefact of the mesh, set by the last bits of the node voltages; "
+            "they stay in the solution, the copper loss and the areas.")
+    if note not in result.warnings:
+        result.warnings.append(note)
+    return note
 
 
 @dataclass

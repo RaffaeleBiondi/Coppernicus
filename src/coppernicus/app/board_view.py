@@ -173,6 +173,14 @@ def drop_mv(result: RailResult, v: np.ndarray) -> np.ndarray:
     return result.shown_drop_at(v) * 1e3
 
 
+def current_scale(layer: LayerField) -> List[float]:
+    """The 'current' map's colour limits: 0 to the layer's :data:`J_CLIP_PERCENTILE`th
+    percentile of |J|, degenerate triangles (an edge under 1 nm) left out."""
+    kept = layer.current_density[layer.resolved()]
+    top = float(np.percentile(kept, J_CLIP_PERCENTILE)) if kept.size else 1.0
+    return [0.0, max(top, 1e-12)]
+
+
 class BoardView(QWidget):
     probed = Signal(str)            # a readout of the values under a double-click
     pad_picked = Signal(float, float)   # pick mode: board point (mm, KiCad frame) under a click
@@ -268,8 +276,7 @@ class BoardView(QWidget):
         if field == "current":
             values = layer.current_density
             mesh.cell_data[title] = values
-            top = float(np.percentile(values, J_CLIP_PERCENTILE)) if values.size else 1.0
-            clim = [0.0, max(top, 1e-12)]
+            clim = current_scale(layer)
         elif field == "difference":
             values = np.asarray(difference_mv, dtype=float)
             mesh.point_data[title] = values

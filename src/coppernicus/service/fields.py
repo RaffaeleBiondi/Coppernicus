@@ -102,10 +102,11 @@ def cut_current(layer: LayerField, locator: TriangleLocator, j_vec: np.ndarray, 
     jabs = np.hypot(j[:, 0], j[:, 1])
     w = ds[live]
     live_width = float(w.sum())
+    peak = jabs[layer.resolved()[tri[live]]]       # no degenerate triangle (edge < 1 nm) sets it
     return CutResult(
         length_mm=length, normal=(float(n[0]), float(n[1])), intervals=spans, width_mm=width,
         current_a=float((jn * w).sum() * thickness_mm),
         mean_abs_j=float((jabs * w).sum() / live_width) if live_width else 0.0,
-        max_abs_j=float(jabs.max()) if jabs.size else 0.0, samples=int(len(pts)),
+        max_abs_j=float(peak.max()) if peak.size else 0.0, samples=int(len(pts)),
         samples_off_mesh=int((~on).sum()), samples_unconnected=int((on & ~live).sum()),
         meshed_width_mm=float(ds[on].sum()))

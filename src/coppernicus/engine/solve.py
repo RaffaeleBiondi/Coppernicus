@@ -28,7 +28,7 @@ from coppernicus.engine.board import Board, EngineError, NetTie
 from coppernicus.power_tree import EstimateError, estimate_note, estimated_draws
 from coppernicus.problems import density_default_note
 from coppernicus.project import SOURCE_PIN_REFS, Project, Rail, Settings, pins_text
-from coppernicus.results import LayerField, RailResult, TerminalResult, ViaCurrent
+from coppernicus.results import LayerField, RailResult, TerminalResult, ViaCurrent, exclude_degenerate
 
 TCR_CU = 0.00393     # per °C, copper; KiPI's default (kipi/dc/solver/setup.py)
 
@@ -319,7 +319,7 @@ def _convert(board: Board, rail: Rail, nets: List[str], result, src_names, load_
     warnings = list(sol.warnings) + [
         f"Load {name}: pins with no copper path to a source draw nothing: {', '.join(pads)}"
         for name, pads in sol.dead_pads.items()]
-    return RailResult(
+    out = RailResult(
         net=rail.net, nets=list(nets), v_ref=float(fields.v_ref), layers=layers,
         sources=[terminal(n, "source") for n in src_names],
         loads=[terminal(n, "load") for n in load_names],
@@ -332,6 +332,8 @@ def _convert(board: Board, rail: Rail, nets: List[str], result, src_names, load_
         stats={"triangles": float(sol.stats["n_tris"]), "unknowns": float(sol.stats["n_unknowns"])},
         warnings=warnings, drop_sign=sign,
     )
+    exclude_degenerate(out)         # j_max without the triangles below the input's 1 nm resolution
+    return out
 
 
 def describe_pins(rail: Rail) -> List[str]:

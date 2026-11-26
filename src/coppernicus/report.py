@@ -39,7 +39,7 @@ import numpy as np
 from coppernicus import __version__
 from coppernicus.problems import ATTENTION, Problem, find_problems
 from coppernicus.project import Limits, Project
-from coppernicus.results import LayerField, RailResult
+from coppernicus.results import LayerField, RailResult, degenerate_triangles
 
 J_CLIP_PERCENTILE = 99.5          # colour-scale top for |J|, as in the maps and the app
 V_CODES = 65533                    # voltage levels: 0 = no copper, 1 = copper with no source
@@ -308,7 +308,9 @@ class ReportBuilder:
             x0, y0, x1, y1 = _bbox(lf)
             grid = grid_for((x0 - cell / 2, y0 - cell / 2, x1 + cell / 2, y1 + cell / 2), cell)
             mask, v, j = sample_layer(lf, grid)
-            jd = lf.current_density[np.isfinite(lf.current_density)]
+            # Degenerate triangles (an edge under 1 nm) set neither the quantisation top nor
+            # the colour scale: their |J| is an artefact (results.exclude_degenerate).
+            jd = lf.current_density[np.isfinite(lf.current_density) & lf.resolved()]
             j_hi = float(jd.max()) if jd.size else 1.0
             j_scale = float(np.percentile(jd, J_CLIP_PERCENTILE)) if jd.size else 1.0
             vid, jid = f"r{index}l{li}v", f"r{index}l{li}j"
@@ -362,6 +364,7 @@ class ReportBuilder:
         judged["attention"] = sum(p.severity == ATTENTION for p in problems)
         judged["verdict_text"] = verdict_text(judged)
         shift = -1 if result.is_shift() else 1      # the drop as the app shows it (shown_drop_at)
+        degenerate = degenerate_triangles(result)
         worst_mv = shift * result.max_drop * 1e3
         worst_keys = ("name", "drop_mv", "drop_pct") + (("nominal_v",) if tree_loads is not None else ())
         self.rails.append({
@@ -402,6 +405,8 @@ class ReportBuilder:
                             "the centre of the cell under the pointer, from the full-resolution "
                             "solution; summary numbers and problems use the full mesh."],
             "warnings": list(result.warnings),
+            # Degenerate triangles left out of every maximum |J| (only when there are some)
+            **({"degenerate_triangles": degenerate} if degenerate else {}),
             "notes": list(notes),
             "stats": {"triangles": int(result.stats.get("triangles", 0)),
                       "unknowns": int(result.stats.get("unknowns", 0)),

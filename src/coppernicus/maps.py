@@ -135,7 +135,8 @@ def render_layer_map(result: RailResult, layer: LayerField, field: str,
         title = "voltage"
     else:
         j = layer.current_density
-        top = float(np.percentile(j, J_CLIP_PERCENTILE)) if j.size else 1.0
+        kept = j[layer.resolved()]          # degenerate triangles (an edge under 1 nm) set no scale
+        top = float(np.percentile(kept, J_CLIP_PERCENTILE)) if kept.size else 1.0
         lo, hi, unit, clipped = 0.0, max(top, 1e-9), "A/mm²", True
         im = ax.tripcolor(tri, facecolors=j, cmap=J_CMAP, vmin=lo, vmax=hi, rasterized=True)
         fig.colorbar(im, ax=ax, label=f"current density (A/mm²), scale clipped at "
