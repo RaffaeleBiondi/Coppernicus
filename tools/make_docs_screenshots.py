@@ -1,22 +1,48 @@
 """Screenshots for the README and the docs, made from the synthetic examples only.
 
-    uv run python tools/make_docs_screenshots.py              # writes docs/images/guide-*.png
-    uv run python tools/make_docs_screenshots.py --set features   # the docs pages' images
-    uv run python tools/make_docs_screenshots.py --out DIR    # somewhere else, e.g. to review
+The real capture, which replaces the images in docs/images (about two minutes):
 
-It opens a real window, which closes itself, and drives the app from code. ``--set guide``
-(the default) makes the README's six ``guide-*.png``: it picks pads on the bare demo board,
-opens the demo project's rail setup, solves, and shows the maps, a probe readout and the
-problems. ``--set features`` makes the images of the feature pages in ``docs/``:
-``tree-*.png`` (the power chain's power tree and ground rise), ``fields-*.png`` (the rail of
-the fields example, from KiCad footprint fields), ``whatif-*.png`` (the copper thickness
-editor, Pin as baseline and Compare on the demo) and ``revisions-delta.png`` (two revisions
-of the demo board compared, solved in a temporary folder that is deleted afterwards).
-``--set all`` makes both.
+    uv run python tools/make_docs_screenshots.py --set all        # every PNG below but report-*
+    uv run python tools/make_docs_screenshots.py --set reports    # the pages for report-*.png,
+                                                                  # captured in a browser by hand
 
-It never saves a project and takes no board argument: only ``examples/demo``,
-``examples/power_chain`` and ``examples/fields`` are used, so no real board can end up in the
-docs. Message boxes are answered in code, so a scripted run never waits on one.
+One set at a time: ``--set guide`` (the default), ``features``, ``analyses``, ``cli``.
+``--out DIR`` writes somewhere else, e.g. to review. ``--offscreen --out DIR`` runs every
+scenario without a window and checks that it reaches its state (tabs shown, solves finished,
+rows present); the board view is blank there, so such images never go into docs/images.
+
+The sets, and the docs that show their images:
+
+- ``guide``: the README's six ``guide-*.png``: pads picked on the bare demo board, the demo
+  project's rail setup, the solved maps, a probe readout and the problems.
+- ``features``: ``tree-*.png`` (the power chain's power tree and ground rise,
+  docs/power-tree.md), ``fields-*.png`` (the fields example's rail from KiCad footprint fields,
+  docs/kicad-fields.md), ``whatif-*.png`` (the copper thickness editor, Pin as baseline and
+  Compare on the demo) and ``revisions-delta.png`` (two revisions of the demo board, solved in
+  a temporary folder), both docs/what-if-and-compare.md.
+- ``analyses``: a window per analysis tab, each solved on its example: ``thermal-1-window.png``
+  (the thermal demo's power tree, F.Cu's board temperature and the Temperature tab;
+  docs/thermal.md), ``ac-1-window.png`` (Solve impedance on examples/pdn; docs/ac-impedance.md),
+  ``noise-1-window.png`` (Solve noise on noise-tight; docs/noise.md),
+  ``tolerance-1-window.png`` (the Tolerance tab's Solve on tolerance-tight; docs/tolerance.md)
+  and ``results-attention.png`` (the Results panel: the thermal demo's +3V3 solved alone,
+  amber ATTENTION rows; docs/technical.md#current-density-default and the README's step 6).
+- ``cli``: the command line's own PNGs, written by ``coppernicus`` into a temporary folder:
+  ``thermal-map.png`` (docs/thermal.md), ``ac-impedance.png`` (docs/ac-impedance.md) and
+  ``noise-waveforms.png`` (docs/noise.md). No window.
+- ``reports``: no PNG. The HTML pages behind ``report-*.png`` (demo, power tree, thermal,
+  impedance, noise, tolerance; docs/html-report.md and the pages listed) go into
+  ``--html-dir``; the run prints each page's URL, the browser width of the image and the part
+  to capture. The repository has no headless browser.
+
+A real window never takes the focus, as with ``tools/gui_check.py --window``: it opens without
+activating, behind the other applications' windows, and on macOS the process never comes to the
+front (checked at the end: the run fails if it did). The app's settings live in a temporary
+folder for the run, so the estimates' "last solve" lines are the same on every machine.
+
+It never saves a project and takes no board argument: only the projects in ``examples/`` are
+used (the power tree page's limits go into a copy in the pages' folder), so no real board can
+end up in the docs. Message boxes are answered in code, so a scripted run never waits on one.
 
 Numbers are formatted with the C locale (dot decimals), whatever the machine's locale. Images
 are scaled down to at most ``--width`` pixels so the repository stays small. Regenerate them
