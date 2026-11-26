@@ -15,6 +15,10 @@ function el(tag, attrs, ...kids) {
 const ok = (x) => typeof x === "number" && isFinite(x);
 function sig(x, n = 4) { if (!ok(x)) return "–"; if (x === 0) return "0";
   const a = Math.abs(x); return (a >= 1e-3 && a < 1e6) ? String(Number(x.toPrecision(n))) : x.toExponential(n - 1); }
+// mV, % and V the CLI prints as 0 at its decimals (2, 2, 5) read 0 here too, not as 5.971e-10.
+const mv = (x, n = 4) => (ok(x) && Math.abs(x) < 0.005 ? "0.00" : sig(x, n));
+const pct = (x, n = 3) => (ok(x) && Math.abs(x) < 0.005 ? "0.00" : sig(x, n));
+const volt = (x, n = 6) => (ok(x) && Math.abs(x) < 5e-6 ? "0.00000" : sig(x, n));
 function fix(x, d) { return ok(x) ? x.toFixed(d) : "–"; }
 function xy(x, y) { return `(${fix(x, 2)}, ${fix(y, 2)}) mm`; }
 
@@ -166,7 +170,7 @@ async function readout(ev) {
   let text;
   if (cv === 1) text = `${where}: copper with no path to a source (no voltage); |J| = 0.`;
   else { const V = rail.v_lo_v + (cv - 2) * vstep, drop = dropSign(rail) * (rail.v_ref_v - V) * 1e3;
-    text = `${where}: V = ${sig(V, 7)} V · ${rail.drop_word || "drop"} = ${sig(drop, 4)} mV (${rail.v_ref_v ? sig(100 * drop / 1e3 / Math.abs(rail.v_ref_v), 3) : "n/a"} %) · |J| = ${sig(J, 4)} A/mm²`; }
+    text = `${where}: V = ${volt(V, 7)} V · ${rail.drop_word || "drop"} = ${mv(drop)} mV (${rail.v_ref_v ? sig(100 * drop / 1e3 / Math.abs(rail.v_ref_v), 3) : "n/a"} %) · |J| = ${sig(J, 4)} A/mm²`; }
   out.textContent = "";
   out.append(text, el("br"), el("span", { class: "muted small" },
     `Values at the centre of the ${sig(c, 3)} mm cell under the pointer, (${fix(g.x0 + (i + 0.5) * c, 3)}, ${fix(g.y0 + (j + 0.5) * c, 3)}) mm, ` +
@@ -237,11 +241,11 @@ function panels() {
   if (rail.nets.length > 1) v.append(el("div", { class: "muted small" },
     (rail.tree ? "Solved together (joined by net ties or links): " : "Solved together through net ties: ") + rail.nets.join(", ")));
   const cards = $("worst"); cards.textContent = "";
-  if (w.load) cards.append(card("Worst load", `${w.load.name}: ${sig(w.load.drop_mv, 4)} mV`, rail.tree
-    ? `${sig(w.load.drop_pct, 3)} % from ${sig(w.load.nominal_v, 4)} V nominal, across its supply and ground pins`
-    : `${sig(w.load.drop_pct, 3)} % ${dropSign(rail) < 0 ? "above" : "below"} ${sig(rail.v_ref_v, 4)} V`));
-  cards.append(card(`Largest ${dropTitle(rail)} on the copper`, `${sig(w.max_drop_mv, 4)} mV`,
-    rail.v_ref_v ? `${sig(w.max_drop_pct, 3)} %` : rail.drop_unit));
+  if (w.load) cards.append(card("Worst load", `${w.load.name}: ${mv(w.load.drop_mv)} mV`, rail.tree
+    ? `${pct(w.load.drop_pct)} % from ${sig(w.load.nominal_v, 4)} V nominal, across its supply and ground pins`
+    : `${pct(w.load.drop_pct)} % ${dropSign(rail) < 0 ? "above" : "below"} ${sig(rail.v_ref_v, 4)} V`));
+  cards.append(card(`Largest ${dropTitle(rail)} on the copper`, `${mv(w.max_drop_mv)} mV`,
+    rail.v_ref_v ? `${pct(w.max_drop_pct)} %` : rail.drop_unit));
   cards.append(card("Copper loss", `${sig(w.power_loss_w * 1e3, 4)} mW`, w.busiest_layer ? `most on ${w.busiest_layer}` : null));
   if (w.hotspot) cards.append(card("Strongest current crowding", `${sig(w.hotspot.mean_j_a_mm2, 4)} A/mm² mean`,
     `${w.hotspot.layer} at ${xy(w.hotspot.x_mm, w.hotspot.y_mm)}, over ${sig(w.hotspot.area_mm2, 3)} mm²${w.hotspot.elements ? ` (${w.hotspot.elements} mesh elements)` : ""}; peak ${sig(w.hotspot.peak_j_a_mm2, 4)} A/mm² is mesh-dependent at sharp corners`));
@@ -258,16 +262,20 @@ function panels() {
   // load, each by its own net's limit; a rail alone: the worst pin against the rail's limit.
   const verdictCell = (t) => t.status ? t.status : t.exceeds === null || t.exceeds === undefined
     ? (rail.tree || lim ? "not judged" : "no limit set") : (t.exceeds ? el("span", { class: "badge fail" }, "FAIL") : "within");
+  // A tree group shows the mean across and the worst pins (which set the drop) side by side.
+  const volts = (v) => [ok(v) ? volt(v, 7) : "–", "num"];
+  $("loads-note").hidden = !rail.tree;
   table("loads", [["Load", ""], ["Ref", ""], ["Pins", "num"], ["Current (A)", "num"],
-    [rail.tree ? "Across (V)" : "V at worst pin (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"],
+    ...(rail.tree ? [["Across, mean (V)", "num"], ["Worst pins (V)", "num"]] : [["V at worst pin (V)", "num"]]),
+    ["Drop (mV)", "num"], ["Drop (%)", "num"],
     [rail.tree ? "Verdict" : lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""], ...(rail.tree ? [["Split", ""]] : [])],
     rail.loads.map((t) => [[t.estimated ? el("span", { title: "estimated at nominal voltages, without copper losses" }, t.name, " ", el("span", { class: "muted small" }, "estimated draw")) : t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"],
-      [ok(rail.tree ? t.v_across_v : (t.v_worst_v ?? t.v_min_v)) ? sig(rail.tree ? t.v_across_v : (t.v_worst_v ?? t.v_min_v), 7) : "–", "num"],
-      [ok(t.drop_mv) ? sig(t.drop_mv, 4) : "–", "num"], [ok(t.drop_pct) ? sig(t.drop_pct, 3) : "–", "num"], [verdictCell(t), ""],
+      ...(rail.tree ? [volts(t.v_across_v), volts(t.v_worst_v)] : [volts(t.v_worst_v ?? t.v_min_v)]),
+      [ok(t.drop_mv) ? mv(t.drop_mv) : "–", "num"], [ok(t.drop_pct) ? pct(t.drop_pct) : "–", "num"], [verdictCell(t), ""],
       ...(rail.tree ? [[splitCell(t), ""]] : [])]));
   netSplit(rail);
   table("sources", [["Source", ""], ["Ref", ""], ["Pins", "num"], ["Voltage (V)", "num"], ["Current (A)", "num"]],
-    rail.sources.map((t) => [[t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.v_v, 6), "num"], [sig(t.current_a, 4), "num"]]));
+    rail.sources.map((t) => [[t.name, ""], [t.ref, ""], [t.pins, "num"], [volt(t.v_v), "num"], [sig(t.current_a, 4), "num"]]));
   const losses = $("losses"); losses.textContent = "";
   const entries = Object.entries(rail.loss_breakdown_w).sort((a, b) => b[1] - a[1]), total = entries.reduce((s, e) => s + e[1], 0) || 1;
   for (const [k, val] of entries) losses.append(el("div", { class: "lossrow" }, el("span", {}, k),
@@ -311,7 +319,7 @@ function netSplit(rail) {
   table("netsplit-table", [["Net", ""], ["V min (V)", "num"], ["V max (V)", "num"], ["Fed from", ""],
     [rise ? "Rise from there (mV)" : "Drop from there (mV)", "num"], [rise ? "Highest at" : "Lowest at", ""],
     ["Copper (mW)", "num"], ["Vias (mW)", "num"]],
-    rows.map((n) => [[n.net, ""], [ok(n.v_min_v) ? sig(n.v_min_v, 7) : "–", "num"], [ok(n.v_max_v) ? sig(n.v_max_v, 7) : "–", "num"],
+    rows.map((n) => [[n.net, ""], [ok(n.v_min_v) ? volt(n.v_min_v, 7) : "–", "num"], [ok(n.v_max_v) ? volt(n.v_max_v, 7) : "–", "num"],
       [n.entry ? `${n.entry.name} (${n.entry.pads.join(", ")})` : "–", ""],
       [fix(rise ? n.rise_mv : n.drop_mv, 3), "num"], [worst(n).layer ? `${xy(worst(n).x_mm, worst(n).y_mm)} on ${worst(n).layer}` : "–", ""],
       [sig(n.copper_loss_w * 1e3, 3), "num"], [sig(n.via_loss_w * 1e3, 3), "num"]]),
@@ -362,15 +370,16 @@ if (M.tree) {                 // solve --tree --html: the tree's own tables, onc
   // I max: a source's rated output current (PI_IMAX), beside I out; the tree judges it (verdict, problems).
   table("tree-vrms", [["VRM", ""], ["Kind", ""], ["Group", ""], ["V set (V)", "num"], ["V out (V)", "num"], ["I out (A)", "num"],
     ["I max (A)", "num"], ["V in (V)", "num"], ["I in (A)", "num"], ["Loss (mW)", "num"], ["", ""]],
-    T.vrms.map((v) => [[v.name, ""], [v.kind, ""], [v.group, ""], [sig(v.v_set_v, 4), "num"], [sig(v.v_out_v, 6), "num"],
+    T.vrms.map((v) => [[v.name, ""], [v.kind, ""], [v.group, ""], [sig(v.v_set_v, 4), "num"], [volt(v.v_out_v), "num"],
       [sig(v.i_out_a, 4), "num"], [ok(v.i_max_a) ? sig(v.i_max_a, 4) : "–", "num"],
-      [ok(v.v_in_v) ? sig(v.v_in_v, 6) : "–", "num"], [ok(v.i_in_a) ? sig(v.i_in_a, 4) : "–", "num"],
+      [ok(v.v_in_v) ? volt(v.v_in_v) : "–", "num"], [ok(v.i_in_a) ? sig(v.i_in_a, 4) : "–", "num"],
       [mw(v.p_loss_w), "num"], [v.regulation || "", ""]]));
-  table("tree-loads", [["Load", ""], ["Group", ""], ["I (A)", "num"], ["Nominal (V)", "num"], ["Across (V)", "num"],
-    ["Drop (mV)", "num"], ["Drop (%)", "num"], ["Verdict", ""]],
+  table("tree-loads", [["Load", ""], ["Group", ""], ["I (A)", "num"], ["Nominal (V)", "num"], ["Across, mean (V)", "num"],
+    ["Worst pins (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"], ["Verdict", ""]],
     T.loads.map((l) => [[l.name, ""], [l.group, ""], [sig(l.current_a, 4), "num"], [sig(l.nominal_v, 4), "num"],
-      [ok(l.v_across_v) ? sig(l.v_across_v, 6) : "–", "num"], [ok(l.drop_mv) ? sig(l.drop_mv, 4) : "–", "num"],
-      [ok(l.drop_pct) ? sig(l.drop_pct, 3) : "–", "num"],
+      [ok(l.v_across_v) ? volt(l.v_across_v) : "–", "num"], [ok(l.v_worst_v) ? volt(l.v_worst_v) : "–", "num"],
+      [ok(l.drop_mv) ? mv(l.drop_mv) : "–", "num"],
+      [ok(l.drop_pct) ? pct(l.drop_pct) : "–", "num"],
       [l.status || (l.exceeds_drop_limit ? el("span", { class: "badge fail" }, "FAIL") : l.exceeds_drop_limit === false ? "within" : "not judged"), ""]]));
   table("tree-links", [["Link", ""], ["Nets", ""], ["Current (A)", "num"], ["Loss (mW)", "num"]],
     (T.links || []).map((k) => [[k.name, ""], [(k.nets || []).join(" ↔ "), ""], [sig(k.current_a, 4), "num"], [mw(k.power_w), "num"]]));

@@ -316,3 +316,22 @@ def test_sample_layer_in_blocks_matches_one_block(monkeypatch):
     blocks = sample_layer(layer, grid)
     for a, b in zip(whole, blocks):
         assert np.array_equal(a, b, equal_nan=True)
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node is not installed")
+def test_round_off_reads_as_zero_at_the_clis_decimals():
+    import subprocess
+    from pathlib import Path
+
+    import coppernicus.report
+    assets = Path(coppernicus.report.__file__).parent / "report_assets"
+    js = (assets / "report.js").read_text(encoding="utf-8")
+    helpers = [line for line in js.splitlines()
+               if line.startswith(("const ok =", "function sig(", "  const a = Math.abs(x); return",
+                                   "const mv =", "const pct =", "const volt ="))]
+    assert len(helpers) == 6, helpers
+    probe = "console.log(JSON.stringify([mv(5.971e-10), mv(-0.004), mv(16.64), pct(3.32e-11), pct(0.504), " \
+            "volt(1e-9), volt(1.8), volt(3.28336), mv(NaN)]));"
+    run = subprocess.run(["node", "-e", "\n".join(helpers) + "\n" + probe], capture_output=True, text=True,
+                         timeout=60)
+    assert run.returncode == 0, run.stderr
+    assert json.loads(run.stdout) == ["0.00", "0.00", "16.64", "0.00", "0.504", "0.00000", "1.8", "3.28336",
+                                      "–"]

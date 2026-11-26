@@ -127,3 +127,37 @@ def test_solve_prints_a_negative_rail_load_at_its_worst_pin(tmp_path, capsys):
     assert main(["solve", str(path), "--no-maps", "--out", str(tmp_path / "o")]) == EXIT_OK
     [line] = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("  load   U1")]
     assert f"{u1.v_max:8.4f} V" in line
+
+
+def _chain_doc(chain, tmp_path, capsys):
+    assert main(["solve", str(chain), "--tree", "--json", "--out", str(tmp_path / "o")]) == EXIT_OK
+    return json.loads(capsys.readouterr().out)
+
+
+def test_the_loads_table_shows_the_mean_across_and_the_worst_pins_that_set_the_drop(chain, tmp_path, capsys):
+    from coppernicus.power_tree import ACROSS_NOTE, tree_text
+    doc = _chain_doc(chain, tmp_path, capsys)
+    u4 = next(ld for ld in doc["loads"] if ld["name"] == "U4")
+    u4["v_worst_v"] = u4["v_across_v"] - 0.0004            # as on a part with several ground pins
+    lines = tree_text(doc)
+    head = next(i for i, line in enumerate(lines) if line.startswith("Loads"))
+    assert "across (mean)" in lines[head + 1] and "worst pins" in lines[head + 1]
+    row = next(line for line in lines if line.lstrip().startswith("U4 "))
+    assert f"{u4['v_across_v']:.5f}V" in row and f"{u4['v_worst_v']:.5f}V" in row
+    assert f"  {ACROSS_NOTE}" in lines
+
+
+def test_the_job_summary_shows_both_voltages_and_why(chain, tmp_path, capsys):
+    from coppernicus.ci import tree_markdown
+    doc = _chain_doc(chain, tmp_path, capsys)
+    text = "\n".join(tree_markdown("chain", doc))
+    assert "| Across, mean (V) | Worst pins (V) |" in text and "which sets the drop" in text
+
+
+def test_the_tree_report_labels_both_voltages(chain, tmp_path):
+    page = tmp_path / "tree.html"
+    assert main(["solve", str(chain), "--tree", "--no-maps", "--html", str(page),
+                 "--out", str(tmp_path / "o")]) == EXIT_OK
+    text = page.read_text(encoding="utf-8")
+    assert "Across, mean (V)" in text and "Worst pins (V)" in text and "which sets the drop" in text
+    assert '"v_worst_v"' in text

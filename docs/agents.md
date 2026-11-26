@@ -66,7 +66,7 @@ input.
 
 | Tool | Inputs | What it returns |
 |---|---|---|
-| `open_board` | `path` | Opens a board read-only. Returns `board_id`, copper layers with thickness, counts, the outline bounding box and import warnings. Reopening an unchanged file returns the same `board_id`. |
+| `open_board` | `path` | Opens a board read-only. Returns `board_id`, copper layers with thickness, counts, the outline bounding box and import warnings. Reopening an unchanged file returns the same `board_id` while the server still holds it: it keeps the 4 boards used last, and a board opened again after it was dropped gets a new `board_id` (its earlier results keep their own). |
 | `list_nets` | `board_id`, `kind`?, `filter`?, `limit`? | Nets with their kind (`power_or_ground` by default, or `power`, `ground`, `signal`, `all`) and their copper layers: `layers` (all touched), `layers_with_copper` (tracks or zones) and `layers_with_only_vias_or_pads`. Through vias touch every layer, so `layers_with_copper` is the guide to where a rail runs. `filter` is a case-insensitive substring, or a glob over whole names such as `+3V*`. |
 | `board_fields` | `board_id` | The board's KiCad footprint fields (`PI_*`; `.kicad_pcb` only) and the rails and links they describe, each value with the field it came from. Each rail's `complete` is judged as a solve judges it, from the fields alone (their `PI_LINK` links and the board's net ties, no project file); a rail completed by a link, a net tie or a regulator input it feeds names it in `complete_through` and its `note`; `missing` says why an incomplete one is. With any, `capacitors` gives each capacitor's model from its library fields (`PI_ESR`, `PI_ESL`, ...) or what it lacks, and `part_tolerances` the parts whose `PI_TOL` / `PI_ACC` has no `PI_RAIL`. Nothing is solved. See [KiCad footprint fields](#kicad-footprint-fields). |
 | `net_parts` | `board_id`, `net` | Parts on the net with value, footprint and pins, used to choose sources and loads. Also the net ties that join the net to others, which are solved as shorts. |
@@ -94,6 +94,10 @@ under a millionth of the rail current are left out, and so is a layer whose curr
 stays under a millionth of the rail's peak (copper of the net that no current crosses, such as
 a through-hole pad's ring on a layer with no load). That is solver round-off, and leaving it
 out is not a judgement.
+
+A summary's `via_count` is the number of plated holes the rail's current can cross: vias and
+the plated holes of through-hole pads, so it can be above the board's via count in
+`open_board`; `via_current_max_a` is the largest current through any of them.
 
 Each load has `v_min_v`, `v_max_v` and `v_worst_v`: the pin furthest from the source in the
 direction of the drop, the lowest on a positive rail and the highest on a negative rail or a
@@ -529,8 +533,11 @@ ground net is solved, each regulator's and load's `ground` pins (see
   judged, `null` where none is given; the key is there only when some VRM has a rating),
   `exceeds_current_limit` (`true`/`false`; `null` without a rating or when not judged) and
   `current_limit_from` (where the rating was written; `null` without one);
-- `loads`: each load's `v_supply_v`, `v_ground_v`, `v_across_v`, `drop_mv` and `drop_pct`
-  (from the nominal voltage, ground rise included), `status` and `exceeds_drop_limit`, `net`
+- `loads`: each load's `v_supply_v` and `v_ground_v` (means over its supply and ground pins),
+  `v_across_v` (their difference), `v_supply_min_v` (its lowest supply pin), `v_worst_v` (the
+  lowest supply pin minus the highest ground pin, the toward-0 V side on a negative rail),
+  `drop_mv` and `drop_pct` (nominal − `v_worst_v`, ground rise included: on a part with several
+  pins, nominal − `v_across_v` is not the drop), `status` and `exceeds_drop_limit`, `net`
   (the net its supply pins are on) and `rail` (the rail it is listed in; another net past a
   net tie);
 - `links` and `groups`. A rail group has `max_drop_mv` and `max_drop_pct`. A ground group has

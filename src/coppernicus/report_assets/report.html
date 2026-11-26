@@ -42,6 +42,7 @@
     <div class="tablewrap"><table id="problems"></table></div></section>
   <section class="two">
     <div><h2>Loads</h2><div class="tablewrap"><table id="loads"></table></div>
+      <p id="loads-note" class="muted small" hidden>Across is the mean over the part's supply pins minus the mean over its ground pins; worst pins is the lowest supply pin minus the highest ground pin, which sets the drop (nominal − worst pins). On a part with several pins the two can differ.</p>
       <h2>Sources</h2><div class="tablewrap"><table id="sources"></table></div></div>
     <div><h2>Where the power is lost</h2><div id="losses"></div>
       <h2>Settings</h2><ul id="settings" class="small"></ul></div>
@@ -56,6 +57,7 @@
   <p id="tree-verdict"></p>
   <h3>VRMs (sources and regulators)</h3><div class="tablewrap"><table id="tree-vrms"></table></div>
   <h3>Loads (the voltage across their supply and ground pins)</h3><div class="tablewrap"><table id="tree-loads"></table></div>
+  <p class="muted small">Across is the mean over the part's supply pins minus the mean over its ground pins; worst pins is the lowest supply pin minus the highest ground pin, which sets the drop (nominal − worst pins). On a part with several pins the two can differ.</p>
   <h3>Links</h3><div class="tablewrap"><table id="tree-links"></table></div>
   <section id="thermal" hidden aria-label="Board temperature">
     <h3>Board temperature</h3>
