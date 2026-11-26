@@ -1506,9 +1506,9 @@ only", not limits of the product):
 
 - `thermal` and `dc`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative,
   with a floor per unit for values near zero (the unit's largest magnitude in the fingerprint ×
-  1e-9);
+  1e-9); together: |Δ| ≤ 1e-9 × the largest value of that unit;
 - `ac`: |Z| within 1e-6 relative (and the noise and tolerance scalars that come from it), since
-  KiPI's own |Z| carries round-off of order 1e-7. On KiPI's noise example (1 kHz to 300 MHz),
+  KiPI's own |Z| carries round-off of order 1e-7. On the noise example (`examples/noise`, 1 kHz to 300 MHz),
   KiPI's own call (COLAMD, threshold 1.0) on the same systems with their unknowns put through a
   random symmetric permutation moves |Z| by 4.0e-8 to 5.8e-8 (6 seeds; 6.0e-8 between any two of
   the 7 orders), and this order by 5.2e-8: inside KiPI's own spread. That spread is 4.5e-8 below
@@ -1522,7 +1522,7 @@ only", not limits of the product):
 Measured (macOS arm64, a loaded machine: provisional), the heat model of a 50 mm synthetic board
 (250,000 unknowns, 4 layers): factors 121 M → 61 M non-zeros, memory +3.2 → +1.4 GB,
 factorization 3.6 → 2.0 s, each later solve 0.37 → 0.15 s; a 6-layer 250 × 250 grid (375,000
-unknowns): 12.6 s / +8.3 GB → 5.2 s / +3.0 GB. KiPI's pdn example's AC solve (19,783 unknowns,
+unknowns): 12.6 s / +8.3 GB → 5.2 s / +3.0 GB. The pdn example's AC solve (`examples/pdn`, 19,783 unknowns,
 111 field frequencies): each factorization 5.2 M → 3.3 M non-zeros, 0.25 → 0.155 s, 208 → 135 MB;
 the backward error at every frequency, off and on, at most 6.2e-17 and 4.9e-17. The factor keeps
 KiPI's name `superlu` and its true memory, which KiPI's thread count reads (field.py `threads`).

@@ -20,8 +20,8 @@ Parts, each off unless enabled:
   diagonal preferred, a row swapped when its pivot is under a tenth of the column's largest;
   KiPI's SciPy default is 1.0), since these systems are indefinite. Process-wide: KiPI solves
   the frequencies in its own threads. The factor keeps KiPI's name ``superlu`` and its true
-  memory, which KiPI's thread count reads (``kipi/ac/solver/field.py`` ``threads``). On KiPI's
-  pdn example (19,783 unknowns, 111 field frequencies): factors 5.2 M → 3.3 M non-zeros, each
+  memory, which KiPI's thread count reads (``kipi/ac/solver/field.py`` ``threads``). On the
+  pdn example (``examples/pdn``; 19,783 unknowns, 111 field frequencies): factors 5.2 M → 3.3 M non-zeros, each
   0.25 → 0.155 s and 208 → 135 MB.
 * ``dc``: every other real factorization, outside :func:`thermal_model`: the DC copper's
   direct solves (KiPI ``SpdSolver``, up to 200,000 unknowns with SuperLU), symmetric positive
@@ -41,12 +41,13 @@ Off, nothing is replaced and KiPI's own path runs: bit-identical. On, a differen
 differently, so results move by round-off only. The proof criteria for that (checks of
 "round-off only", not limits of the product), :data:`TOLERANCE_REL`: the benchmark fingerprint's
 scalars agree within 1e-9 relative (thermal, dc), with a floor per unit for values near zero (the
-unit's largest magnitude in the fingerprint × 1e-9); |Z| within 1e-6 relative (ac), since KiPI's
-own |Z| carries round-off of order 1e-7: on KiPI's noise example its own call (COLAMD,
-threshold 1.0) on the same systems with their unknowns permuted at random (6 seeds) moves |Z|
-by up to 6.0e-8, as far as this order does (5.2e-8), up to about 10 MHz (that probe has no
-target: never judged); on the pdn example both agree to 3.3e-11 everywhere, 1.9e-11 in its
-judged band; and the backward error ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) is of the same order on and off
+unit's largest magnitude in the fingerprint × 1e-9; together: |Δ| ≤ 1e-9 × the largest value of
+that unit); |Z| within 1e-6 relative (ac), since KiPI's own |Z| carries round-off of order 1e-7:
+on the noise example (``examples/noise``) KiPI's own call (COLAMD, threshold 1.0) on the same
+systems with their unknowns permuted at random (6 seeds) moves |Z| by up to 6.0e-8, as far as
+this order does (5.2e-8), up to about 10 MHz (that probe has no target: never judged); on the
+pdn example (``examples/pdn``) both agree to 3.3e-11 everywhere, 1.9e-11 in its judged band;
+and the backward error ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) is of the same order on and off
 (both a few 1e-16).
 
 The seam: KiPI's private ``direct._superlu`` and ``direct._superlu_complex`` are replaced
