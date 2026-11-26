@@ -108,6 +108,10 @@ documented current-density default flags crowded copper without ever giving a ve
 
 ### Changed
 
+- HTML reports open in a dark theme, with a **☀ Light / ☾ Dark** button in each page's header
+  (remembered where the browser allows it). The ac, noise and tolerance pages use the same
+  colours as the rail report; plots embedded in a page sit in a light frame.
+
 - A project that sets `thermal: max_temp_c` or `max_rise_c` and is solved rail by rail
   (`coppernicus solve` without `--tree`, the MCP tool `solve_project`, the Action without
   `tree`) now lists each of these limits as NOT JUDGED ("solved with the power tree only") and

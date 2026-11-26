@@ -12,7 +12,7 @@
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
   font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-header, main, footer, nav { max-width:1280px; margin:0 auto; padding:0 16px; }
+header, main, footer, nav, #tree { max-width:1280px; margin:0 auto; padding:0 16px; }
 header { padding-top:18px; display:flex; align-items:baseline; justify-content:space-between;
   gap:12px; } h1 { font-size:20px; margin:0 0 2px; }
 #theme-toggle { flex:none; font:inherit; font-size:12.5px; padding:3px 9px; border:1px solid var(--line);
