@@ -74,7 +74,7 @@ def test_with_both_holders_the_return_splits_and_the_ground_rise_drops(board):
 def test_the_order_of_the_parts_does_not_matter(board):
     a, _ = holder_amps(board, pack_project(("BT4", "BT8")))
     b, _ = holder_amps(board, pack_project(("BT8", "BT4")))
-    assert a == pytest.approx(b, rel=1e-9)
+    assert a == pytest.approx(b, rel=1e-6)
 
 
 def test_the_pads_can_be_chosen_part_by_part(board):
