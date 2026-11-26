@@ -1,7 +1,8 @@
 """Where the shown rail comes from, when the board's parts carry KiCad footprint fields: the
 banner of the rail panel (and its red line when a field cannot be used), the texts the
-read-only rows show, and the two questions of an override (which rail to keep, going back
-to the fields). The origins are those of ``coppernicus.board_fields.merge``.
+read-only rows show (the rail panel's, and the Impedance tab's capacitor models from KiCad
+fields), and the two questions of an override (which rail to keep, going back to the
+fields). The origins are those of ``coppernicus.board_fields.merge``.
 
 The questions are module functions, so a scripted run can answer them instead of a person.
 """
@@ -31,6 +32,58 @@ def row_tip(entry: Mapping[str, Any]) -> str:
     fields = ", ".join(f'{name} "{text}"' for name, text in entry.get("fields", {}).items())
     return (f"From KiCad footprint fields on {entry.get('ref', '')}: {fields} "
             f"({entry.get('from', '')}). Override in project to edit it.")
+
+
+CAP_KEY_FIELDS = {"esl_h": "PI_ESL", "esr_ohm": "PI_ESR", "dielectric": "PI_DIELECTRIC"}   # one field each
+
+
+def _use_project_cap(ref: str) -> str:
+    return f"set override_board_fields: true on a project capacitor model naming {ref} to use the project's"
+
+
+def cap_field_tip(cap, key: str) -> str:
+    """The tooltip of a capacitor model from KiCad fields, read-only in the Impedance tab, in
+    its column ``key`` (``cap``: a ``board_fields.FieldCap`` with its model): where the value
+    lives, and how a project model takes its place."""
+    ref, given, m = cap.ref, cap.fields, cap.model
+
+    def field(name: str) -> str:
+        return f'KiCad field {name} "{given[name]}" on {ref}'
+
+    if key == "name":
+        listed = ", ".join(f'{name} "{text}"' for name, text in given.items())
+        value = "" if "PI_C" in given else f"; its capacitance read from the {cap.capacitance_from}"
+        where = f"From KiCad footprint fields on {ref}, read-only (what the solve uses): {listed}{value}"
+    elif key == "capacitance_f":
+        where = (f"set in {field('PI_C')}" if "PI_C" in given
+                 else f"read from the {cap.capacitance_from} of {ref} (no PI_C)")
+    elif key in CAP_KEY_FIELDS:
+        where = "set in " + field(CAP_KEY_FIELDS[key])
+    elif key == "rated_v":
+        if m.rated_v is not None:
+            where = f"set in {field('PI_VRATED')}"
+        elif "PI_VRATED" in given:
+            where = (f"{field('PI_VRATED')} is not passed on: a {m.dielectric} capacitor is not a ceramic, "
+                     "so it is not derated for DC bias")
+        else:
+            where = f"no PI_VRATED on {ref}: not derated for DC bias ({m.dielectric})"
+    elif key == "kept_at_rated_pct":
+        from coppernicus.board_fields import CLASS_II
+        where = ("no KiCad field gives it (empty: KiPI's typical class II value)"
+                 if m.rated_v is not None and m.dielectric in CLASS_II
+                 else f"no KiCad field gives it: a {m.dielectric} capacitor is not derated for DC bias")
+    else:
+        where = f"{ref}: the part whose KiCad fields give this model"
+    return f"{where}; {_use_project_cap(ref)}"
+
+
+def cap_lost_tip(lost) -> str:
+    """The tooltip of a project capacitor model's parts when some of them went to the models of
+    their KiCad fields (``lost``: (ref, that model's name) pairs), as the merge gives them."""
+    parts = "; ".join(f"{ref} is solved with {name}, from its KiCad fields, not with this model"
+                      for ref, name in lost)
+    return (f"{parts}: KiCad fields win over a project model; set override_board_fields: true on this "
+            "model in the project file to use its values")
 
 
 def drop_tip(limit: Mapping[str, Any]) -> str:

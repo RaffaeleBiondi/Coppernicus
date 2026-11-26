@@ -456,10 +456,22 @@ def _convert(board: Board, project: Project, c: _Context, res, thickness,
         dielectric_assumed=assumed)
     out.assumptions = _assumptions(board, project, c, res, summary, assumed, thickness) + notes
     # Task 11 (Q9): a load whose AC tolerance disagrees with its probe's ac_tolerance_v.
-    pairs = load_probes(board, project)
-    out.warnings += mismatch_warnings(project, pairs, {name: float(c.source.voltage) for name in pairs},
-                                      list(by_name))
+    out.ac_tolerance_warnings = ac_tolerance_warnings(project, load_probes(board, project),
+                                                      c.source.voltage, list(by_name))
+    out.warnings += out.ac_tolerance_warnings
     return out
+
+
+def ac_tolerance_warnings(project: Project, pairs: Dict[str, Optional[str]], voltage: Optional[float],
+                          probes: Sequence[str]) -> List[str]:
+    """Task 11 (Q9): a warning for each load paired with one of ``probes`` (``pairs``: engine
+    load name -> its probe, :func:`coppernicus.engine.tolerance.load_probes`) whose AC
+    tolerance disagrees with that probe's ``ac_tolerance_v``, each load's nominal the set
+    ``voltage`` of the rail's source (None: not known). An AC result keeps them apart too
+    (``ac_tolerance_warnings``): a tolerance changes no |Z|, so the app shows them for the
+    values now, without solving again."""
+    nominal = None if voltage is None else float(voltage)
+    return mismatch_warnings(project, pairs, {name: nominal for name in pairs}, list(probes))
 
 
 def _assumptions(board: Board, project: Project, c: _Context, res, summary: str, assumed: str,

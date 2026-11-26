@@ -469,6 +469,9 @@ class ImpedanceResult:
     assumptions: List[str] = field(default_factory=list)
     assumed_bandwidth_hz: Optional[float] = None   # a placeholder when none is given
     dielectric_assumed: str = ""   # why the dielectric εr is assumed; "" when the board gives it
+    # Of ``warnings``, those of Task 11's Q9 (a load's AC tolerance against its probe's
+    # ac_tolerance_v): a tolerance changes no |Z|, so the app shows them for the values now.
+    ac_tolerance_warnings: List[str] = field(default_factory=list)
 
     @property
     def bandwidth_assumed(self) -> bool:

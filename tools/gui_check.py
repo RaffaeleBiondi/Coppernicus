@@ -2303,6 +2303,96 @@ def run_ac(window, check: Checks, args, out: Path):
     window.dirty = False
 
 
+def run_ac_fields(window, check: Checks, args, out: Path):
+    """The Impedance tab's capacitor models from KiCad fields, then its Q9 warning. On a
+    synthetic .kicad_pcb written into ``out`` (C1 and C2 carry PI_C, PI_ESR, PI_ESL and
+    PI_DIELECTRIC, C2 PI_VRATED too; the project's model bulk names C1 and C3), no solve: the
+    fields' models follow the project's, read-only, each tooltip naming its field; bulk's C1
+    is marked; an edit of a field row is refused; saved, the file holds bulk only. Then on
+    examples/tolerance (never saved): LOAD's ac_tolerance_v at 40 mV against U2's ac_tol_mv
+    50, the impedance solved (quick preset) warns; a Tolerance-tab edit to 40 mV takes the
+    warning away and one to 45 mV words it anew, the result kept, never flagged stale."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.engine.synthetic import write_strip_kicad_pcb
+    from coppernicus.project import CapModel, Project
+    panel, folder = window.ac_panel, out / "ac_fields"
+    folder.mkdir(parents=True, exist_ok=True)
+    c1 = {"PI_C": "10u", "PI_ESR": "20mOhm", "PI_ESL": "0.5nH", "PI_DIELECTRIC": "C0G"}
+    c2 = {"PI_C": "100nF", "PI_ESR": "30mOhm", "PI_ESL": "0.3nH", "PI_DIELECTRIC": "X7R", "PI_VRATED": "16V"}
+    write_strip_kicad_pcb(folder / "caps.kicad_pcb", {"C1": c1, "C2": c2},
+                          extra_parts=[("C1", 10.0, 0.0, "VCC"), ("C2", 20.0, 0.0, "VCC")])
+    path = Project(board="caps.kicad_pcb", capacitors=[CapModel("bulk", 10e-6, 0.5e-9, 0.01, ["C1", "C3"])]
+                   ).save(folder / "caps.coppernicus.yml")
+    window.dirty = False
+    window.open_project(path)
+    window.results_tabs.setCurrentWidget(panel)
+    panel.tabs.setCurrentIndex(1)                         # Capacitor models
+    QApplication.processEvents()
+    caps = panel.caps
+    names = [caps.item(r, 0).text() for r in range(caps.rowCount())]
+    locked = all(not caps.item(r, c).flags() & Qt.ItemIsEditable for r in (1, 2)
+                 for c in range(caps.columnCount()))
+    check("ac fields: C1's and C2's models from KiCad fields follow the project's bulk, read-only",
+          names == ["bulk", "C1 (KiCad)", "C2 (KiCad)"] and locked and caps.item(1, 3).text() == "20m"
+          and [m.name for m in window.project.capacitors] == ["bulk"], str(names))
+    tip = caps.item(1, 3).toolTip()
+    check("ac fields: ... each cell's tooltip names its field and how a project model takes its place",
+          tip == 'set in KiCad field PI_ESR "20mOhm" on C1; set override_board_fields: true on a project '
+          "capacitor model naming C1 to use the project's", tip)
+    parts = caps.item(0, 4).toolTip()
+    check("ac fields: bulk's C1, which its KiCad fields hold, is marked on bulk's Parts and under the table",
+          "C1 is solved with C1 (KiCad)" in parts and "Model bulk: C1" in panel.cap_note.text(),
+          f"{parts} | {panel.cap_note.text()}")
+    caps.item(2, 1).setText("1u")                       # only a script can: refused, as typed back
+    check("ac fields: an edit of a KiCad fields row is refused, its value back, the field named",
+          caps.item(2, 1).text() == "100n" and "Not applied" in panel.status.text()
+          and 'PI_C "100nF" on C2' in panel.status.text()
+          and abs(window.merged.project.capacitors[2].capacitance_f - 1e-7) < 1e-15, panel.status.text())
+    shot = folder / "ac_fields.png"
+    panel.grab().save(str(shot))
+    print(f"  Impedance tab with models from KiCad fields: {shot}", flush=True)
+    saved = folder / "caps-saved.coppernicus.yml"
+    window._save(saved)
+    check("ac fields: saved, the project file holds its own model only",
+          [m.name for m in Project.load(saved).capacitors] == ["bulk"]
+          and "KiCad" not in saved.read_text(encoding="utf-8"), saved.read_text(encoding="utf-8")[:200])
+
+    window.dirty = False
+    window.open_project(TOLERANCE_DIR / "tolerance.coppernicus.yml")
+    window.results_tabs.setCurrentWidget(panel)
+    panel.tabs.setCurrentIndex(0)
+    QApplication.processEvents()
+    panel.rail_box.setCurrentIndex(panel.rail_box.findText("VOUT"))
+    panel.probes.item(0, 10).setText("40m")               # LOAD's ac_tolerance_v; U2's ac_tol_mv is 50
+    panel.use_quick_preset()
+    res, _ = solve_ac_and_wait(window, args.timeout)
+    notes = panel.notes.toPlainText()
+    check("ac q9: LOAD's ac_tolerance_v 40 mV against U2's ac_tol_mv 50: the solve warns, once",
+          res is not None and notes.count("disagree") == 1 and "ac_tol_mv ±50 mV" in notes
+          and len(res.ac_tolerance_warnings) == 1 and not [w for w in res.warnings if "disagree" in w],
+          notes[-400:])
+    tol = window.tolerance_panel
+    window.results_tabs.setCurrentWidget(tol)
+    QApplication.processEvents()
+    tol.set_cell("load", "U2", "ac_tol_mv", "40")
+    QApplication.processEvents()
+    notes = panel.notes.toPlainText()
+    check("ac q9: U2's ac_tol_mv set to 40 in the Tolerance tab: no warning, the result kept, not stale",
+          "disagree" not in notes and panel.results.get("VOUT", (None,))[0] is res and not panel.stale,
+          notes[-300:])
+    tol.set_cell("load", "U2", "ac_tol_mv", "45")
+    window.results_tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+    notes = panel.notes.toPlainText()
+    check("ac q9: ... set to 45: the warning for 45 mV, the verdict line not flagged",
+          notes.count("disagree") == 1 and "ac_tol_mv ±45 mV" in notes
+          and "Setup changed" not in panel.header.text() and panel.results["VOUT"][0] is res, notes[-300:])
+    window.results_tabs.setCurrentWidget(window.problems)
+    window.dirty = False
+
+
 NOISE_DIR = ROOT / "examples" / "noise"
 
 
@@ -2743,6 +2833,7 @@ def main(argv=None) -> int:
         run_signs(window, check, args, out)
         run_fields(window, check, args, out)
         run_ac(window, check, args, out)
+        run_ac_fields(window, check, args, out)
         run_noise(window, check, args, out)
         run_tolerance(window, check, args, out)
         run_demo(window, check, args, out)
