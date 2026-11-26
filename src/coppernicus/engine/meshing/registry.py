@@ -37,6 +37,7 @@ from coppernicus.engine.meshing.protocol import Backend
 #: name -> "module:attribute" of a backend class (built with no arguments), imported when needed.
 KNOWN: Dict[str, str] = {
     "triangle": "coppernicus.engine.meshing.triangle_backend:TriangleBackend",
+    "rust": "coppernicus.engine.meshing.rust_backend:RustBackend",
 }
 _factories: Dict[str, Callable[[], Backend]] = {}
 _state: Dict[str, object] = {}          # the installed name and what install() replaced

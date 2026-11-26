@@ -27,7 +27,7 @@ def _restore():
     meshing.uninstall()
 
 
-@pytest.fixture(params=["triangle"])
+@pytest.fixture(params=["triangle", "rust"])
 def name(request):
     if request.param not in meshing.available():
         pytest.skip(f"mesher {request.param!r} not available here")

@@ -1,0 +1,25 @@
+[package]
+name = "coppermesh"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Constrained Delaunay triangulation and Delaunay refinement for Coppernicus (experimental drop-in for KiPI's mesh_polygon)"
+publish = false
+
+[lib]
+name = "coppermesh"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+python = ["dep:pyo3", "dep:numpy"]
+
+[dependencies]
+robust = "1.2"
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py312"], optional = true }
+numpy = { version = "0.30", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
