@@ -47,7 +47,8 @@ voltage between two points, across groups too), render_map and cut_current take 
 id, report the tree's; the tools for one rail result (get_problems, copper_step,
 compare_results, compare_revisions, propose_fields) refuse them. solve_tree's reference
 ({ground_of: "U1"} or {pads: [...]}) only shows the voltages from another 0 V: drops, rises
-and verdicts stay from the solve's 0 V.
+and verdicts stay from the solve's 0 V. The tree's split of each drop (segments, net_split) is
+shown, never judged.
 Also from a project file: solve_ac for the PDN impedance |Z|(f) at the project's probes;
 solve_noise for a switcher's ripple and the noise it couples into victim nets, judged only
 against the user's noise margins (ripple and radiated estimate never judged); solve_tolerance

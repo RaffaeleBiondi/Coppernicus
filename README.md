@@ -244,7 +244,7 @@ uv run coppernicus gui project.coppernicus.yml --solve +3V3 --field current
 With `--tree`, `--split` also prints where each drop comes from, `--reference U1` shows the
 tree from U1's ground pins (verdicts stay from the solve's 0 V), and `--probe B.Cu@97.5,1.0`
 (repeatable) reads the group, voltage and drop at a point; see the
-[power tree guide](docs/power-tree.md#run-it).
+[power tree guide](docs/power-tree.md).
 
 Add `--json` to `nets`, `parts`, `fields`, `solve`, `ac`, `noise` or `tolerance` to get one JSON
 document on stdout instead of text. The `*_summary.json` file that `solve` writes holds the
@@ -381,7 +381,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Project file v2: regulator kind (source / LDO / switcher), efficiency, quiescent current; input, ground and remote-sense pins; load ground pins; links (ferrites, sense resistors, fuses). Old project files load and save unchanged | ✅ (regulators editable in the app; links set in the project file) |
 | Power tree with ground return: regulators as loads on the rail feeding them, ground rise, remote sense; Solve tree (Ctrl+T), Group selector, Power tree tab; `solve --tree` (and `--json`); MCP `solve_tree` | ✅ |
 | Where each power-tree drop comes from: each load's and regulator input's drop as parts that add up to it (the source's regulation, each net's copper, each link, the ground), each net's range, drop or rise and loss, each link's voltage across it; shown, never judged ([guide](docs/power-tree.md#where-each-drop-comes-from)) | ✅ `solve --tree --split`, the JSON and MCP `solve_tree`, the HTML report's Split column and Nets table |
-| The power tree shown from another 0 V (a part's ground pins, or pads): a display shift with no re-solve, verdicts always from the solve's 0 V; each regulator's output across its own pins (V across) ([guide](docs/power-tree.md#showing-it-from-another-0-v)) | ✅ app (0 V at), project file (`tree: reference:`), CLI (`--reference`), MCP (`reference`), HTML report |
+| The power tree shown from another 0 V (a part's ground pins, or pads): a display shift with no re-solve, verdicts always from the solve's 0 V; each regulator's output across its own pins (V across, `v_out_across_v`) ([guide](docs/power-tree.md#showing-it-from-another-0-v)) | ✅ app (0 V at), project file (`tree: reference:`), CLI (`--reference`), MCP (`reference`), HTML report |
 | Power-tree groups probed, mapped and cut: MCP `solve_tree` returns `tree_id` (`t1`) and a `result_id` per group (`t1:GND`) for `probe` (`relative_to` for the voltage between two points, across groups too), `render_map` and `cut_current`, and `report` takes the tree's id; `solve --tree --probe LAYER@X,Y` on the command line | ✅ |
 | A rail solved alone draws the regulator inputs and links it feeds, estimated at nominal voltages | ✅ in the app, the CLI (`solve`, `--json`, `--html`), MCP `solve_project` and the Action; MCP `solve_rail` has no project |
 | Optional ground-rise limit (`max_ground_rise_mv`) on a ground net | ✅ (single-rail solves, the power tree, MCP, report and CI summary) |
