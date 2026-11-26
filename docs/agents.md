@@ -770,8 +770,9 @@ What it adds up and what the user enters: [Tolerance stack-up](tolerance.md); ev
   `hotspot` problem with `severity: "attention"` (between `"fail"` and `"info"`). It has
   `default_j_a_mm2` (the default used) and `thickness_mm` besides `mean_j_a_mm2`,
   `peak_j_a_mm2` and `area_mm2`, and is measured as a limit is, on the spot's mean |J|. Every
-  one is listed, on top of the ranked spots, so a ranked `info` spot can sit on the same
-  copper. It changes no verdict, no `not_judged` list and no exit code; a rail summary, each
+  one is listed, on top of the ranked spots. A spot is listed once: a ranked `info` spot that
+  shares copper (one mesh triangle) with an attention or `fail` spot on its layer is not listed
+  again, and the `top` ranked spots are counted after that. It changes no verdict, no `not_judged` list and no exit code; a rail summary, each
   tree group and the tree and project documents count them in `attention`. A
   `max_current_density_a_mm2` the user sets replaces the default on that rail or group (a
   `fail` when exceeded, no attention items). Every rail and power-tree result has an
@@ -928,8 +929,10 @@ tool does. `solve` reads them by default; `--no-board-fields` ignores them for o
 `use_board_fields: false` in the project file does (see
 [KiCad footprint fields](#kicad-footprint-fields)).
 
-`--top N` sets how many current-crowding spots and vias are listed per rail (default 5 each;
-every load is always listed).
+`--top N` sets how many current-crowding spots and vias are listed per rail (default 5 each,
+more when they exceed a limit; every load is always listed). The spots above the
+current-density default come on top of the N, and a spot listed as a fail or an attention item
+is not ranked again.
 
 Exit codes:
 

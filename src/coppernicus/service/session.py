@@ -1320,7 +1320,9 @@ class Session:
             "assumptions": [
                 "Loads are ranked by drop at their worst pin; hotspots are connected regions in the "
                 "top 1 % of a layer's copper area by |J| (or above max_current_density_a_mm2 when "
-                "set), reported by their area-weighted mean |J|; vias by barrel current. With "
+                "set), reported by their area-weighted mean |J|, each spot once (a ranked spot on "
+                "the copper of an attention or fail spot is not listed again); vias by barrel "
+                "current. With "
                 "max_ground_rise_mv on a net at 0 V, one 'rise' problem gives the copper furthest "
                 "from 0 V; a limit of the wrong kind for the net (a rise limit on a supply rail, "
                 "a % drop limit on a 0 V net) is listed in not_judged."],

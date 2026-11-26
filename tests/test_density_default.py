@@ -1,7 +1,8 @@
 """Coppernicus's current-density default: 60 A/mm² at 1 oz, scaled ×√(35 µm / t) with each
 layer's copper thickness as solved. Exceeding it is an attention item, never a fail: no
 verdict, not-judged list or exit code changes. A max_current_density the user sets replaces
-it (a fail when exceeded, no attention items). Synthetic boards only."""
+it (a fail when exceeded, no attention items). A spot is listed once: a ranked spot on the
+copper of an attention (or failed) spot is not listed again. Synthetic boards only."""
 
 import json
 import math
@@ -11,6 +12,7 @@ import sys
 import textwrap
 from pathlib import Path
 
+import numpy as np
 import pytest
 from shapely.geometry import box
 
@@ -29,6 +31,7 @@ from coppernicus.engine.synthetic import (
 from coppernicus.engine.tree import solve_project_tree
 from coppernicus.problems import ATTENTION, FAIL, INFO, find_problems, find_tree_problems
 from coppernicus.project import Limits, Load, Project, Rail, Settings, Source
+from coppernicus.results import LayerField, RailResult, TerminalResult
 
 NET = "VCC"
 NECK_W = 0.5                    # mm: the neck between two 5 mm wide pours
@@ -100,19 +103,17 @@ def test_a_1_oz_neck_above_60_is_an_attention_item_not_a_fail(neck_80):
     assert not [p for p in problems if p.severity == FAIL]
 
 
-def test_attention_sorts_between_fails_and_ranked_items(neck_80):
-    problems = find_problems(neck_80, Limits(max_drop_pct=1e-6))      # every load fails
-    ranks = [{FAIL: 0, ATTENTION: 1, INFO: 2}[p.severity] for p in problems]
-    assert ranks == sorted(ranks) and set(ranks) == {0, 1, 2}
-
-
-def test_the_ranked_items_are_unchanged_attention_is_added(neck_80):
-    """The info rows (the top 1 % spots, the vias, the loads) are the same as before the
-    default: attention rows come on top of them."""
+def test_the_neck_is_listed_once_and_the_other_rows_are_unchanged(neck_80):
+    """Without the default the neck is the one ranked (top 1 %) spot; with it, the neck is an
+    attention item and is not listed again as a ranked spot. The loads and vias are the same
+    as before the default."""
     problems = find_problems(neck_80, Limits(), top=5)
-    info_spots = [p for p in problems if p.kind == "hotspot" and p.severity == INFO]
-    assert info_spots and "top 1%" in info_spots[0].detail
-    assert _without_attention(problems) == find_problems(_no_thickness(neck_80), Limits(), top=5)
+    bare = find_problems(_no_thickness(neck_80), Limits(), top=5)
+    [ranked] = [p for p in bare if p.kind == "hotspot"]
+    assert ranked.severity == INFO and "top 1%" in ranked.detail
+    hot = [p for p in problems if p.kind == "hotspot"]
+    assert [(p.severity, p.layer, p.x, p.y) for p in hot] == [(ATTENTION, ranked.layer, ranked.x, ranked.y)]
+    assert [p for p in problems if p.kind != "hotspot"] == [p for p in bare if p.kind != "hotspot"]
 
 
 def _no_thickness(res):
@@ -122,10 +123,6 @@ def _no_thickness(res):
     out = copy.copy(res)
     out.layers = [dataclasses.replace(lf, thickness_mm=None) for lf in res.layers]
     return out
-
-
-def _without_attention(problems):
-    return [p for p in problems if p.severity != ATTENTION]
 
 
 def test_the_verdict_and_not_judged_are_unchanged_by_attention(neck_80):
@@ -197,6 +194,77 @@ def test_a_layer_without_a_thickness_gets_no_default():
     assert not attention(find_problems(res, Limits()))
 
 
+# ---------------------------------------------------------------------- each spot listed once
+
+STRIP_QUADS = 1000        # a 500 mm × 1 mm strip of 0.5 mm × 1 mm quads: 1 % of it is 5 mm²
+A, CORE, B = (20, 21), (62, 62), (100, 103)       # quads first to last
+FLANKS = ((60, 61), (63, 64))
+
+
+def strip_layer(name: str, spans, layer_id: int = 0) -> LayerField:
+    """A solved 1 oz outer layer built by hand, no solve: the strip at 1 A/mm², with |J| set
+    per quad by ``spans`` ({(first, last): J}), two triangles of 0.25 mm² per quad."""
+    n = STRIP_QUADS
+    xs = np.arange(n + 1) * 0.5
+    points = np.column_stack([np.concatenate([xs, xs]), np.repeat([0.0, 1.0], n + 1)])
+    lo = np.arange(n)                                 # quad i: nodes i, i+1 (y 0), i+n+1, i+n+2 (y 1)
+    tris = np.concatenate([np.column_stack([lo, lo + 1, lo + n + 2]),
+                           np.column_stack([lo, lo + n + 2, lo + n + 1])])
+    j = np.ones(n)
+    for (first, last), value in spans.items():
+        j[first:last + 1] = value
+    return LayerField(layer_id, name, points, tris, np.zeros(len(points)), np.concatenate([j, j]),
+                      np.zeros(2 * n), np.full(2 * n, 0.25), OZ1, True)
+
+
+def strip_result() -> RailResult:
+    """F.Cu: A, 1 mm² at 80 A/mm² (above the 60 A/mm² default); C, a 0.5 mm² core at 70 A/mm²
+    between 2 mm² of flanks at 45 A/mm²; B, 2 mm² at 55 A/mm² (below the default). The top
+    1 % of F.Cu reaches down to 45 A/mm², so the ranked spots are A (80), B (55) and C as a
+    whole (50 mean); the spots above the default are A and C's core. B.Cu: 5 mm² at
+    50 A/mm² under A, a ranked spot of its own layer."""
+    front = strip_layer("F.Cu", {A: 80.0, CORE: 70.0, **{f: 45.0 for f in FLANKS}, B: 55.0})
+    back = strip_layer("B.Cu", {(16, 25): 50.0}, layer_id=31)
+    return RailResult(NET, [NET], 1.0, [front, back], [], [], [], 0.0, 0.0, 0.0, 0.0)
+
+
+def spots(problems, severity):
+    return [(p.layer, round(p.value, 6)) for p in problems if p.kind == "hotspot" and p.severity == severity]
+
+
+def test_a_ranked_spot_on_the_copper_of_an_attention_spot_is_not_listed_again():
+    """A is the same copper as its attention item; C contains the attention core. Neither is
+    listed again as a ranked spot. B (F.Cu, below the default) and the B.Cu spot under A
+    (another layer) are."""
+    problems = find_problems(strip_result(), Limits())
+    assert spots(problems, ATTENTION) == [("F.Cu", 80.0), ("F.Cu", 70.0)]
+    assert spots(problems, INFO) == [("F.Cu", 55.0), ("B.Cu", 50.0)]
+
+
+def test_top_counts_the_ranked_spots_left_once_the_duplicates_are_out():
+    """The ``top`` ranked spots are counted after the spots already listed above them are
+    taken out: attention items come on top of the ranked ones, not out of their number."""
+    assert spots(find_problems(strip_result(), Limits(), top=1), INFO) == [("F.Cu", 55.0)]
+    assert spots(find_problems(strip_result(), Limits(), top=2), INFO) == [("F.Cu", 55.0), ("B.Cu", 50.0)]
+
+
+def test_attention_sorts_between_fails_and_ranked_items():
+    res = strip_result()
+    res.loads = [TerminalResult("U1", "load", "U1", 1.0, 0.9, 0.9, ["1"], [(0.0, 0.5)])]
+    problems = find_problems(res, Limits(max_drop_pct=1.0))           # the load fails: 10 %
+    ranks = [{FAIL: 0, ATTENTION: 1, INFO: 2}[p.severity] for p in problems]
+    assert ranks == sorted(ranks) and set(ranks) == {0, 1, 2}
+
+
+def test_against_a_user_limit_the_failed_spots_and_the_ranked_ones_are_apart():
+    """At 55 A/mm²: A and C's core fail; B, exactly at the limit, is a ranked spot of its own
+    copper and stays listed."""
+    problems = find_problems(strip_result(), Limits(max_current_density=55.0))
+    assert spots(problems, FAIL) == [("F.Cu", 80.0), ("F.Cu", 70.0)]
+    assert spots(problems, INFO) == [("F.Cu", 55.0)]
+    assert not attention(problems)
+
+
 # ---------------------------------------------------------------------- the assumption line
 
 LINE_1OZ = ("Current-density default (Coppernicus, attention only, not a verdict): 60 A/mm² at "
@@ -244,12 +312,20 @@ def hot_tree(chain_board):
     return solve_project_tree(chain_board, _hot_chain())
 
 
-def test_the_tree_problems_are_unchanged_attention_is_added(hot_tree):
+def test_a_tree_group_lists_each_spot_once_and_its_other_rows_are_unchanged(hot_tree):
+    """The strips of +1V8, +3V3 and GND above the default are attention items, not listed
+    again as ranked spots. The loads, inputs, regulators and vias are those of the tree with
+    no default."""
     import copy
     bare = copy.copy(hot_tree)
     bare.groups = {k: _no_thickness(res) for k, res in hot_tree.groups.items()}
     for key in hot_tree.groups:
-        assert _without_attention(find_tree_problems(hot_tree, key)) == find_tree_problems(bare, key)
+        problems, before = find_tree_problems(hot_tree, key), find_tree_problems(bare, key)
+        assert [p for p in problems if p.kind != "hotspot"] == [p for p in before if p.kind != "hotspot"]
+        flagged = {(p.layer, p.x, p.y) for p in attention(problems)}
+        assert not [p for p in problems if p.kind == "hotspot" and p.severity == INFO
+                    and (p.layer, p.x, p.y) in flagged], key
+    assert [p.severity for p in find_tree_problems(hot_tree, "+1V8") if p.kind == "hotspot"] == [ATTENTION]
 
 
 def test_a_tree_group_above_the_default_has_attention_and_no_fail(hot_tree):
@@ -394,9 +470,12 @@ def test_the_html_report_has_an_attention_badge(neck_80, tmp_path):
     [rail] = b.rails
     assert [p["severity"] for p in rail["problems"]].count("attention") == 1
     assert "1 attention item" in rail["verdict_text"] and "not a verdict" in rail["verdict_text"]
-    # the "strongest current crowding" card keeps the ranked spot it showed before
-    info = [p for p in rail["problems"] if p["kind"] == "hotspot" and p["severity"] == "info"]
-    assert rail["worst"]["hotspot"]["mean_j_a_mm2"] == pytest.approx(max(p["mean_j_a_mm2"] for p in info))
+    # the neck is listed once, as attention: the "strongest current crowding" card shows it
+    [spot] = [p for p in rail["problems"] if p["kind"] == "hotspot"]
+    assert spot["severity"] == "attention"
+    card = rail["worst"]["hotspot"]
+    assert card["mean_j_a_mm2"] == pytest.approx(spot["mean_j_a_mm2"])
+    assert (card["x_mm"], card["y_mm"]) == (spot["x_mm"], spot["y_mm"])
     assets = Path(__file__).resolve().parents[1] / "src" / "coppernicus" / "report_assets"
     assert '"attention"' in (assets / "report.js").read_text(encoding="utf-8")
     assert ".badge.attention" in (assets / "report.css").read_text(encoding="utf-8")

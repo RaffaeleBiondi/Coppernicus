@@ -87,7 +87,15 @@ the thickness.
 above the threshold is one spot, judged by its area-weighted mean |J|, not by the
 single-triangle peak. A spot of a few triangles at a corner or a via edge can be a mesh effect:
 solve again with a smaller `max_edge_mm` before taking it as real. Every spot above the default
-is listed, between the fails and the ranked items, so a ranked spot can sit on the same copper.
+is listed, between the fails and the ranked items.
+
+**Each spot is listed once.** A ranked (top 1 %) spot that shares copper with an attention or
+failed spot on the same layer, one mesh triangle being enough, is not listed again: the same
+copper, or a wider ranked region around a spot above the default. The `top` ranked spots
+(`--top`, default 5) are counted after that, so the attention items come on top of them and the
+ranked rows show the strongest spots not already listed; a failed spot still counts in the
+`top`. The HTML report's "Strongest current crowding" card takes the strongest spot of any
+severity.
 
 **What it changes.** It changes no verdict, no `not_judged` list and no exit code (CLI, CI,
 MCP). The app shows amber ATTENTION rows and counts them apart from "limit(s) exceeded". The

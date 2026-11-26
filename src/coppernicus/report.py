@@ -352,9 +352,9 @@ class ReportBuilder:
             x = d.get("drop_mv")
             return x if x is not None and math.isfinite(x) else -math.inf
         worst_load = max(loads, key=size, default=None)
-        # The strongest ranked (or failed) spot: an attention spot, measured over the copper
-        # above the default instead, does not take its place.
-        hot = [p for p in problems if p.kind == "hotspot" and p.severity != ATTENTION]
+        # The strongest spot, failed, attention or ranked: a spot is listed once, so the one
+        # above the current-density default may only be there as an attention item.
+        hot = [p for p in problems if p.kind == "hotspot"]
         top_hot = max(hot, key=lambda p: p.value, default=None)
         top_via = max(result.vias, key=lambda v: v.current, default=None)
         busiest = max(result.layers, key=lambda lf: lf.power, default=None)

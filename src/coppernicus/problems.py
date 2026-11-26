@@ -7,7 +7,8 @@ result exceeds it. Verdicts are only against the user's limits.
 One documented default (docs/technical.md#current-density-default): without a
 ``max_current_density``, a current-crowding spot whose mean |J| is above
 :func:`density_default` for its layer is an ``attention`` item. It is shown between the fails
-and the ranked items and never changes a verdict.
+and the ranked items and never changes a verdict. Each spot is listed once: a ranked spot on
+the copper of an attention or failed spot is not listed again.
 
 Current crowding is reported per *spot*: connected triangles in the top share of current
 density on a layer, summarised by their area-weighted mean |J|. A point maximum is not
@@ -88,8 +89,8 @@ class Problem:
 def find_problems(result: RailResult, limits: Optional[Limits] = None,
                   top: int = 5) -> List[Problem]:
     """Every load, then at most ``top`` current-crowding spots and ``top`` vias (more when
-    they exceed a limit), and every spot above the current-density default (attention). Fails
-    first, then attention items, then the ranked ones."""
+    they exceed a limit), and every spot above the current-density default (attention), each
+    spot once (:func:`_hotspots`). Fails first, then attention items, then the ranked ones."""
     limits = limits or Limits()
     rise = _rise(result, limits) if not result.v_ref else []    # a ground-rise limit: 0 V nets only
     out = rise + _loads(result, limits) + _hotspots(result, limits, top) + _vias(result, limits, top)
@@ -159,11 +160,16 @@ def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "",
               default: bool = True) -> List[Problem]:
     """Current-crowding spots: against the user's ``max_current_density`` when set (fails),
     else the top ones ranked, plus every spot above the current-density default (attention,
-    measured as a limit is: mean |J| over the spot; unless ``default`` is False)."""
-    found, attention = [], []
+    measured as a limit is: mean |J| over the spot; unless ``default`` is False).
+
+    Each spot is listed once: a ranked spot that shares copper (one triangle is enough) with
+    a failed or attention spot on its layer is not listed again. The ``top`` ranked spots
+    are counted after that, so the attention items come on top of them, not out of them."""
+    fails, attention, ranked = [], [], []
     for layer in result.layers:
         if layer.current_density.size == 0 or not np.any(layer.current_density > 0):
             continue
+        listed = np.zeros(layer.current_density.shape, dtype=bool)   # copper of the spots above
         if limits.max_current_density is not None:
             threshold, grow = limits.max_current_density, 1.0
             why = f"above the {limits.max_current_density:g} A/mm² limit"
@@ -171,28 +177,37 @@ def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "",
             threshold, grow = _top_share_threshold(layer, HOTSPOT_TOP_SHARE), HOTSPOT_GROW
             why = f"top {HOTSPOT_TOP_SHARE:.0%} of this layer's copper by current density"
             if default and layer.thickness_mm:
-                attention += _default_spots(layer)
+                for problem, idx in _default_spots(layer):
+                    attention.append(problem)
+                    listed[idx] = True
         cents = layer.centroids()
+        found = []
         for idx, mean_j, max_j, area in _spots(layer, threshold, grow):
             w = layer.tri_area[idx]
             x, y = (cents[idx] * w[:, None]).sum(axis=0) / w.sum()
             fail = limits.max_current_density is not None and mean_j > limits.max_current_density
-            found.append(Problem(
+            found.append((Problem(
                 FAIL if fail else INFO, "hotspot",
                 _against(f"Current crowding on {layer.name}: {mean_j:.1f} A/mm² mean over {area:.3g} mm²",
                          fail, limits.max_current_density, "A/mm²", source),
                 f"Peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners); {why}.",
                 mean_j, float(x), float(y), layer.name,
-                data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area}))
-    found.sort(key=lambda p: -p.value)
-    attention.sort(key=lambda p: -p.value)
-    fails = [p for p in found if p.severity == FAIL]
-    return fails + attention + [p for p in found if p.severity != FAIL][:max(0, top - len(fails))]
+                data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area}), idx))
+        for problem, idx in found:
+            if problem.severity == FAIL:
+                fails.append(problem)
+                listed[idx] = True
+        ranked += [problem for problem, idx in found
+                   if problem.severity != FAIL and not listed[idx].any()]
+    for group in (fails, attention, ranked):
+        group.sort(key=lambda p: -p.value)
+    return fails + attention + ranked[:max(0, top - len(fails))]
 
 
-def _default_spots(layer: LayerField) -> List[Problem]:
+def _default_spots(layer: LayerField) -> List[Tuple[Problem, np.ndarray]]:
     """The spots of ``layer`` whose mean |J| is above the current-density default for its
-    thickness, found and measured as against a ``max_current_density``: attention items."""
+    thickness, found and measured as against a ``max_current_density``: attention items,
+    each with the indices of its triangles."""
     t, outer = float(layer.thickness_mm), layer.outer is not False
     limit = density_default(t, outer)
     cents = layer.centroids()
@@ -202,7 +217,7 @@ def _default_spots(layer: LayerField) -> List[Problem]:
             continue
         w = layer.tri_area[idx]
         x, y = (cents[idx] * w[:, None]).sum(axis=0) / w.sum()
-        out.append(Problem(
+        out.append((Problem(
             ATTENTION, "hotspot",
             f"Current crowding on {layer.name}: {mean_j:.1f} A/mm² mean over {area:.3g} mm², above "
             f"the {limit:.3g} A/mm² default for {_um(t)} copper",
@@ -212,7 +227,7 @@ def _default_spots(layer: LayerField) -> List[Problem]:
             f"({DENSITY_DEFAULT_SOURCE}); set max_current_density to judge it.",
             mean_j, float(x), float(y), layer.name,
             data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area,
-                  "default_j_a_mm2": limit, "thickness_mm": t}))
+                  "default_j_a_mm2": limit, "thickness_mm": t}), idx))
     return out
 
 
