@@ -900,6 +900,8 @@ def test_a_kicad_fields_rows_tips_say_where_each_value_lives_and_how_to_use_the_
     assert 'PI_VRATED "10V" on C5' in rated and "not derated" in rated, rated
     assert 'KiCad field PI_DIELECTRIC "X7R" on C1' in cap_field_tip(c1, "dielectric")
     assert "KiPI's typical class II value" in cap_field_tip(c1, "kept_at_rated_pct")
+    for cap, diel in ((c2, "C0G"), (c5, "TANT")):          # KiPI derates class II models only
+        assert f"a {diel} capacitor is not derated for DC bias" in cap_field_tip(cap, "kept_at_rated_pct")
     name = cap_field_tip(c1, "name")
     assert all(f in name for f in ('PI_ESR "5m"', 'PI_ESL "0.5nH"', 'PI_DIELECTRIC "X7R"', 'PI_VRATED "16V"'))
     assert "read-only" in name
