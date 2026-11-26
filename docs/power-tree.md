@@ -142,9 +142,10 @@ into parts, each the difference of two voltages the solve gives:
   pins, along the ground's nets and links (one **ground** step when they are not on one ground
   group).
 
-The parts add up to the drop exactly (to the last digit: each part ends on the voltage the next
-one starts from), and the chain starts again at each regulator: each part is measured across
-its own pins against its own source. On the power chain:
+The parts add up to the drop exactly, within round-off (1e-12 V: each part ends on the voltage
+the next one starts from; the printed parts are rounded, so their printed sum can differ in the
+last digit), and the chain starts again at each regulator: each part is measured across its own
+pins against its own source. On the power chain:
 
 ```text
 Split (each drop part by part, from its rail's source to its worst pins, toward 0 V; shown, never judged)
