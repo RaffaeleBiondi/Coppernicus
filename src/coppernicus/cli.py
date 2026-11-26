@@ -422,7 +422,7 @@ def _cmd_solve_tree(args) -> int:
     else:
         print(f"Board: {board.name} · power tree: {len(tree.groups)} groups solved "
               f"in {tree.stats['seconds']:.1f} s")
-        print("\n".join(tree_text(doc)))
+        print("\n".join(tree_text(doc, split=getattr(args, "split", False))))
         if probes:
             from coppernicus.service.session import probe_text
             print("\n".join(probe_text(p) for p in doc["probes"]))
@@ -829,6 +829,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--probe", action="append", metavar="LAYER@X,Y",
                    help="with --tree: the group, voltage and drop (or ground rise) at this point, mm "
                         "in KiCad's frame, e.g. B.Cu@97.5,1.0 (repeatable; in the JSON as probes)")
+    p.add_argument("--split", action="store_true",
+                   help="with --tree: also print each drop segment by segment (regulation, each "
+                        "net's copper, each link, the ground) and each net's range, entry and losses; "
+                        "shown, never judged (the JSON always holds them)")
 
     p = sub.add_parser("mcp", help="run the MCP server for AI agents (stdio; see README)")
     p.add_argument("--out", help="folder for maps, one session-... subfolder per run "

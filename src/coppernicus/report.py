@@ -418,6 +418,9 @@ class ReportBuilder:
             "warnings": list(result.warnings),
             # Degenerate triangles left out of every maximum |J| (only when there are some)
             **({"degenerate_triangles": degenerate} if degenerate else {}),
+            # A tree group's nets: each one's range, entry, drop or rise and losses, as the tree
+            # document has them (shown, never judged), and how parallel links were attributed
+            **(_net_split_keys(result) if tree_loads is not None else {}),
             "notes": list(notes),
             "stats": {"triangles": int(result.stats.get("triangles", 0)),
                       "unknowns": int(result.stats.get("unknowns", 0)),
@@ -562,18 +565,31 @@ def tree_group_loads(tree, key: str) -> List[Dict[str, Any]]:
     input the group feeds ("U2 (input)"), with the voltage across its supply (input) and ground
     pins, its drop from its nominal voltage and the tree's verdict (``exceeds``: None when not
     judged; ``status`` says why when it could not be)."""
+    from coppernicus.power_tree import segment_keys
+
     def mv(v):
         return None if v is None else v * 1e3
+    # segments: the drop part by part (the split column; shown, never judged)
     rows = [{"name": ld.name, "current_a": ld.current_a, "nominal_v": ld.nominal_v,
              "v_across_v": ld.v_across_v, "v_worst_v": ld.v_worst_v, "drop_mv": mv(ld.drop_v),
              "drop_pct": ld.drop_pct, "exceeds": None if ld.passed is None else not ld.passed,
-             "status": ld.status} for ld in tree.loads if ld.group == key]
+             "status": ld.status, **segment_keys(getattr(ld, "segments", ()))}
+            for ld in tree.loads if ld.group == key]
     rows += [{"name": f"{v.name} (input)", "current_a": v.i_in_a, "nominal_v": v.input_nominal_v,
               "v_across_v": v.v_in_worst_v, "v_worst_v": v.v_in_worst_v, "drop_mv": mv(v.input_drop_v),
               "drop_pct": v.input_drop_pct,
               "exceeds": None if v.input_passed is None else not v.input_passed,
-              "status": v.input_status} for v in tree.vrms if v.input_net and v.input_group == key]
+              "status": v.input_status, **segment_keys(getattr(v, "segments", ()))}
+             for v in tree.vrms if v.input_net and v.input_group == key]
     return rows
+
+
+def _net_split_keys(result: RailResult) -> Dict[str, Any]:
+    """A tree group's ``net_split`` rows (:func:`coppernicus.power_tree.net_split_rows`) and its
+    ``split_note`` when it has one, for the page."""
+    from coppernicus.power_tree import net_split_rows
+    note = getattr(result, "split_note", "")
+    return {"net_split": net_split_rows(result), **({"split_note": note} if note else {})}
 
 
 def thermal_map_images(temp, outline: Sequence[np.ndarray] = (), dpi: int = 110) -> List[Dict[str, str]]:

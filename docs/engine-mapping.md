@@ -387,6 +387,18 @@ and the agent interface will reuse it. It has:
   each group, and the document, count the attention items in `attention`; a `load` has `limit_pct`
   and `limit_from` (the `max_drop_pct` that judged it and the net it came from, by
   `net_limits`), a `return` has `limit_mv` and `limit_from`; `null` when no limit is set;
+- the split (S1, shown, never judged; `engine.tree.split_tree`): `links[]` `v_a_v`, `v_b_v`,
+  `across_mv` from KiPI's `SeriesResult.v_a` / `v_b` (the merged node of each side);
+  `groups[].net_split` and `split_note`, `loads[].segments`, `vrms[].segments`,
+  `segments_sum_mv` ([agents.md](agents.md#power-tree) has the keys). Each mesh node's net
+  (`LayerField.node_net`) comes from KiPI's mesh, where nets are never joined (`combine_meshes`
+  concatenates the per-net meshes; a link is an element between pad nodes): the components
+  of triangles, plated-hole rings and terminal-pad nodes, named by the nets of the pads and
+  holes they hold (an island with none by the copper outline holding its first triangle). A
+  segment chain's waypoints are the driver's `v_out_v` and `v_ground_v`, the link sides'
+  voltages and the worst supply and ground pads' voltages (the KiPI terminals' `v_pads`, the
+  same floats the drop is taken from), so the segments add up to `drop_v` / `input_drop_v`
+  exactly; a chain whose waypoints do not rebuild the drop to 1e-9 V is left empty;
 - `assumptions` and `warnings`.
 
 ### Which way the load current flows (T7.1): negative rails and nets at 0 V

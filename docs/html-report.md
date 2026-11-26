@@ -102,6 +102,16 @@ The **map** is the copper drop below the group's source output, as its scale say
 differ by the ground's rise and by the source's own output voltage. Here U2's input is judged
 at 147.06 mV (4.46 %) across its pins, against the +3V3 limit of 1 %: *FAIL*.
 
+The loads table's **Split** column opens each drop part by part: the source's regulation, the
+copper of each net on the way, each link, the ground back to the source's ground pins, and their
+total, which is the drop ([where each drop comes from](power-tree.md#where-each-drop-comes-from)).
+Under it, the group's **Nets** table gives each net its lowest and highest voltage, where it is
+fed from (its source's pins, or the side of the link it is reached through; on a ground, the
+pins holding it at 0 V), its drop from there (a ground: its rise), the point where it is
+furthest from there and its copper and via loss; a row zooms the map to that point. A note
+says how links in parallel or in a loop were attributed, when there are some. Both are shown,
+never judged.
+
 ### Board temperature
 
 When the tree is solved with the [board temperature](thermal.md) (`--thermal`, or a project that

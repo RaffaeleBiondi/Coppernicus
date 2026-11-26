@@ -42,6 +42,11 @@ class LayerField:
     # built by hand), so no default applies.
     thickness_mm: Optional[float] = None
     outer: Optional[bool] = None
+    # The net of each node, aligned with ``points``: an (N,) object array of net names (str).
+    # Set on power-tree groups (every node gets one: coppernicus.engine.tree.node_nets), where
+    # nets joined by links or net ties are solved as one mesh; None elsewhere (one net, or a
+    # rail and the nets its net ties join, solved alone).
+    node_net: Optional[np.ndarray] = None
 
     @property
     def power(self) -> float:
@@ -150,6 +155,12 @@ class RailResult:
     # ground group, where it rises). Not derivable from v_ref: a rail group at 0 V inside a
     # power tree draws (+1), a net at 0 V solved alone does not.
     drop_sign: float = 1.0
+    # A power-tree group's per-net split (coppernicus.engine.tree): one row per net of
+    # ``nets``, in that order; empty elsewhere. Shown, never judged.
+    net_split: List["NetSplit"] = field(default_factory=list)
+    # How the split was attributed when links in parallel or in a loop give several paths
+    # between two nets ("" when every net is reached one way).
+    split_note: str = ""
 
     # ------------------------------------------------------------------ helpers
     def layer(self, name: str) -> Optional[LayerField]:
@@ -325,6 +336,51 @@ class BoardTemperature:
 
 # ---------------------------------------------------------------------- power tree
 
+@dataclass
+class NetSplit:
+    """One net of a power-tree group as solved: its lowest and highest voltage (where they are),
+    the point it is fed from and its copper loss. Shown, never judged.
+
+    ``entry`` is where the net connects toward its group's driver: on a rail group the driving
+    source's output pins (``entry_kind`` "source") or the side of the link it is reached
+    through (``"link"``), first from the driver over links and net ties (the highest-current
+    path when there are several, :attr:`RailResult.split_note`); on a ground group the pins of
+    the source holding it at 0 V (``"reference"``), or the side of the link toward them.
+    ``drop_v``: on a rail, V(entry) − its lowest voltage (toward 0 V on a negative rail: its
+    highest − V(entry)); on a ground, its rise above V(entry), the one of largest magnitude,
+    signed (max − V(entry), or min − V(entry) below it)."""
+    net: str
+    v_min_v: float                 # NaN: no node with a voltage (floating copper only)
+    v_max_v: float
+    at_min: Tuple[float, float, str]           # (x mm, y mm, layer name) of the lowest node
+    at_max: Tuple[float, float, str]
+    copper_loss_w: float           # its triangles
+    via_loss_w: float              # its via and plated-hole barrels
+    entry_kind: str = ""           # "source", "link", "reference"; "" when not reached
+    entry_name: str = ""           # the source, the link (or the sources holding the 0 V)
+    entry_pads: List[str] = field(default_factory=list)     # "REF.PAD" labels
+    entry_v: Optional[float] = None
+    drop_v: Optional[float] = None
+
+
+@dataclass
+class Segment:
+    """One part of a load's (or regulator input's) drop, from its group's driver to its worst
+    pins (coppernicus.engine.tree). Positive toward 0 V, as the drop: a load's segments add up
+    to its ``drop_v`` exactly. Shown, never judged.
+
+    ``what``: "regulation" (nominal − (the driver's output − its ground)), "copper" (a net of
+    the rail, from where the current enters it to where it leaves, the last one to the worst
+    supply pin), "link" (the voltage across a link or net tie), "ground copper" and "ground
+    link" (from the worst ground pin back to the driver's ground pins, along the ground's nets
+    and links), or "ground" (the same in one step, when they are not on one ground group)."""
+    what: str
+    name: str                      # the driver, the net or the link
+    frm: str                       # where it starts: "U1.2", "FB1.1", "3.3 V set"
+    to: str                        # where it ends: "FB1.1", "U2.1", "U1.2 − U1.3"
+    v: float                       # V
+
+
 DISCONNECTED = "DISCONNECTED"                     # no copper path to its source: not solved
 NOT_CONVERGED = "NOT CONVERGED"
 OUT_OF_REGULATION = "VRM OUT OF REGULATION"       # its regulator cannot hold its voltage
@@ -365,6 +421,8 @@ class VrmReport:
     current_limit_a: Optional[float] = None
     current_limit_from: str = ""
     current_passed: Optional[bool] = None
+    # Its input drop (input_drop_v) split along the rail feeding it (Segment); empty without one.
+    segments: List[Segment] = field(default_factory=list)
 
 
 @dataclass
@@ -391,6 +449,9 @@ class LoadReport:
     # ground pin. v_worst_v is one of them, the side toward 0 V.
     v_low_v: Optional[float] = None
     v_high_v: Optional[float] = None
+    # Its drop (drop_v) split from its rail's driver to its worst pins (Segment); empty when
+    # it has none (disconnected).
+    segments: List[Segment] = field(default_factory=list)
 
 
 @dataclass
