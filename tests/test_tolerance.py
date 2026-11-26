@@ -361,6 +361,7 @@ def test_the_ac_result_warns_when_a_load_and_its_probe_disagree():
     r = solve_ac_rail(Board(ac_decap_board()), project, "+3V3")
     (w,) = [w for w in r.warnings if "disagree" in w]
     assert "Load U1's AC tolerance (ac_tol_mv ±30 mV" in w and "probe U1's ac_tolerance_v (50 mV" in w
+    assert r.ac_tolerance_warnings == [w]          # kept apart too: the app shows them for the values now
     project.rails[0].loads[0].ac_tol_mv = (-50.0, 50.0)
     assert not [w for w in solve_ac_rail(Board(ac_decap_board()), project, "+3V3").warnings
                 if "disagree" in w]

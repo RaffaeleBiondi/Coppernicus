@@ -773,3 +773,73 @@ def test_links_from_kicad_fields_are_listed_and_take_a_series_inductance(tmp_pat
         assert window.project.ac.link_esl_h == {{"FB1": 1e-6}}, window.project.ac.link_esl_h
         assert window.merged.project.ac.link_esl_h == {{"FB1": 1e-6}} and window.dirty
     ''')
+
+
+# ---------------------------------------------------------------------- Q9 follows the values now
+
+TOLERANCE = os.path.join(os.path.dirname(__file__), "..", "examples", "tolerance",
+                         "tolerance.coppernicus.yml")
+
+
+def test_the_q9_warning_shown_follows_a_tolerance_edit_and_the_result_stays():
+    """Task 11 (Q9): the AC result warns when a load's AC tolerance and its probe's
+    ac_tolerance_v disagree. A tolerance changes no |Z|, so a Tolerance-tab edit keeps the
+    result (never stale); the warning shown is the one for the values now, without solving
+    again, and the held result (which the Tolerance tab reads too) keeps no solve-time copy.
+    The result is the engine's shape, built here: no AC solve runs."""
+    run_in_window(f'''
+        import copy
+        import numpy as np
+        from coppernicus.app.ac_panel import _project_key
+        from coppernicus.engine.tolerance import load_probes, mismatch_warnings
+        from coppernicus.results import ImpedanceResult, ProbeImpedance
+        window.show()
+        window.open_project({TOLERANCE!r})
+        app.processEvents()
+        panel = window.ac_panel
+        panel.probes.item(0, 10).setText("40m")        # LOAD's ac_tolerance_v; U2's ac_tol_mv is 50
+        merged = window.merged
+        pairs = load_probes(window.board, merged.project)
+        q9 = mismatch_warnings(merged.project, pairs, {{name: 1.8 for name in pairs}}, ["LOAD"])
+        assert len(q9) == 1 and "ac_tol_mv ±50 mV" in q9[0], q9
+        f = np.logspace(3, 8, 6)
+        z = np.array([1.0, 0.2, 0.1, 0.02, 0.05, 0.3], complex)
+        res = ImpedanceResult("VOUT", ["VOUT"], "GND", "U1", 1e5, f, f,
+                              [ProbeImpedance("LOAD", "U2", ["1"], "VOUT", "GND", z)],
+                              stats={{"seconds": 1.0, "triangles": 100}}, warnings=["another warning"] + q9,
+                              ac_tolerance_warnings=list(q9))     # the engine keeps them apart too
+
+        class Done(QtCore.QObject):
+            succeeded = QtCore.Signal(object)
+            generation = panel._generation
+
+        done = Done()
+        done.succeeded.connect(panel._solved)
+        panel.worker = done
+        panel._solving = ("VOUT", _project_key(merged.project), copy.deepcopy(merged))
+        done.succeeded.emit(res)
+        app.processEvents()
+        notes = panel.notes.toPlainText()
+        assert notes.count("disagree") == 1 and "ac_tol_mv ±50 mV" in notes and "another warning" in notes
+        assert not [w for w in panel.results["VOUT"][0].warnings if "disagree" in w]   # held: none
+
+        tol = window.tolerance_panel
+        window.results_tabs.setCurrentWidget(tol)
+        app.processEvents()
+        tol.set_cell("load", "U2", "ac_tol_mv", "40")   # agrees with the probe's 40 mV now
+        app.processEvents()
+        notes = panel.notes.toPlainText()
+        assert "disagree" not in notes and "another warning" in notes, notes
+        assert panel.results["VOUT"][0] is res and not panel.stale
+        tol.set_cell("load", "U2", "ac_tol_mv", "45")
+        app.processEvents()
+        notes = panel.notes.toPlainText()
+        assert notes.count("disagree") == 1 and "ac_tol_mv ±45 mV" in notes, notes
+        assert "ac_tol_mv ±50 mV" not in notes and not panel.stale
+        window.results_tabs.setCurrentWidget(panel)    # shown again: the same
+        app.processEvents()
+        assert panel.notes.toPlainText().count("disagree") == 1 and "Setup changed" not in panel.header.text()
+        panel.probes.item(0, 10).setText("45m")        # the probe's: the target changes, so stale
+        app.processEvents()
+        assert "disagree" not in panel.notes.toPlainText() and panel.stale
+    ''')

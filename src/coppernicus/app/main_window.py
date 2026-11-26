@@ -593,6 +593,7 @@ class MainWindow(QMainWindow):
         self.merged = merged
         self.last_remerge_s = time.perf_counter() - t0
         self._tolerance_stale()
+        self._impedance_warnings_stale()
 
     def _tolerance_stale(self):
         """The project, the power tree or a result held changed: the Tolerance tab recomposes
@@ -600,6 +601,13 @@ class MainWindow(QMainWindow):
         panel = getattr(self, "tolerance_panel", None)
         if panel is not None:
             panel.schedule_refresh()
+
+    def _impedance_warnings_stale(self):
+        """The project changed: the Impedance tab's shown Q9 warnings follow it, after the events
+        queued (a tolerance edit keeps its result: no |Z| depends on a tolerance)."""
+        panel = getattr(self, "ac_panel", None)
+        if panel is not None:
+            panel.schedule_warnings()
 
     def _merge_again(self, reshow: bool = False):
         """Merge again after the project changed (or its file name, which the red line

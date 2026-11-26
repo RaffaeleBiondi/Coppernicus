@@ -601,6 +601,8 @@ class AcPanel(QWidget):
         self._cap_rows: List[CapModel] = []
         self.last_estimate = ""
         self._shown: Dict[str, str] = {}      # what each line edit shows: a commit of it unchanged is no edit
+        self._pairs: Tuple[Any, Dict[str, Optional[str]]] = (None, {})   # (key, each load's probe)
+        self._notes_pending = False
         self._build()
         window.view.pad_picked.connect(self._pad_picked)
         window.rail_panel.pick_changed.connect(lambda kind: kind and self._leave_pick())
@@ -1229,8 +1231,62 @@ class AcPanel(QWidget):
                     item.setForeground(QBrush(QColor("#c0392b")))
                 self.table.setItem(i, c, item)
         self.stats.setText(stats_text(r.stats))
-        self.notes.setPlainText("\n".join(line.strip("\n") for line in ac_text(ac_summary([r]))))
+        self._show_notes()
         self.export_button.setEnabled(True)
+        self._check_stale()
+
+    def _show_notes(self):
+        """The shown result's notes as ``coppernicus ac`` prints them, its Q9 warnings those of
+        the values now (:meth:`tolerance_warnings`)."""
+        entry = self.results.get(self.rail_box.currentText())
+        if entry is None:
+            return
+        r = entry[0]
+        shown = dataclasses.replace(r, warnings=list(r.warnings) + self.tolerance_warnings(r))
+        self.notes.setPlainText("\n".join(line.strip("\n") for line in ac_text(ac_summary([shown]))))
+
+    def tolerance_warnings(self, r) -> List[str]:
+        """Task 11's Q9 warnings of the result ``r`` for the values now: a load's AC tolerance
+        against its probe's ``ac_tolerance_v``, through the engine's own function
+        (:func:`coppernicus.engine.ac.ac_tolerance_warnings`) on the merged project, ``r``'s
+        probes and the set voltage of its source. A tolerance changes no |Z|, so a tolerance
+        edit keeps the result and only these follow. [] when the setup cannot be read: the
+        result is then flagged, the setup changed since it."""
+        from coppernicus.engine import EngineError
+        from coppernicus.engine.ac import ac_tolerance_warnings
+        if self._win.board is None:
+            return []
+        try:
+            pairs = self._load_probes()
+        except EngineError:
+            return []
+        project = self.merged_project
+        src = next((s for rail in project.rails for s in rail.sources if s.label == r.source),
+                   None) or rail_source(project, r.rail)
+        return ac_tolerance_warnings(project, pairs, src.voltage if src is not None else None,
+                                     [p.name for p in r.probes])
+
+    def _load_probes(self) -> Dict[str, Optional[str]]:
+        """Each load's probe by KiPI's rule (:func:`coppernicus.engine.tolerance.load_probes`),
+        kept while the rails and probes are the same (no tolerance changes it)."""
+        from coppernicus.engine.tolerance import load_probes
+        win = self._win
+        key = (id(win.board), json.dumps(_project_key(win.merged.project), sort_keys=True, default=str))
+        if self._pairs[0] != key:
+            self._pairs = (key, load_probes(win.board, win.merged.project))
+        return self._pairs[1]
+
+    def schedule_warnings(self):
+        """The project was merged again (an edit here, in the rail setup or the Tolerance tab):
+        the shown result's Q9 warnings and its verdict line follow, once, after the events now
+        queued (the window calls it from ``_remerge``, which stays quick)."""
+        if self.results and not self._notes_pending:
+            self._notes_pending = True
+            QTimer.singleShot(0, self._warnings_now)
+
+    def _warnings_now(self):
+        self._notes_pending = False
+        self._show_notes()
         self._check_stale()
 
     def _check_stale(self):
@@ -1558,6 +1614,10 @@ class AcPanel(QWidget):
         if not self._current():
             return
         _rail, solved, _merged = self._solving
+        # Its Q9 warnings are those of the values solved: shown for the values now instead
+        # (tolerance_warnings), so the result held, which the Tolerance tab reads too, keeps none.
+        q9 = set(res.ac_tolerance_warnings)
+        res.warnings = [w for w in res.warnings if w not in q9]
         self.results[res.rail] = (res, solved)
         self.results_changed.emit()
         st = res.stats
@@ -1633,6 +1693,7 @@ class AcPanel(QWidget):
             self.cancel_button.setEnabled(False)
         self.results.clear()
         self.results_changed.emit()
+        self._pairs = (None, {})
         self.last_estimate = ""
         self.estimate.setText("")
         self._say("")
