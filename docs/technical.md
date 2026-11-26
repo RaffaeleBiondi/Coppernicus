@@ -85,9 +85,39 @@ the thickness.
 
 **How it is measured.** Exactly as a `max_current_density` is: the connected copper at or
 above the threshold is one spot, judged by its area-weighted mean |J|, not by the
-single-triangle peak. A spot of a few triangles at a corner or a via edge can be a mesh effect:
-solve again with a smaller `max_edge_mm` before taking it as real. Every spot above the default
-is listed, between the fails and the ranked items, so a ranked spot can sit on the same copper.
+single-triangle peak. Every current-density item gives its mesh element count (`elements`, and
+"N mesh elements" in its detail). Every spot above the default is listed, between the fails and
+the ranked items, except the slivers below.
+
+**Slivers below the mesh's resolution.** A spot of fewer than 3 mesh elements
+(`MIN_SPOT_ELEMENTS` in `problems.py`) is not an attention item. This is a numerical-resolution
+rule, not a physical limit: no published source gives a minimum spot size. What was measured on
+the examples (demo-thermal, noise) and the synthetic boards: every spot of 1 to 4 elements has
+a node on a vertex of the 16-sided polygon that models a via's drill wall, and the 1- and
+2-element ones sit 0.5 to 6 % above the default. Refined near the holes (`min_edge_mm` 0.02 →
+0.01 → 0.005 mm, `grading` 0.2 → 0.1 → 0.05) they appear, split, merge or vanish instead of
+converging. The resolved spots beside them converge: their area stays within about 20 %, their
+mean |J| within a few %, their element count grows (32 → 85 → 170 at one via) and only their
+peak rises (5 to 11 % each time `min_edge_mm` halves). A dropped sliver's copper is not taken
+as listed, so a ranked spot around it is still listed. Against a `max_current_density` the
+user sets, every spot is judged, whatever its size. To see the slivers, or to check any small
+spot, refine the mesh near the holes and solve again (next paragraph).
+
+**Refining the mesh near holes.** `max_edge_mm` sets the mesh on planes. Near plated holes
+KiPI grades it: elements start at `min_edge_mm` (0.02 mm) on the hole wall and grow by `grading`
+(0.2 mm per mm of distance) up to `max_edge_mm`. A smaller `max_edge_mm` leaves the elements at
+a via wall as they were: halved to 0.25 mm, it left the small via-edge spots of the examples
+with the same element counts and their mean |J| within 0.2 % (the larger via spots within 0.4 %). To check a spot near a via, set the advanced settings `min_edge_mm` (for
+example 0.01) and `grading` (for example 0.1) and solve again: a spot that keeps its area and
+mean |J| is resolved. Unset, KiPI's defaults apply.
+
+**Each spot is listed once.** A ranked (top 1 %) spot that shares copper with an attention or
+failed spot on the same layer, one mesh triangle being enough, is not listed again: the same
+copper, or a wider ranked region around a spot above the default. The `top` ranked spots
+(`--top`, default 5) are counted after that, so the attention items come on top of them and the
+ranked rows show the strongest spots not already listed; a failed spot still counts in the
+`top`. The HTML report's "Strongest current crowding" card takes the strongest spot of any
+severity.
 
 **What it changes.** It changes no verdict, no `not_judged` list and no exit code (CLI, CI,
 MCP). The app shows amber ATTENTION rows and counts them apart from "limit(s) exceeded". The

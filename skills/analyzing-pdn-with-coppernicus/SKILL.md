@@ -127,7 +127,8 @@ follow the hint. `result_evicted` means you must solve again.
 **Without MCP**, use the CLI:
 - `uv run --project <Coppernicus repo> coppernicus nets|parts BOARD [NET] --json`;
 - `coppernicus solve PROJECT.coppernicus.yml --json --out DIR [--top N] [--html]`. The project
-  YAML takes `settings: {max_edge_mm, via_plating_um, copper_temp_c, copper_thickness_mm?}`;
+  YAML takes `settings: {max_edge_mm, via_plating_um, copper_temp_c, copper_thickness_mm?,
+  min_edge_mm?, grading?}` (the last two advanced: the mesh at plated holes);
   `copper_thickness_mm: {B.Cu: 0.07}` is the optional what-if of step 7.
 - Write the YAML and the outputs outside the board's folder.
 - Exit codes: 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit that was set
@@ -210,8 +211,11 @@ to a measured cross-section (`cut_current`).
 - Quoting the **peak** |J| at a sharp corner or via edge as a fact. It depends on the mesh.
   - Use the spot's mean |J| and its area instead.
   - A tiny spot (a few triangles at a via edge or a corner) that is flagged against a J limit
-    may be a mesh effect. Re-solve with a smaller `max_edge_mm` and check whether its mean |J|
-    holds before you call it real.
+    may be a mesh effect: each spot gives its mesh element count (`elements`). A smaller
+    `max_edge_mm` does not refine near holes; re-solve with the advanced settings
+    `min_edge_mm` (e.g. 0.01) and `grading` (e.g. 0.1) and check whether its area and mean |J|
+    hold before you call it real. The current-density default already skips spots of fewer
+    than 3 elements (a numerical-resolution rule, not a physical limit).
 - Calling a "current crowding" spot a defect. The spots are the copper with the highest |J|, the
   top 1 % per layer. A spot can be a whole uniform narrow track, which is a sizing question, not a
   local defect.

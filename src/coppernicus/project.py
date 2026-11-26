@@ -319,9 +319,15 @@ class Settings:
     # What-if copper thickness by layer name, mm (1 oz = 0.035). Empty: the board file's.
     # The board file is never changed; real changes of copper weight are made in KiCad.
     copper_thickness_mm: Dict[str, float] = field(default_factory=dict)
+    # Advanced, the mesh near plated holes (KiPI's SolveSettings): the smallest element, at a
+    # hole wall, mm, and how fast elements grow away from it (mm of edge per mm of distance;
+    # 0 turns the grading off). None: KiPI's defaults (0.02 mm, 0.2). Saved only when set.
+    min_edge_mm: Optional[float] = None
+    grading: Optional[float] = None
 
     def __post_init__(self):
         self.copper_thickness_mm = check_copper_thickness(self.copper_thickness_mm)
+        self.min_edge_mm, self.grading = check_mesh_near_holes(self.min_edge_mm, self.grading)
 
 
 # Where a regulator's conversion loss (input − output power) heats the board: "output_pads",
@@ -458,6 +464,31 @@ def check_copper_thickness(values) -> Dict[str, float]:
                                f"> 0 and at most {MAX_COPPER_MM:g} mm (1 oz copper is 0.035, not 35)")
         out[str(layer)] = x
     return out
+
+
+# The range of KiPI's own "Via grading" field (kipi/dc/gui/pi_panel.py, kipi/ac/gui/panel.py):
+# 0 (off) to 2 mm of edge per mm of distance.
+GRADING_RANGE = (0.0, 2.0)
+
+
+def check_mesh_near_holes(min_edge_mm, grading) -> Tuple[Optional[float], Optional[float]]:
+    """``min_edge_mm`` and ``grading`` checked, each None (KiPI's default) or a finite number:
+    ``min_edge_mm`` > 0, ``grading`` within :data:`GRADING_RANGE`. Raises
+    :class:`ProjectError` naming the key."""
+    out = []
+    for key, value, ok, rule in (
+            ("min_edge_mm", min_edge_mm, lambda x: x > 0, "a size in mm, > 0 (KiPI's default 0.02)"),
+            ("grading", grading, lambda x: GRADING_RANGE[0] <= x <= GRADING_RANGE[1],
+             f"from {GRADING_RANGE[0]:g} (off) to {GRADING_RANGE[1]:g} mm of edge per mm of "
+             "distance (KiPI's default 0.2)")):
+        if value is None:
+            out.append(None)
+            continue
+        x = None if isinstance(value, bool) else _float_or_none(value)
+        if x is None or not math.isfinite(x) or not ok(x):
+            raise ProjectError(f"settings {key} = {value!r}: give {rule}, or leave it out")
+        out.append(x)
+    return out[0], out[1]
 
 
 def _float_or_none(value) -> Optional[float]:
@@ -1297,9 +1328,12 @@ def _flag(data: Dict[str, Any], key: str, default: bool) -> bool:
 
 
 def _settings_out(settings: Settings) -> Dict[str, Any]:
-    """The settings as written to the file; copper_thickness_mm only when set, so a project
-    without it is written exactly as before."""
+    """The settings as written to the file; copper_thickness_mm, min_edge_mm and grading only
+    when set, so a project without them is written exactly as before."""
     out = dict(vars(settings))
+    for key in ("min_edge_mm", "grading"):           # KiPI's defaults: not written
+        if out.get(key) is None:
+            out.pop(key, None)
     if not out.get("copper_thickness_mm"):
         out.pop("copper_thickness_mm", None)
     else:

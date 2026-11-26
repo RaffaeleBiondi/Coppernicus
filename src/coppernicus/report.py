@@ -352,9 +352,9 @@ class ReportBuilder:
             x = d.get("drop_mv")
             return x if x is not None and math.isfinite(x) else -math.inf
         worst_load = max(loads, key=size, default=None)
-        # The strongest ranked (or failed) spot: an attention spot, measured over the copper
-        # above the default instead, does not take its place.
-        hot = [p for p in problems if p.kind == "hotspot" and p.severity != ATTENTION]
+        # The strongest spot, failed, attention or ranked: a spot is listed once, so the one
+        # above the current-density default may only be there as an attention item.
+        hot = [p for p in problems if p.kind == "hotspot"]
         top_hot = max(hot, key=lambda p: p.value, default=None)
         top_via = max(result.vias, key=lambda v: v.current, default=None)
         busiest = max(result.layers, key=lambda lf: lf.power, default=None)
@@ -383,7 +383,8 @@ class ReportBuilder:
                 "busiest_layer": busiest.name if busiest else None,
                 "hotspot": top_hot and {"mean_j_a_mm2": top_hot.data.get("mean_j_a_mm2", top_hot.value),
                                         "peak_j_a_mm2": top_hot.data.get("peak_j_a_mm2"),
-                                        "area_mm2": top_hot.data.get("area_mm2"), "layer": top_hot.layer,
+                                        "area_mm2": top_hot.data.get("area_mm2"),
+                                        "elements": top_hot.data.get("elements"), "layer": top_hot.layer,
                                         "x_mm": top_hot.x, "y_mm": top_hot.y},
                 "via": top_via and {"current_a": top_via.current, "x_mm": top_via.position[0],
                                     "y_mm": top_via.position[1], "drill_mm": top_via.drill_mm},

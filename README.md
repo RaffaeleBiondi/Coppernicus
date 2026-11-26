@@ -291,6 +291,8 @@ settings:
   copper_temp_c: 20.0             # resistivity is referenced to 20 °C
   copper_thickness_mm:            # optional what-if, mm per copper layer (1 oz = 0.035, not 35)
     B.Cu: 0.07                    # the board file is not changed; real changes are made in KiCad
+  # min_edge_mm: 0.01             # advanced: smallest element at plated-hole walls (default 0.02)
+  # grading: 0.1                  # advanced: element growth away from holes, 0-2 (default 0.2)
 rails:
 - net: +3V3
   sources:
