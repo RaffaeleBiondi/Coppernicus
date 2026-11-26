@@ -1568,10 +1568,28 @@ machine, it did not happen: the DC factorizations took 0.73–0.91× KiPI's time
 `dc` default). `ac` stays opt-in until a real board's AC solve is checked. The heat model's grid
 (at most 7 non-zeros a row) has no such rows.
 
-Recorded for a later ruling, not built: with this order a direct solve beats KiPI's AMG-CG
-(above 200,000 unknowns) at 352,000 unknowns (1.13 s against 2.68 s, but 647 MB against
-241 MB) and ties at 620,000 (3.6 s against 3.4 s, 1.7 GB against 0.43 GB): raising the direct
-ceiling would replace CG's 1e-10 relative residual with an exact solve for mid-size rails.
+**DC direct ceiling (opt-in, `COPPERNICUS_DC_DIRECT_MAX=<unknowns>`).** KiPI solves a DC system
+of more than 200,000 unknowns with AMG-CG (to a 1e-10 relative residual) where SuperLU is its
+backend (`spd.direct_solve_max_unknowns`, spd.py:53). With the ceiling set and the `dc` part
+active, a system up to it is factorized instead, checked as above, never past KiPI's SuperLU
+limit (1,000,000 unknowns) nor past the largest system whose estimated memory fits half the
+memory free (KiPI's own share for PARDISO, spd.py `PARDISO_MEMORY_SHARE`). The estimate,
+`dc_direct_memory_bytes`, is a fit of the memory one factorization and one solve added on
+synthetic boards' DC systems (103,000 to 620,000 unknowns: 107 MB to 1.04 GB; bytes = 72.15 ·
+n^1.2343 within −7 % / +8 %), scaled up 8.1 % to lie at or above every point. Like KiPI's rule it
+is per system: a power tree holds one factorization per group.
+
+| synthetic board (tools/bench) | DC rail | power tree | electro-thermal tree | peak memory | largest change |
+|---|---|---|---|---|---|
+| grid-170 (rails 262,000 unknowns) | 0.51–0.53× | 0.62× | 0.82× | 1.4–1.7× | 5.9e-11 |
+| grid-200 (rails 352,000, ground 620,000) | 0.46–0.58× | 0.69× min, 0.86× median | 0.97× | 1.4–1.8× | 1.5e-11 |
+
+(Wall-time ratios, median unless said, on a loaded machine: provisional.) A direct solve beats AMG-CG clearly up to about
+450,000 unknowns and ties at 620,000 with 2.4× the memory; in the electro-thermal loop each
+iteration factorizes again while AMG-CG reuses its hierarchy, so the gain there is smaller.
+Criterion `dc_direct`: 1e-9 relative with the floor per unit, since CG's 1e-10 relative
+residual bounds its own error at about that order and the exact solve removes it (measured: at
+most 5.9e-11 on the fingerprints, 4.5e-11 on solution vectors). Off by default.
 
 Not refitted: the memory estimates (`thermal_ram_estimate`; the AC `ram_estimate` and
 `noise_ram_estimate`) were measured in KiPI's order; with their part active (on, with SuperLU as
