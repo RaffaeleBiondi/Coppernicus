@@ -556,6 +556,11 @@ class TolerancePanel(QWidget):
                                       "<project>_tolerance.csv and <project>_tolerance_summary.json")
         self.export_button.setEnabled(False)
         self.table = _table(RESULT_HEADERS, RESULT_TIPS)
+        # Verdict shown next to Load and Net: the part and check cells are long, and it went off
+        # the right edge of a laptop-wide tab. Only the shown order moves; the cells keep their
+        # columns (RESULT_HEADERS), and Why stays last, stretched.
+        head = self.table.horizontalHeader()
+        head.moveSection(head.visualIndex(RESULT_HEADERS.index("Verdict")), RESULT_HEADERS.index("Net") + 1)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.notes = QPlainTextEdit(readOnly=True)
