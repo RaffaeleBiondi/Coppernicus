@@ -410,6 +410,9 @@ def test_solve_tree_reads_the_fields_in_the_cli_and_the_tool(board, tmp_path, ca
     cli_doc = json.loads(capsys.readouterr().out)
     cli_doc.pop("summary_file")
     tool_doc = Session(out_dir=tmp_path / "out").solve_tree(project)
+    # The session adds the tree's id and each group's result id; the rest is the CLI's.
+    assert tool_doc.pop("tree_id") == "t1"
+    assert [g.pop("result_id") for g in tool_doc["groups"]] == ["t1:VCC"]
     assert tool_doc == cli_doc and [g["group"] for g in tool_doc["groups"]] == ["VCC"]
     assert any(a.startswith("Rail VCC from KiCad footprint fields") for a in tool_doc["assumptions"])
     assert main(["solve", str(project), "--tree", "--json", "--no-board-fields",

@@ -7,7 +7,8 @@ CLI (``--json``) and the MCP server are thin layers over it; the GUI can move on
 Results are big (a large ground net is ~1 GB of arrays), so the session keeps the arrays of
 only the most recently used results, within a count and a memory bound. An evicted
 result keeps its compact summary (``compare_results`` still works) and asks to be solved
-again for anything that needs the field.
+again for anything that needs the field. A power tree (``solve_tree``, "t1") is one such
+result, its groups reached as "t1:GND", and is dropped whole.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Seq
 
 import numpy as np
 import yaml
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
 from coppernicus import board_fields as BF
@@ -40,7 +41,7 @@ from coppernicus.maps import FIELDS, render_layer_map, safe_name, save_layer_map
 from coppernicus.power_tree import EstimateError, estimated_draws
 from coppernicus.problems import Problem, find_problems
 from coppernicus.project import Limits, Project, ProjectError, Rail, Settings
-from coppernicus.results import LayerField, RailResult
+from coppernicus.results import LayerField, RailResult, TreeResult
 from coppernicus.service import convert as C
 from coppernicus.service import errors as E
 from coppernicus.service import fields as F
@@ -207,17 +208,183 @@ class _ResultRecord:
     # fields_info), so that a what-if re-solves the very same rail.
     context: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def loaded(self) -> bool:
+        """Whether its arrays are still in memory."""
+        return self.result is not None
+
+    def release(self) -> None:
+        """Drop its arrays, keeping the summary (compare_results still works)."""
+        self.result, self.board, self.outline, self.queries, self.nbytes = None, None, None, {}, 0
+
+
+@dataclass
+class _TreeRecord:
+    """A power-tree solve (``solve_tree``), kept so that probe, render_map, cut_current and
+    report reach its groups by id (``t1:GND``). It counts as one result in the memory bounds
+    (every group's arrays, and the locators built later) and is evicted whole."""
+    id: str
+    board_id: str
+    project_path: Path
+    groups: List[str]                  # the group keys, kept after eviction for the hints
+    board: Optional[Board]             # the board as solved: the project's copper thickness
+    outline: Optional[list]
+    tree: Optional[TreeResult]
+    doc: Optional[Dict[str, Any]]      # its tree_summary, without the ids (the report's)
+    project: Optional[Project]         # the project solved, KiCad fields merged
+    layer_thickness: Dict[str, float]
+    top: int
+    nbytes: int
+    queries: Dict[Tuple[str, str], Any] = field(default_factory=dict)   # (group, layer)
+    problems: Dict[str, List[Problem]] = field(default_factory=dict)    # per group, maps
+
+    @property
+    def loaded(self) -> bool:
+        return self.tree is not None
+
+    def release(self) -> None:
+        """Drop the whole tree: every group goes at once."""
+        self.board, self.outline, self.tree, self.doc, self.project = None, None, None, None, None
+        self.queries, self.problems, self.nbytes = {}, {}, 0
+
 
 class _Live(NamedTuple):
-    rec: _ResultRecord
+    rec: Any                           # _ResultRecord, or _TreeRecord with ``group``
     res: RailResult
     board: Board
     outline: list
+    group: Optional[str] = None        # the key of a power-tree group
+
+    @property
+    def id(self) -> str:
+        """The id the caller gave it by: ``r1``, or a group's ``t1:GND``."""
+        return self.rec.id if self.group is None else f"{self.rec.id}:{self.group}"
 
 
 def _result_nbytes(res: RailResult) -> int:
     return int(sum(a.nbytes for lf in res.layers for a in (
-        lf.points, lf.tris, lf.voltage, lf.current_density, lf.tri_power, lf.tri_area)))
+        lf.points, lf.tris, lf.voltage, lf.current_density, lf.tri_power, lf.tri_area,
+        getattr(lf, "node_net", None)) if isinstance(a, np.ndarray)))
+
+
+def _tree_nbytes(tree: TreeResult) -> int:
+    """Every group's arrays, and the board temperature's maps when it was solved."""
+    total = sum(_result_nbytes(res) for res in tree.groups.values())
+    for m in (tree.thermal.maps if tree.thermal is not None else ()):
+        total += sum(a.nbytes for a in vars(m).values() if isinstance(a, np.ndarray))
+    return int(total)
+
+
+def _net_at(res: RailResult, lf: LayerField, k: int) -> Optional[str]:
+    """The net of the copper in triangle ``k`` of a power-tree group's layer, or None when it
+    is not known exactly: the group's one net, else the layer's per-node net
+    (``LayerField.node_net``, when the engine gives it; the nets of a group are never joined
+    in the mesh, so a triangle's nodes share one)."""
+    if len(res.nets) == 1:
+        return res.nets[0]
+    nodes = getattr(lf, "node_net", None)
+    if nodes is None:
+        return None
+    try:
+        net = nodes[int(lf.tris[k][0])]
+    except (IndexError, KeyError, TypeError, ValueError):
+        return None
+    return str(net) if isinstance(net, str) and net in res.nets else None
+
+
+PROBE_ASSUMPTION = ("Voltage is interpolated linearly in the mesh triangle; |J| is constant per "
+                    "triangle and uniform through the copper thickness.")
+REPORT_SAMPLING = ("The maps are sampled on square cells; the page's readout gives the values at the "
+                   "centre of the cell under the pointer, from the full-resolution solution. Summary "
+                   "numbers and problems use the full mesh.")
+
+
+def point_values(res: RailResult, lf: LayerField, locator: TriangleLocator, j_vectors: np.ndarray,
+                 k: int, x: float, y: float, group: bool = False) -> Dict[str, Any]:
+    """What a probe reads in triangle ``k`` (located at ``x``, ``y``) of ``lf``: voltage, drop,
+    |J| and its vector. On a power-tree group (``group``) the drop is worded as the app's
+    readout words it (``drop_word``, ``drop_unit``: on a ground below 0 V, the depth below it;
+    :meth:`~coppernicus.results.RailResult.shown_drop_at`), with the net there when it is
+    known exactly (``net``). Plain values, not yet made JSON (:func:`convert.jsonable`)."""
+    v = float(locator.weights(k, x, y) @ lf.voltage[lf.tris[k]])
+    connected = math.isfinite(v)
+    drop = float(res.shown_drop_at(v) if group else res.drop_at(v))   # toward 0 V on a negative rail
+    out: Dict[str, Any] = {}
+    if group:
+        net = _net_at(res, lf, k)
+        out.update({"net": net} if net is not None else {})
+    out.update({"on_copper": True, "connected": connected, "voltage_v": v, "drop_mv": drop * 1e3,
+                "drop_pct": 100.0 * drop / abs(res.v_ref) if res.v_ref else None})
+    if group:
+        out.update({"drop_word": res.drop_word(), "drop_unit": res.shown_drop_unit()})
+    out.update({"j_a_mm2": float(lf.current_density[k]), "j_vector_a_mm2": j_vectors[k],
+                "assumptions": [PROBE_ASSUMPTION],
+                "warnings": [] if connected else ["This copper is not connected to a source."]})
+    return out
+
+
+def probe_tree(tree: TreeResult, layer: str, x: float, y: float,
+               cache: Optional[Dict[Tuple[str, str], Any]] = None) -> Dict[str, Any]:
+    """What a probe reads at (x, y) mm on ``layer`` of a power tree, in the group that has
+    solved copper there (the nets of different groups never share copper): ``group``,
+    ``kind``, then :func:`point_values`. Off every group's copper: ``on_copper`` false and
+    ``groups_with_copper_here`` on other layers. JSON-ready. ``cache`` keeps the locators
+    and J vectors between calls, by (group, layer). For ``coppernicus solve --tree --probe``."""
+    cache = {} if cache is None else cache
+
+    def query(key, lf):
+        if (key, lf.name) not in cache:
+            cache[(key, lf.name)] = (TriangleLocator(lf.points, lf.tris), current_vectors(lf))
+        return cache[(key, lf.name)]
+    where = {"layer": layer, "x_mm": x, "y_mm": y}
+    for key, res in tree.groups.items():
+        lf = res.layer(layer)
+        if lf is None:
+            continue
+        loc, jv = query(key, lf)
+        k = loc.locate(x, y)
+        if k >= 0:
+            values = point_values(res, lf, loc, jv, k, x, y, group=True)
+            net = values.pop("net", None)
+            return C.jsonable({"group": key, "kind": res.kind, **({"net": net} if net else {}),
+                               **where, **values})
+    here = [{"group": key, "layer": lf.name} for key, res in tree.groups.items() for lf in res.layers
+            if lf.name != layer and query(key, lf)[0].locate(x, y) >= 0]
+    return C.jsonable({**where, "on_copper": False, "groups_with_copper_here": here,
+                       "assumptions": [], "warnings": [f"No solved copper of any group on {layer} "
+                                                       "at this point."]})
+
+
+def probe_text(p: Mapping[str, Any]) -> str:
+    """One line of ``coppernicus solve --tree --probe``: the point, the group there, its
+    voltage, its drop (or rise, or shift) as the app's readout words it, and |J|."""
+    head = f"Probe {p['layer']} ({p['x_mm']:g}, {p['y_mm']:g}) mm: "
+    if not p["on_copper"]:
+        others = ", ".join(f"{h['group']} on {h['layer']}" for h in p["groups_with_copper_here"])
+        return head + "no solved copper of any group here" + (f" (copper here: {others})" if others else "")
+    net = f", net {p['net']}" if p.get("net") and p["net"] != p["group"] else ""
+    head += f"{p['group']} ({p['kind']}{net})"
+    if not p["connected"]:
+        return head + " · not connected to a source"
+    return (head + f" · V = {p['voltage_v']:.5f} V · {p['drop_word']} = {p['drop_mv']:.3f} "
+            f"{p['drop_unit']} · |J| = {p['j_a_mm2']:.2f} A/mm²")
+
+
+# What to do instead when a tool that works on one rail result is given a power tree's id.
+TREE_REFUSAL_HINTS = {
+    "get_problems": "a tree group's problems are in solve_tree's document (groups[].problems), "
+                    "judged against the project's limits; to judge other limits, change them in "
+                    "the project file (write_project) and call solve_tree again",
+    "copper_step": "for a what-if on the tree, set that layer's copper_thickness_mm in the project "
+                   "file (write_project; one standard weight from the design) and call solve_tree "
+                   "again; copper_step takes a rail result (solve_rail, solve_project)",
+    "compare_results": "compare_results takes two rail results (solve_rail, solve_project); for two "
+                       "trees, compare their solve_tree documents (groups, loads, vrms)",
+    "compare_revisions": "compare_revisions takes two rail results (solve_rail, solve_project) of "
+                         "two board files; for two trees, compare their solve_tree documents",
+    "propose_fields": "propose_fields(project_path=...) describes every rail of the project the "
+                      "tree was solved from",
+}
 
 
 def _limited(names: Sequence[str], limit: int = 30) -> str:
@@ -237,8 +404,10 @@ class Session:
         self.max_boards = max(1, int(max_boards))
         self._boards: "OrderedDict[str, _BoardEntry]" = OrderedDict()
         self._board_keys: Dict[Tuple[str, int], str] = {}
-        self._results: "OrderedDict[str, _ResultRecord]" = OrderedDict()
-        self._n_boards = self._n_results = 0
+        # Rail results (r1...) and power trees (t1...), least recently used first: one order and
+        # one memory bound for both.
+        self._results: "OrderedDict[str, Any]" = OrderedDict()
+        self._n_boards = self._n_results = self._n_trees = 0
         self._lock = threading.RLock()
         self._solve_lock = threading.Lock()
 
@@ -527,8 +696,9 @@ class Session:
 
     def _evict(self, keep: Optional[str] = None) -> None:
         """Drop the arrays of the least recently used results beyond the bounds (never the
-        most recently used one, nor ``keep``), keeping their summaries."""
-        heavy = [r for r in self._results.values() if r.result is not None]
+        most recently used one, nor ``keep``), keeping their summaries. A power tree counts
+        as one result and goes whole, every group at once."""
+        heavy = [r for r in self._results.values() if r.loaded]
         total = sum(r.nbytes for r in heavy)
         for r in heavy[:-1]:
             if len(heavy) <= self.max_results and total <= self.max_result_bytes:
@@ -537,10 +707,10 @@ class Session:
                 continue
             heavy.remove(r)
             total -= r.nbytes
-            r.result, r.board, r.outline, r.queries, r.nbytes = None, None, None, {}, 0
+            r.release()
         while len(self._results) > MAX_SUMMARIES:
             oldest = next(iter(self._results))
-            if self._results[oldest].result is not None:
+            if self._results[oldest].loaded:
                 break
             self._results.pop(oldest)
 
@@ -873,6 +1043,7 @@ class Session:
             raise ServiceError(E.INVALID_INPUT, "give project_path or result_id, one of them",
                                "a project file proposes all its rails; a result, its rail")
         if result_id is not None:
+            self._refuse_tree(result_id, "propose_fields")
             rec = self._record(result_id, heavy=False)
             project = Project(rails=[rec.rail])
             board = rec.board or self._entry(rec.board_id).board
@@ -949,9 +1120,11 @@ class Session:
                    confirm_large: bool = False) -> Dict[str, Any]:
         """Solve the project's whole power tree at once: every rail and ground group, with
         the regulators' input currents and the ground return computed exactly. Returns
-        :func:`coppernicus.power_tree.tree_summary` unchanged (the document of
+        :func:`coppernicus.power_tree.tree_summary` (the document of
         ``coppernicus solve --tree --json``, without its ``summary_file``), judged against
-        the project's limits only. The groups are not kept as results: no maps or probes.
+        the project's limits only, with the ids only the session adds: ``tree_id`` ("t1")
+        and each group's ``result_id`` ("t1:GND"). The tree is kept as one result: probe,
+        render_map and cut_current take a group's id, report the tree's.
 
         The board temperature (electro-thermal): ``thermal`` True solves it, False not, None
         as the project's ``thermal.enabled``, or True when ``thermal_options`` are given (they
@@ -998,7 +1171,22 @@ class Session:
         if estimate is not None:
             doc["thermal_estimate"] = estimate
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
-        return json.loads(json.dumps(doc, allow_nan=False))
+        doc = json.loads(json.dumps(doc, allow_nan=False))
+        # Kept as one result, on the board as solved (the project's copper thickness).
+        board = entry.variant(project.settings.copper_thickness_mm)
+        with self._lock:
+            self._n_trees += 1
+            tid = f"t{self._n_trees}"
+        rec = _TreeRecord(tid, entry.id, path.resolve(), list(tree.groups), board, entry.outline(),
+                          tree, doc, project, {lay.name: lay.thickness_mm for lay in board.layers()},
+                          max(1, int(top)), _tree_nbytes(tree))
+        with self._lock:
+            self._results[tid] = rec
+            self._evict(keep=tid)
+        out = {"tree_id": tid, **json.loads(json.dumps(doc))}
+        for g in out["groups"]:
+            g["result_id"] = f"{tid}:{g['group']}"
+        return out
 
     def solve_ac(self, project_path, rails: Optional[Sequence[str]] = None, out_dir=None,
                  confirm_large: bool = False, progress: Progress = None, cancelled: Cancel = None,
@@ -1183,12 +1371,16 @@ class Session:
 
     # ================================================================== result queries
     def _record(self, result_id: str, heavy: bool = True) -> _ResultRecord:
+        """A rail result. A power tree's id, or a group's, is refused here: only probe,
+        render_map, cut_current and report take them (:meth:`_live_any`, :meth:`report`)."""
+        self._refuse_tree(result_id, "this tool")
         with self._lock:
             rec = self._results.get(str(result_id))
             if rec is None:
                 known = ", ".join(self._results) or "none"
                 raise ServiceError(E.RESULT_NOT_FOUND, f"No result with id {result_id!r}",
-                                   f"solve_rail returns a result_id (results: {known})")
+                                   f"solve_rail returns a result_id, solve_tree a tree_id and each "
+                                   f"group's result_id (results: {known})")
             if heavy and rec.result is None:
                 raise ServiceError(E.RESULT_EVICTED, f"Result {result_id} was dropped from memory "
                                    "to make room for newer ones (its summary is kept)",
@@ -1196,12 +1388,79 @@ class Session:
             self._results.move_to_end(rec.id)
             return rec
 
+    def _refuse_tree(self, result_id: Optional[str], tool: str) -> None:
+        """Refuse a power tree's id ("t1") or a group's ("t1:GND") where ``tool`` takes only a
+        rail result, saying what to do instead (:data:`TREE_REFUSAL_HINTS`)."""
+        if result_id is None:
+            return
+        rid = str(result_id)
+        head, sep, group = rid.partition(":")
+        with self._lock:
+            rec = self._results.get(head)
+        if not isinstance(rec, _TreeRecord):
+            return
+        what = f"group {group} of power tree {rec.id}" if sep else f"power tree {rec.id}"
+        hint = TREE_REFUSAL_HINTS.get(tool, "probe, render_map and cut_current take a group's id "
+                                            "(t1:GND), report the tree's (t1)")
+        if tool == "propose_fields":
+            hint += f": propose_fields(project_path={rec.project_path.as_posix()!r})"
+        raise ServiceError(E.INVALID_INPUT, f"{rid} is {what} (solve_tree): {tool} takes a rail "
+                           "result (r1, r2... from solve_rail or solve_project)", hint)
+
     def _live(self, result_id: str) -> _Live:
         """A result with its arrays, board and outline bound at once: an eviction by another
         call while this one runs cannot pull them away."""
         with self._lock:
             rec = self._record(result_id)
             return _Live(rec, rec.result, rec.board, rec.outline)
+
+    def _live_any(self, result_id: str) -> _Live:
+        """As :meth:`_live`, for a rail result or a power-tree group: "t1:GND" is group GND of
+        tree t1 (split on the first ':', so a net name may hold one). A net of a group names
+        that group ("t1:+3V3_F" is group +3V3 when FB1 joins them)."""
+        rid = str(result_id)
+        head, sep, name = rid.partition(":")
+        with self._lock:
+            rec = self._results.get(head)
+            if not isinstance(rec, _TreeRecord):
+                if sep:
+                    known = ", ".join(self._results) or "none"
+                    raise ServiceError(E.RESULT_NOT_FOUND, f"No result with id {rid!r}",
+                                       "solve_tree returns a tree_id and each group's result_id, "
+                                       f"such as t1:GND (results: {known})")
+                return self._live(rid)
+            groups = ", ".join(f"{rec.id}:{g}" for g in rec.groups)
+            if not rec.loaded:
+                raise ServiceError(E.RESULT_EVICTED, f"Power tree {rec.id} was dropped from memory, "
+                                   "every group of it, to make room for newer results",
+                                   f"call solve_tree on {rec.project_path.name} again to probe, map "
+                                   "or cut its groups")
+            if not sep:
+                raise ServiceError(E.INVALID_INPUT, f"{rid} is a power tree: probe, render_map and "
+                                   "cut_current take one of its groups", f"its groups: {groups}")
+            key = name if name in rec.tree.groups else rec.tree.group_of(name)
+            if key is None:
+                raise ServiceError(E.RESULT_NOT_FOUND, f"Power tree {rec.id} has no group {name!r}",
+                                   f"its groups: {groups}")
+            self._results.move_to_end(rec.id)
+            return _Live(rec, rec.tree.groups[key], rec.board, rec.outline, key)
+
+    def _problems(self, live: _Live) -> List[Problem]:
+        """The problems a map marks: a rail result's, or a tree group's as the tree judged
+        them (built once per group)."""
+        if live.group is None:
+            return live.rec.problems
+        from coppernicus.problems import find_tree_problems
+        rec = live.rec
+        with self._lock:
+            found = rec.problems.get(live.group)
+            tree = rec.tree
+        if found is None and tree is not None:
+            found = find_tree_problems(tree, live.group, top=rec.top)
+            with self._lock:
+                if rec.loaded:
+                    rec.problems[live.group] = found
+        return found or []
 
     def rail_result(self, result_id: str) -> RailResult:
         """The full result object (for in-process callers such as the CLI)."""
@@ -1226,15 +1485,31 @@ class Session:
 
     def report(self, result_ids: Optional[Sequence[str]] = None, path=None,
                title: str = "") -> Dict[str, Any]:
-        """Write an offline HTML report of results (default: every result whose fields are
-        still in memory, oldest first) and return its path, size and cell sizes."""
+        """Write an offline HTML report of results (default: every rail result whose fields
+        are still in memory, oldest first) and return its path, size and cell sizes. A power
+        tree's id alone ("t1") writes the tree's page (:meth:`_tree_report`)."""
         from coppernicus.report import RailReport, build_report
         with self._lock:
             ids = [str(r) for r in result_ids] if result_ids else [
-                r.id for r in self._results.values() if r.result is not None]
+                r.id for r in self._results.values() if isinstance(r, _ResultRecord) and r.loaded]
+            trees = [r.id for r in self._results.values() if isinstance(r, _TreeRecord) and r.loaded]
+            named = [rid for rid in ids if isinstance(self._results.get(rid.partition(":")[0]), _TreeRecord)]
+        if named:
+            tid = named[0].partition(":")[0]
+            if ids == [tid]:
+                return self._tree_report(tid, path, title)
+            if ":" in named[0]:
+                raise ServiceError(E.INVALID_INPUT, f"{named[0]} is a group of power tree {tid}: report "
+                                   "takes the tree's id", f"report(result_ids=[{tid!r}]) writes the "
+                                   "tree's page, every group of it in one page")
+            raise ServiceError(E.INVALID_INPUT, "a power tree's report is a page of its own: give "
+                               "its id alone", f"report(result_ids=[{tid!r}]) for the tree; the rail "
+                               "results in another call")
         if not ids:
             raise ServiceError(E.RESULT_NOT_FOUND, "No solved result to report",
-                               "solve a rail first (solve_rail or solve_project)")
+                               "solve a rail first (solve_rail or solve_project)" + (
+                                   f"; for the power tree, report(result_ids=[{trees[-1]!r}])"
+                                   if trees else ""))
         lives = [self._live(rid) for rid in ids]
         boards = list(dict.fromkeys(lv.rec.board_id for lv in lives))
         warnings = ([] if len(boards) == 1 else
@@ -1267,36 +1542,63 @@ class Session:
             "rails": [{"result_id": lv.rec.id, "net": lv.res.net, "cell_mm": r["cell_mm"]}
                       for lv, r in zip(lives, builder.rails)],
             "generation_s": builder.seconds,
-            "assumptions": ["The maps are sampled on square cells; the page's readout gives the values "
-                            "at the centre of the cell under the pointer, from the full-resolution "
-                            "solution. Summary numbers and problems use the full mesh."],
+            "assumptions": [REPORT_SAMPLING],
             "warnings": warnings,
         })
 
-    def _layer(self, res: RailResult, layer: Optional[str]) -> LayerField:
+    def _tree_report(self, tree_id: str, path=None, title: str = "") -> Dict[str, Any]:
+        """The report of a power tree (:func:`coppernicus.report.write_tree_report`, as
+        ``coppernicus solve --tree --html`` writes it): every group's maps and problems, the
+        tree's verdict and its VRM, load and link tables."""
+        from coppernicus.report import write_tree_report
+        with self._lock:
+            rec = self._results[tree_id]
+            if not rec.loaded:
+                raise ServiceError(E.RESULT_EVICTED, f"Power tree {rec.id} was dropped from memory to "
+                                   "make room for newer results", f"call solve_tree on "
+                                   f"{rec.project_path.name} again to report it")
+            self._results.move_to_end(rec.id)
+            tree, doc, board, outline, project = rec.tree, rec.doc, rec.board, rec.outline, rec.project
+        if path:
+            target = Path(str(path)).expanduser().resolve()
+        else:
+            target = self.out_dir() / f"report-{rec.id}-{time.strftime('%Y%m%d-%H%M%S')}.html"
+        started = time.perf_counter()
+        written = write_tree_report(tree, doc, target, outline=outline, board_name=board.name,
+                                    project=rec.project_path.name, title=title, top=max(rec.top, 10),
+                                    settings=dict(vars(project.settings)))
+        return C.jsonable({
+            "path": written, "size_mb": written.stat().st_size / 1e6, "tree_id": rec.id,
+            "groups": [f"{rec.id}:{g}" for g in rec.groups],
+            "generation_s": time.perf_counter() - started,
+            "assumptions": [REPORT_SAMPLING], "warnings": []})
+
+    def _layer(self, res: RailResult, layer: Optional[str], group: bool = False) -> LayerField:
         if layer is None or layer == "":
             return max(res.layers, key=lambda lf: lf.power)
         lf = res.layer(str(layer))
         if lf is None:
-            raise ServiceError(E.LAYER_NOT_FOUND, f"Rail {res.net} has no copper on layer {layer!r}",
+            raise ServiceError(E.LAYER_NOT_FOUND, f"{'Group' if group else 'Rail'} {res.net} has no "
+                               f"copper on layer {layer!r}",
                                f"layers of this result: {', '.join(x.name for x in res.layers)}")
         return lf
 
     def _queries(self, live: _Live, lf: LayerField) -> Dict[str, Any]:
         """Locator and J vectors of a layer, built once (outside the lock: a large layer takes
-        a while) and counted in the result's memory."""
+        a while) and counted in the result's memory (a tree group's, in its tree's)."""
         rec = live.rec
+        key = lf.name if live.group is None else (live.group, lf.name)
         with self._lock:
-            q = rec.queries.get(lf.name)
+            q = rec.queries.get(key)
         if q is not None:
             return q
         built = {"locator": TriangleLocator(lf.points, lf.tris), "j": current_vectors(lf)}
         with self._lock:
-            q = rec.queries.get(lf.name)
+            q = rec.queries.get(key)
             if q is None:
                 q = built
-                if rec.result is not None:            # not evicted meanwhile
-                    rec.queries[lf.name] = q
+                if rec.loaded:                        # not evicted meanwhile
+                    rec.queries[key] = q
                     rec.nbytes += built["locator"].nbytes + built["j"].nbytes
                     self._evict(keep=rec.id)
         return q
@@ -1310,6 +1612,7 @@ class Session:
     def get_problems(self, result_id: str, limits: Optional[Mapping[str, Any]] = None,
                      top: int = 5) -> Dict[str, Any]:
         """Re-rank a result's problems against other limits, without solving again."""
+        self._refuse_tree(result_id, "get_problems")
         live = self._live(result_id)
         rec = live.rec
         lim = rec.rail.limits if limits is None else C.limits_from_dict(limits)
@@ -1333,10 +1636,11 @@ class Session:
                    region_mm: Optional[Sequence[float]] = None, dpi: int = 110,
                    out_dir=None) -> Dict[str, Any]:
         """A PNG map of ``field`` (drop / voltage / current) on one layer (default: the layer
-        with the most copper loss), optionally zoomed to region_mm = [x_min, y_min, x_max, y_max]."""
-        live = self._live(result_id)
+        with the most copper loss), optionally zoomed to region_mm = [x_min, y_min, x_max, y_max].
+        ``result_id`` may be a power-tree group's ("t1:GND")."""
+        live = self._live_any(result_id)
         rec, res = live.rec, live.res
-        lf = self._layer(res, layer)
+        lf = self._layer(res, layer, live.group is not None)
         if field not in FIELDS:
             raise ServiceError(E.INVALID_INPUT, f"unknown field {field!r}",
                                f"field is one of: {', '.join(FIELDS)}")
@@ -1352,11 +1656,12 @@ class Session:
         folder = Path(out_dir).expanduser().resolve() if out_dir else self.out_dir()
         folder.mkdir(parents=True, exist_ok=True)
         tag = "" if region is None else "_" + safe_name("_".join(f"{v:g}" for v in region))
+        # rec.id is the tree's for a group ("t1"), the group being res.net: no ':' in the name
         path = folder / f"{rec.id}_{safe_name(res.net)}_{safe_name(lf.name)}_{field}{tag}.png"
-        scale = render_layer_map(res, lf, field, live.outline, path, rec.problems, region, dpi)
+        scale = render_layer_map(res, lf, field, live.outline, path, self._problems(live), region, dpi)
         key = {"mV": "scale_mv", "V": "scale_v", "A/mm²": "scale_a_mm2"}[scale["unit"]]
         return C.jsonable({
-            "result_id": rec.id, "net": res.net, "layer": lf.name, "field": field,
+            "result_id": live.id, **self._named(live), "layer": lf.name, "field": field,
             "path": path, "region_mm": list(region) if region else None,
             key: [scale["min"], scale["max"]], "image_px": [8 * dpi, 6 * dpi],
             "legend": "green triangles: sources; red dots: loads; crosses: current-crowding "
@@ -1367,15 +1672,32 @@ class Session:
             "warnings": [],
         })
 
-    def probe(self, result_id: str, layer: str, x_mm: float, y_mm: float) -> Dict[str, Any]:
-        """Voltage, drop and current density at a point of a layer."""
-        live = self._live(result_id)
-        rec, res = live.rec, live.res
-        lf = self._layer(res, layer)
+    @staticmethod
+    def _named(live: _Live) -> Dict[str, Any]:
+        """What a result is, in a query's answer: a rail result's net; a tree group's key
+        (``group``) and kind (rail or ground)."""
+        if live.group is None:
+            return {"net": live.res.net}
+        return {"group": live.group, "kind": live.res.kind}
+
+    def probe(self, result_id: str, layer: str, x_mm: float, y_mm: float,
+              relative_to: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        """Voltage, drop and current density at a point of a layer. ``result_id`` may be a
+        power-tree group's ("t1:GND"): the answer then has ``group``, ``kind``, the drop as
+        the app words it (``drop_word``, ``drop_unit``) and ``net`` where it is known exactly.
+
+        ``relative_to`` = {result_id?, layer, x_mm, y_mm} (``x``/``y`` accepted) or
+        {result_id?, pad: "REF.PAD"}: another point of the same solve (by default of the same
+        result; a pad's group is found from its net); ``delta_v`` is this point's voltage
+        minus that one's, both in the solve's own frame (nothing is shifted)."""
+        live = self._live_any(result_id)
+        res, group = live.res, live.group is not None
+        lf = self._layer(res, layer, group)
         x, y = C._number(x_mm, "x_mm"), C._number(y_mm, "y_mm")
+        reference = self._reference_point(live, relative_to) if relative_to is not None else None
         q = self._queries(live, lf)
         loc, jv = q["locator"], q["j"]
-        out: Dict[str, Any] = {"result_id": rec.id, "net": res.net, "layer": lf.name,
+        out: Dict[str, Any] = {"result_id": live.id, **self._named(live), "layer": lf.name,
                                "x_mm": x, "y_mm": y}
         k = loc.locate(x, y)
         if k < 0:
@@ -1383,31 +1705,138 @@ class Session:
                     if o.name != lf.name and self._queries(live, o)["locator"].locate(x, y) >= 0]
             kn, dist = loc.nearest(x, y)
             near = loc.centroids[kn] if kn >= 0 else (math.nan, math.nan)
+            what = f"group {live.group}" if group else res.net
             out.update({"on_copper": False, "layers_with_copper_here": here,
                         "nearest_copper_mm": {"x_mm": near[0], "y_mm": near[1], "distance_mm": dist},
-                        "assumptions": [], "warnings": [f"No solved copper of {res.net} on {lf.name} "
+                        **({"relative_to": reference} if reference else {}),
+                        "assumptions": [], "warnings": [f"No solved copper of {what} on {lf.name} "
                                                         "at this point."]})
             return C.jsonable(out)
-        w = loc.weights(k, x, y)
-        v = float(w @ lf.voltage[lf.tris[k]])
-        connected = math.isfinite(v)
-        out.update({
-            "on_copper": True, "connected": connected, "voltage_v": v,
-            "drop_mv": float(res.drop_at(v)) * 1e3,         # toward 0 V on a negative rail
-            "drop_pct": 100.0 * float(res.drop_at(v)) / abs(res.v_ref) if res.v_ref else None,
-            "j_a_mm2": float(lf.current_density[k]), "j_vector_a_mm2": jv[k],
-            "assumptions": ["Voltage is interpolated linearly in the mesh triangle; |J| is constant "
-                            "per triangle and uniform through the copper thickness."],
-            "warnings": [] if connected else ["This copper is not connected to a source."],
-        })
+        values = point_values(res, lf, loc, jv, k, x, y, group)
+        if group and "net" in values:                 # the net at the point, beside the group
+            out["net"] = values.pop("net")
+        out.update(values)
+        if reference is not None:
+            out["relative_to"] = reference
+            out["delta_v"] = out["voltage_v"] - reference["voltage_v"]
+            out["assumptions"].append(
+                "delta_v is this point's voltage minus the voltage at relative_to, both from one "
+                "solve (one 0 V reference); nothing is shifted or solved again.")
         return C.jsonable(out)
+
+    def _reference_point(self, live: _Live, spec: Mapping[str, Any]) -> Dict[str, Any]:
+        """The point ``relative_to`` names, with its voltage: {result_id?, layer, x_mm, y_mm}
+        (``x``/``y`` accepted) or {result_id?, pad: "REF.PAD"}, in the same solve as ``live``
+        (a rail result, or a group of the same tree), on connected copper."""
+        form = ("relative_to is {result_id?, layer, x_mm, y_mm} or {result_id?, pad} (a pad as "
+                "REF.PAD, e.g. U3.2)")
+        if not isinstance(spec, Mapping):
+            raise ServiceError(E.INVALID_INPUT, f"relative_to must be an object, not {spec!r}", form)
+        spec = {k: v for k, v in spec.items() if v is not None}
+        unknown = sorted(set(spec) - {"result_id", "layer", "x_mm", "y_mm", "x", "y", "pad"})
+        if unknown:
+            raise ServiceError(E.INVALID_INPUT, f"relative_to: unknown key(s) {', '.join(unknown)}", form)
+        target = str(spec.get("result_id") or live.id)
+        if "pad" in spec:
+            if set(spec) & {"layer", "x_mm", "y_mm", "x", "y"}:
+                raise ServiceError(E.INVALID_INPUT, "relative_to gives a pad or a point, not both", form)
+            return self._pad_reference(live, target, str(spec["pad"]).strip())
+        x, y = spec.get("x_mm", spec.get("x")), spec.get("y_mm", spec.get("y"))
+        if x is None or y is None or not spec.get("layer"):
+            raise ServiceError(E.INVALID_INPUT, "relative_to needs a layer, x_mm and y_mm (or a pad)", form)
+        ref = self._live_any(target)
+        self._same_solve(live, ref)
+        lf = self._layer(ref.res, spec["layer"], ref.group is not None)
+        x, y = C._number(x, "relative_to x_mm"), C._number(y, "relative_to y_mm")
+        loc = self._queries(ref, lf)["locator"]
+        k = loc.locate(x, y)
+        what = f"group {ref.group}" if ref.group is not None else ref.res.net
+        if k < 0:
+            kn, dist = loc.nearest(x, y)
+            near = (f"the nearest copper of {what} on {lf.name} is at ({loc.centroids[kn][0]:.4g}, "
+                    f"{loc.centroids[kn][1]:.4g}) mm, {dist:.3g} mm away" if kn >= 0 else
+                    f"{what} has no meshed copper on {lf.name}")
+            raise ServiceError(E.INVALID_INPUT, f"relative_to: no solved copper of {what} on {lf.name} "
+                               f"at ({x:g}, {y:g}) mm", near)
+        v = float(loc.weights(k, x, y) @ lf.voltage[lf.tris[k]])
+        if not math.isfinite(v):
+            raise ServiceError(E.INVALID_INPUT, f"relative_to: the copper of {what} at ({x:g}, {y:g}) mm "
+                               "is not connected to a source", "choose a point on connected copper")
+        return {"result_id": ref.id, "layer": lf.name, "x_mm": x, "y_mm": y, "voltage_v": v}
+
+    def _pad_reference(self, live: _Live, target: str, pad: str) -> Dict[str, Any]:
+        """``relative_to: {pad}``: the pad's voltage, interpolated at its centre (at the nearest
+        meshed copper of the pad when its centre is a drilled hole) on the first layer of
+        its result where it has copper. ``target`` is a rail result, a tree group or a tree
+        id; in a tree, the pad's group is the one that solved its net."""
+        ref, dot, number = pad.partition(".")
+        if not (ref and dot and number):
+            raise ServiceError(E.INVALID_INPUT, f"relative_to: pad {pad!r} is not REF.PAD",
+                               "a pad is REF.PAD: the part's reference, a dot, the pad number "
+                               "(e.g. U3.2)")
+        board = live.board
+        nets = board.part_nets(ref)
+        if not nets:
+            raise ServiceError(E.PART_NOT_ON_NET, f"relative_to: no part {ref} with pads on a net",
+                               "use net_parts to see the parts and pins of a net")
+        pads = board.pads(nets, ref)
+        found = [p for p in pads if p.number == number]
+        if not found:
+            numbers = sorted({p.number for p in pads}, key=lambda s: (len(s), s))
+            raise ServiceError(E.PIN_NOT_ON_NET, f"relative_to: {ref} has no pad {number!r}",
+                               f"pads of {ref}: {_limited(numbers, 64)}")
+        p = found[0]
+        head = target.partition(":")[0]
+        with self._lock:
+            rec = self._results.get(head)
+        if isinstance(rec, _TreeRecord) and rec.loaded:
+            key = rec.tree.group_of(p.net)
+            if key is None:
+                raise ServiceError(E.INVALID_INPUT, f"relative_to: pad {pad} is on {p.net}, which power "
+                                   f"tree {rec.id} does not solve", "choose a pad on a solved net")
+            target = f"{rec.id}:{key}"
+        ref_live = self._live_any(target)
+        self._same_solve(live, ref_live)
+        if p.net not in ref_live.res.nets:
+            raise ServiceError(E.INVALID_INPUT, f"relative_to: pad {pad} is on {p.net}, not solved in "
+                               f"{ref_live.id} ({', '.join(ref_live.res.nets)})",
+                               "give relative_to the result_id of the result that solved its net")
+        cx, cy = float(p.position[0]), float(p.position[1])
+        for lf in ref_live.res.layers:
+            polys = (p.shapes or {}).get(lf.layer_id)
+            if not polys:
+                continue
+            loc = self._queries(ref_live, lf)["locator"]
+            k, at = loc.locate(cx, cy), (cx, cy)
+            if k < 0:                 # a plated hole's drill: the nearest meshed copper of the pad
+                kn, _ = loc.nearest(cx, cy)
+                copper = unary_union([Polygon(s.outline, s.holes) for s in polys])
+                if kn < 0 or not copper.covers(Point(loc.centroids[kn])):
+                    continue
+                k, at = kn, (float(loc.centroids[kn][0]), float(loc.centroids[kn][1]))
+            v = float(loc.weights(k, *at) @ lf.voltage[lf.tris[k]])
+            if math.isfinite(v):
+                return {"result_id": ref_live.id, "pad": f"{ref}.{number}", "net": p.net,
+                        "layer": lf.name, "x_mm": at[0], "y_mm": at[1], "voltage_v": v}
+        raise ServiceError(E.INVALID_INPUT, f"relative_to: pad {pad} is on no connected, solved copper "
+                           f"of {ref_live.id}", "choose a pad on the solved copper, or a point")
+
+    @staticmethod
+    def _same_solve(live: _Live, ref: _Live) -> None:
+        """Two readouts compared only within one solve: separate solves share no 0 V."""
+        if ref.rec is not live.rec:
+            raise ServiceError(E.INVALID_INPUT, f"relative_to: {ref.id} and {live.id} are separate "
+                               "solves, whose voltages share no reference",
+                               "give a point of the same solve: the same rail result, or a group of "
+                               "the same power tree")
 
     def cut_current(self, result_id: str, layer: str, p1_mm: Sequence[float],
                     p2_mm: Sequence[float]) -> Dict[str, Any]:
-        """Copper width along the segment p1→p2 on a layer and the current through it."""
-        live = self._live(result_id)
+        """Copper width along the segment p1→p2 on a layer and the current through it.
+        ``result_id`` may be a power-tree group's ("t1:GND")."""
+        live = self._live_any(result_id)
         rec, res = live.rec, live.res
-        lf = self._layer(res, layer)
+        lf = self._layer(res, layer, live.group is not None)
         p1 = [C._number(v, "p1_mm") for v in p1_mm]
         p2 = [C._number(v, "p2_mm") for v in p2_mm]
         if len(p1) != 2 or len(p2) != 2:
@@ -1439,7 +1868,7 @@ class Session:
                             f"{cut.width_mm:.4g} mm by more than 2 %.")
         area = cut.width_mm * t_mm
         return C.jsonable({
-            "result_id": rec.id, "net": res.net, "layer": lf.name, "p1_mm": p1, "p2_mm": p2,
+            "result_id": live.id, **self._named(live), "layer": lf.name, "p1_mm": p1, "p2_mm": p2,
             "length_mm": cut.length_mm, "normal": list(cut.normal),
             "copper_spans_mm": [[a, b] for a, b in cut.intervals],
             "width_mm": cut.width_mm, "thickness_mm": t_mm, "area_mm2": area,
@@ -1466,6 +1895,7 @@ class Session:
         3 oz: 0.0175, 0.035, 0.070, 0.105 mm), from the design's own thickness (the project's
         copper_thickness_mm, else the board file's), and compare it with that result. Bigger
         jumps, a non-standard start and a result that is already a what-if are refused."""
+        self._refuse_tree(result_id, "copper_step")
         if step not in ("up", "down"):
             raise ServiceError(E.INVALID_INPUT, f"step is up or down, not {step!r}",
                                "one standard copper weight at a time")
@@ -1521,6 +1951,8 @@ class Session:
         most, with a map per layer), and what could not be matched."""
         from coppernicus.maps import render_delta_map
         from coppernicus.service import revisions as RV
+        self._refuse_tree(result_a, "compare_revisions")
+        self._refuse_tree(result_b, "compare_revisions")
         la, lb = self._live(result_a), self._live(result_b)
         sa, sb = la.rec.summary, lb.rec.summary
         loads, unmatched, warnings = RV.compare_loads(sa, sb)
@@ -1558,6 +1990,8 @@ class Session:
 
     def compare_results(self, result_a: str, result_b: str) -> Dict[str, Any]:
         """Per-load and per-layer deltas, b − a (works on evicted results too)."""
+        self._refuse_tree(result_a, "compare_results")
+        self._refuse_tree(result_b, "compare_results")
         a, b = self._record(result_a, heavy=False), self._record(result_b, heavy=False)
         return compare_summaries(a.summary, b.summary)
 

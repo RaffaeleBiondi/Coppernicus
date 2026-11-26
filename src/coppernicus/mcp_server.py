@@ -41,7 +41,11 @@ solve_rail -> get_problems / render_map / probe / cut_current -> change settings
 (via_plating_um, copper_temp_c; copper_thickness_mm one standard weight from the design at
 most) and solve again -> compare_results.
 From a project file: solve_project (rails one by one, with maps) or solve_tree (the whole
-power tree at once, ground return included; tables only; the board temperature with thermal);
+power tree at once, ground return included; the board temperature with thermal). solve_tree
+returns tree_id "t1" and a result_id per group ("t1:GND"): probe (with relative_to for the
+voltage between two points, across groups too), render_map and cut_current take a group's
+id, report the tree's; the tools for one rail result (get_problems, copper_step,
+compare_results, compare_revisions, propose_fields) refuse them;
 solve_ac for the PDN impedance |Z|(f) at the project's probes; solve_noise for a switcher's
 ripple and the noise it couples into victim nets, judged only against the user's noise
 margins (ripple and radiated estimate never judged); solve_tolerance for each load's
@@ -115,6 +119,22 @@ class LimitsSpec(BaseModel):
                                                 "as loads): largest allowed rise of its copper "
                                                 "above 0 V, mV. On a supply rail it is not judged "
                                                 "(listed in not_judged).")
+
+
+class ReferenceSpec(BaseModel):
+    """The point a probe's delta_v is measured from: a point (layer, x_mm, y_mm) or a pad."""
+    model_config = ConfigDict(extra="forbid")
+    result_id: Optional[str] = Field(None, description="Where the point is: a rail result or a tree "
+                                     "group of the SAME solve (default: the probed one). With pad, "
+                                     "the tree id ('t1') or any of its groups: the pad's group is "
+                                     "found from its net.")
+    layer: Optional[str] = Field(None, description="Copper layer of the point.")
+    x_mm: Optional[float] = None
+    y_mm: Optional[float] = None
+    x: Optional[float] = Field(None, description="Same as x_mm.")
+    y: Optional[float] = Field(None, description="Same as y_mm.")
+    pad: Optional[str] = Field(None, description="Instead of a point: a pad as REF.PAD (e.g. 'U3.2'), "
+                               "its voltage at its centre.")
 
 
 class PinRefSpec(BaseModel):
@@ -330,7 +350,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         vias by current), each with layer and x/y in mm and a severity: fail (over a limit
         given), attention (a spot above Coppernicus's current-density default: never a
         verdict) or info. Pass limits to re-judge without solving again (default: the limits
-        given at solve time)."""
+        given at solve time). Rail results only: a tree group's problems are in solve_tree's
+        groups[].problems."""
         return _call("get_problems", session.get_problems, result_id,
                      None if limits is None else _dump(limits), top)
 
@@ -345,7 +366,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                    dpi: Annotated[int, Field(ge=50, le=300)] = 110) -> CallToolResult:
         """A colour map of one layer of a result as a PNG image (also saved; the path is
         returned): voltage drop (mV), voltage (V) or current density (A/mm²), with sources,
-        loads and current-crowding spots marked."""
+        loads and current-crowding spots marked. result_id may be a power-tree group's
+        ('t1:GND' from solve_tree; on a ground the drop map is its rise above 0 V)."""
         out = _call("render_map", session.render_map, result_id, layer, field, region_mm, dpi)
         if isinstance(out, CallToolResult):
             return out
@@ -354,24 +376,34 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                               structured_content=out)
 
     @mcp.tool(annotations=READ_ONLY)
-    def probe(result_id: str, layer: str, x_mm: float, y_mm: float) -> dict[str, Any]:
+    def probe(result_id: str, layer: str, x_mm: float, y_mm: float,
+              relative_to: Annotated[Optional[ReferenceSpec], Field(
+                  description="Also give delta_v: this point's voltage minus the voltage at "
+                              "this point or pad of the same solve.")] = None) -> dict[str, Any]:
         """Voltage, drop and current density (magnitude and vector) at a point of a layer.
-        Off copper, says which layers have copper there and where the nearest copper is."""
-        return _call("probe", session.probe, result_id, layer, x_mm, y_mm)
+        Off copper, says which layers have copper there and where the nearest copper is.
+        result_id may be a power-tree group's ('t1:GND', 't1:+3V3' from solve_tree): the
+        answer then has group, kind (rail or ground), drop_word ('drop', 'rise' or 'shift')
+        with drop_unit naming what drop_mv measures, and net where it is known exactly.
+        relative_to ({layer, x_mm, y_mm} or {pad: 'U3.2'}, result_id for another group of the
+        same tree) adds delta_v and the reference's own reading: e.g. a chip's supply pad
+        against its ground pad is the voltage across it."""
+        return _call("probe", session.probe, result_id, layer, x_mm, y_mm, _dump(relative_to))
 
     @mcp.tool(annotations=READ_ONLY)
     def cut_current(result_id: str, layer: str, x1_mm: float, y1_mm: float, x2_mm: float,
                     y2_mm: float) -> dict[str, Any]:
         """Cross-section along the segment (x1, y1)→(x2, y2) on one layer: copper width
         crossed, current through it (∫ J·n t ds, signed along 'normal'), mean and max |J|.
-        Use it to measure a neck or bottleneck."""
+        Use it to measure a neck or bottleneck. result_id may be a power-tree group's
+        ('t1:GND')."""
         return _call("cut_current", session.cut_current, result_id, layer, [x1_mm, y1_mm],
                      [x2_mm, y2_mm])
 
     @mcp.tool(annotations=READ_ONLY)
     def compare_results(result_a: str, result_b: str) -> dict[str, Any]:
         """What-if deltas b − a between two results: settings changed, max drop, loss, drop per
-        load and loss per layer, and both verdicts."""
+        load and loss per layer, and both verdicts. Rail results only (not tree groups)."""
         return _call("compare_results", session.compare_results, result_a, result_b)
 
     @mcp.tool(annotations=READ_ONLY)
@@ -428,8 +460,10 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         load, link and group tables, each group's problems ("load" on a rail; "rise" and
         "return" on a ground), the verdict per group
         against the project's own limits, assumptions and warnings: the same document as
-        `coppernicus solve --tree --json`. No result ids: render_map and probe do not apply
-        to tree groups (solve_project per rail for maps). With the board temperature, the
+        `coppernicus solve --tree --json`, plus tree_id ('t1') and each group's result_id
+        ('t1:GND', split on the first ':'). probe, render_map and cut_current take a group's
+        result_id, report the tree_id; the tree is kept as one result and dropped from
+        memory whole (solve again if a call says result_evicted). With the board temperature, the
         document has `thermal` (verdict, peak, per-layer rows, history, load drops at the
         ambient and electro-thermal) and `thermal_estimate` (grid, unknowns, memory against
         this machine's), given before the solve starts."""
@@ -556,7 +590,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness,
         and compare it with that result (compare_results' deltas, plus the new result_id).
         Bigger jumps, a non-standard start and stepping a what-if are refused: real changes are
-        made in KiCad. The stack is rebuilt, so via barrels change length too."""
+        made in KiCad. The stack is rebuilt, so via barrels change length too. Rail results
+        only: for the tree, one step of copper_thickness_mm in the project, then solve_tree."""
         bridge = _Bridge(ctx)
         return _call("copper_step", session.copper_step, result_id, layer, step,
                      progress=bridge.progress, cancelled=bridge.cancelled)
@@ -565,7 +600,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
     def propose_fields(project_path: Annotated[Optional[str], Field(
                            description="A *.coppernicus.yml whose rails and links to describe.")] = None,
                        result_id: Annotated[Optional[str], Field(
-                           description="Or a solved rail (from solve_rail or solve_project).")] = None,
+                           description="Or a solved rail (from solve_rail or solve_project; for a "
+                                       "power tree, give its project_path).")] = None,
                        ) -> dict[str, Any]:
         """The KiCad PI_* field text that describes a project's rails and links (or one solved
         rail), part by part: library_symbol fields (PI_KIND, PI_EFF, PI_IQ, PI_IMAX, PI_FSW;
@@ -627,14 +663,17 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
 
     @mcp.tool(annotations=WRITES_FILE)
     def report(result_ids: Annotated[Optional[list[str]], Field(
-                   description="Results to include; default: every result still in memory.")] = None,
+                   description="Results to include; default: every rail result still in memory. "
+                               "A power tree's tree_id alone (['t1']) writes the tree's page.")] = None,
                path: Annotated[Optional[str], Field(
                    description="Absolute path of the .html file; default: the server's maps folder.")] = None
                ) -> dict[str, Any]:
         """Write an offline, interactive HTML report of solved results for a person to open
         in a browser: every layer's drop, voltage and current-density map with zoom, pan and
         a hover readout, the problems, worst values, assumptions and warnings. Returns its
-        path and size; the file needs no network."""
+        path and size; the file needs no network. With a tree_id (['t1'] from solve_tree):
+        the power tree's page, as `coppernicus solve --tree --html` writes it (every group's
+        maps and problems, the tree's verdict, its VRM, load and link tables)."""
         return _call("report", session.report, result_ids, path)
 
     return mcp
