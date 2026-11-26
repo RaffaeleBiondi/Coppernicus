@@ -71,22 +71,22 @@ input.
 | `board_fields` | `board_id` | The board's KiCad footprint fields (`PI_*`; `.kicad_pcb` only) and the rails and links they describe, each value with the field it came from. Each rail's `complete` is judged as a solve judges it, from the fields alone (their `PI_LINK` links and the board's net ties, no project file); a rail completed by a link, a net tie or a regulator input it feeds names it in `complete_through` and its `note`; `missing` says why an incomplete one is. With any, `capacitors` gives each capacitor's model from its library fields (`PI_ESR`, `PI_ESL`, ...) or what it lacks, and `part_tolerances` the parts whose `PI_TOL` / `PI_ACC` has no `PI_RAIL`. Nothing is solved. See [KiCad footprint fields](#kicad-footprint-fields). |
 | `net_parts` | `board_id`, `net` | Parts on the net with value, footprint and pins, used to choose sources and loads. Also the net ties that join the net to others, which are solved as shorts. |
 | `solve_rail` | `board_id`, `net`, `sources`, `loads`, `limits`?, `settings`?, `follow_net_ties`?, `top`? | Solves one rail. A source is `{ref, voltage_v, pins?, name?}`; a load is `{ref, current_a, pins?, name?}`. Returns `result_id` and a summary: load voltages and drops, max drop, loss per layer, busiest layer, top problems, verdict. |
-| `get_problems` | `result_id`, `limits`?, `top`? | Ranked problems: loads by drop, current-crowding spots by mean \|J\|, vias by current. Each has a layer and x/y in mm. Pass `limits` to re-judge without solving again. |
-| `render_map` | `result_id`, `layer`?, `field`?, `region_mm`?, `dpi`? | A map of `drop` (mV), `voltage` (V) or `current` (A/mm²) on one layer. It comes back as an image and as a PNG file whose path is returned. The default layer is the one with the most copper loss. `region_mm = [x_min, y_min, x_max, y_max]` zooms. |
-| `probe` | `result_id`, `layer`, `x_mm`, `y_mm` | Voltage, drop and current density (magnitude and vector) at a point. Off copper, it says which layers have copper there and where the nearest copper is. |
-| `cut_current` | `result_id`, `layer`, `x1_mm`, `y1_mm`, `x2_mm`, `y2_mm` | A cross-section along a segment: the copper width crossed, the current through it (∫ J·n t ds, signed along `normal`), and the mean and max \|J\|. Use it to measure a neck. |
+| `get_problems` | `result_id`, `limits`?, `top`? | Ranked problems: loads by drop, current-crowding spots by mean \|J\|, vias by current. Each has a layer and x/y in mm. Pass `limits` to re-judge without solving again. Rail results only (a tree group's problems are in `solve_tree`'s `groups[].problems`). |
+| `render_map` | `result_id`, `layer`?, `field`?, `region_mm`?, `dpi`? | A map of `drop` (mV), `voltage` (V) or `current` (A/mm²) on one layer. It comes back as an image and as a PNG file whose path is returned. The default layer is the one with the most copper loss. `region_mm = [x_min, y_min, x_max, y_max]` zooms. Takes a tree group's id too (`t1:GND`, see [Probing, mapping and cutting tree groups](#probing-mapping-and-cutting-tree-groups)). |
+| `probe` | `result_id`, `layer`, `x_mm`, `y_mm`, `relative_to`? | Voltage, drop and current density (magnitude and vector) at a point. Off copper, it says which layers have copper there and where the nearest copper is. On a tree group (`t1:GND`) it adds `group`, `kind`, `drop_word`, `drop_unit` and the exact `net`. `relative_to` (`{layer, x_mm, y_mm}` or `{pad}`, of the same solve) adds `delta_v`, the voltage between the two points, across groups too. |
+| `cut_current` | `result_id`, `layer`, `x1_mm`, `y1_mm`, `x2_mm`, `y2_mm` | A cross-section along a segment: the copper width crossed, the current through it (∫ J·n t ds, signed along `normal`), and the mean and max \|J\|. Use it to measure a neck. Takes a tree group's id too. |
 | `compare_results` | `result_a`, `result_b` | What-if deltas b − a: settings changed, max drop, loss, drop per load, loss per layer, and both verdicts. |
 | `compare_revisions` | `result_a`, `result_b` | Two revisions of a board (different board files, or the same file edited and saved in KiCad, then opened again), whose meshes differ: per-load drop deltas matched by part, per-layer loss deltas, via currents matched by position and drill, where the drop grew or shrank most (B's drop mapped onto A's mesh, a PNG Δ map per layer), and what could not be matched. See [Comparing revisions](#comparing-revisions). |
 | `copper_step` | `result_id`, `layer`, `step` (`up`/`down`) | What-if: the result re-solved with one copper layer **one** standard weight up or down (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness (the project's `copper_thickness_mm`, else the board file's), with the comparison against that result and the new `result_id`. A project rail keeps its estimated draws. Bigger jumps, a non-standard start (more than 3 % off a standard weight) and a result that is already a what-if (any layer off the design's copper) are refused: real changes are made in KiCad. The assumptions carry the via-barrel note. |
 | `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. The board temperature is a power-tree solve: when the project sets `thermal.max_temp_c` or `max_rise_c`, each is a top-level `not_judged` entry (`rail: null`, `item: "board temperature"`, "solved with the power tree only…"), so the verdict is `not_judged` (CLI and CI exit 3) unless something fails; use `solve_tree` to judge it. |
-| `solve_tree` | `project_path`, `top`?, `use_board_fields`?, `thermal`?, `thermal_options`?, `confirm_large`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`): see [Power tree](#power-tree). Limits come from the project file. With `thermal` (or the project's `thermal.enabled`) it also solves the board temperature: see [Board temperature](#board-temperature). |
+| `solve_tree` | `project_path`, `top`?, `use_board_fields`?, `thermal`?, `thermal_options`?, `confirm_large`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`), plus `tree_id` (`t1`) and each group's `result_id` (`t1:GND`) for `probe`, `render_map`, `cut_current` and `report`: see [Power tree](#power-tree). Limits come from the project file. With `thermal` (or the project's `thermal.enabled`) it also solves the board temperature: see [Board temperature](#board-temperature). |
 | `solve_ac` | `project_path`, `rails`?, `confirm_large`?, `use_board_fields`? | The open-loop PDN impedance \|Z\|(f) at the project's probes, rail by rail: the document of `coppernicus ac --json`, with each rail's CSV and PNG of \|Z\|(f), sized first. See [AC impedance](#ac-impedance). |
 | `solve_noise` | `project_path`, `aggressors`?, `confirm_large`?, `use_board_fields`? | The DC-DC ripple and the noise each switching regulator (aggressor) couples into the victim nets: the document of `coppernicus noise --json`, with each aggressor's CSV, waveforms PNG and field-map PNGs, sized first. Judged only against the victims' noise margins; the ripple and the radiated estimate are never judged. See [Ripple and coupled noise](#ripple-and-coupled-noise). |
 | `solve_tolerance` | `project_path`, `skip_ac`?, `skip_noise`?, `confirm_large`?, `use_board_fields`? | Each load's tolerance stack-up (DC drop + accuracy, ripple + transient, their total): the document of `coppernicus tolerance --json`, with its CSV, every AC and noise solve it needs sized first. Judged only against the tolerances the user set, and only when every part is known; KiPI's transient estimate is shown, never judged. See [Tolerance stack-up](#tolerance-stack-up). |
 | `propose_fields` | `project_path` or `result_id` | The KiCad `PI_*` field text that describes a project's rails and links (or one solved rail), part by part, to paste into KiCad. See [Proposing fields](#proposing-fields). |
 | `read_project` | `project_path` | A project file as written (rails, sources, loads, limits, links, settings; unknown keys included), checked by the project loader, with the board it names. |
 | `write_project` | `project_path`, `board_path`?, `rails`?, `remove_rails`?, `links`?, `remove_links`?, `settings`?, `use_board_fields`?, `from_project`?, `overwrite`? | Creates or edits a project file for the user. See [Editing projects](#editing-projects). |
-| `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every result still in memory, and returns its path, size and cell sizes. It is meant for a person to open in a browser. |
+| `report` | `result_ids`?, `path`? | Writes the offline HTML report (see [below](#html-report)) of the given results, by default every rail result still in memory, and returns its path, size and cell sizes. A tree's id alone (`["t1"]`) writes the power tree's page instead (every group, the VRM, load and link tables). It is meant for a person to open in a browser. |
 
 A summary's `problems` list is complete: every load, then the `top` current-crowding spots and
 the `top` vias by current (default 5 each), plus any that exceed a limit you set. Vias carrying
@@ -574,11 +574,46 @@ Verdicts in the tree follow the rule above: a copper limit (via, current density
 nothing to judge passes; a `max_drop_pct` with no load to judge is not judged; a limit set on
 a net the tree does not solve is a not-judged item ("NET: not solved in the power tree").
 
-Tree groups are not kept as results: there is no `result_id` per group, so `render_map`,
-`probe`, `cut_current`, `compare_results` and `report` do not apply to them. For maps, solve
-the rails with `solve_project`, or give the user `coppernicus solve PROJECT --tree --html`: one
-offline page with every group (maps, problems and the tree's verdict per group) and the tree's
-VRM, load and link tables.
+#### Probing, mapping and cutting tree groups
+
+The session keeps the tree as one result. `solve_tree` returns `tree_id` (`"t1"`) and each
+group's `result_id` (`"t1:GND"`, `"t1:+3V3"`: the tree id, a colon, the group's key; split on
+the first colon, so a net name may hold one). A net of a group names that group too
+(`"t1:+3V3_F"` reads group `+3V3` when FB1 joins them; the answer gives the group's id).
+- `probe`, `render_map` and `cut_current` take a group's `result_id`. `report` takes the tree's
+  id alone (`report(result_ids=["t1"])`) and writes the tree's page, as
+  `coppernicus solve PROJECT --tree --html` does: every group's maps and problems, the tree's
+  verdict and its VRM, load and link tables.
+- A probe on a group answers with `group`, `kind` (`rail` or `ground`), and `net`, the net at
+  the point, only where it is known exactly (a group of one net). Its `drop_mv` is worded as
+  the app's readout words it: `drop_word` is `drop`, `rise` (a ground above 0 V) or `shift` (a
+  ground under a negative rail), and `drop_unit` says what the number measures (`"mV above
+  0 V (ground rise)"`; on a shift, `"mV below 0 V (ground shift)"`, the depth below 0 V). On
+  the power-chain example, `probe(result_id="t1:GND", layer="B.Cu", x_mm=97.5, y_mm=1.0)`
+  reads U3's ground pad: a 38.470 mV rise.
+- `relative_to` on `probe` gives `delta_v`, this point's voltage minus another point's:
+  `{layer, x_mm, y_mm}` (`x`/`y` are accepted too) or `{pad: "U3.2"}` (a pad as REF.PAD, read at
+  its centre, or at the nearest meshed copper of the pad when its centre is a drilled hole),
+  with `result_id` for another group of the **same** tree (with a pad, the tree's id finds the
+  pad's group from its net). The answer has `relative_to` with that point's own reading. It
+  works across groups: U3's supply pad against `{pad: "U3.2"}` is the voltage across U3 (its
+  `v_across_v` in the loads table). Both readings come from one solve, in its own frame
+  (0 V at the source's ground pins); nothing is shifted or solved again. Points of separate
+  solves share no 0 V and are refused, as is a reference off copper (the hint gives the nearest
+  copper) or on copper not connected to a source.
+- The tools for one rail result refuse a tree's or a group's id with `invalid_input` and a hint:
+  `get_problems` (a group's problems are in `groups[].problems`), `copper_step` (one step of
+  `copper_thickness_mm` in the project file, then `solve_tree` again), `compare_results` and
+  `compare_revisions` (compare two tree documents), `propose_fields` (give the `project_path`).
+- The tree counts as one result in the session's memory bounds (every group's arrays, and the
+  locators built by later probes) and is dropped whole: then every group answers
+  `result_evicted`; call `solve_tree` again.
+
+On the command line, `coppernicus solve PROJECT --tree --probe LAYER@X,Y` (repeatable) prints
+one readout line per point after the tables: the group with copper there, its voltage, its drop
+(or rise) and |J|. With `--json` the readouts are the document's `probes` list (each with
+`group`, `kind`, `layer`, `x_mm`, `y_mm`, `voltage_v`, `drop_mv`, `drop_word`, `drop_unit`,
+`j_a_mm2`; off every group's copper, `on_copper: false` and `groups_with_copper_here`).
 
 ### Board temperature
 

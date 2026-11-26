@@ -9,6 +9,8 @@
     coppernicus solve PROJECT --tree [--out DIR] [--top N] [--json] [--html [PATH]] [--open]
                                                 the whole power tree
     coppernicus solve PROJECT --thermal [--out DIR] [--top N] [--json]   power tree with board temperature
+    coppernicus solve PROJECT --tree --probe LAYER@X,Y [--probe ...]     the group, voltage and drop
+                                                at points of the tree (mm, KiCad frame)
     coppernicus fields BOARD [--json]          the KiCad footprint fields (PI_*) of a board
     coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
     coppernicus ac PROJECT [--rail NET ...] [--out DIR] [--json]   AC PDN impedance |Z|(f) (CSV + PNG)
@@ -217,6 +219,9 @@ def _cmd_solve(args) -> int:
     from coppernicus.problems import find_problems
     from coppernicus.service import ServiceError, Session
 
+    if getattr(args, "probe", None):
+        return _fail(args, "invalid_input", "--probe reads the power tree: add --tree",
+                     "coppernicus solve PROJECT --tree --probe LAYER@X,Y")
     quiet = args.json
     stem = safe_file_name(Path(args.project).stem)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
@@ -303,6 +308,19 @@ def _cmd_solve(args) -> int:
     return _exit_for(doc)
 
 
+def _probe_point(text: str):
+    """``--probe LAYER@X,Y`` as (layer, x_mm, y_mm); ValueError saying the form otherwise."""
+    layer, at, xy = text.strip().rpartition("@")
+    parts = xy.split(",")
+    try:
+        x, y = (float(v) for v in parts) if at and layer and len(parts) == 2 else (None, None)
+    except ValueError:
+        x = y = None
+    if x is None or not (math.isfinite(x) and math.isfinite(y)):
+        raise ValueError(f"--probe {text!r}: give LAYER@X,Y (mm), e.g. B.Cu@97.5,1.0")
+    return layer.strip(), x, y
+
+
 def _cmd_solve_tree(args) -> int:
     """``solve --tree``: every rail and ground of the project solved together (regulator input
     currents, ground return). Prints the VRM, load and group tables, or with ``--json`` the
@@ -327,6 +345,10 @@ def _cmd_solve_tree(args) -> int:
     if args.rail:
         return fail("invalid_input", "--tree solves the whole project: --rail does not apply to it",
                     "leave groups out with engine_options: excluded_nets")
+    try:                                  # --probe LAYER@X,Y: checked before anything is solved
+        probes = [_probe_point(text) for text in getattr(args, "probe", None) or ()]
+    except ValueError as e:
+        return fail("invalid_input", str(e), "a point is LAYER@X,Y in mm, KiCad's frame: B.Cu@97.5,1.0")
     if not Path(args.project).is_file():
         return fail("file_not_found", f"No such file: {args.project}")
     try:
@@ -336,6 +358,11 @@ def _cmd_solve_tree(args) -> int:
         return fail("invalid_project", str(e))
     except EngineError as e:
         return fail("board_unreadable", str(e))
+    layers = [lay.name for lay in board.layers()]
+    unknown = [layer for layer, _, _ in probes if layer not in layers]
+    if unknown:
+        return fail("invalid_input", f"--probe: no copper layer {unknown[0]!r} on this board",
+                    f"copper layers: {', '.join(layers)}")
     try:                                  # the KiCad footprint fields, as Session.solve_tree
         merged = board_fields.apply(project, lambda: read_board_fields(board.path),
                                     False if args.no_board_fields else None,
@@ -375,6 +402,10 @@ def _cmd_solve_tree(args) -> int:
         write_png(tree.thermal, m.layer_name, png, board.outline())
     if pngs:                                   # as the per-rail document's "maps"
         doc["maps"] = [png.as_posix() for png in pngs]
+    if probes:                                 # the readouts, only when asked for
+        from coppernicus.service.session import probe_tree
+        cache: dict = {}
+        doc["probes"] = [probe_tree(tree, layer, x, y, cache) for layer, x, y in probes]
     if args.html is not None or args.open:     # one page: every group, the VRM and load tables
         from coppernicus.report import write_tree_report
         html_path = (Path(args.html) if args.html else
@@ -392,6 +423,9 @@ def _cmd_solve_tree(args) -> int:
         print(f"Board: {board.name} · power tree: {len(tree.groups)} groups solved "
               f"in {tree.stats['seconds']:.1f} s")
         print("\n".join(tree_text(doc)))
+        if probes:
+            from coppernicus.service.session import probe_text
+            print("\n".join(probe_text(p) for p in doc["probes"]))
         print("".join(f"Map: {png}\n" for png in pngs) + f"Summary: {summary_path}")
         if "report_file" in doc:
             print(f"Report: {doc['report_file']}")
@@ -792,6 +826,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--thermal", action="store_true",
                    help="the power tree with the board temperature (electro-thermal; implies --tree; "
                         "writes a temperature map per copper layer)")
+    p.add_argument("--probe", action="append", metavar="LAYER@X,Y",
+                   help="with --tree: the group, voltage and drop (or ground rise) at this point, mm "
+                        "in KiCad's frame, e.g. B.Cu@97.5,1.0 (repeatable; in the JSON as probes)")
 
     p = sub.add_parser("mcp", help="run the MCP server for AI agents (stdio; see README)")
     p.add_argument("--out", help="folder for maps, one session-... subfolder per run "
