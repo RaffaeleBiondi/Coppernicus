@@ -73,6 +73,7 @@ from coppernicus.engine.ac import (
     _kipi_probe,
     cost_estimate,
     peak_rss_bytes,
+    superlu_order_note,
 )
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import _numbers, _pads, terminal_names, to_pisetup
@@ -925,7 +926,12 @@ def noise_cost_estimate(size: NoiseSize, last: Optional[Dict[str, Any]] = None) 
 def noise_ram_estimate(unknowns: float, total_bytes: Optional[float]) -> RamEstimate:
     """Whether a noise solve of ``unknowns`` could exceed this machine's memory, from the
     upper bound measured on synthetic boards (NOISE_MEM_BASE_BYTES + NOISE_MEM_PER_UNKNOWN per
-    unknown). A warning to confirm, never a cancel (brief Q8)."""
+    unknown). A warning to confirm, never a cancel (brief Q8). With the ``ac`` part of
+    :mod:`coppernicus.engine.superlu_order` on, the text says the bound overstates."""
+    return superlu_order_note(_noise_ram_estimate(unknowns, total_bytes))
+
+
+def _noise_ram_estimate(unknowns: float, total_bytes: Optional[float]) -> RamEstimate:
     need = NOISE_MEM_BASE_BYTES + NOISE_MEM_PER_UNKNOWN * float(unknowns)
     beyond = " (extrapolated beyond them)" if unknowns > NOISE_MEM_UNKNOWNS[1] else ""
     how = (f"an upper bound measured on synthetic boards, 0.2 GB plus 26 to 36 kB per unknown from "

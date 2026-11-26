@@ -1481,8 +1481,8 @@ Also:
 
 ## Solver order options: SuperLU's symmetric mode (`kipi/core/solver/direct.py`, opt-in)
 
-KiPI factorizes with SciPy's SuperLU in the COLAMD column order (`direct._superlu`), which
-ignores that its matrices are symmetric. SuperLU's symmetric mode (minimum degree on the pattern
+KiPI factorizes with SciPy's SuperLU in the COLAMD column order (`direct._superlu`,
+`direct._superlu_complex`), which ignores that its matrices are symmetric. SuperLU's symmetric mode (minimum degree on the pattern
 of A + Aᵀ, `SymmetricMode`, the diagonal as pivot) fills about half as much on them, so it takes
 less time and memory. `src/coppernicus/engine/superlu_order.py` offers it per part, each **off
 by default**.
@@ -1490,9 +1490,10 @@ by default**.
 | Part | What runs in SuperLU's symmetric mode | Pivoting |
 |------|---------------------------------------|----------|
 | `thermal` | the board temperature's heat model (`BoardThermalModel`, model.py:282), marked on the calling thread around its construction in `engine/thermal.py` | none (symmetric positive definite) |
+| `ac` | every complex factorization: the AC field solves, one per field frequency (field.py, fem.py:648), and so the noise and tolerance solves; process-wide, since KiPI solves the frequencies in its own threads | partial, threshold 0.1 (KiPI: SciPy's 1.0): the systems are indefinite |
 
-How to enable: `COPPERNICUS_SUPERLU_ORDER=thermal` in the environment (comma-separated parts,
-read when `coppernicus.engine` is imported), or `superlu_order.enable("thermal")`.
+How to enable: `COPPERNICUS_SUPERLU_ORDER=thermal,ac` in the environment (comma-separated
+parts, read when `coppernicus.engine` is imported), or `superlu_order.enable("thermal", "ac")`.
 
 Off, nothing is replaced and KiPI's own path runs: bit-identical (the drift test of our
 electro-thermal loop against KiPI's `solve_electrothermal` runs with it off). On, a different
@@ -1501,17 +1502,24 @@ only", not limits of the product):
 
 - `thermal`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative, with a
   floor per unit for values near zero (the unit's largest magnitude in the fingerprint × 1e-9);
+- `ac`: |Z| within 1e-8 relative (and the noise and tolerance scalars that come from it): at low
+  frequency the rail is tied to ground only through the plane capacitance, an ill-conditioned
+  system in which round-off grows (measured up to 8.6e-10);
 - the backward error ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖), on and off, of the same order (a few 1e-16;
   `tests/test_superlu_order.py`).
 
 Measured (macOS arm64, a loaded machine: provisional), the heat model of a 50 mm synthetic board
 (250,000 unknowns, 4 layers): factors 121 M → 61 M non-zeros, memory +3.2 → +1.4 GB,
 factorization 3.6 → 2.0 s, each later solve 0.37 → 0.15 s; a 6-layer 250 × 250 grid (375,000
-unknowns): 12.6 s / +8.3 GB → 5.2 s / +3.0 GB.
+unknowns): 12.6 s / +8.3 GB → 5.2 s / +3.0 GB. KiPI's pdn example's AC solve (19,783 unknowns,
+111 field frequencies): each factorization 5.2 M → 3.3 M non-zeros, 0.25 → 0.155 s, 208 → 135 MB;
+the backward error at every frequency, off and on, at most 6.2e-17 and 4.9e-17. The factor keeps
+KiPI's name `superlu` and its true memory, which KiPI's thread count reads (field.py `threads`).
 
 The seam: KiPI's private functions are replaced process-wide, once, only on KiPI 1.0.1 with
 those functions of the expected signature (otherwise a warning, once, and KiPI's path); a part
 that is off hands its factorizations to KiPI's own function. `uninstall()` puts KiPI's back.
 
-Not refitted: the board temperature's memory estimate (`thermal_ram_estimate`) is a fit
-measured in KiPI's order; with `thermal` on it overstates, and its text says so.
+Not refitted: the memory estimates (`thermal_ram_estimate`; the AC `ram_estimate` and
+`noise_ram_estimate`) were measured in KiPI's order; with their part on they overstate, and
+their text says so.

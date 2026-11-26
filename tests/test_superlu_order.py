@@ -241,3 +241,115 @@ def test_the_ram_estimate_says_it_overstates_with_thermal_on():
     on = thermal_ram_estimate(250_000, 4, 24e9)
     assert on.bytes == off.bytes and on.risk == off.risk
     assert on.text.startswith(off.text) and "overstates" in on.text and so.ENV in on.text
+
+
+# ------------------------------------------------------------------- the AC part
+
+KIPI_SUPERLU_COMPLEX = direct._superlu_complex
+
+
+def ac_like(nx=24, ny=20, nl=2, omega=2e6, weak=1.0) -> sp.csc_matrix:
+    """A small AC-like complex symmetric matrix: conductance G, capacitance on the diagonal and
+    an inductive grid, G + j(ωC − B/ω): indefinite in its imaginary part. ``weak`` scales the
+    diagonal: under 1, pivots fall under the column's largest entry and pivoting acts."""
+    G = grid_spd(nx, ny, nl, seed=4)
+    B = grid_spd(nx, ny, nl, seed=5) * 1e3
+    C = sp.diags_array(np.full(G.shape[0], 1e-9))
+    A = sp.csc_matrix(G + 1j * (omega * C - B / omega))
+    return sp.csc_matrix(A + (weak - 1.0) * sp.diags_array(A.diagonal()))
+
+
+def test_ac_part_factorizes_complex_systems_in_symmetric_mode_with_pivoting():
+    A = ac_like(weak=0.4)
+    b = np.random.default_rng(6).standard_normal(A.shape[0]) + 0j
+    so.enable("ac")
+    f = direct._superlu_complex(A)
+    sym = splu(A, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.1, options={"SymmetricMode": True})
+    assert np.array_equal(f(b), sym.solve(b))
+    full = splu(A, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=1.0, options={"SymmetricMode": True})
+    assert not np.array_equal(f(b), full.solve(b))           # this matrix tells 0.1 from 1.0
+    # KiPI's thread count (kipi/ac/solver/field.py threads()) reads the name and the memory.
+    assert f.name == "superlu" and f.nbytes == 24 * int(sym.nnz)
+
+
+def test_ac_part_reaches_kipis_threads():
+    """The AC field solves run in KiPI's own threads: the part is process-wide."""
+    A = ac_like()
+    b = np.ones(A.shape[0], dtype=complex)
+    so.enable("ac")
+    got = {}
+    t = threading.Thread(target=lambda: got.update(x=direct._superlu_complex(A)(b)))
+    t.start()
+    t.join()
+    sym = splu(A, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.1, options={"SymmetricMode": True})
+    assert np.array_equal(got["x"], sym.solve(b))
+
+
+def test_parts_are_apart():
+    """Each part only its own: thermal on leaves the complex systems KiPI's, AC on leaves the
+    heat model KiPI's."""
+    A, S = ac_like(), grid_spd()
+    b, s = np.ones(A.shape[0], dtype=complex), np.ones(S.shape[0])
+    so.enable("thermal")
+    assert np.array_equal(direct._superlu_complex(A)(b), KIPI_SUPERLU_COMPLEX(A)(b))
+    so.disable()
+    so.enable("ac")
+    with so.thermal_model():
+        assert np.array_equal(direct.factorize(S)(s), KIPI_SUPERLU(S)(s))
+    assert so.parse("ac, thermal") == {"ac", "thermal"}
+
+
+@pytest.mark.parametrize("weak", [1.0, 0.4])
+def test_ac_backward_error_on_and_off_alike(weak):
+    """Also where pivots fall under the column's largest entry (``weak``): threshold 0.1 stays
+    as accurate as KiPI's full partial pivoting."""
+    A = ac_like(36, 30, 2, weak=weak)
+    b = np.random.default_rng(7).standard_normal(A.shape[0]) + 0j
+    off = backward_error(A, KIPI_SUPERLU_COMPLEX(A)(b), b)
+    so.enable("ac")
+    on = backward_error(A, direct._superlu_complex(A)(b), b)
+    assert off < 1e-14 and on < 1e-14
+    assert on < 10 * off + 1e-16 and off < 10 * on + 1e-16
+
+
+def test_the_ac_seam_is_checked_too(monkeypatch):
+    monkeypatch.setattr(direct, "_superlu_complex", lambda A, warn: None)
+    with pytest.warns(UserWarning, match="_superlu_complex"):
+        assert not so.enable("ac")
+    assert direct._superlu is KIPI_SUPERLU
+
+
+def test_ac_solve_moves_by_round_off_only(monkeypatch):
+    """KiPI's decoupling-capacitor validation board: the same mesh and ports, |Z| at every
+    frequency within the AC proof criterion (1e-8 relative), every field factorization ours."""
+    from coppernicus.engine.ac import solve_ac_rail
+    from coppernicus.engine.synthetic import ac_decap_board, ac_decap_project
+    board = Board(ac_decap_board())
+    off = solve_ac_rail(board, ac_decap_project(), "+3V3")
+    calls = []
+    real = so.splu
+
+    def spy(A, **kw):
+        calls.append(kw["permc_spec"])
+        return real(A, **kw)
+    monkeypatch.setattr(so, "splu", spy)
+    so.enable("ac")
+    on = solve_ac_rail(board, ac_decap_project(), "+3V3")
+    assert calls and set(calls) == {"MMD_AT_PLUS_A"}
+    assert len(calls) == on.stats.get("field_frequencies", len(calls))
+    assert on.stats.get("triangles") == off.stats.get("triangles")
+    assert np.array_equal(on.freq_hz, off.freq_hz)
+    for p, q in zip(off.probes, on.probes, strict=True):
+        assert np.all(np.abs(np.abs(q.z_ohm) - np.abs(p.z_ohm)) <= so.TOLERANCE_REL["ac"] * np.abs(p.z_ohm))
+
+
+def test_the_ac_and_noise_ram_estimates_say_they_overstate_with_ac_on():
+    from coppernicus.engine.ac import ram_estimate
+    from coppernicus.engine.noise import noise_ram_estimate
+    offs = [ram_estimate(50_000, 24e9, 12e9), noise_ram_estimate(50_000, 24e9)]
+    so.enable("ac")
+    ons = [ram_estimate(50_000, 24e9, 12e9), noise_ram_estimate(50_000, 24e9)]
+    for off, on in zip(offs, ons):
+        assert "symmetric" not in off.text
+        assert on.bytes == off.bytes and on.risk == off.risk
+        assert on.text.startswith(off.text) and "overstates" in on.text and so.ENV in on.text

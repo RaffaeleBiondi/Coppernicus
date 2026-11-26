@@ -2,11 +2,12 @@
 default.
 
 KiPI factorizes with SciPy's SuperLU in the COLAMD column order (``kipi/core/solver/direct.py``,
-``_superlu``), which ignores that its matrices are symmetric. SuperLU's symmetric mode
-(minimum degree on the pattern of A + Aᵀ, ``SymmetricMode``, the diagonal as pivot) fills about
-half as much on them: on the heat model of a 50 mm synthetic board (250,000 unknowns, 4 layers)
-121 M → 61 M non-zeros in the factors, 3.2 → 1.4 GB and 3.6 → 2.0 s for the factorization,
-each later solve 2.4× faster (macOS arm64, a loaded machine).
+``_superlu`` and ``_superlu_complex``), which ignores that its matrices are symmetric.
+SuperLU's symmetric mode (minimum degree on the pattern of A + Aᵀ, ``SymmetricMode``, the
+diagonal as pivot) fills about half as much on them: on the heat model of a 50 mm synthetic
+board (250,000 unknowns, 4 layers) 121 M → 61 M non-zeros in the factors, 3.2 → 1.4 GB and
+3.6 → 2.0 s for the factorization, each later solve 2.4× faster (macOS arm64, a loaded
+machine).
 
 Parts, each off unless enabled:
 
@@ -14,6 +15,14 @@ Parts, each off unless enabled:
   positive definite), factorized without pivoting, which is stable for such a matrix. Only the
   factorization made inside :func:`thermal_model` (on the calling thread, so solves in other
   threads keep KiPI's) uses it.
+* ``ac``: the complex symmetric systems of the AC field solves (one per field frequency; the
+  noise and tolerance solves run the same), with partial pivoting kept at threshold 0.1 (the
+  diagonal preferred, a row swapped when its pivot is under a tenth of the column's largest;
+  KiPI's SciPy default is 1.0), since these systems are indefinite. Process-wide: KiPI solves
+  the frequencies in its own threads. The factor keeps KiPI's name ``superlu`` and its true
+  memory, which KiPI's thread count reads (``kipi/ac/solver/field.py`` ``threads``). On KiPI's
+  pdn example (19,783 unknowns, 111 field frequencies): factors 5.2 M → 3.3 M non-zeros, each
+  0.25 → 0.155 s and 208 → 135 MB.
 
 Enabled by the environment variable ``COPPERNICUS_SUPERLU_ORDER`` (comma-separated parts, read
 when :mod:`coppernicus.engine` is imported) or by :func:`enable`.
@@ -22,16 +31,21 @@ Off, nothing is replaced and KiPI's own path runs: bit-identical. On, a differen
 differently, so results move by round-off only. The proof criteria for that (checks of
 "round-off only", not limits of the product), :data:`TOLERANCE_REL`: the benchmark fingerprint's
 scalars agree within 1e-9 relative (thermal), with a floor per unit for values near zero (the
-unit's largest magnitude in the fingerprint × 1e-9); and the backward error
+unit's largest magnitude in the fingerprint × 1e-9); |Z| within 1e-8 relative (ac: at low
+frequency the rail is tied to ground only through the plane capacitance, an ill-conditioned
+system in which round-off grows, measured up to 8.6e-10); and the backward error
 ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) is of the same order on and off (both a few 1e-16).
 
-The seam: KiPI's private ``direct._superlu`` is replaced process-wide, once, by a function that
-hands every factorization outside an enabled part to KiPI's own. It is installed only on the
-KiPI it was written for (:data:`KIPI_VERSION`) with that function of the expected signature;
+The seam: KiPI's private ``direct._superlu`` and ``direct._superlu_complex`` are replaced
+process-wide, once, by functions that hand every factorization outside an enabled part to KiPI's
+own. They are installed only on the KiPI they were written for (:data:`KIPI_VERSION`) with those
+functions of the expected signature;
 otherwise a warning (once) and KiPI's path. :func:`uninstall` puts KiPI's back (the tests).
 
-The memory estimate of the board temperature (:func:`coppernicus.engine.thermal.thermal_ram_estimate`)
-is a fit measured with KiPI's order: with ``thermal`` on it overstates, and says so.
+The memory estimates (the board temperature's :func:`coppernicus.engine.thermal.thermal_ram_estimate`,
+the AC and noise solves' :func:`coppernicus.engine.ac.ram_estimate` and
+:func:`coppernicus.engine.noise.noise_ram_estimate`) were measured with KiPI's order: with their
+part on they overstate, and say so.
 """
 
 from __future__ import annotations
@@ -49,17 +63,19 @@ from kipi.core.solver import direct
 from scipy.sparse.linalg import splu
 
 ENV = "COPPERNICUS_SUPERLU_ORDER"
-PARTS = ("thermal",)
+PARTS = ("thermal", "ac")
 KIPI_VERSION = "1.0.1"
 # SuperLU's symmetric mode: the column order and, for symmetric positive definite matrices,
 # the diagonal as pivot (threshold 0).
 ORDER = "MMD_AT_PLUS_A"
 SPD_PIVOT_THRESHOLD = 0.0
+# Complex symmetric (indefinite) systems: partial pivoting kept, the diagonal preferred.
+COMPLEX_PIVOT_THRESHOLD = 0.1
 # The proof criteria of "round-off only" per part (see the module's docstring): relative, with
 # an absolute floor per unit of this times the unit's largest magnitude.
-TOLERANCE_REL = {"thermal": 1e-9}
+TOLERANCE_REL = {"thermal": 1e-9, "ac": 1e-8}
 # KiPI's functions replaced, with the parameters they take.
-_SEAMS = {"_superlu": ["A"]}
+_SEAMS = {"_superlu": ["A"], "_superlu_complex": ["A"]}
 
 _lock = threading.Lock()
 _enabled: frozenset = frozenset()
@@ -106,7 +122,7 @@ def seam_problem() -> Optional[str]:
 
 
 def _ours() -> dict:
-    return {"_superlu": _superlu}
+    return {"_superlu": _superlu, "_superlu_complex": _superlu_complex}
 
 
 def enable(*parts: str) -> bool:
@@ -188,3 +204,14 @@ def _superlu(A: sp.spmatrix) -> direct.DirectFactor:
     lu = splu(sp.csc_matrix(A), permc_spec=ORDER, diag_pivot_thresh=SPD_PIVOT_THRESHOLD,
               options={"SymmetricMode": True})
     return direct.DirectFactor(lu.solve, "superlu")
+
+
+def _superlu_complex(A: sp.spmatrix) -> direct.ComplexFactor:
+    """KiPI's ``direct._superlu_complex`` (a complex symmetric A), in SuperLU's symmetric mode
+    with partial pivoting when the ``ac`` part is on."""
+    if "ac" not in _enabled:
+        return _kipi["_superlu_complex"](A)
+    lu = splu(sp.csc_matrix(A, dtype=complex), permc_spec=ORDER, diag_pivot_thresh=COMPLEX_PIVOT_THRESHOLD,
+              options={"SymmetricMode": True})
+    # L and U: a complex value and a row index each, as KiPI counts them.
+    return direct.ComplexFactor(lu.solve, "superlu", nbytes=24 * int(lu.nnz))
