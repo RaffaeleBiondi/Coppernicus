@@ -28,6 +28,9 @@ from coppernicus.engine.synthetic import (
     save_snapshot,
     two_layer_stackup,
 )
+from coppernicus.engine.synthetic import (
+    B as B_CU,
+)
 from coppernicus.engine.tree import solve_project_tree
 from coppernicus.problems import ATTENTION, FAIL, INFO, find_problems, find_tree_problems
 from coppernicus.project import Limits, Load, Project, Rail, Settings, Source
@@ -602,3 +605,21 @@ def test_math_check_of_the_ipc_2221_figure_in_the_docs():
     amps = 0.048 * 10 ** 0.44 * area_mil2 ** 0.725
     assert amps / 0.035 == pytest.approx(68.0, abs=1.0)
     assert math.isclose(60 * math.sqrt(0.035 / 0.070), 42.43, abs_tol=0.01)
+
+
+def test_a_layer_with_round_off_current_is_not_ranked():
+    """Copper on B.Cu reached only through the source's through-hole pad carries no current
+    (round-off, about 1e-9 of the neck's |J|): it is not a current-crowding spot, even when
+    every spot of F.Cu is already an attention item and the ranked list has room."""
+    b = SyntheticBoard("neck-tht", two_layer_stackup(OZ1))
+    copper = box(0, 0, 10, 5).union(box(10, 2.5 - NECK_W / 2, 13, 2.5 + NECK_W / 2)).union(box(13, 0, 23, 5))
+    b.zone(NET, F, copper)
+    b.zone(NET, B_CU, box(0, 0, 4, 5))
+    b.square_pad("J1", "1", NET, 1.5, 2.5, 2.0, layers=(F, B_CU), drill=1.0)
+    b.square_pad("U1", "1", NET, 21.5, 2.5, 2.0, layers=(F,))
+    res = solve_rail(Board(b.snapshot()), neck_rail(amps_for(120.0, OZ1)))
+    back = next(lay for lay in res.layers if lay.name == "B.Cu")
+    front = next(lay for lay in res.layers if lay.name == "F.Cu")
+    assert back.current_density.size and back.current_density.max() < 1e-6 * front.current_density.max()
+    spots = [p for p in find_problems(res, Limits(), top=5) if p.kind == "hotspot"]
+    assert spots and all(p.layer == "F.Cu" for p in spots)

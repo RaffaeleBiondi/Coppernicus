@@ -36,6 +36,7 @@ SEVERITY_RANK = {FAIL: 0, ATTENTION: 1, INFO: 2}     # the order problems are li
 HOTSPOT_TOP_SHARE = 0.01      # without a limit: the top 1 % of a layer's copper area by |J|
 HOTSPOT_GROW = 0.8            # ... grown through neighbours above 80 % of that threshold
 VIA_NOISE_SHARE = 1e-6        # vias below this share of the rail current carry nothing (round-off)
+DENSITY_NOISE_SHARE = 1e-6    # copper below this share of the rail's peak |J| carries nothing (round-off)
 
 # The current-density default (docs/technical.md#current-density-default): A/mm² at 1 oz
 # (35 µm), outer and inner layers apart so they can diverge; scaled ×√(35 µm / t).
@@ -183,8 +184,10 @@ def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "",
     a failed or attention spot on its layer is not listed again. The ``top`` ranked spots
     are counted after that, so the attention items come on top of them, not out of them."""
     fails, attention, ranked = [], [], []
+    peak = max((float(lay.current_density[lay.resolved()].max(initial=0.0)) for lay in result.layers),
+               default=0.0)
     for layer in result.layers:
-        if layer.current_density.size == 0 or not np.any(layer.current_density > 0):
+        if layer.current_density.size == 0 or not np.any(layer.current_density > DENSITY_NOISE_SHARE * peak):
             continue
         listed = np.zeros(layer.current_density.shape, dtype=bool)   # copper of the spots above
         if limits.max_current_density is not None:

@@ -120,7 +120,8 @@ and why, and ask for what is missing.
 
 A summary's `problems` lists every load, then the top `top` current-crowding spots and the top
 `top` vias (default 5 each). Pass a larger `top` to see more vias. Vias carrying under a
-millionth of the rail current are left out as round-off.
+millionth of the rail current, and layers whose |J| stays under a millionth of the rail's peak,
+are left out as round-off.
 
 Coordinates are in mm in KiCad's frame, with **y down**. Errors return `{"error": {code, message, hint}}`:
 follow the hint. `result_evicted` means you must solve again.

@@ -90,8 +90,10 @@ input.
 
 A summary's `problems` list is complete: every load, then the `top` current-crowding spots and
 the `top` vias by current (default 5 each), plus any that exceed a limit you set. Vias carrying
-under a millionth of the rail current are left out. That current is solver round-off, and
-leaving them out is not a judgement.
+under a millionth of the rail current are left out, and so is a layer whose current density
+stays under a millionth of the rail's peak (copper of the net that no current crosses, such as
+a through-hole pad's ring on a layer with no load). That is solver round-off, and leaving it
+out is not a judgement.
 
 Each load has `v_min_v`, `v_max_v` and `v_worst_v`: the pin furthest from the source in the
 direction of the drop, the lowest on a positive rail and the highest on a negative rail or a
