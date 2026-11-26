@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from coppernicus.project import Limits, PinSpec, Project, Source
-from coppernicus.results import DISCONNECTED, NOT_CONVERGED, OUT_OF_REGULATION
+from coppernicus.results import DISCONNECTED, NOT_CONVERGED, OUT_OF_REGULATION, degenerate_triangles
 
 SWITCHING = ("smps",)
 REGULATING = ("ldo", "smps")
@@ -547,12 +547,15 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         failed += gv.failed
         v_ref = res.v_ref
         by_net = {net: limits_dict(net_limits(tree, net, key)[0], res.kind, res.v_ref) for net in res.nets}
+        degenerate = degenerate_triangles(res)
         groups.append({
             "group": key, "kind": res.kind, "nets": list(res.nets), "v_ref_v": v_ref,
             ("max_rise_mv" if res.kind == "ground" else "max_drop_mv"): res.max_drop * 1e3,
             "max_drop_pct": (100.0 * res.max_drop / abs(v_ref)) if v_ref and res.kind == "rail" else None,
             "power_loss_w": res.power_loss, "loss_breakdown_w": res.loss_breakdown(),
             "j_point_max_a_mm2": res.j_max,
+            # Degenerate triangles (an edge under 1 nm) left out of every maximum |J|, if any
+            **({"degenerate_triangles": degenerate} if degenerate else {}),
             "via_current_max_a": max((v.current for v in res.vias), default=0.0),
             "verdict": gv.verdict, "limits": gv.limits, "failed": gv.failed,
             # spots above the current-density default: attention, never part of the verdict

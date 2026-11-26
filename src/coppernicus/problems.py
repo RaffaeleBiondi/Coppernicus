@@ -15,7 +15,8 @@ again.
 Current crowding is reported per *spot*: connected triangles in the top share of current
 density on a layer, summarised by their area-weighted mean |J|. A point maximum is not
 used because at a sharp inner corner the 2D current density is singular, so its value
-depends on the mesh.
+depends on the mesh. A degenerate triangle (an edge shorter than 1 nm, the resolution of
+KiPI's geometry snap) is in no spot (:func:`_spots`).
 """
 
 from __future__ import annotations
@@ -132,9 +133,14 @@ def _loads(result: RailResult, limits: Limits) -> List[Problem]:
 def _spots(layer: LayerField, threshold: float, grow: float = 1.0):
     """Connected groups of triangles around those with |J| ≥ ``threshold``: each group is
     grown through neighbours with |J| ≥ ``grow`` · threshold (hysteresis, so a uniform track
-    near the threshold is one spot, not many). Returns (indices, mean J, max J, area)."""
+    near the threshold is one spot, not many). Returns (indices, mean J, max J, area).
+
+    Degenerate triangles (an edge shorter than the input's 1 nm resolution,
+    :meth:`~coppernicus.results.LayerField.resolved`) are neither seeds nor members: one alone
+    would be a spot of its own, and on a spot it would raise the peak and count toward
+    :data:`MIN_SPOT_ELEMENTS`. Its area (~1e-14 mm²) would not move the mean anyway."""
     j_all = layer.current_density
-    cand = np.flatnonzero(j_all >= grow * threshold)
+    cand = np.flatnonzero((j_all >= grow * threshold) & layer.resolved())
     if cand.size == 0:
         return []
     tris = layer.tris[cand]

@@ -43,6 +43,7 @@ from coppernicus.results import (
     TerminalResult,
     TreeResult,
     VrmReport,
+    exclude_degenerate,
 )
 
 REGULATING = ("ldo", "smps")
@@ -249,6 +250,10 @@ def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
     for label, g in kt.groups.items():
         res = out.groups[key_of[label]] = _group(board, key_of[label], g, assumptions)
         res.warnings += [w for w in notes if w.startswith(f"{res.net} is solved as a 0 V rail")]
+        # j_max without the triangles below the input's 1 nm resolution; the tree says so too
+        note = exclude_degenerate(res)
+        if note:
+            out.warnings.append(note)
         for s in g.result.fields.series:
             k = next((k for k in setup.links if k.name == s.name), None)
             if k is not None:

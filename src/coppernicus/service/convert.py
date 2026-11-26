@@ -22,7 +22,7 @@ from coppernicus.project import (
     parse_pins,
     pins_text,
 )
-from coppernicus.results import RailResult
+from coppernicus.results import RailResult, degenerate_triangles
 from coppernicus.service import errors as E
 from coppernicus.service.errors import ServiceError
 
@@ -345,6 +345,7 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
                        "copper_area_mm2": float(lf.tri_area.sum()),
                        "thickness_mm": layer_thickness.get(lf.name), "triangles": int(len(lf.tris))})
     busiest = max(res.layers, key=lambda lf: lf.power).name if res.layers else None
+    degenerate = degenerate_triangles(res)
     out = {
         "result_id": result_id, "board_id": board_id, "net": res.net, "nets_solved": res.nets,
         "v_ref_v": v_ref, "drop_sign": int(res.sign), "drop_unit": res.drop_unit(),
@@ -355,6 +356,8 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         "busiest_layer": busiest, "layers": layers,
         "via_count": len(res.vias), "via_current_max_a": max((v.current for v in res.vias), default=0.0),
         "j_point_max_a_mm2": res.j_max,
+        # Degenerate triangles (an edge under 1 nm) left out of every maximum |J|, if any
+        **({"degenerate_triangles": degenerate} if degenerate else {}),
         **verdict(problems, limits, res),
         "problems": [problem_dict(p, estimated) for p in problems],
         "problems_total": len(problems),
