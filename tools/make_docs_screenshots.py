@@ -66,10 +66,11 @@ def gui_check():
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", help=f"output folder (default: {IMAGES.relative_to(ROOT)})")
-    ap.add_argument("--set", choices=("guide", "features", "analyses", "all"), default="guide",
+    ap.add_argument("--set", choices=("guide", "features", "analyses", "cli", "all"), default="guide",
                     help="guide: the README's guide-*.png (default); features: the images of the "
                          "feature pages in docs/; analyses: the Temperature, Impedance, Ripple & noise "
-                         "and Tolerance tabs and the Results panel; all: every set")
+                         "and Tolerance tabs and the Results panel; cli: the command line's PNGs "
+                         "(no window); all: every set")
     ap.add_argument("--offscreen", action="store_true",
                     help="no window (Qt's offscreen platform), to check that every scenario runs and "
                          "reaches its state; the board view stays blank, so --out is required")
@@ -88,6 +89,15 @@ def main(argv=None) -> int:
     faulthandler.dump_traceback_later(args.timeout, exit=True)
     out = Path(args.out) if args.out else IMAGES
     out.mkdir(parents=True, exist_ok=True)
+    if args.set == "cli":                    # no window: the command line draws these itself
+        try:
+            written = cli_pngs(out, args.timeout)
+        except Unfinished as e:
+            print(f"cli: {e}", file=sys.stderr)
+            return 1
+        for path in written:
+            print(path)
+        return 0
 
     from PySide6.QtCore import QLocale, QSettings, Qt
     from PySide6.QtGui import QIcon
@@ -470,9 +480,53 @@ def main(argv=None) -> int:
         settle()
         shutil.rmtree(settings, ignore_errors=True)
 
+    if args.set == "all":
+        try:
+            written.extend(cli_pngs(out, args.timeout))
+        except Unfinished as e:
+            print(f"cli: {e}", file=sys.stderr)
+            return 1
     for path in written:
         print(path)
     return 0
+
+
+# The command line's own PNGs that the docs show: (the image, the arguments of `coppernicus`, the
+# file it writes into --out, as a glob). Each example fails a limit on purpose: exit code 1.
+CLI_PNGS = (
+    ("thermal-map.png", ("solve", DEMO_THERMAL, "--thermal"), "*_temperature_F.Cu.png"),
+    ("ac-impedance.png", ("ac", PDN), "*_P3V3_impedance.png"),
+    ("noise-waveforms.png", ("noise", NOISE_TIGHT), "*_U1_noise.png"),
+)
+
+
+def coppernicus(args, out_dir: Path, timeout: float):
+    """``coppernicus ARGS --out OUT_DIR`` in a child process, as a user runs it. Exit codes 0,
+    1 (a limit exceeded) and 3 (not judged) are results; anything else stops the run."""
+    import subprocess
+    cmd = [sys.executable, "-m", "coppernicus", *map(str, args), "--out", str(out_dir)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if proc.returncode not in (0, 1, 3):
+        raise Unfinished(f"coppernicus {' '.join(map(str, args))} exited with {proc.returncode}: "
+                         f"{proc.stderr.strip()[-800:]}")
+    return proc
+
+
+def cli_pngs(out: Path, timeout: float) -> list:
+    """The PNGs of :data:`CLI_PNGS`, each written by its command into a temporary folder (never
+    ``results/`` beside an example) and copied to ``out``."""
+    written = []
+    with tempfile.TemporaryDirectory(prefix="coppernicus-shots-cli-") as tmp:
+        for name, args, pattern in CLI_PNGS:
+            folder = Path(tmp) / Path(name).stem
+            coppernicus(args, folder, timeout)
+            found = sorted(folder.glob(pattern))
+            if len(found) != 1:
+                raise Unfinished(f"{name}: expected one {pattern} from coppernicus {args[0]}, found "
+                                 f"{sorted(p.name for p in folder.iterdir())}")
+            shutil.copyfile(found[0], out / name)
+            written.append(out / name)
+    return written
 
 
 def answer_dialogs():
