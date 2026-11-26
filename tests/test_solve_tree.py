@@ -144,6 +144,19 @@ def test_render_map_and_cut_current_on_tree_groups(chain, tmp_path):
     assert cut["thickness_mm"] == pytest.approx(0.035)
 
 
+def test_a_tree_group_is_cut_on_the_copper_it_was_solved_with(chain, tmp_path):
+    """A project's copper what-if (F.Cu 2 oz): the tree keeps the board as solved, so the cut
+    counts 0.07 mm of copper and still carries U3's 2.0 A."""
+    project = Project.load(chain)
+    project.settings.copper_thickness_mm = {"F.Cu": 0.07}
+    project.save()
+    session = Session(out_dir=tmp_path / "out")
+    session.solve_tree(chain)
+    cut = session.cut_current("t1:+1V8", "F.Cu", [90.0, -1.0], [90.0, 3.0])
+    assert cut["thickness_mm"] == pytest.approx(0.07)
+    assert cut["abs_current_a"] == pytest.approx(2.0, rel=0.01)
+
+
 @pytest.mark.parametrize("tool, call, hint", [
     ("get_problems", lambda s, rid: s.get_problems(rid), "groups[].problems"),
     ("copper_step", lambda s, rid: s.copper_step(rid, "F.Cu", "up"), "copper_thickness_mm"),

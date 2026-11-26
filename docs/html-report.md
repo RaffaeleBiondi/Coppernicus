@@ -18,7 +18,8 @@ so you can send it to someone who does not have Coppernicus, or attach it to a d
   (`<out>` is `results/` next to the project file unless `--out` says otherwise); `--html PATH`
   writes it elsewhere, and `--open` also opens it in the browser.
 - **Power tree:** `coppernicus solve PROJECT --tree --html` writes one page with every group of
-  the tree and the tree's tables ([below](#the-power-tree-report)).
+  the tree and the tree's tables ([below](#the-power-tree-report)); an agent writes the same
+  page with the MCP `report(result_ids=["t1"])` after `solve_tree`.
 - **Impedance:** `coppernicus ac PROJECT --html` writes its own page ([below](#the-impedance-page)).
 - **Ripple and noise:** `coppernicus noise PROJECT --html` writes its own page
   ([below](#the-noise-page)).

@@ -182,6 +182,42 @@ def test_probe_reads_voltage_drop_and_current_density(session, boards):
     assert off["on_copper"] is False and off["nearest_copper_mm"]["distance_mm"] > 4.0
 
 
+def test_probe_relative_to_a_point_or_a_pad_of_the_same_rail(session, boards):
+    """delta_v on the strip, closed form: V(30) − V(10) = −ρ·20/(W·T); against U1's pad (an
+    equipotential terminal from its edge at x 39.25) +ρ·9.25/(W·T)."""
+    bid = session.open_board(boards["strip"])["board_id"]
+    rid = solve_strip(session, bid, 1.0)["result_id"]
+    p = strict_json(session.probe(rid, "F.Cu", 30.0, 0.0,
+                                  relative_to={"layer": "F.Cu", "x_mm": 10.0, "y_mm": 0.0}))
+    assert p["delta_v"] == pytest.approx(-RHO * 20.0 / (W * T), rel=0.01)
+    assert "net" in p and "group" not in p and "drop_word" not in p     # a rail result's keys
+    pad = strict_json(session.probe(rid, "F.Cu", 30.0, 0.0, relative_to={"pad": "U1.1"}))
+    assert pad["relative_to"]["result_id"] == rid and pad["relative_to"]["net"] == Strip.NET
+    assert pad["delta_v"] == pytest.approx(RHO * (Strip.X1 - Strip.PAD / 2 - 30.0) / (W * T), rel=0.02)
+
+
+def test_probe_relative_to_a_drilled_pad_reads_its_ring(session, tmp_path):
+    """A through-hole pad's centre is its drill, off the mesh: the pad is read at its nearest
+    meshed copper, the ring, which holds the terminal's voltage."""
+    from shapely.geometry import Point, box
+
+    from coppernicus.engine.synthetic import B
+    b = SyntheticBoard("pth", two_layer_stackup())
+    b.square_pad("J1", "1", "VCC", 0.0, 0.0, 1.5)
+    b.pad("U1", "1", "VCC", box(39.0, -1.0, 41.0, 1.0).difference(Point(40.0, 0.0).buffer(0.5)),
+          layers=(F, B), drill=1.0)
+    b.track("VCC", F, 0.5, (0.0, 0.0), (39.0, 0.0))
+    save_snapshot(b.snapshot(), tmp_path / "pth.kipi.json.gz")
+    bid = session.open_board(tmp_path / "pth.kipi.json.gz")["board_id"]
+    r = session.solve_rail(bid, "VCC", [{"ref": "J1", "voltage_v": 1.0}], [{"ref": "U1", "current_a": 1.0}])
+    assert session.probe(r["result_id"], "F.Cu", 40.0, 0.0)["on_copper"] is False   # the drill
+    p = session.probe(r["result_id"], "F.Cu", 20.0, 0.0, relative_to={"pad": "U1.1"})
+    ref = p["relative_to"]
+    assert ref["voltage_v"] == pytest.approx(r["loads"][0]["v_min_v"], abs=1e-6)
+    assert 0.5 <= math.hypot(ref["x_mm"] - 40.0, ref["y_mm"]) <= 1.5      # on the ring
+    assert p["delta_v"] == pytest.approx(p["voltage_v"] - ref["voltage_v"], abs=2e-7)
+
+
 def test_copper_thickness_what_if_and_compare(session, boards):
     bid = session.open_board(boards["strip"])["board_id"]
     a = solve_strip(session, bid)
