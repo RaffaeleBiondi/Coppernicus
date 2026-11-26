@@ -365,7 +365,7 @@ def fields_note(fields: Sequence[Tuple[CapModel, Any]], lost: Dict[int, List[Tup
     project rows whose parts went to them; "" when neither."""
     out = []
     if fields:
-        out.append("From KiCad fields, read-only (the grey rows; what the solve uses): "
+        out.append("From KiCad fields, read-only, after the project's models (what the solve uses): "
                    + ", ".join(m.name for m, _c in fields))
     for i, pairs in sorted(lost.items()):
         out.append(f"Model {rows[i].name or f'row {i + 1}'}: {', '.join(ref for ref, _n in pairs)} solved "
