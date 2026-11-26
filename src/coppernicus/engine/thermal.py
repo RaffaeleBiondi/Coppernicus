@@ -214,8 +214,10 @@ def solve_kipi_reference(board: Board, project: Project) -> TreeResult:
     thickness = dict(project.settings.copper_thickness_mm or {})
     board = board.with_copper_thickness(thickness) if thickness else board
     setup = to_pisetup(board, project)
-    kt = solve_electrothermal(board.snapshot, setup, thermal_settings(project.thermal),
-                              _ThermalProgress(None, lambda: False))
+    # KiPI's own factorizations throughout, whatever superlu_order part is on: the reference.
+    with superlu_order.kipi_path():
+        kt = solve_electrothermal(board.snapshot, setup, thermal_settings(project.thermal),
+                                  _ThermalProgress(None, lambda: False))
     return _finish(board, project, setup, thickness, kt, {}, 0.0)
 
 
@@ -473,9 +475,10 @@ def thermal_ram_estimate(unknowns: float, layers: int, total_bytes: Optional[flo
     """Whether KiPI's thermal model of ``unknowns`` (cells × ``layers``) could exceed this
     machine's memory, from the fit of :data:`MEM_POINTS` (other boards may need more or less).
     The power tree's own meshes and factors come on top. With the thermal part of
-    :mod:`coppernicus.engine.superlu_order` on, the text says the fit overstates."""
+    :mod:`coppernicus.engine.superlu_order` active (on, with SuperLU as KiPI's backend), the
+    text says the fit overstates."""
     ram = _thermal_ram(unknowns, layers, total_bytes)
-    if "thermal" not in superlu_order.enabled():
+    if not superlu_order.active("thermal"):
         return ram
     return dataclasses.replace(ram, text=ram.text + (
         f" The factorization runs in SuperLU's symmetric order ({superlu_order.ENV}=thermal), which "
