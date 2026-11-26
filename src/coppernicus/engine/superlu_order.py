@@ -31,6 +31,9 @@ Parts, each off unless enabled:
   meshes; on synthetic meshes, dense pad rows included, it took 0.5 s. Not to be made a default
   before a run on a real board.
 
+Where PARDISO loads (the optional ``pypardiso``, x86-64 Windows and Linux), KiPI factorizes with
+it and comes here only when it fails: the parts then change only that fallback.
+
 Enabled by the environment variable ``COPPERNICUS_SUPERLU_ORDER`` (comma-separated parts, read
 when :mod:`coppernicus.engine` is imported) or by :func:`enable`.
 
@@ -206,12 +209,19 @@ def current_part() -> Optional[str]:
     return getattr(_local, "part", None)
 
 
+def _kipi_fn(name: str):
+    """KiPI's own function ``name``: kept while ours are installed, back in its module after
+    :func:`uninstall` (for a factorization already under way then)."""
+    kept = _kipi
+    return kept[name] if kept is not None else getattr(direct, name)
+
+
 def _superlu(A: sp.spmatrix) -> direct.DirectFactor:
     """KiPI's ``direct._superlu`` (a real symmetric positive definite A), in SuperLU's
     symmetric mode when the part it belongs to is on: ``thermal`` inside
     :func:`thermal_model`, ``dc`` outside."""
     if (current_part() or "dc") not in _enabled:
-        return _kipi["_superlu"](A)
+        return _kipi_fn("_superlu")(A)
     lu = splu(sp.csc_matrix(A), permc_spec=ORDER, diag_pivot_thresh=SPD_PIVOT_THRESHOLD,
               options={"SymmetricMode": True})
     return direct.DirectFactor(lu.solve, "superlu")
@@ -221,7 +231,7 @@ def _superlu_complex(A: sp.spmatrix) -> direct.ComplexFactor:
     """KiPI's ``direct._superlu_complex`` (a complex symmetric A), in SuperLU's symmetric mode
     with partial pivoting when the ``ac`` part is on."""
     if "ac" not in _enabled:
-        return _kipi["_superlu_complex"](A)
+        return _kipi_fn("_superlu_complex")(A)
     lu = splu(sp.csc_matrix(A, dtype=complex), permc_spec=ORDER, diag_pivot_thresh=COMPLEX_PIVOT_THRESHOLD,
               options={"SymmetricMode": True})
     # L and U: a complex value and a row index each, as KiPI counts them.

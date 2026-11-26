@@ -1493,6 +1493,9 @@ by default**.
 | `dc` | every other real factorization (outside the heat model's marker): the DC copper's direct solves (`SpdSolver`, spd.py:117 and its fallback at :163; SuperLU up to 200,000 unknowns) | none (symmetric positive definite) |
 | `ac` | every complex factorization: the AC field solves, one per field frequency (field.py, fem.py:648), and so the noise and tolerance solves; process-wide, since KiPI solves the frequencies in its own threads | partial, threshold 0.1 (KiPI: SciPy's 1.0): the systems are indefinite |
 
+Where PARDISO loads (the optional `pypardiso`, x86-64 Windows and Linux), KiPI factorizes with
+it and reaches SuperLU only when PARDISO fails: the parts then change only that fallback.
+
 How to enable: `COPPERNICUS_SUPERLU_ORDER=thermal,ac,dc` in the environment (comma-separated
 parts, read when `coppernicus.engine` is imported), or `superlu_order.enable("thermal", "ac", "dc")`.
 

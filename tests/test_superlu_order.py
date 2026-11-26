@@ -423,3 +423,14 @@ def test_dc_solve_moves_by_round_off_only(demo, monkeypatch):
     for la, lb in zip(off.layers, on.layers, strict=True):
         assert np.array_equal(la.points, lb.points)
         assert close(la.voltage, lb.voltage, tol)
+
+
+def test_a_factorization_under_way_at_uninstall_gets_kipis():
+    """``_kipi_fn`` after uninstall: KiPI's function, back in its module."""
+    so.enable("dc")
+    so.uninstall()
+    assert so._kipi_fn("_superlu") is KIPI_SUPERLU
+    A = grid_spd()
+    b = np.ones(A.shape[0])
+    with so.thermal_model():
+        assert np.array_equal(so._superlu(A)(b), KIPI_SUPERLU(A)(b))
