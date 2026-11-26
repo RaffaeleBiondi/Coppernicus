@@ -100,7 +100,9 @@ converging. The resolved spots beside them converge: their area stays within abo
 mean |J| within a few %, their element count grows (32 → 85 → 170 at one via) and only their
 peak rises (5 to 11 % each time `min_edge_mm` halves). A dropped sliver's copper is not taken
 as listed, so a ranked spot around it is still listed. Against a `max_current_density` the
-user sets, every spot is judged, whatever its size. To see the slivers, or to check any small
+user sets, every spot is judged, whatever its size: a failed spot of fewer than 3 elements
+stays a fail, and its detail says it may be a mesh artefact at a via wall, how to check it
+(a smaller `min_edge_mm` and `grading`) and, if it stays, to widen the copper there or add a via. To see the slivers, or to check any small
 spot, refine the mesh near the holes and solve again (next paragraph).
 
 **Refining the mesh near holes.** `max_edge_mm` sets the mesh on planes. Near plated holes

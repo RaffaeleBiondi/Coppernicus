@@ -315,6 +315,20 @@ def test_a_user_limit_fails_a_spot_whatever_its_size(elements):
     assert fails == [(80.0, 4), (70.0, elements)]
 
 
+@pytest.mark.parametrize("elements", [1, 2])
+def test_a_failed_spot_below_3_elements_says_how_to_check_it(elements):
+    """It stays a FAIL (the user's limit) and its detail says it may be a mesh artefact,
+    how to refine the mesh near the holes, and to widen the copper or add a via if it stays;
+    a resolved failed spot says none of that."""
+    from coppernicus.problems import SMALL_SPOT_CHECK
+    problems = find_problems(sliver_result(elements), Limits(max_current_density=60.0))
+    small, resolved = ([p for p in problems if p.severity == FAIL and p.data["elements"] == n]
+                       for n in (elements, 4))
+    assert len(small) == 1 and small[0].detail.endswith(SMALL_SPOT_CHECK)
+    assert "min_edge_mm" in SMALL_SPOT_CHECK and "add a via" in SMALL_SPOT_CHECK
+    assert len(resolved) == 1 and SMALL_SPOT_CHECK not in resolved[0].detail
+
+
 def test_the_report_card_never_shows_a_dropped_sliver():
     from coppernicus.report import ReportBuilder
     res = sliver_result(1)

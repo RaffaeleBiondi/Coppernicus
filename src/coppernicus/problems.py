@@ -47,6 +47,10 @@ DENSITY_DEFAULT_SOURCE = "docs/technical.md#current-density-default"
 # 1-4 element slivers at the polygon vertices of via walls, a few % above the default, that
 # do not converge when the mesh is refined). A user's max_current_density judges every spot.
 MIN_SPOT_ELEMENTS = 3
+# What a failed spot smaller than that says: it still fails (the user's limit), and how to check it.
+SMALL_SPOT_CHECK = ("A spot this small may be a mesh artefact at a via wall: to check it, solve again "
+                    "with a smaller min_edge_mm and grading (the mesh near plated holes); if it stays, "
+                    "widen the copper there or add a via.")
 
 
 def density_default(thickness_mm: float, outer: bool) -> float:
@@ -193,11 +197,12 @@ def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "",
             w = layer.tri_area[idx]
             x, y = (cents[idx] * w[:, None]).sum(axis=0) / w.sum()
             fail = limits.max_current_density is not None and mean_j > limits.max_current_density
+            check = (f" {SMALL_SPOT_CHECK}" if fail and len(idx) < MIN_SPOT_ELEMENTS else "")
             found.append((Problem(
                 FAIL if fail else INFO, "hotspot",
                 _against(f"Current crowding on {layer.name}: {mean_j:.1f} A/mm² mean over {area:.3g} mm²",
                          fail, limits.max_current_density, "A/mm²", source),
-                f"{_elements(idx)}; peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners); {why}.",
+                f"{_elements(idx)}; peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners); {why}.{check}",
                 mean_j, float(x), float(y), layer.name,
                 data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area,
                       "elements": len(idx)}), idx))
