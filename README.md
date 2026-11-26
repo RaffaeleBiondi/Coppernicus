@@ -200,7 +200,10 @@ estimated at nominal voltages; its assumptions say so.
 - **Copper loss**: I²R power lost in the copper, per layer and in the vias.
 
 How hot a track gets for a given current depends on the copper, the layer, the board and the
-airflow. Coppernicus does not guess it for you. Set the limits your design rules call for.
+airflow, so Coppernicus does not judge it from the current density alone. The
+[board temperature](docs/thermal.md) solve estimates it from the copper loss, and the
+[current-density default](docs/technical.md#current-density-default) points at crowded copper
+(attention only, never a verdict). Set the limits your design rules call for.
 
 ## Command line
 
@@ -331,7 +334,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | ΔV between two clicked points ("Measure ΔV") | ✅ |
 | Nets marked as rails by hand, saved in the project (right-click a net) | ✅ |
 | Command line with exit codes for scripts and CI | ✅ 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit you set could not judge something, 2 an error (a crash too) |
-| AI-agent interface: MCP server (with `solve_tree` for the whole power tree) and `--json` on the CLI ([guide](docs/agents.md)) | ✅ first version (registration in a real Claude host not yet tried) |
+| AI-agent interface: MCP server (with `solve_tree` for the whole power tree) and `--json` on the CLI ([guide](docs/agents.md)) | ✅ (used from Claude Code) |
 | Offline interactive HTML report (`solve --html`, MCP `report` tool); `solve --tree --html` for the whole power tree | ✅ (tested in Chromium and Chrome; Safari and Firefox not yet) |
 | Power-tree report: each group's loads and worst card show the tree's judged values (across supply and ground pins, from nominal); `report.html#group=NET` opens a group | ✅ |
 | GitHub Action for KiCad repositories (`uses: RaffaeleBiondi/Coppernicus@main`), job summary, artifacts; `fail-on-not-judged` (default on) fails on a limit that could not judge; opt-in `tree` adds the power tree's tables to the job summary | ✅ |
@@ -373,6 +376,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Current-density default: spots above 60 A/mm² at 1 oz, scaled ×√(35 µm / t) per layer (≈85 at 0.5 oz, ≈42 at 2 oz), are flagged ATTENTION, never a verdict; set `max_current_density` to judge them ([why and sources](docs/technical.md#current-density-default)) | ✅ |
 | Tolerance stack-up per load: `coppernicus tolerance PROJECT`: the DC drop on the worst pins (power tree) plus the source's DC accuracy, the ripple from the noise solve (or your `ripple_mv`) and your `transient_mv` (KiPI's estimate shown, never judged), against your `tol` / `dc_tol` / `ac_tol`; judged only with every part known, never on a KiPI stand-in or a default 0. Example: `examples/tolerance` | ✅ CLI and app (Tolerance tab: built from the results the app holds; a stale one counts as missing) |
 | Packaged app: macOS `.dmg`, Windows `.zip`; Triangle fetched once on first start, checked against `uv.lock` ([install](docs/install.md)) | ✅ macOS built and tried; Windows built by CI, not yet tried; unsigned |
+| Benchmark harness for every step (`tools/bench`): wall time, CPU, peak memory and a fingerprint of the result per step, compared before and after a change ([README](tools/bench/README.md)) | ✅ developer tooling |
 
 Tested on macOS. The test suite runs in CI on Ubuntu, macOS and Windows, all required; the desktop app itself has not been tried on Windows yet. The engine also reads ODB++
 and HyperLynx files, which have not been tried through Coppernicus yet.

@@ -24,7 +24,8 @@ documented current-density default flags crowded copper without ever giving a ve
   - Command line: `coppernicus ac PROJECT` (`--rail`, `--out`, `--json`, `--html`) writes a CSV
     and a PNG of |Z|(f) per rail and `<project>_ac_summary.json`.
   - App: the **Impedance** tab (probes, capacitor models and sweep, picked on the board;
-    **Solve impedance**, Ctrl+I; CSV and PNG export).
+    **Solve impedance**, Ctrl+I; CSV and PNG export). The capacitor models from KiCad fields
+    are listed there too, read-only, each cell naming its field and part.
   - Agents: the MCP tool `solve_ac`. CI: the Action's opt-in `ac` input.
   - Example: `examples/pdn`. Guide: [docs/ac-impedance.md](docs/ac-impedance.md).
 - **Ripple and coupled noise.** For each switching regulator you mark as an aggressor
@@ -50,7 +51,8 @@ documented current-density default flags crowded copper without ever giving a ve
   - Command line: `coppernicus tolerance PROJECT` (`--skip-ac`, `--skip-noise`, `--out`,
     `--no-board-fields`, `--json`, `--html`) writes `<project>_tolerance.csv` and
     `<project>_tolerance_summary.json`.
-  - App: the **Tolerance** tab, built from the results the window holds.
+  - App: the **Tolerance** tab, built from the results the window holds; a value a KiCad field
+    gives (`PI_TOL`, `PI_DC_TOL`, `PI_AC_TOL`, `PI_ACC`) is read-only there, naming the field.
   - Agents: the MCP tool `solve_tolerance`. CI: the Action's opt-in `tolerance` input.
   - Example: `examples/tolerance`. Guide: [docs/tolerance.md](docs/tolerance.md).
 - **Board temperature in the app:** the **Temperature** tab (options and limits, the hottest

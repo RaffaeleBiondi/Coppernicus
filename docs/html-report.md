@@ -2,7 +2,8 @@
 
 The report is one HTML file that holds a whole analysis: every solved rail, every copper layer
 as a map you can zoom and point at, the problems, the verdict and the assumptions. It needs no
-network and no installed software beyond a current browser (Chrome, Edge, Firefox or Safari),
+network and no installed software beyond a current browser (tested in Chromium and Chrome;
+Safari and Firefox not yet),
 so you can send it to someone who does not have Coppernicus, or attach it to a design review.
 
 <p align="center">

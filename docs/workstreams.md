@@ -1,6 +1,7 @@
 # Workstreams
 
-Status and split of the work as of 2026-11-24, agreed with the owner. Update it as items land.
+Status and split of the work, agreed with the owner (started 2026-11-24, updated 2026-11-26).
+Update it as items land.
 
 ## Decisions already taken
 
@@ -13,9 +14,10 @@ Status and split of the work as of 2026-11-24, agreed with the owner. Update it 
 - Real boards live only in the git-ignored `boards_local/`. Nothing board-derived is committed.
 - The agent interface is an MCP server (stdio) on an engine-independent service layer, plus
   CLI `--json`. No HTTP API for now. See `docs/agent-interface-brief.md`.
-- Triangle (KiPI's mesher) licence: option A for now (source distribution, `uv` installs it).
-  Packaging later needs either B (permission from the author) or C (gmsh, GPLv2+, needs a
-  patched or vendored mesher plus re-validation). Not decided yet.
+- Triangle (KiPI's mesher) licence: the packaged app leaves it out and downloads it on its first
+  start (`docs/install.md`); a source install gets it through `uv`. Replacing it is being
+  evaluated outside `main` (CGAL Mesh_2 and a mesher of our own, never merged without the
+  owner's OK).
 
 ## Roles
 
@@ -69,7 +71,7 @@ Delegated to a background agent on branch `feat/mcp`. The coordinator reviews an
    checked in Chromium. Safari and Firefox not tried. Assets in `src/coppernicus/report_assets/`
    must be packaged as data files (WS4).
 3. **Phase 3 (merged 2026-11-24, `bd156f6`):** root `action.yml`, self-test and test workflows
-   (Ubuntu, macOS; Windows informative), `docs/ci.md`, `docs/kicad-fields-proposal.md`. KiCad
+   (Ubuntu, macOS; Windows informative then, required since `f92c2bc`), `docs/ci.md`, `docs/kicad-fields-proposal.md`. KiCad
    footprint fields implemented in phase 4b (`5965aaa`): on by default, KiCad wins unless
    `override_board_fields`. Original scope:
    automation, i.e. a GitHub Action (or workflow template) usable from a KiCad

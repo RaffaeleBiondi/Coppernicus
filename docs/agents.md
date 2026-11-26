@@ -855,8 +855,8 @@ the what-if next to the original) and give them the path.
 </p>
 
 `coppernicus solve PROJECT --html` (or the MCP `report` tool) writes one self-contained HTML
-file. It needs no network and no installed software beyond a current browser (Chrome, Edge,
-Firefox or Safari). It holds:
+file. It needs no network and no installed software beyond a current browser (tested in
+Chromium and Chrome; Safari and Firefox not yet). It holds:
 
 - every rail and every copper layer, as voltage drop, voltage or current density, with zoom
   (wheel), pan (drag) and a **hover readout** of V, drop and |J|;
