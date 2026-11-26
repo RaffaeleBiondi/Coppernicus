@@ -673,9 +673,9 @@ passed or failed. **Behaviour change:** a rise limit on a supply rail used to fa
 
 Problem kinds, in `problems` of every summary and of `get_problems`:
 - `load`: a load's drop at its worst pin (`drop_mv`, `drop_pct`);
-- `hotspot`: a current-crowding spot (`mean_j_a_mm2`, `peak_j_a_mm2`, `area_mm2`); one above
-  the current-density default has `severity: "attention"`, `default_j_a_mm2` and
-  `thickness_mm` (see Conventions);
+- `hotspot`: a current-crowding spot (`mean_j_a_mm2`, `peak_j_a_mm2`, `area_mm2`, and
+  `elements`, its mesh element count); one above the current-density default has
+  `severity: "attention"`, `default_j_a_mm2` and `thickness_mm` (see Conventions);
 - `via`: a via or plated hole by barrel current (`current_a`);
 - `rise`: only with `max_ground_rise_mv` set on a net at 0 V, the copper furthest from 0 V
   (`rise_mv`, signed: negative below 0 V; judged by its magnitude), with its layer and x/y;
@@ -770,9 +770,13 @@ What it adds up and what the user enters: [Tolerance stack-up](tolerance.md); ev
   `hotspot` problem with `severity: "attention"` (between `"fail"` and `"info"`). It has
   `default_j_a_mm2` (the default used) and `thickness_mm` besides `mean_j_a_mm2`,
   `peak_j_a_mm2` and `area_mm2`, and is measured as a limit is, on the spot's mean |J|. Every
-  one is listed, on top of the ranked spots. A spot is listed once: a ranked `info` spot that
-  shares copper (one mesh triangle) with an attention or `fail` spot on its layer is not listed
-  again, and the `top` ranked spots are counted after that. It changes no verdict, no `not_judged` list and no exit code; a rail summary, each
+  one is listed, on top of the ranked spots, except a spot of fewer than 3 mesh elements
+  (`elements`): a numerical-resolution rule of the default, not a physical limit. Refine the
+  mesh near holes (`min_edge_mm`, `grading`) to see such a spot; a `max_current_density_a_mm2`
+  the user sets judges every spot. A spot is listed once: a ranked `info` spot that shares
+  copper (one mesh triangle) with an attention or `fail` spot on its layer is not listed
+  again, and the `top` ranked spots are counted after that. It changes no verdict, no
+  `not_judged` list and no exit code; a rail summary, each
   tree group and the tree and project documents count them in `attention`. A
   `max_current_density_a_mm2` the user sets replaces the default on that rail or group (a
   `fail` when exceeded, no attention items). Every rail and power-tree result has an

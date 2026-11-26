@@ -7,8 +7,10 @@ result exceeds it. Verdicts are only against the user's limits.
 One documented default (docs/technical.md#current-density-default): without a
 ``max_current_density``, a current-crowding spot whose mean |J| is above
 :func:`density_default` for its layer is an ``attention`` item. It is shown between the fails
-and the ranked items and never changes a verdict. Each spot is listed once: a ranked spot on
-the copper of an attention or failed spot is not listed again.
+and the ranked items and never changes a verdict. A spot of fewer than
+:data:`MIN_SPOT_ELEMENTS` mesh elements is below the mesh's resolution and is not one. Each
+spot is listed once: a ranked spot on the copper of an attention or failed spot is not listed
+again.
 
 Current crowding is reported per *spot*: connected triangles in the top share of current
 density on a layer, summarised by their area-weighted mean |J|. A point maximum is not
@@ -40,6 +42,11 @@ DENSITY_DEFAULT_EXTERNAL_A_MM2 = 60.0
 DENSITY_DEFAULT_INTERNAL_A_MM2 = 60.0
 DENSITY_DEFAULT_REF_MM = 0.035
 DENSITY_DEFAULT_SOURCE = "docs/technical.md#current-density-default"
+# A numerical-resolution rule of the default, not a physical limit: a spot of fewer mesh
+# elements than this is not an attention item (docs/technical.md#current-density-default:
+# 1-4 element slivers at the polygon vertices of via walls, a few % above the default, that
+# do not converge when the mesh is refined). A user's max_current_density judges every spot.
+MIN_SPOT_ELEMENTS = 3
 
 
 def density_default(thickness_mm: float, outer: bool) -> float:
@@ -190,9 +197,10 @@ def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "",
                 FAIL if fail else INFO, "hotspot",
                 _against(f"Current crowding on {layer.name}: {mean_j:.1f} A/mm² mean over {area:.3g} mm²",
                          fail, limits.max_current_density, "A/mm²", source),
-                f"Peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners); {why}.",
+                f"{_elements(idx)}; peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners); {why}.",
                 mean_j, float(x), float(y), layer.name,
-                data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area}), idx))
+                data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area,
+                      "elements": len(idx)}), idx))
         for problem, idx in found:
             if problem.severity == FAIL:
                 fails.append(problem)
@@ -204,16 +212,21 @@ def _hotspots(result: RailResult, limits: Limits, top: int, source: str = "",
     return fails + attention + ranked[:max(0, top - len(fails))]
 
 
+def _elements(idx) -> str:
+    return f"{len(idx)} mesh element{'s' if len(idx) != 1 else ''}"
+
+
 def _default_spots(layer: LayerField) -> List[Tuple[Problem, np.ndarray]]:
     """The spots of ``layer`` whose mean |J| is above the current-density default for its
     thickness, found and measured as against a ``max_current_density``: attention items,
-    each with the indices of its triangles."""
+    each with the indices of its triangles. A spot of fewer than :data:`MIN_SPOT_ELEMENTS`
+    elements is not one (nor is its copper taken as listed)."""
     t, outer = float(layer.thickness_mm), layer.outer is not False
     limit = density_default(t, outer)
     cents = layer.centroids()
     out = []
     for idx, mean_j, max_j, area in _spots(layer, limit, 1.0):
-        if mean_j <= limit:
+        if mean_j <= limit or len(idx) < MIN_SPOT_ELEMENTS:
             continue
         w = layer.tri_area[idx]
         x, y = (cents[idx] * w[:, None]).sum(axis=0) / w.sum()
@@ -221,13 +234,13 @@ def _default_spots(layer: LayerField) -> List[Tuple[Problem, np.ndarray]]:
             ATTENTION, "hotspot",
             f"Current crowding on {layer.name}: {mean_j:.1f} A/mm² mean over {area:.3g} mm², above "
             f"the {limit:.3g} A/mm² default for {_um(t)} copper",
-            f"Peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners). Attention only, not a "
-            f"verdict: Coppernicus's current-density default, {_base(outer):g} A/mm² at 1 oz scaled "
-            f"×√({_um(DENSITY_DEFAULT_REF_MM)} / t) to {limit:.3g} A/mm² at {_um(t)} "
+            f"{_elements(idx)}; peak {max_j:.1f} A/mm² (mesh-dependent at sharp corners). Attention "
+            f"only, not a verdict: Coppernicus's current-density default, {_base(outer):g} A/mm² at "
+            f"1 oz scaled ×√({_um(DENSITY_DEFAULT_REF_MM)} / t) to {limit:.3g} A/mm² at {_um(t)} "
             f"({DENSITY_DEFAULT_SOURCE}); set max_current_density to judge it.",
             mean_j, float(x), float(y), layer.name,
             data={"mean_j_a_mm2": mean_j, "peak_j_a_mm2": max_j, "area_mm2": area,
-                  "default_j_a_mm2": limit, "thickness_mm": t}), idx))
+                  "elements": len(idx), "default_j_a_mm2": limit, "thickness_mm": t}), idx))
     return out
 
 

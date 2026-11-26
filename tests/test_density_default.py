@@ -197,8 +197,8 @@ def test_a_layer_without_a_thickness_gets_no_default():
 # ---------------------------------------------------------------------- each spot listed once
 
 STRIP_QUADS = 1000        # a 500 mm × 1 mm strip of 0.5 mm × 1 mm quads: 1 % of it is 5 mm²
-A, CORE, B = (20, 21), (62, 62), (100, 103)       # quads first to last
-FLANKS = ((60, 61), (63, 64))
+A, CORE, B = (20, 21), (62, 63), (100, 103)       # quads first to last
+FLANKS = ((60, 61), (64, 65))
 
 
 def strip_layer(name: str, spans, layer_id: int = 0) -> LayerField:
@@ -218,11 +218,11 @@ def strip_layer(name: str, spans, layer_id: int = 0) -> LayerField:
 
 
 def strip_result() -> RailResult:
-    """F.Cu: A, 1 mm² at 80 A/mm² (above the 60 A/mm² default); C, a 0.5 mm² core at 70 A/mm²
+    """F.Cu: A, 1 mm² at 80 A/mm² (above the 60 A/mm² default); C, a 1 mm² core at 70 A/mm²
     between 2 mm² of flanks at 45 A/mm²; B, 2 mm² at 55 A/mm² (below the default). The top
     1 % of F.Cu reaches down to 45 A/mm², so the ranked spots are A (80), B (55) and C as a
-    whole (50 mean); the spots above the default are A and C's core. B.Cu: 5 mm² at
-    50 A/mm² under A, a ranked spot of its own layer."""
+    whole (53.3 mean); the spots above the default are A and C's core, 4 elements each.
+    B.Cu: 5 mm² at 50 A/mm² under A, a ranked spot of its own layer."""
     front = strip_layer("F.Cu", {A: 80.0, CORE: 70.0, **{f: 45.0 for f in FLANKS}, B: 55.0})
     back = strip_layer("B.Cu", {(16, 25): 50.0}, layer_id=31)
     return RailResult(NET, [NET], 1.0, [front, back], [], [], [], 0.0, 0.0, 0.0, 0.0)
@@ -263,6 +263,69 @@ def test_against_a_user_limit_the_failed_spots_and_the_ranked_ones_are_apart():
     assert spots(problems, FAIL) == [("F.Cu", 80.0), ("F.Cu", 70.0)]
     assert spots(problems, INFO) == [("F.Cu", 55.0)]
     assert not attention(problems)
+
+
+def sliver_result(elements: int) -> RailResult:
+    """F.Cu as in :func:`strip_result`, but C's core is a sliver: its first ``elements``
+    triangles at 70 A/mm², the rest of C at 45 A/mm². C as a whole stays a ranked spot."""
+    res = strip_result()
+    front = res.layers[0]
+    j = front.current_density
+    core = [q for q in range(CORE[0], CORE[1] + 1)]
+    j[core] = j[[q + STRIP_QUADS for q in core]] = 45.0
+    for q in ([62, 62 + STRIP_QUADS, 63, 63 + STRIP_QUADS][:elements]):
+        j[q] = 70.0
+    return res
+
+
+@pytest.mark.parametrize("elements", [1, 2])
+def test_a_sliver_of_fewer_than_3_elements_is_not_an_attention_item(elements):
+    """A spot of 1 or 2 mesh elements above the default is below the mesh's resolution: no
+    attention item, and its copper is not taken as listed, so the ranked region around it
+    (C) is listed."""
+    from coppernicus.problems import MIN_SPOT_ELEMENTS
+    assert MIN_SPOT_ELEMENTS == 3
+    problems = find_problems(sliver_result(elements), Limits())
+    assert spots(problems, ATTENTION) == [("F.Cu", 80.0)]
+    [c] = [p for p in problems if p.severity == INFO and p.layer == "F.Cu" and 9.0 < p.x < 35.0]
+    assert c.data["mean_j_a_mm2"] < 60.0 and c.data["elements"] == 12
+
+
+def test_a_spot_of_3_elements_is_an_attention_item_with_its_element_count():
+    problems = find_problems(sliver_result(3), Limits())
+    att = attention(problems)
+    assert [(p.value, p.data["elements"]) for p in att] == [(80.0, 4), (70.0, 3)]
+    assert "3 mesh elements" in att[1].detail
+    assert not [p for p in problems if p.severity == INFO and p.layer == "F.Cu" and 9.0 < p.x < 35.0]
+
+
+def test_every_current_density_item_carries_its_element_count():
+    for limits in (Limits(), Limits(max_current_density=55.0)):
+        hot = [p for p in find_problems(strip_result(), limits) if p.kind == "hotspot"]
+        assert hot and all(isinstance(p.data["elements"], int) for p in hot)
+        assert all(f"{p.data['elements']} mesh elements" in p.detail for p in hot)
+
+
+@pytest.mark.parametrize("elements", [1, 2])
+def test_a_user_limit_fails_a_spot_whatever_its_size(elements):
+    """The resolution rule is the default's only: against a max_current_density the user
+    set, a 1- or 2-element spot above it is a FAIL."""
+    problems = find_problems(sliver_result(elements), Limits(max_current_density=60.0))
+    fails = [(p.value, p.data["elements"]) for p in problems if p.severity == FAIL]
+    assert fails == [(80.0, 4), (70.0, elements)]
+
+
+def test_the_report_card_never_shows_a_dropped_sliver():
+    from coppernicus.report import ReportBuilder
+    res = sliver_result(1)
+    res.layers[0].current_density[62] = 500.0           # the strongest copper, one element
+    b = ReportBuilder(title="sliver")
+    b.add_rail(res, Limits())
+    [rail] = b.rails
+    listed = [p for p in rail["problems"] if p["kind"] == "hotspot"]
+    card = rail["worst"]["hotspot"]
+    assert card["mean_j_a_mm2"] == pytest.approx(max(p["mean_j_a_mm2"] for p in listed))
+    assert card["elements"] == 12 and card["mean_j_a_mm2"] < 500.0     # C as a whole, ranked
 
 
 # ---------------------------------------------------------------------- the assumption line

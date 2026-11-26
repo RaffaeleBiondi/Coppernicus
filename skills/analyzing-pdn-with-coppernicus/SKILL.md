@@ -210,8 +210,11 @@ to a measured cross-section (`cut_current`).
 - Quoting the **peak** |J| at a sharp corner or via edge as a fact. It depends on the mesh.
   - Use the spot's mean |J| and its area instead.
   - A tiny spot (a few triangles at a via edge or a corner) that is flagged against a J limit
-    may be a mesh effect. Re-solve with a smaller `max_edge_mm` and check whether its mean |J|
-    holds before you call it real.
+    may be a mesh effect: each spot gives its mesh element count (`elements`). A smaller
+    `max_edge_mm` does not refine near holes; re-solve with the advanced settings
+    `min_edge_mm` (e.g. 0.01) and `grading` (e.g. 0.1) and check whether its area and mean |J|
+    hold before you call it real. The current-density default already skips spots of fewer
+    than 3 elements (a numerical-resolution rule, not a physical limit).
 - Calling a "current crowding" spot a defect. The spots are the copper with the highest |J|, the
   top 1 % per layer. A spot can be a whole uniform narrow track, which is a sizing question, not a
   local defect.

@@ -235,7 +235,7 @@ function panels() {
     rail.v_ref_v ? `${sig(w.max_drop_pct, 3)} %` : rail.drop_unit));
   cards.append(card("Copper loss", `${sig(w.power_loss_w * 1e3, 4)} mW`, w.busiest_layer ? `most on ${w.busiest_layer}` : null));
   if (w.hotspot) cards.append(card("Strongest current crowding", `${sig(w.hotspot.mean_j_a_mm2, 4)} A/mm² mean`,
-    `${w.hotspot.layer} at ${xy(w.hotspot.x_mm, w.hotspot.y_mm)}, over ${sig(w.hotspot.area_mm2, 3)} mm²; peak ${sig(w.hotspot.peak_j_a_mm2, 4)} A/mm² is mesh-dependent at sharp corners`));
+    `${w.hotspot.layer} at ${xy(w.hotspot.x_mm, w.hotspot.y_mm)}, over ${sig(w.hotspot.area_mm2, 3)} mm²${w.hotspot.elements ? ` (${w.hotspot.elements} mesh elements)` : ""}; peak ${sig(w.hotspot.peak_j_a_mm2, 4)} A/mm² is mesh-dependent at sharp corners`));
   if (w.via) cards.append(card("Most loaded via", `${sig(w.via.current_a, 4)} A`, `at ${xy(w.via.x_mm, w.via.y_mm)}, drill ${sig(w.via.drill_mm, 3)} mm`));
   table("problems", [["", ""], ["Kind", ""], ["Problem", ""], ["Layer", ""], ["Where", ""]],
     rail.problems.map((p) => [[severityBadge(p), ""], [p.kind_label || p.kind, ""],
