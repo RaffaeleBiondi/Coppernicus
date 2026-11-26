@@ -626,6 +626,10 @@ def run_compare(window, check: Checks, args, out: Path):
     window.view.probed.disconnect(probed.append)
     check("on the Δ map the probe reads the change of drop", bool(probed) and "Δ drop" in probed[-1],
           str(probed))
+    lead = window.view.hover_readout_at(50.0, 10.0)
+    delta = probed[-1].split("Δ drop vs baseline = ")[-1] if probed else "?"
+    check("... and the hover's large number is that change", (lead.lead, lead.caption)
+          == (delta, "Δ drop vs baseline") and delta.endswith(" mV"), f"{lead!r} | {delta!r}")
     if args.window:
         window.view.screenshot(out / "t5_difference_view.png")
     # Re-pinning while the Δ map is shown: the shown result is now the baseline.
@@ -1366,6 +1370,9 @@ def run_thermal(window, check: Checks, args, out: Path):
           f"{clicked} at ({bx:.3f}, {by:.3f}) mm")
     check("... the hover at the same pixel reads the same T", hovered == clicked,
           f"{hovered!r} | {clicked!r}")
+    lead = view.hover_readout_at(bx, by).lead
+    check("... its large number is that T in °C", lead == f"{tree.thermal.map('F.Cu').at(bx, by):.1f} °C"
+          and clicked.startswith(f"T = {lead} ("), f"{lead!r} | {clicked!r}")
     if args.window:
         check("... over the hottest cell, its temperature", clicked == temperature_reading(ht, d), clicked)
         mouse_move(window, view_point(window, hx, hy))          # the pointer, as Qt delivers it
@@ -1600,9 +1607,63 @@ def report_hover_times(window, check: Checks, what: str, n: int = 200):
           0 < ticks <= loop / 0.040 + 1, f"{ticks} probes in {loop:.3f} s")
 
 
+def run_hover_leads(window, check: Checks):
+    """With the pointer resting over a point of the shown layer's copper that carries current,
+    each Show changes the label's large number at once, with no move and no wait: the drop,
+    V and |J| as the double-click reads them there, at its precision. Runs offscreen too: the
+    camera is centred on the point, so it is under the pointer whatever the render window's
+    size (offscreen VTK has none and maps every pixel to the centre)."""
+    import re
+
+    import numpy as np
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QApplication
+    view, label = window.view, window.view.hover_label
+    layer = view._layer
+    ok = np.isfinite(layer.voltage[layer.tris]).all(axis=1) & (layer.current_density > 0)
+    k = np.flatnonzero(ok)[np.argsort(layer.current_density[ok])][int(ok.sum() * 0.99)]   # on a track
+    x, y = (float(c) for c in layer.centroids()[k])
+    view.zoom_to(x, y)
+    ren = view.plotter.renderer
+    ren.SetWorldPoint(x, -y, 0.0, 1.0)
+    ren.WorldToDisplay()
+    dx, dy, _ = ren.GetDisplayPoint()
+    view.plotter.iren.interactor.SetEventPosition(int(round(dx)), int(round(dy)))
+    widget = view.plotter.interactor
+    view._hover_at = QPoint(widget.width() // 2, widget.height() // 2)
+    view._hover_timer.stop()
+    view._hover_tick()
+    bx, by = view.display_to_board(*view._event_xy())
+    probed = []
+    view.probed.connect(probed.append)
+    view.probe_at(bx, by)
+    view.probed.disconnect(probed.append)
+    msg = probed[-1] if probed else ""
+    leads = {}
+    for field, pattern in (("drop", r"(?:drop|rise|shift) = (-?[\d.]+ mV)"), ("voltage", r"V = (-?[\d.]+ V)"),
+                           ("current", r"\|J\| = ([\d.]+ A/mm²)")):
+        window.field_box.setCurrentIndex(window.field_box.findData(field))     # no move, no wait
+        found = re.search(pattern, msg)
+        leads[field] = label.lead.text() if label.isVisible() and label.lead.isVisible() else ""
+        check(f"hover: Show {field} under a still pointer: at once, the label's large number is the "
+              "double-click's there", found is not None and leads[field] == found.group(1)
+              and label.text() == view.hover_at(bx, by), f"{leads[field]!r} | {label.text()!r} | {msg!r}")
+    check("... three different numbers, each with the layer under it",
+          len(set(leads.values())) == 3 and float(leads["current"].split()[0]) > 0
+          and view.hover_readout_at(bx, by).lines == ("F.Cu",), str(leads))
+    window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+    check("... back on the drop: 'drop below 3.3 V' under its number",
+          label.rest.text().splitlines()[:1] == ["drop below 3.3 V"], label.rest.text())
+    view._hide_hover()
+    view.reset_view()
+    QApplication.processEvents()
+
+
 def run_hover(window, check: Checks, args, out: Path):
-    """The hover readout: View → Hover shows lists the values (V, drop and layer by default,
-    kept in the settings); over the demo board the readout shows them beside the pointer,
+    """The hover readout: View → Hover shows lists the values (the map's value, large, and
+    the layer by default, kept in the settings; a choice saved up to 0.3.1 is migrated); over
+    the demo board the label leads with the value of the map shown (the drop, V or |J|, at the
+    double-click's precision) and switches at once when Show changes under a still pointer;
     nothing off the copper, "not connected" on a copper island and, on a ground group of the
     power tree, the rise the double-click reads (the shift below 0 V under a negative rail).
     Hidden after the pointer leaves and while panning; a zoom (wheel, Problems row) or Fit
@@ -1620,11 +1681,12 @@ def run_hover(window, check: Checks, args, out: Path):
     view = window.view
     actions = getattr(view, "hover_actions", {})
     menus = [a.text() for a in window.menuBar().actions()]
-    check("hover: View → Hover shows lists V, drop, |J|, layer, net", "View" in menus
-          and [a.text() for a in actions.values()] == ["V", "drop", "|J| (A/mm²)", "layer", "net"],
+    check("hover: View → Hover shows lists the map's value, V, drop, |J|, layer, net", "View" in menus
+          and [a.text() for a in actions.values()] == ["map value (large)", "V", "drop", "|J| (A/mm²)",
+                                                       "layer", "net"],
           f"menus {menus}, actions {[a.text() for a in actions.values()]}")
-    check("... V, drop and layer checked by default",
-          [k for k, a in actions.items() if a.isChecked()] == ["v", "drop", "layer"])
+    check("... the map's value and the layer checked by default",
+          [k for k, a in actions.items() if a.isChecked()] == ["shown", "layer"])
     if not actions:
         return
     window.dirty = False
@@ -1641,9 +1703,13 @@ def run_hover(window, check: Checks, args, out: Path):
     window.view.reset_view()
     QApplication.processEvents()
     at_u1 = view.hover_at(50.0, 10.0)
-    check("... at U1 on F.Cu: V, the drop below 3.3 V and the layer",
-          at_u1.startswith("V = 3.2") and "mV below 3.3 V" in at_u1 and at_u1.endswith("F.Cu"), at_u1)
+    lead = view.hover_readout_at(50.0, 10.0)
+    check("... at U1 on F.Cu: the drop below 3.3 V, large, and the layer",
+          at_u1.startswith("drop = ") and "mV below 3.3 V" in at_u1 and at_u1.endswith("\nF.Cu")
+          and at_u1.count("\n") == 1 and lead.lead.endswith(" mV") and lead.caption == "drop below 3.3 V",
+          f"{at_u1!r} {lead!r}")
     check("... nothing off the copper", view.hover_at(30.0, 1.0) == "", view.hover_at(30.0, 1.0))
+    run_hover_leads(window, check)
 
     if args.window:
         label = view.hover_label
@@ -1654,9 +1720,10 @@ def run_hover(window, check: Checks, args, out: Path):
         check("... a mouse move over U1 shows it beside the pointer",
               label.isVisible() and label.text() == at_u1, f"visible {label.isVisible()}, {label.text()!r}")
         box = label.geometry()
-        check("... 14 px from the cursor, inside the view",
+        check("... 16 px right of and 12 px below the cursor (or flipped), inside the view",
               QRect(0, 0, widget.width(), widget.height()).contains(box)
-              and not box.contains(u1) and abs(box.left() - u1.x()) in (14, 14 + box.width()),
+              and not box.contains(u1) and abs(box.left() - u1.x()) in (16, 16 + box.width())
+              and abs(box.top() - u1.y()) in (12, 12 + box.height()),
               f"label {box.getRect()}, cursor ({u1.x()}, {u1.y()})")
         window.grab().save(str(out / "hover_window.png"))
         mouse_move(window, view_point(window, 30.0, 1.0))
@@ -1729,12 +1796,13 @@ def run_hover(window, check: Checks, args, out: Path):
 
     actions["j"].setChecked(True)
     at_u1 = view.hover_at(50.0, 10.0)
-    check("hover: checking |J| adds it", "A/mm²" in at_u1, at_u1)
-    stored = hover_settings().value("view/hover_shows")
-    check("... and keeps the choice in the settings", stored == "v,drop,j,layer", repr(stored))
+    check("hover: checking |J| adds it under the drop", at_u1.startswith("drop = ")
+          and at_u1.split("\n")[1].startswith("|J| = ") and "A/mm²" in at_u1, at_u1)
+    stored = hover_settings().value("view/hover_label")
+    check("... and keeps the choice in the settings", stored == "shown,j,layer", repr(stored))
     for act in actions.values():
         act.setChecked(False)
-    stored = hover_settings().value("view/hover_shows")
+    stored = hover_settings().value("view/hover_label")
     check("... none checked: the readout is off, and stays off when read back",
           view.hover_at(50.0, 10.0) == "" and chosen_from_setting(stored) == (), repr(stored))
     if args.window:
@@ -1749,7 +1817,22 @@ def run_hover(window, check: Checks, args, out: Path):
     other.close()
     other.deleteLater()
     check("hover: the choice is restored at the next start", restored == ["j", "net"], str(restored))
-    for key in ("v", "drop", "layer"):
+    settings = hover_settings()                            # a choice saved by 0.3.1 and no new one
+    stored = settings.value("view/hover_label")
+    settings.remove("view/hover_label")
+    settings.setValue("view/hover_shows", "j,net")
+    settings.sync()
+    other, menu = BoardView(), QMenu()
+    other.add_hover_menu(menu)
+    migrated = [k for k, a in other.hover_actions.items() if a.isChecked()]
+    other.close()
+    other.deleteLater()
+    settings.setValue("view/hover_label", stored)
+    settings.remove("view/hover_shows")
+    settings.sync()
+    check("hover: a choice saved up to 0.3.1 keeps its values, under the map's value",
+          migrated == ["shown", "j", "net"], str(migrated))
+    for key in ("shown", "v", "drop", "layer"):
         actions[key].setChecked(True)
     actions["j"].setChecked(False)
     if args.window:
@@ -1872,25 +1955,31 @@ def double_click_view(window, pos):
 
 def hover_vs_double_click(window, pos):
     """At the view widget's pixel ``pos`` (logical, y down): the hover label after a real move
-    there ("" when hidden), the readouts a real double-click there emitted, and the board
-    point (mm) under the pixel. Real window only."""
+    there ("" when hidden), the readouts a real double-click there emitted, the board point
+    (mm) under the pixel, and the label's large number ("" when it has none). Real window
+    only."""
     view = window.view
     mouse_move(window, pos)
     view._hover_timer.stop()
     view._hover_tick()
-    hovered = view.hover_label.text() if view.hover_label.isVisible() else ""
+    label = view.hover_label
+    hovered = label.text() if label.isVisible() else ""
+    lead = label.lead.text() if label.isVisible() and label.lead.isVisible() else ""
     messages = []
     view.probed.connect(messages.append)
     double_click_view(window, pos)
     view.probed.disconnect(messages.append)
-    return hovered, messages, board_point(window, pos)
+    return hovered, messages, board_point(window, pos), lead
 
 
 def run_hover_pixels(window, check: Checks, args, out: Path):
     """The hover readout and the double-click read the same point: at real pixels of the
     demo's drop map (a grid on and off the copper, beside every via, terminal and outline
     corner), with the current-flow arrows off and on, a real move shows the label and a real
-    double-click the readout of the point exactly under the pointer (real window)."""
+    double-click the readout of the point exactly under the pointer (real window). The
+    label's large number is the double-click's drop there and, with Show on Voltage or
+    Current density, its V or |J|."""
+    import re
     from collections import Counter
 
     import numpy as np
@@ -1898,7 +1987,7 @@ def run_hover_pixels(window, check: Checks, args, out: Path):
     from PySide6.QtWidgets import QApplication
     view = window.view
     for key, act in view.hover_actions.items():
-        act.setChecked(key in ("v", "drop", "layer"))
+        act.setChecked(key in ("shown", "v", "drop", "layer"))
     window.dirty = False
     window.open_project(ROOT / "examples" / "demo" / "demo.coppernicus.yml")
     window.nets.select("+3V3")
@@ -1910,6 +1999,7 @@ def run_hover_pixels(window, check: Checks, args, out: Path):
     widget = view.plotter.interactor
     outline = np.vstack([np.asarray(r, float) for r in window.board.outline()])
     total, bad, wrong_count, examples, where, misread = 0, Counter(), 0, [], Counter(), 0
+    lead_seen, lead_wrong = Counter(), Counter()       # per Show: connected pixels, wrong large numbers
     drawn = []                                         # (layer, arrows asked, arrows drawn)
     for layer, arrows in (("B.Cu", False), ("B.Cu", True), ("F.Cu", True)):
         window.group_box.setCurrentIndex(0)
@@ -1930,13 +2020,16 @@ def run_hover_pixels(window, check: Checks, args, out: Path):
             pixels += [(kind, at + d) for d in (QPoint(3, 0), QPoint(0, 4), QPoint(-5, -2))]
         pixels = [(k, p) for k, p in pixels if 1 <= p.x() < w - 1 and 1 <= p.y() < h - 1]
         for kind, pos in pixels:
-            hovered, messages, (bx, by) = hover_vs_double_click(window, pos)
+            hovered, messages, (bx, by), lead = hover_vs_double_click(window, pos)
             total += 1
             where[readout(hovered)[0]] += 1
             if len(messages) != 1:
                 wrong_count += 1
                 continue
             msg = messages[0]
+            if readout(msg)[0] == "values":
+                lead_seen["drop"] += 1
+                lead_wrong["drop"] += lead != f"{readout(msg)[2]} mV"
             same_reading = readout(hovered) == readout(msg)
             misread += not same_reading
             if not (same_reading and msg.startswith(f"({bx:.3f}, {by:.3f}) mm")):
@@ -1945,6 +2038,20 @@ def run_hover_pixels(window, check: Checks, args, out: Path):
                     examples.append(f"{layer} {kind} px ({pos.x()}, {pos.y()}) board ({bx:.3f}, {by:.3f}): "
                                     f"hover {hovered!r} | double-click {msg!r}")
     window.show_arrows.setChecked(False)
+    # Show on Voltage, then Current density, on F.Cu: the large number is the double-click's V,
+    # then its |J|, at a sample of the last pass's pixels.
+    for field, pattern in (("voltage", r"V = (-?[\d.]+ V)"), ("current", r"\|J\| = ([\d.]+ A/mm²)")):
+        window.field_box.setCurrentIndex(window.field_box.findData(field))
+        QApplication.processEvents()
+        for _kind, pos in pixels[::max(len(pixels) // 40, 1)]:
+            _hovered, messages, _point, lead = hover_vs_double_click(window, pos)
+            if len(messages) != 1 or readout(messages[0])[0] != "values":
+                continue
+            found = re.search(pattern, messages[0])
+            lead_seen[field] += 1
+            lead_wrong[field] += not (found and lead == found.group(1))
+    window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+    QApplication.processEvents()
     n_bad = sum(bad.values())
     print(f"  hover vs double-click: {total} pixels (hover: {dict(where)}), {n_bad} disagreed "
           f"({misread} in what they read, the rest in the point only) {dict(bad)}, {wrong_count} "
@@ -1957,6 +2064,9 @@ def run_hover_pixels(window, check: Checks, args, out: Path):
           f"{wrong_count} did not")
     check(f"... and it reads what the hover reads, at the point under the pointer, at all {total} pixels",
           total > 0 and n_bad == 0, f"{n_bad} disagreed")
+    check("... the label's large number is the double-click's drop, V or |J| (Show on each) at every "
+          "connected pixel", all(lead_seen[f] > 0 for f in ("drop", "voltage", "current"))
+          and not sum(lead_wrong.values()), f"connected {dict(lead_seen)}, wrong {dict(lead_wrong)}")
     window.dirty = False
 
 
@@ -2010,8 +2120,9 @@ def run_hover_local(window, check: Checks, args):
     cents = layer.centroids()[ok]
     x, y = cents[len(cents) // 2]
     text = view.hover_at(float(x), float(y))
-    check("hover on the local rail: V and the layer at a point of its copper",
-          text.startswith("V = ") and layer.name in text, repr(text))
+    lead = view.hover_readout_at(float(x), float(y)).lead
+    check("hover on the local rail: the map's value, large, and the layer at a point of its copper",
+          bool(lead) and lead in text.split("\n")[0] and layer.name in text, f"{lead!r} {text!r}")
     if args.window:
         pos = view_point(window, float(x), float(y))
         mouse_move(window, pos)

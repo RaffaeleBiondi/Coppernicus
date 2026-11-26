@@ -80,14 +80,15 @@ def test_hover_net_names_every_net_of_the_result():
     assert hover_text(hover_values(tied, "F.Cu", _probe(3.3)), ["net"]) == "VCC + VCC_A"
 
 
-def test_hover_label_sits_14_px_from_the_cursor_and_flips_inside_the_viewport():
+def test_hover_label_sits_16_px_right_12_px_below_the_cursor_and_flips_inside_the_viewport():
     from coppernicus.app.hover import label_position
     size, viewport = (80, 40), (800, 600)
-    assert label_position((100, 100), size, viewport) == (114, 114)
-    assert label_position((790, 100), size, viewport) == (696, 114)      # right edge: left of it
-    assert label_position((100, 590), size, viewport) == (114, 536)      # bottom edge: above it
-    assert label_position((790, 590), size, viewport) == (696, 536)
+    assert label_position((100, 100), size, viewport) == (116, 112)
+    assert label_position((790, 100), size, viewport) == (694, 112)      # right edge: left of it
+    assert label_position((100, 590), size, viewport) == (116, 538)      # bottom edge: above it
+    assert label_position((790, 590), size, viewport) == (694, 538)
     assert label_position((10, 10), size, (50, 30)) == (0, 0)            # bigger than the view: clamped
+    assert label_position((100, 100), size, viewport, offset=14) == (114, 114)   # one offset for both
     for cx in range(0, 800, 37):                                         # never under the cursor
         for cy in range(0, 600, 29):
             x, y = label_position((cx, cy), size, viewport)
@@ -97,10 +98,127 @@ def test_hover_label_sits_14_px_from_the_cursor_and_flips_inside_the_viewport():
 
 def test_hover_choice_round_trips_through_its_setting():
     from coppernicus.app.hover import HOVER_DEFAULT, HOVER_VALUES, chosen_from_setting, setting_from_chosen
-    assert [label for _key, label in HOVER_VALUES] == ["V", "drop", "|J| (A/mm²)", "layer", "net"]
-    assert HOVER_DEFAULT == ("v", "drop", "layer")
+    assert [label for _key, label in HOVER_VALUES] == ["map value (large)", "V", "drop", "|J| (A/mm²)",
+                                                       "layer", "net"]
+    assert HOVER_DEFAULT == ("shown", "layer")                           # the map's value and the layer
     assert chosen_from_setting(None) == HOVER_DEFAULT                    # never set: the defaults
     assert chosen_from_setting("") == ()                                 # none checked: readout off
     assert chosen_from_setting(setting_from_chosen([])) == ()
     assert chosen_from_setting("net,v,old_key") == ("v", "net")          # known keys, menu order
+    assert chosen_from_setting(["layer", "shown"]) == ("shown", "layer")  # read back as a list
     assert setting_from_chosen(["layer", "j"]) == "j,layer"
+    assert setting_from_chosen(["layer", "shown"]) == "shown,layer"
+
+
+def test_hover_choice_saved_up_to_0_3_1_is_migrated():
+    """The old setting (View → Hover shows without the map's value) is read only while the
+    new one was never written: its default becomes the new default, a choice of its own
+    keeps its values under the map's value, and a readout turned off stays off."""
+    from coppernicus.app.hover import HOVER_DEFAULT, chosen_from_setting
+    assert chosen_from_setting(None, "v,drop,layer") == HOVER_DEFAULT
+    assert chosen_from_setting(None, "j,net") == ("shown", "j", "net")
+    assert chosen_from_setting(None, "v") == ("shown", "v")
+    assert chosen_from_setting(None, "") == ()                           # it was off: it stays off
+    assert chosen_from_setting(None, None) == HOVER_DEFAULT
+    assert chosen_from_setting("layer", "j,net") == ("layer",)           # the new setting wins
+    assert chosen_from_setting("", "j,net") == ()
+
+
+# ---------------------------------------------------------------------- the map's value, large
+
+def test_hover_leads_with_the_value_of_the_map_shown():
+    """The label's large number is the quantity of the Show selector, at the double-click
+    readout's precision; the plain text leads with it in the readout's words."""
+    from coppernicus.app.hover import hover_readout, hover_values
+    values = hover_values(_rail(3.3, net="+3V3", nets=["+3V3"]), "F.Cu", _probe(3.29274, j=2.6512))
+    chosen = ("shown", "layer")
+    drop = hover_readout(values, chosen, "drop")
+    assert (drop.lead, drop.secondary, drop.caption, drop.lines) == (
+        "7.260 mV", "0.22 %", "drop below 3.3 V", ("F.Cu",))              # % of 3.3 V, as the loads
+    assert drop.text() == "drop = 7.260 mV below 3.3 V\nF.Cu"
+    assert drop.label_lines() == ("drop below 3.3 V", "F.Cu")
+    volt = hover_readout(values, chosen, "voltage")
+    assert (volt.lead, volt.secondary, volt.caption) == ("3.29274 V", "", "")
+    assert volt.text() == "V = 3.29274 V\nF.Cu"
+    cur = hover_readout(values, chosen, "current")
+    assert (cur.lead, cur.secondary, cur.caption) == ("2.65 A/mm²", "", "")
+    assert cur.text() == "|J| = 2.65 A/mm²\nF.Cu"
+
+
+def test_hover_label_shows_the_extras_muted_without_their_equals_sign():
+    from coppernicus.app.hover import hover_readout, hover_values
+    values = hover_values(_rail(3.3, net="+3V3", nets=["+3V3"]), "F.Cu", _probe(3.29274, j=2.6512))
+    r = hover_readout(values, ("shown", "v", "j", "layer"), "drop")
+    assert r.label_lines() == ("drop below 3.3 V", "V 3.29274 V", "|J| 2.65 A/mm²", "F.Cu")
+    assert r.text() == "drop = 7.260 mV below 3.3 V\nV = 3.29274 V\n|J| = 2.65 A/mm²\nF.Cu"
+    island = hover_values(_rail(3.3), "B.Cu", _probe(float("nan"), j=0.0))
+    assert hover_readout(island, ("shown", "layer"), "drop").label_lines() == ("not connected", "B.Cu")
+
+
+def test_hover_on_the_difference_map_leads_with_the_change_of_drop():
+    from coppernicus.app.hover import hover_readout, hover_values
+    rail = _rail(3.3)
+    more = hover_readout(hover_values(rail, "F.Cu", _probe(3.29), delta_mv=1.23456), ("shown",), "difference")
+    assert (more.lead, more.caption) == ("+1.235 mV", "Δ drop vs baseline")
+    assert more.text() == "Δ drop vs baseline = +1.235 mV"
+    less = hover_readout(hover_values(rail, "F.Cu", _probe(3.29), delta_mv=-0.5), ("shown",), "difference")
+    assert less.lead == "-0.500 mV"
+    none = hover_readout(hover_values(rail, "F.Cu", _probe(3.29)), ("shown", "drop"), "difference")
+    assert none.lead == "" and none.text() == ("Δ drop vs baseline: no baseline copper here\n"
+                                               "drop = 10.000 mV below 3.3 V")
+
+
+def test_hover_lead_on_a_temperature_map_is_the_cells_temperature():
+    from coppernicus.app.hover import temperature_readout
+    t = temperature_readout(41.83, 0.24, "F.Cu", ("shown", "layer"))
+    assert (t.lead, t.caption, t.lines) == ("41.8 °C", "", ("F.Cu",))
+    assert t.text() == "T = 41.8 °C (0.24 mm cell)\nF.Cu"               # the double-click's words
+    assert temperature_readout(41.83, 0.24, "F.Cu", ("shown",)).text() == "T = 41.8 °C (0.24 mm cell)"
+    plain = temperature_readout(41.83, 0.24, "F.Cu", ("layer",))       # the map's value unticked
+    assert plain.lead == "" and plain.text() == "T = 41.8 °C (0.24 mm cell)\nF.Cu"
+    assert not temperature_readout(float("nan"), 0.24, "F.Cu", ("shown",))     # outside the board
+
+
+def test_hover_lead_keeps_the_drop_word_and_reference_of_each_sign():
+    from coppernicus.app.hover import hover_readout, hover_values
+
+    def lead(result, v):
+        r = hover_readout(hover_values(result, "F.Cu", _probe(v)), ("shown",), "drop")
+        return r.lead, r.secondary, r.caption
+    assert lead(_rail(-3.3, drop_sign=-1.0), -3.29) == (
+        "10.000 mV", "0.30 %", "drop above -3.3 V (toward 0 V)")
+    assert lead(_rail(0.0, net="GND", nets=["GND"], kind="ground"), 0.002) == (     # no % of 0 V
+        "2.000 mV", "", "rise above 0 V (ground rise)")
+    shifted = _rail(0.0, net="GND", nets=["GND"], kind="ground", max_drop=-0.005)
+    assert lead(shifted, -0.002) == ("2.000 mV", "", "shift below 0 V (ground shift)")
+    assert lead(_rail(3.3), 3.301) == ("-1.000 mV", "-0.03 %", "drop below 3.3 V")   # a boost reads negative
+
+
+def test_hover_extras_follow_the_menu_and_never_repeat_the_lead():
+    from coppernicus.app.hover import hover_readout, hover_values
+    values = hover_values(_rail(3.3, net="+3V3", nets=["+3V3"]), "F.Cu", _probe(3.29, j=2.5))
+    every = ("shown", "v", "drop", "j", "layer", "net")
+    assert hover_readout(values, every, "drop").lines == (
+        "V = 3.29000 V", "|J| = 2.50 A/mm²", "F.Cu · +3V3")
+    assert hover_readout(values, every, "voltage").lines == (
+        "drop = 10.000 mV below 3.3 V", "|J| = 2.50 A/mm²", "F.Cu · +3V3")
+    assert hover_readout(values, every, "current").lines == (
+        "V = 3.29000 V", "drop = 10.000 mV below 3.3 V", "F.Cu · +3V3")
+    assert hover_readout(values, ("shown",), "current").lines == ()      # the number alone
+    assert hover_readout(values, ("shown", "net"), "voltage").text() == "V = 3.29000 V\n+3V3"
+    # The map's value unticked: the extras as before, its own value among them.
+    assert hover_readout(values, ("v", "drop", "layer"), "voltage").text() == (
+        "V = 3.29000 V\ndrop = 10.000 mV below 3.3 V\nF.Cu")
+    assert hover_readout(values, ("v", "drop", "layer"), "voltage").lead == ""
+
+
+def test_hover_with_the_lead_is_brief_off_or_off_the_source():
+    """Off the copper nothing shows, as before; on copper joined to no source the label says
+    so, with the layer or net if chosen, and no number."""
+    from coppernicus.app.hover import hover_readout, hover_values
+    island = hover_values(_rail(3.3), "B.Cu", _probe(float("nan"), j=0.0))
+    for field in ("drop", "voltage", "current", "difference"):
+        assert hover_readout(island, ("shown", "layer"), field).text() == "not connected\nB.Cu"
+        assert hover_readout(island, ("shown",), field).lead == ""
+        assert not hover_readout(None, ("shown", "layer"), field)
+        assert hover_readout(island, (), field).text() == ""
