@@ -363,7 +363,8 @@ def rail_summary(result_id: str, board_id: str, res: RailResult, rail, problems:
         "problems_total": len(problems),
         "problems_note": f"Every load, then the top {top} current-crowding spots and the top {top} "
                          "vias by current (more when they exceed a limit you set). Vias carrying "
-                         "under a millionth of the rail current are left out: that is solver "
+                         "under a millionth of the rail current, and layers whose current density "
+                         "stays under a millionth of the rail's peak, are left out: that is solver "
                          "round-off, not a judgement. Severity \"attention\": a spot above "
                          "Coppernicus's current-density default (without a max_current_density), "
                          "all of them listed; never a verdict.",
