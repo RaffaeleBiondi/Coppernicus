@@ -232,8 +232,11 @@ A rail solved on its own (F5 in the app, `coppernicus solve` without `--tree`) a
 regulators and links it feeds, with their input current **estimated** at nominal voltages,
 without copper losses; such a load is named `U1 (input, estimated)` and an assumption line
 says so. The tree computes the same currents from the solved voltages, and adds the ground.
-The rail-by-rail solve is the quick check of one rail, and the one that **Pin as baseline**
-and the agents' maps, probes and cuts work on; the tree gives the whole board's verdict.
+The rail-by-rail solve is the quick check of one rail, and the one that **Pin as baseline**,
+the agents' what-ifs and comparisons work on; the tree gives the whole board's verdict. The
+agents' maps, probes and cuts work on both: a tree group by its id (`t1:GND`, see
+[Agents](agents.md#probing-mapping-and-cutting-tree-groups)), and on the command line
+`coppernicus solve PROJECT --tree --probe LAYER@X,Y` reads the group, voltage and drop at a point.
 
 ## Documentation
 

@@ -20,6 +20,15 @@ results against your own judgement.
 - `COPPERNICUS_DC_DIRECT_MAX=<unknowns>` (opt-in) solves DC systems above KiPI's 200,000-unknown
   direct limit with a direct factorization instead of AMG-CG, within KiPI's SuperLU limit and
   half the free memory; results equal within 1e-9 (CG's tolerance).
+- Agents can probe, map and cut the power tree: the MCP `solve_tree` returns `tree_id` (`t1`)
+  and a `result_id` per group (`t1:GND`), which `probe`, `render_map` and `cut_current` take;
+  `report(result_ids=["t1"])` writes the tree's page. A probe on a group says its group, kind
+  and whether the number is a drop, a ground rise or a shift; `relative_to` (a point or a pad,
+  `U3.2`) gives the voltage between two points of the same solve, across groups too (a chip's
+  supply pad against its ground pad). The tools for one rail result refuse tree ids with a hint.
+  The tree counts in the session's memory bounds and is dropped whole. On the command line,
+  `coppernicus solve PROJECT --tree --probe LAYER@X,Y` (repeatable) prints the readouts
+  (`probes` in the JSON).
 
 ## 0.3.1 (2026-11-26)
 

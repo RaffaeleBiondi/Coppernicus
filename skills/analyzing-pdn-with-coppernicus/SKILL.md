@@ -72,8 +72,14 @@ and why, and ask for what is missing.
    (regulator input currents and the ground return exact; when a ground net is solved, it
    needs every load's and regulator's ground pins). Read `loads[].drop_mv` / `drop_pct`
    (supply minus ground, from nominal), the VRMs' `regulation`, and each group's problems.
-   It returns no result ids: for maps, use `solve_project`, or point the user to
-   `coppernicus solve PROJECT --tree --html` (every group's maps and the VRM and load tables).
+   It returns `tree_id` ("t1") and each group's `result_id` ("t1:GND"): `probe`,
+   `render_map` and `cut_current` take a group's id, and `report(result_ids=["t1"])` writes
+   the tree's page for the user (every group's maps and the VRM and load tables). A probe on
+   a group says `drop_word` ("drop", "rise" or "shift") and `drop_unit`: quote the number with
+   them. For the voltage between two points, probe with `relative_to` (`{layer, x_mm, y_mm}`
+   or `{pad: "U3.2"}`, `result_id` for another group of the same tree): `delta_v`, e.g. a
+   chip's supply pad against its ground pad. `get_problems`, `copper_step`, `compare_results`
+   and `propose_fields` refuse tree ids (the hint says what to use).
    - Board temperature: `solve_tree(project_path, thermal=true)` (or the project's
      `thermal.enabled`), with `thermal_options` for this solve. Read `thermal_estimate` first.
      If the call is refused with `solve_too_large`, tell the user the estimate and ask before
@@ -144,11 +150,13 @@ follow the hint. `result_evicted` means you must solve again.
   for a what-if on a project rail, change the project's settings and solve the project again.
 - `--html` also writes an offline report for the user; its path is in `report_file`. It lets the
   user zoom and read values by hovering, but you cannot read it.
-- The CLI has no cut, probe, zoomed map or compare for you. Say that widths and point values
-  were not measured. Do not estimate them from J or from a PNG, and do not parse the board file
-  for geometry. For those, point the user to the MCP tools, to the `--html` report (hover
-  readout), or to the app: `coppernicus gui PROJECT --solve NET`, then double-click or
-  **Measure ΔV**.
+- The CLI has no cut, zoomed map or compare for you, and its only probe is the power tree's:
+  `coppernicus solve PROJECT --tree --probe LAYER@X,Y` (repeatable; in `--json`, the
+  document's `probes`: group, voltage, drop or rise at each point). Otherwise say that widths
+  and point values were not measured. Do not estimate them from J or from a PNG, and do not
+  parse the board file for geometry. For those, point the user to the MCP tools, to the
+  `--html` report (hover readout), or to the app: `coppernicus gui PROJECT --solve NET`, then
+  double-click or **Measure ΔV**.
 
 ## Limits: never invent them
 
