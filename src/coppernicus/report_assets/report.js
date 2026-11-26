@@ -250,10 +250,12 @@ function panels() {
     ? (rail.tree || lim ? "not judged" : "no limit set") : (t.exceeds ? el("span", { class: "badge fail" }, "FAIL") : "within");
   table("loads", [["Load", ""], ["Ref", ""], ["Pins", "num"], ["Current (A)", "num"],
     [rail.tree ? "Across (V)" : "V at worst pin (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"],
-    [rail.tree ? "Verdict" : lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""]],
+    [rail.tree ? "Verdict" : lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""], ...(rail.tree ? [["Split", ""]] : [])],
     rail.loads.map((t) => [[t.estimated ? el("span", { title: "estimated at nominal voltages, without copper losses" }, t.name, " ", el("span", { class: "muted small" }, "estimated draw")) : t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"],
       [ok(rail.tree ? t.v_across_v : (t.v_worst_v ?? t.v_min_v)) ? sig(rail.tree ? t.v_across_v : (t.v_worst_v ?? t.v_min_v), 7) : "–", "num"],
-      [ok(t.drop_mv) ? sig(t.drop_mv, 4) : "–", "num"], [ok(t.drop_pct) ? sig(t.drop_pct, 3) : "–", "num"], [verdictCell(t), ""]]));
+      [ok(t.drop_mv) ? sig(t.drop_mv, 4) : "–", "num"], [ok(t.drop_pct) ? sig(t.drop_pct, 3) : "–", "num"], [verdictCell(t), ""],
+      ...(rail.tree ? [[splitCell(t), ""]] : [])]));
+  netSplit(rail);
   table("sources", [["Source", ""], ["Ref", ""], ["Pins", "num"], ["Voltage (V)", "num"], ["Current (A)", "num"]],
     rail.sources.map((t) => [[t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.v_v, 6), "num"], [sig(t.current_a, 4), "num"]]));
   const losses = $("losses"); losses.textContent = "";
@@ -267,6 +269,46 @@ function panels() {
   const fill = (id, items, empty) => { const ul = $(id); ul.textContent = ""; for (const s of items.length ? items : [empty]) ul.append(el("li", {}, s)); };
   fill("assumptions", [...rail.assumptions, ...rail.notes], "None.");
   fill("warnings", rail.warnings, "None.");
+}
+// A tree group's load or regulator input: its drop part by part (regulation, each net's copper,
+// each link, the ground), which add up to the drop; shown, never judged. Expandable.
+function splitCell(t) {
+  const segs = t.segments || [];
+  if (!segs.length) return "–";
+  return el("details", { class: "split" }, el("summary", {}, `${segs.length} parts`),
+    el("table", { class: "small" }, el("tbody", {}, ...segs.map((s) => el("tr", {},
+      el("td", {}, s.what), el("td", {}, s.name), el("td", { class: "muted" }, `${s.from} → ${s.to}`),
+      el("td", { class: "num" }, `${fix(s.mv, 3)} mV`))),
+      el("tr", {}, el("td", {}, "total"), el("td", {}, ""), el("td", {}, ""),
+        el("td", { class: "num" }, `${fix(t.segments_sum_mv, 3)} mV`)))));
+}
+// A tree group's nets (#netsplit, made once, after the loads): each one's range, where it is fed
+// from, its drop (a ground: its rise) from there and its losses; a row zooms to its worst point.
+function netSplit(rail) {
+  let sec = $("netsplit");
+  if (!sec) {
+    sec = el("section", { id: "netsplit", "aria-label": "Nets of the group" }, el("h2", {}, "Nets"),
+      el("p", { id: "netsplit-note", class: "muted small" }), el("div", { class: "tablewrap" }, el("table", { id: "netsplit-table" })));
+    $("loads").closest("section").after(sec);
+  }
+  const rows = rail.tree ? rail.net_split || [] : [];
+  sec.hidden = !rows.length;
+  if (!rows.length) return;
+  const rise = rows.some((n) => n.rise_mv !== undefined);
+  $("netsplit-note").textContent = "Each net from where it is fed: its source's pins, or the side of the link it is reached " +
+    `through (on a ground: the pins holding it at 0 V, or the link toward them). Shown, never judged.${rail.split_note ? " " + rail.split_note : ""}`;
+  const worst = (n) => (rise ? n.at_max : n.at_min);
+  table("netsplit-table", [["Net", ""], ["V min (V)", "num"], ["V max (V)", "num"], ["Fed from", ""],
+    [rise ? "Rise from there (mV)" : "Drop from there (mV)", "num"], [rise ? "Highest at" : "Lowest at", ""],
+    ["Copper (mW)", "num"], ["Vias (mW)", "num"]],
+    rows.map((n) => [[n.net, ""], [ok(n.v_min_v) ? sig(n.v_min_v, 7) : "–", "num"], [ok(n.v_max_v) ? sig(n.v_max_v, 7) : "–", "num"],
+      [n.entry ? `${n.entry.name} (${n.entry.pads.join(", ")})` : "–", ""],
+      [fix(rise ? n.rise_mv : n.drop_mv, 3), "num"], [worst(n).layer ? `${xy(worst(n).x_mm, worst(n).y_mm)} on ${worst(n).layer}` : "–", ""],
+      [sig(n.copper_loss_w * 1e3, 3), "num"], [sig(n.via_loss_w * 1e3, 3), "num"]]),
+    (i) => { const p = worst(rows[i]);
+      if (!p.layer) return;
+      const li = rail.layers.findIndex((l) => l.name === p.layer); if (li >= 0) setLayer(li, false);
+      S.mark = [p.x_mm, p.y_mm]; zoomTo(p.x_mm, p.y_mm, 8); $("map").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
 }
 function buttons() {
   const lays = $("layers"); lays.textContent = "";
