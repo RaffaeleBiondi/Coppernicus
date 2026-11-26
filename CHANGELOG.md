@@ -22,8 +22,7 @@ documented current-density default flags crowded copper without ever giving a ve
   `ac_tolerance_v`, `step_a` and `slew_a_per_us`. Nothing below the bandwidth is judged, and a
   probe is not judged when no bandwidth is given or a capacitor on its rail has no model.
   - Command line: `coppernicus ac PROJECT` (`--rail`, `--out`, `--no-board-fields`, `--json`,
-    `--html`) writes a CSV
-    and a PNG of |Z|(f) per rail and `<project>_ac_summary.json`.
+    `--html`) writes a CSV and a PNG of |Z|(f) per rail and `<project>_ac_summary.json`.
   - App: the **Impedance** tab (probes, capacitor models and sweep, picked on the board;
     **Solve impedance**, Ctrl+I; CSV and PNG export). The capacitor models from KiCad fields
     are listed there too, read-only, each cell naming its field and part.
