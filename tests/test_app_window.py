@@ -148,3 +148,99 @@ def test_a_rail_solve_that_finishes_after_the_setup_changed_is_dropped():
         msg = solve_then(lambda: None)
         assert "+3V3" in window.results and "+3V3 solved in" in msg, msg
     ''')
+
+
+def test_the_hover_label_leads_with_the_value_of_the_map_shown(tmp_path):
+    """The pointer resting over the demo board's copper: switching Show changes the label's
+    large number at once, with no new move (the drop, V, |J|, each at the readout's
+    precision); the values under it follow View → Hover shows, which is kept in the settings."""
+    run_in_window('''
+        import re
+        from pathlib import Path
+
+        import numpy as np
+
+        import coppernicus
+        import coppernicus.app.main_window as mw
+
+        QtCore.QSettings.setDefaultFormat(QtCore.QSettings.IniFormat)       # never the user's
+        QtCore.QSettings.setPath(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, SETTINGS)
+
+        class HeldWorker(mw.SolveWorker):
+            """The real rail solve, run when the test says so."""
+            def start(self):
+                pass
+
+        mw.SolveWorker = HeldWorker
+        root = Path(coppernicus.__file__).resolve().parents[2]
+        window.resize(1200, 800)
+        window.show()
+        window.open_project(root / "examples" / "demo" / "demo.coppernicus.yml")
+        window.nets.select("+3V3")
+        app.processEvents()
+        window.solve()
+        window.worker.run()
+        app.processEvents()
+        view, label = window.view, window.view.hover_label
+        for key, act in view.hover_actions.items():
+            act.setChecked(key in ("shown", "layer"))
+        window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
+        window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+        app.processEvents()
+
+        # A connected F.Cu triangle carrying current; the pointer rests on its centroid (the
+        # camera centred there, as offscreen VTK maps every pixel to the centre).
+        layer = view._layer
+        ok = np.isfinite(layer.voltage[layer.tris]).all(axis=1) & (layer.current_density > 0)
+        k = np.flatnonzero(ok)[np.argsort(layer.current_density[ok])][int(ok.sum() * 0.99)]   # a track
+        x, y = (float(c) for c in layer.centroids()[k])
+        view.zoom_to(x, y)
+        ren = view.plotter.renderer
+        ren.SetWorldPoint(x, -y, 0.0, 1.0)
+        ren.WorldToDisplay()
+        dx, dy, _ = ren.GetDisplayPoint()
+        view.plotter.iren.interactor.SetEventPosition(int(round(dx)), int(round(dy)))
+        widget = view.plotter.interactor
+        view._hover_at = QtCore.QPoint(widget.width() // 2, widget.height() // 2)
+        view._hover_tick()
+        bx, by = view.display_to_board(*view._event_xy())
+        assert label.isVisible(), label.text()
+
+        leads = {}
+        for field, words, number in (("drop", "drop = ", r"-?\\d+\\.\\d{3} mV"),
+                                     ("voltage", "V = ", r"-?\\d+\\.\\d{5} V"),
+                                     ("current", "|J| = ", r"\\d+\\.\\d{2} A/mm²")):
+            window.field_box.setCurrentIndex(window.field_box.findData(field))   # no move, no wait
+            readout = view.hover_readout_at(bx, by)
+            assert label.isVisible() and label.text() == readout.text(), (field, label.text())
+            assert label.text().startswith(words) and label.text().endswith("\\nF.Cu"), label.text()
+            assert label.lead.isVisible() and label.lead.text() == readout.lead, label.lead.text()
+            assert re.fullmatch(number, readout.lead), readout.lead
+            leads[field] = readout.lead
+        assert len(set(leads.values())) == 3 and float(leads["current"].split()[0]) > 0, leads
+        assert label.lead.font().bold() and (label.lead.font().pixelSize(), label.rest.font().pixelSize()) \\
+            == (17, 12)
+        assert label.rest.text() == "F.Cu" and not label.secondary.isVisible(), label.rest.text()
+        window.field_box.setCurrentIndex(window.field_box.findData("drop"))
+        assert label.secondary.isVisible() and re.fullmatch(r"-?\\d+\\.\\d\\d %", label.secondary.text())
+        assert label.rest.text() == "drop below 3.3 V\\nF.Cu", label.rest.text()
+        window.field_box.setCurrentIndex(window.field_box.findData("current"))
+
+        # The extras follow the menu, under the lead and without repeating it.
+        view.hover_actions["v"].setChecked(True)
+        view.hover_actions["j"].setChecked(True)                    # |J| is the lead here
+        view._hover_tick()                                          # the next move
+        assert label.lead.text() == leads["current"], label.lead.text()
+        assert label.rest.text().splitlines() == ["V " + view.hover_readout_at(bx, by).lines[0][4:], "F.Cu"]
+        assert label.text().splitlines()[1].startswith("V = "), label.text()   # the readout's words
+        assert QtCore.QSettings(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, "Coppernicus",
+                                "Coppernicus").value("view/hover_label") == "shown,v,j,layer"
+        view.hover_actions["shown"].setChecked(False)               # as before: no large number
+        view._hover_tick()
+        assert not label.lead.isVisible() and label.text().startswith("V = "), label.text()
+        assert "|J| = " + leads["current"] in label.text(), label.text()
+        for act in view.hover_actions.values():                     # none checked: off
+            act.setChecked(False)
+        view._hover_tick()
+        assert not label.isVisible()
+    '''.replace("SETTINGS", repr(str(tmp_path))))

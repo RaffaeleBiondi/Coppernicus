@@ -4,12 +4,12 @@ Shows one copper layer at a time: the board outline, the net's copper outline, a
 solve a colour map (voltage drop, voltage or current density) with the sources, loads and
 vias on top, or the board temperature of an electro-thermal power-tree solve. Left-drag
 pans, the wheel zooms, a double-click reads the values under the pointer and, as the pointer
-moves, a readout beside it shows the values chosen in View →
-Hover shows. In pick mode a single click (a press and release less than 3 px apart, so a pan
-is never a click) reports the board point under it; in measure mode two clicks give the
-voltage difference between two points. Drop isolines and current-flow arrows can be laid
-over any map. KiCad's y axis points down; the view plots (x, −y) so the board reads as in
-KiCad.
+moves, a label beside it shows the value of the map shown as one large number, with the
+values chosen in View → Hover shows under it. In pick mode a single click (a press and
+release less than 3 px apart, so a pan is never a click) reports the board point under it;
+in measure mode two clicks give the voltage difference between two points. Drop isolines
+and current-flow arrows can be laid over any map. KiCad's y axis points down; the view
+plots (x, −y) so the board reads as in KiCad.
 """
 
 from __future__ import annotations
@@ -23,21 +23,22 @@ import numpy as np  # noqa: E402
 import pyvista as pv  # noqa: E402
 from matplotlib import colormaps  # noqa: E402
 from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, Signal  # noqa: E402
-from PySide6.QtGui import QColor, QImage, QPainter, QPixmap  # noqa: E402
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QWidget  # noqa: E402
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPixmap  # noqa: E402
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget  # noqa: E402
 from pyvistaqt import QtInteractor  # noqa: E402
 
 from coppernicus.app import APP_NAME  # noqa: E402
 from coppernicus.app.hover import (  # noqa: E402
     HOVER_DEFAULT,
     HOVER_VALUES,
+    HoverReadout,
     chosen_from_setting,
-    hover_text,
+    hover_readout,
     hover_values,
     label_position,
     setting_from_chosen,
-    temperature_hover_text,
     temperature_reading,
+    temperature_readout,
 )
 
 # TriangleLocator is also re-exported here for code that imported it from this module.
@@ -68,9 +69,30 @@ MAX_ARROWS = 2000
 ARROW_CELLS = 36                  # arrows across the layer's larger side, before thinning
 ARROW_FULL_PERCENTILE = 95        # arrows at or above this percentile of |J| get full length
 HOVER_MS = 40                     # at most one hover probe per 40 ms while the pointer moves
-HOVER_SETTING = "view/hover_shows"    # the values the hover readout shows (QSettings)
-HOVER_STYLE = ("QLabel { background: #fffff0; color: #111111; border: 1px solid #888888;"
-               " border-radius: 3px; padding: 2px 5px; }")
+HOVER_SETTING = "view/hover_label"    # the values the hover readout shows (QSettings)
+OLD_HOVER_SETTING = "view/hover_shows"  # the same up to 0.3.1, before the map's value led
+# The hover label: an opaque box, so it reads the same on every colour of every map, dark or
+# light as the app is: (background, 1 px outline, the large number, the muted small text).
+HOVER_COLORS = {"dark": ("#0e1013", "#3d434c", "#f1f3f4", "#9aa0a6"),
+                "light": ("#ffffff", "#9aa0a6", "#111111", "#5f6368")}
+HOVER_LEAD_PX, HOVER_SMALL_PX = 17, 12   # the map's value (semibold); the rest, muted
+
+
+def hover_style(scheme: str) -> str:
+    """The hover label's style sheet for the app's ``scheme`` ("dark" or "light")."""
+    background, outline, text, muted = HOVER_COLORS[scheme]
+    return (f"QFrame#hover {{ background: {background}; border: 1px solid {outline}; border-radius: 6px; }}"
+            f" QFrame#hover QLabel {{ background: transparent; border: none; color: {muted}; }}"
+            f" QFrame#hover QLabel#lead {{ color: {text}; }}")
+
+
+def color_scheme() -> str:
+    """The app's look, "dark" or "light": the platform's colour scheme, or the palette's
+    window colour where the platform does not say."""
+    scheme = QGuiApplication.styleHints().colorScheme()
+    if scheme != Qt.ColorScheme.Unknown:
+        return "dark" if scheme == Qt.ColorScheme.Dark else "light"
+    return "dark" if QGuiApplication.palette().window().color().lightness() < 128 else "light"
 
 
 def _xyz(points: np.ndarray, z: float = 0.0) -> np.ndarray:
@@ -181,6 +203,69 @@ def current_scale(layer: LayerField) -> List[float]:
     return [0.0, max(top, 1e-12)]
 
 
+class HoverLabel(QFrame):
+    """The hover readout beside the pointer. Line 1: the value of the map shown, large and
+    semibold (:attr:`HoverReadout.lead`), with a smaller muted figure beside it where one is
+    natural (:attr:`HoverReadout.secondary`); under it, smaller and muted, its caption and the
+    chosen extras (:meth:`HoverReadout.label_lines`). Dark or light as the app is.
+    :meth:`text` is the readout as plain text, as :meth:`BoardView.hover_at` returns it."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("hover")
+        self.setAttribute(Qt.WA_StyledBackground)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.lead, self.secondary, self.rest = QLabel(self), QLabel(self), QLabel(self)
+        self.lead.setObjectName("lead")
+        small = QFont(self.font())
+        small.setPixelSize(HOVER_SMALL_PX)
+        big = QFont(self.font())
+        big.setPixelSize(HOVER_LEAD_PX)
+        big.setWeight(QFont.DemiBold)
+        for label, font in ((self.lead, big), (self.secondary, small), (self.rest, small)):
+            label.setTextFormat(Qt.PlainText)        # a net name is never read as markup
+            label.setFont(font)
+        # Bottom-aligned on line 1, the small figure raised to sit on the number's baseline.
+        self.secondary.setContentsMargins(
+            0, 0, 0, max(self.lead.fontMetrics().descent() - self.secondary.fontMetrics().descent(), 0))
+        line1 = QHBoxLayout()
+        line1.setSpacing(6)
+        line1.addWidget(self.lead, 0, Qt.AlignBottom)
+        line1.addWidget(self.secondary, 0, Qt.AlignBottom)
+        line1.addStretch(1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 5)
+        layout.setSpacing(1)
+        layout.addLayout(line1)
+        layout.addWidget(self.rest)
+        self._readout = HoverReadout()
+        self.restyle()
+        QGuiApplication.styleHints().colorSchemeChanged.connect(self.restyle)
+
+    def restyle(self, *_):
+        """Follow the app's colour scheme (:func:`color_scheme`)."""
+        self.setStyleSheet(hover_style(color_scheme()))
+
+    def set_readout(self, readout: HoverReadout):
+        """Show ``readout``; the label's size follows it."""
+        if readout == self._readout:
+            return
+        self._readout = readout
+        rest = "\n".join(readout.label_lines())
+        self.lead.setText(readout.lead)
+        self.lead.setVisible(bool(readout.lead))
+        self.secondary.setText(readout.secondary)
+        self.secondary.setVisible(bool(readout.lead and readout.secondary))
+        self.rest.setText(rest)
+        self.rest.setVisible(bool(rest))
+        self.setAccessibleName(readout.text())
+        self.layout().activate()
+        self.adjustSize()
+
+    def text(self) -> str:
+        return self._readout.text()
+
+
 class BoardView(QWidget):
     probed = Signal(str)            # a readout of the values under a double-click
     pad_picked = Signal(float, float)   # pick mode: board point (mm, KiCad frame) under a click
@@ -214,15 +299,15 @@ class BoardView(QWidget):
         self._difference_mv: Optional[np.ndarray] = None             # per node, on the Δ map
         self._measure_result: Optional[RailResult] = None
         self._temperature = None            # (TemperatureMap, cell mm) while the temperature map is shown
+        self._field: Optional[str] = None   # the map shown: a key of FIELDS, None before a solve
         # Hover readout: a move stores the pointer and starts the timer if it is idle, so a
         # moving pointer is probed every HOVER_MS, at its latest position.
-        self.hover_label = QLabel(self.plotter.interactor)
-        self.hover_label.setStyleSheet(HOVER_STYLE)
-        self.hover_label.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.hover_label = HoverLabel(self.plotter.interactor)
         self.hover_label.hide()
         self.hover_actions = {}
         self._hover_chosen: Tuple[str, ...] = HOVER_DEFAULT
         self._hover_at: Optional[QPoint] = None                       # widget pixels, y down
+        self._hover_layer: Optional[str] = None                       # the layer it last read
         self._hover_timer = QTimer(self)
         self._hover_timer.setSingleShot(True)
         self._hover_timer.setInterval(HOVER_MS)
@@ -236,11 +321,13 @@ class BoardView(QWidget):
         self._measure, self._measure_result = [], None
 
     def clear(self):
-        self._hide_hover()
+        # The label goes, the pointer stays: _finish reads the new scene under a still pointer.
+        self._hover_timer.stop()
+        self.hover_label.hide()
         self.plotter.clear()
         self.colorbar.set_scale(None)
         self._layer, self._result, self._finder = None, None, None
-        self._temperature = None
+        self._temperature, self._field = None, None
 
     def show_board(self, outline: Sequence[np.ndarray], copper_rings: Sequence[np.ndarray] = (),
                    sources: Sequence[Tuple[str, Sequence]] = (), loads: Sequence[Tuple[str, Sequence]] = (),
@@ -268,7 +355,7 @@ class BoardView(QWidget):
         self.clear()
         if result is not self._measure_result:          # a measurement belongs to one result
             self._measure, self._measure_result = [], result
-        self._result, self._layer = result, layer
+        self._result, self._layer, self._field = result, layer, field
         self._difference_mv = np.asarray(difference_mv, float) if field == "difference" else None
         title, cmap = FIELDS[field]
         faces = np.column_stack([np.full(len(layer.tris), 3), layer.tris]).ravel()
@@ -348,7 +435,7 @@ class BoardView(QWidget):
                                       render_points_as_spheres=True, always_visible=True, name="hottest")
         self.colorbar.set_scale(cmap, lo, hi, f"°C, all layers: ambient → board peak\n{d:.3g} mm cells")
         self._add_outline(outline)
-        self._temperature = (m, d)
+        self._temperature, self._field = (m, d), "temperature"
         self._finish(fit)
 
     def temperature_at(self, x: float, y: float) -> str:
@@ -428,6 +515,7 @@ class BoardView(QWidget):
             self.plotter.reset_camera()
             self._has_camera = True
         self.plotter.render()
+        self._reread_hover()
 
     # ------------------------------------------------------------------ navigation
     def zoom_to(self, x: float, y: float, half_width_mm: float = 3.0):
@@ -573,8 +661,7 @@ class BoardView(QWidget):
         else:
             delta = ""
             if self._difference_mv is not None:          # the Δ map is shown: read Δ too
-                nodes = self._layer.tris[p.triangle]
-                d = float(self._finder.weights(p.triangle, x, y) @ self._difference_mv[nodes])
+                d = self._difference_at(p.triangle, x, y)
                 delta = (f", Δ drop vs baseline = {d:+.3f} mV" if np.isfinite(d)
                          else ", Δ drop vs baseline: no baseline copper here")
             msg = (f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: V = {p.voltage_v:.5f} V, "
@@ -583,20 +670,35 @@ class BoardView(QWidget):
         self.probed.emit(msg)
         return msg
 
+    def _difference_at(self, triangle: int, x: float, y: float) -> float:
+        """The Δ map's change of drop (mV) at board point (x, y) in ``triangle`` of the shown
+        layer, interpolated as the voltage is; NaN where the baseline had no copper."""
+        nodes = self._layer.tris[triangle]
+        return float(self._finder.weights(triangle, x, y) @ self._difference_mv[nodes])
+
     # ------------------------------------------------------------------ hover
-    def hover_at(self, x: float, y: float) -> str:
+    def hover_readout_at(self, x: float, y: float) -> HoverReadout:
         """The hover readout at board point (x, y) mm on the shown layer: the double-click's
-        probe on the result it reads (a power-tree group when one is shown). Empty off the
-        copper, before a solve and with no value chosen. On the temperature map: the cell's
-        temperature, as the double-click reads it."""
+        probe on the result it reads (a power-tree group when one is shown), led by the value
+        of the map shown. Empty off the copper, before a solve and with no value chosen. On
+        the temperature map: the cell's temperature, as the double-click reads it."""
         if self._temperature is not None:
             m, d = self._temperature
-            return temperature_hover_text(m.at(x, y), d, m.layer_name, self._hover_chosen)
+            return temperature_readout(m.at(x, y), d, m.layer_name, self._hover_chosen)
         if self._layer is None or self._finder is None or self._result is None or not self._hover_chosen:
-            return ""
+            return HoverReadout()
         p = probe(self._layer, self._finder, x, y)
-        return hover_text(None if p is None else hover_values(self._result, self._layer.name, p),
-                          self._hover_chosen)
+        if p is None:
+            return HoverReadout()
+        delta = (self._difference_at(p.triangle, x, y)
+                 if self._difference_mv is not None and np.isfinite(p.voltage_v) else float("nan"))
+        return hover_readout(hover_values(self._result, self._layer.name, p, delta), self._hover_chosen,
+                             self._field)
+
+    def hover_at(self, x: float, y: float) -> str:
+        """:meth:`hover_readout_at` as plain text, the map's value first in the double-click
+        readout's words ("drop = 7.263 mV below 3.3 V"): what the label's ``text()`` holds."""
+        return self.hover_readout_at(x, y).text()
 
     def set_hover_values(self, chosen: Sequence[str]):
         """The values the readout shows (keys of :data:`HOVER_VALUES`); none turns it off."""
@@ -608,7 +710,8 @@ class BoardView(QWidget):
         """Add the "Hover shows" submenu to ``menu``: one checkable action per value, none
         checked turns the readout off. The choice is kept in the user's settings."""
         settings = _settings()
-        self.set_hover_values(chosen_from_setting(settings.value(HOVER_SETTING)))
+        self.set_hover_values(chosen_from_setting(settings.value(HOVER_SETTING),
+                                                  settings.value(OLD_HOVER_SETTING)))
         sub = menu.addMenu("Hover shows")
         for key, label in HOVER_VALUES:
             act = sub.addAction(label)
@@ -616,6 +719,8 @@ class BoardView(QWidget):
             act.setChecked(key in self._hover_chosen)
             act.toggled.connect(self._hover_menu_toggled)
             self.hover_actions[key] = act
+            if key == "shown":                 # the map's value, then the extras under it
+                sub.addSeparator()
         return sub
 
     def _hover_menu_toggled(self, *_):
@@ -645,18 +750,34 @@ class BoardView(QWidget):
         if self._hover_at is not None and not self._hover_timer.isActive():
             self._hover_timer.start()
 
+    def _shown_layer(self) -> Optional[str]:
+        """The name of the layer the view shows a map of; None without one."""
+        if self._temperature is not None:
+            return self._temperature[0].layer_name
+        return self._layer.name if self._layer is not None else None
+
+    def _reread_hover(self):
+        """After a redraw under a still pointer: on the layer the label was reading (another
+        Show, an overlay toggled, a new solve) it reads the new map at once; on another layer,
+        or with no map, it stays hidden until the pointer moves."""
+        if self._hover_at is None:
+            return
+        if self._shown_layer() is not None and self._shown_layer() == self._hover_layer:
+            self._hover_tick()
+        else:
+            self._hide_hover()
+
     def _hover_tick(self):
         if self._hover_at is None or self.plotter.iren is None:     # None: the view has closed
             return
+        self._hover_layer = self._shown_layer()
         # The pointer's display point as VTK received it, as a click in pick mode reads it.
-        text = self.hover_at(*self.display_to_board(*self._event_xy()))
+        readout = self.hover_readout_at(*self.display_to_board(*self._event_xy()))
         label = self.hover_label
-        if not text:
+        if not readout:
             label.hide()
             return
-        if text != label.text():
-            label.setText(text)
-            label.adjustSize()
+        label.set_readout(readout)
         widget = self.plotter.interactor
         corner = QPoint(*label_position((self._hover_at.x(), self._hover_at.y()),
                                         (label.width(), label.height()), (widget.width(), widget.height())))

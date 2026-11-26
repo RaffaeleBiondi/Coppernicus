@@ -21,6 +21,15 @@ results against your own judgement.
   direct limit with a direct factorization instead of AMG-CG, within KiPI's SuperLU limit and
   half the free memory; results equal within 1e-9 (CG's tolerance).
 
+### Changed
+
+- The hover label in the app leads with the value of the map shown, as one large number: the
+  drop (with its % of the source voltage), V, |J|, the change of drop on the Δ map, or the
+  board temperature. It switches at once when Show changes under a still pointer.
+  **View → Hover shows** chooses the values under it: the layer by default; a choice of your
+  own saved by 0.3.1 is kept under the new number, and a readout turned off stays off. The
+  label follows the app's light or dark look.
+
 ## 0.3.1 (2026-11-26)
 
 ### Changed
