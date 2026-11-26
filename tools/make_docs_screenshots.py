@@ -66,11 +66,15 @@ def gui_check():
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", help=f"output folder (default: {IMAGES.relative_to(ROOT)})")
-    ap.add_argument("--set", choices=("guide", "features", "analyses", "cli", "all"), default="guide",
+    ap.add_argument("--set", choices=("guide", "features", "analyses", "cli", "reports", "all"),
+                    default="guide",
                     help="guide: the README's guide-*.png (default); features: the images of the "
                          "feature pages in docs/; analyses: the Temperature, Impedance, Ripple & noise "
                          "and Tolerance tabs and the Results panel; cli: the command line's PNGs "
-                         "(no window); all: every set")
+                         "(no window); all: those four sets; reports: the HTML pages to capture "
+                         "report-*.png from in a browser (no window, no PNG)")
+    ap.add_argument("--html-dir", help="--set reports: folder for the pages (default: a new temporary "
+                                       "folder, kept and printed)")
     ap.add_argument("--offscreen", action="store_true",
                     help="no window (Qt's offscreen platform), to check that every scenario runs and "
                          "reaches its state; the board view stays blank, so --out is required")
@@ -97,6 +101,18 @@ def main(argv=None) -> int:
             return 1
         for path in written:
             print(path)
+        return 0
+    if args.set == "reports":                # no window: pages for a browser capture by hand
+        folder = Path(args.html_dir or tempfile.mkdtemp(prefix="coppernicus-reports-"))
+        try:
+            pages = reports(folder, args.timeout)
+        except Unfinished as e:
+            print(f"reports: {e}", file=sys.stderr)
+            return 1
+        print(f"Pages in {folder} (kept). Open each in a browser window of the width given, one "
+              f"colour scheme for all, and save the part named as {out}/<image>:")
+        for name, url, what, width, docs in pages:
+            print(f"{name}  ({docs})\n    {url}\n    {width} px wide: {what}")
         return 0
 
     from PySide6.QtCore import QLocale, QSettings, Qt
@@ -527,6 +543,65 @@ def cli_pngs(out: Path, timeout: float) -> list:
             shutil.copyfile(found[0], out / name)
             written.append(out / name)
     return written
+
+
+# The HTML pages behind the report-*.png images: (the image, the arguments of `coppernicus`, the
+# fragment to open the page at, what to capture, the browser width of the image in the docs, the
+# docs that show it). The repository has no headless browser: the pages are captured by hand.
+REPORTS = (
+    ("report-demo.png", ("solve", DEMO, "--html"), "",
+     "the top of the page, with a hover readout on the B.Cu drop map", 1360,
+     "README.md, docs/html-report.md, docs/agents.md"),
+    ("report-tree.png", ("solve", "CHAIN_WITH_LIMITS", "--tree", "--html"), "#group=+3V3",
+     "the top of the page down to the Problems table", 1280, "docs/html-report.md"),
+    ("report-thermal.png", ("solve", DEMO_THERMAL, "--thermal", "--html"), "",
+     "the Board temperature section, from its heading to 'Assumptions of the board temperature'",
+     1280, "docs/html-report.md"),
+    ("report-ac.png", ("ac", PDN, "--html"), "", "the whole page", 1200, "docs/html-report.md"),
+    ("report-noise.png", ("noise", NOISE_TIGHT, "--html"), "",
+     "from the title down to the radiated estimate", 900, "docs/html-report.md, docs/noise.md"),
+    ("report-tolerance.png", ("tolerance", TOLERANCE_TIGHT, "--html"), "", "the whole page", 1150,
+     "docs/html-report.md, docs/tolerance.md"),
+)
+
+
+def chain_with_limits(folder: Path) -> Path:
+    """The power chain with the limits docs/power-tree.md gives it for the example (1 % drop on
+    +3V3 and +1V8, 30 mV of ground rise on GND), saved in ``folder`` under the example's name,
+    beside a copy of its board, so that the page names the example's files."""
+    from coppernicus.project import Project
+    project = Project.load(CHAIN)
+    project.rail("+3V3").limits.max_drop_pct = 1.0
+    project.rail("+1V8").limits.max_drop_pct = 1.0
+    project.ensure_rail("GND").limits.max_ground_rise_mv = 30.0
+    folder.mkdir(parents=True, exist_ok=True)
+    board = folder / project.board_path().name
+    shutil.copyfile(project.board_path(), board)
+    project.board = str(board)
+    return project.save(folder / CHAIN.name)
+
+
+def reports(folder: Path, timeout: float) -> list:
+    """Each page of :data:`REPORTS` written into its own subfolder of ``folder``. Returns
+    (image, page URL with its fragment, what to capture, width, docs) per page. A page that
+    names a local folder is refused: it would end up in a public image."""
+    pages = []
+    private = [str(p) for p in (Path.home(), folder.resolve(), ROOT)]
+    for name, args, fragment, what, width, docs in REPORTS:
+        sub = folder / Path(name).stem
+        if "CHAIN_WITH_LIMITS" in args:
+            args = tuple(chain_with_limits(sub / "project") if a == "CHAIN_WITH_LIMITS" else a for a in args)
+        coppernicus(args, sub, timeout)
+        found = sorted(sub.glob("*.html"))
+        if len(found) != 1:
+            raise Unfinished(f"{name}: expected one page from coppernicus {args[0]}, found "
+                             f"{[p.name for p in found]}")
+        text = found[0].read_text(encoding="utf-8")
+        named = [p for p in private if p in text]
+        if named:
+            raise Unfinished(f"{found[0]} names a local folder ({named[0]}): not for a public image")
+        pages.append((name, found[0].resolve().as_uri() + fragment, what, width, docs))
+    return pages
 
 
 def answer_dialogs():
