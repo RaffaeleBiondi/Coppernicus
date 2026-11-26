@@ -54,6 +54,14 @@ The full list of keys is in
 
 - **App:** the **Impedance** tab: pick the probe's supply and ground pins, the capacitors and
   their models, then **Solve impedance** (Ctrl+I). **Export CSV and PNG…** saves the results.
+  The models given in [KiCad footprint fields](kicad-fields.md#capacitor-models) follow the
+  project's in the **Capacitor models** table, grey and read-only: they are what the solve
+  uses, each cell's tooltip names the field and the part that hold its value, and they are
+  never written into the project file. A project model that names a part with such a model
+  loses that part to it (marked on its **Parts**, with a line under the table), unless the
+  model sets `override_board_fields: true` in the project file. A tolerance changes no |Z|:
+  after an edit in the **Tolerance** tab the result stays, and the warning that a load's AC
+  tolerance and its probe's `ac_tolerance_v` disagree is the one for the values now.
 - **Command line:** `coppernicus ac PROJECT` solves every rail with a probe (`--rail NET` for
   some), writes a CSV and a PNG of |Z|(f) per rail and `<project>_ac_summary.json` into `--out`
   (default `results/` next to the project), and `--html` an offline page (see
