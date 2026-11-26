@@ -147,6 +147,12 @@ class ProjectSourceSpec(BaseModel):
                                             "parallel.")
     input: Optional[PinRefSpec] = Field(None, description="A regulator's input pins.")
     ground: Optional[PinRefSpec] = None
+    extra_ground_pins: Optional[list[str]] = Field(None, description="More pads of its ground "
+                                                   "terminal on other parts of the ground net, as "
+                                                   "REF.PAD (BT8.1, BT8.* for all its pads there): "
+                                                   "with ground, one terminal held at 0 V in the "
+                                                   "power tree, e.g. a battery's negative pole on "
+                                                   "several cell holders. kind source only.")
     sense: Optional[PinRefSpec] = None
     ground_sense: Optional[PinRefSpec] = None
 

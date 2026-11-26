@@ -490,7 +490,7 @@ def compose(project: Project, tree: Optional[TreeResult], impedance: Sequence[Im
 # loading ignores any other key, as it always has.
 LOAD_KEYS = ("name", "ref", "pins", "current", *LOAD_PIN_REFS, *LOAD_TOLERANCE_KEYS, *LOAD_PART_KEYS)
 SOURCE_KEYS = ("name", "ref", "pins", "voltage", "kind", "efficiency", "quiescent_a", "current_limit_a",
-               "fsw_hz", "extra_pins", *SOURCE_PIN_REFS, *SOURCE_ACCURACY_KEYS)
+               "fsw_hz", "extra_pins", "extra_ground_pins", *SOURCE_PIN_REFS, *SOURCE_ACCURACY_KEYS)
 # An unknown key looks like a tolerance with one of these in it (tol_pc), or close to a known
 # one (acuracy_pct: difflib's ratio at least LOOKS_CLOSE).
 LOOKS_LIKE = ("tol", "acc", "ripple", "transient")

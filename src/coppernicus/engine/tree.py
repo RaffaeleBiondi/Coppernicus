@@ -23,6 +23,7 @@ from kipi.dc.solver import SolveError
 from kipi.dc.solver.setup import REF_TEMP_C
 
 from coppernicus.engine.board import Board, EngineError
+from coppernicus.engine.ground_terminal import PartsPinRef
 from coppernicus.engine.pisetup import ground_nets, ground_rails, terminal_names, to_pisetup
 from coppernicus.engine.solve import (
     Cancelled,
@@ -91,7 +92,9 @@ def _assumptions(project: Project, setup, rho_note: Optional[List[str]] = None) 
         "A load's drop counts its ground: nominal − (lowest supply pin − highest ground pin).",
         LIMITS_RULE,
     ]
-    refs = [v.name for v in setup.vrms if v.kind == "source" and v.ground]
+    refs = [v.name + (f" (on {', '.join(v.ground.parts())}, every one of those pads at 0 V)"
+                      if isinstance(v.ground, PartsPinRef) else "")
+            for v in setup.vrms if v.kind == "source" and v.ground]
     if refs:
         out.append(f"Ground nets are held at 0 V at the ground pins of {', '.join(refs)}; every "
                    "other ground voltage is a rise above that reference.")

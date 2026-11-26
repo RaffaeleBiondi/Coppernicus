@@ -332,6 +332,45 @@ def power_chain_project(board: str = "power_chain.kipi.json.gz") -> Project:
     ], links=[Link("FB1", "FB1", ["1"], "+3V3", ["2"], "+3V3_F", g.R_FB)])
 
 
+class Pack:
+    """A cell pack's return, symmetric about x = 30 mm: the negative pole is two holders, BT4
+    and BT8, each with its two tabs on -V_BAT, at the two ends of a B.Cu plane; the load U1
+    returns its current into the middle of the plane, fed on F.Cu from the positive holder BT1.
+    1 oz copper, positions in mm."""
+    POS, NEG = "+V_BAT", "-V_BAT"
+    PLANE = (0.0, 0.0, 60.0, 20.0)                     # -V_BAT, B.Cu
+    TAB = 3.0                                          # a square holder tab
+    HOLDERS = {"BT4": ((4.0, 6.0), (4.0, 14.0)), "BT8": ((56.0, 6.0), (56.0, 14.0))}
+    U1_GND = (30.0, 10.0)
+    RAIL = (26.0, 0.0, 34.0, 20.0)                     # +V_BAT, F.Cu
+    BT1, U1 = (30.0, 3.0), (30.0, 17.0)
+    V_BAT, I_U1 = 6.4, 2.0
+
+
+def pack_board() -> BoardSnapshot:
+    g, b = Pack, SyntheticBoard("pack", two_layer_stackup())
+    b.zone(g.NEG, B, box(*g.PLANE))
+    for ref, tabs in g.HOLDERS.items():
+        for number, (x, y) in enumerate(tabs, start=1):
+            b.square_pad(ref, str(number), g.NEG, x, y, g.TAB, layers=(B,), value="HOLDER")
+    b.square_pad("U1", "2", g.NEG, *g.U1_GND, 2.0, layers=(B,), value="LOAD")
+    b.zone(g.POS, F, box(*g.RAIL))
+    b.square_pad("BT1", "1", g.POS, *g.BT1, g.TAB, value="HOLDER")
+    b.square_pad("U1", "1", g.POS, *g.U1, 2.0, value="LOAD")
+    return b.snapshot()
+
+
+def pack_project(grounds: Sequence[str] = ("BT4", "BT8"), board: str = "pack.kipi.json.gz") -> Project:
+    """The pack as a project: BT1 holds +V_BAT, its ground terminal on every pad of each holder
+    in ``grounds`` (the first is ``ground``, the others ``extra_ground_pins``); U1 draws 2 A."""
+    g = Pack
+    first, *more = grounds
+    source = Source("BT1", g.V_BAT, ground_ref=first, ground_net=g.NEG,
+                    extra_ground_pins=[f"{r}.*" for r in more] or None)
+    return Project(board=board, rails=[Rail(g.POS, sources=[source], loads=[
+        Load("U1", g.I_U1, ["1"], ground_pins=["2"], ground_net=g.NEG)])])
+
+
 # ---------------------------------------------------------------------- AC boards (Task 9)
 # Copied from KiPI's AC validation boards (examples/validation/make_boards.py:65-82,
 # :333-449), dimensions and part values unchanged, so its hand calculations hold here too.

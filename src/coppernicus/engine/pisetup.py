@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from kipi.dc.pi.model import DcLink, PinRef, PISetup, SensePoint, Vrm, validate
 from kipi.dc.pi.model import Load as KipiLoad
 
+from coppernicus.engine import ground_terminal
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.solve import engine_settings, tied_nets
 from coppernicus.project import PinSpec, Project, Rail, pin_ref
@@ -127,6 +128,33 @@ def _extra_terminal(board: Board, nets: Sequence[str], source, owner: str) -> Li
             for ref, pins in by_ref.items()]
 
 
+def _ground_terminal(board: Board, source, owner: str) -> Optional[PinRef]:
+    """A source's ground pins, with its ``extra_ground_pins`` ("REF.PAD") as a
+    :class:`~coppernicus.engine.ground_terminal.PartsPinRef`: one ground terminal on several
+    parts, every pad held at the ground's 0 V. Without them, exactly its ground pin reference."""
+    ground = _pin_ref(board, source, "ground", owner)
+    extra = getattr(source, "extra_ground_pins", None) or ()
+    if not extra:
+        return ground
+    if ground is None:
+        raise EngineError(f"{owner}: extra_ground_pins ({', '.join(extra)}) without its ground pins: "
+                          "set its ground (ground: {ref, net, pins}), of which they are more pads")
+    if source.kind != "source":
+        raise EngineError(f"{owner}: extra_ground_pins on a {source.kind}: a ground terminal on "
+                          "several parts is the 0 V reference of an ideal supply (kind: source); a "
+                          "regulator returns its current at its own ground pins")
+    by_ref: Dict[str, List[str]] = {}
+    for entry in extra:
+        ref, _, pad = entry.partition(".")
+        by_ref.setdefault(ref, []).append(pad)
+    more = []
+    for ref, pins in by_ref.items():
+        pads = _pads(board, [ground.net], ref, pins, f"{owner} (extra ground pins)")
+        more.append(PinRef(ref, ground.net, _numbers(pads, pins)))
+    ground_terminal.require(owner)
+    return ground_terminal.PartsPinRef(ground.ref, ground.net, list(ground.pins), more=more)
+
+
 def _overlap(a: PinRef, b: PinRef) -> bool:
     """Whether two pin references share a pad (an empty list is every pad)."""
     if (a.ref, a.net) != (b.ref, b.net):
@@ -197,7 +225,7 @@ def to_pisetup(board: Board, project: Project) -> PISetup:
                 efficiency=float(s.efficiency) if s.kind in SWITCHING_KINDS else UNUSED_EFFICIENCY,
                 quiescent_a=float(s.quiescent_a),
                 input=None if s.kind == "source" else _pin_ref(board, s, "input", owner),
-                ground=_pin_ref(board, s, "ground", owner),
+                ground=_ground_terminal(board, s, owner),
                 # extra_pins: KiPI's mesh sense holds its own pins and each other part's at the
                 # voltage, the current entering there (one terminal on several parts).
                 sense=output if held else _pin_ref(board, s, "sense", owner),
