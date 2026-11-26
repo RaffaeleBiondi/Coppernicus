@@ -47,7 +47,12 @@ For each rail, chosen at the top of the page:
 - **The maps**, one per copper layer: **Drop** (how many mV each point is below the source),
   **Voltage** or **Current density**. Scroll to zoom, drag to pan, **Fit** to see the whole
   board; toggles show or hide the sources, the loads and the crowding spots. Point at the map
-  for the voltage, the drop and |J| under the pointer.
+  for the voltage, the drop and |J| under the pointer. On **Current density**, above the colour
+  bar: the layer's **peak** |J| (marked mesh-dependent) and its verdict as the problem list
+  judges it, for example *limit 60 A/mm²: FAIL · worst spot 89.1 A/mm² over 3.02 mm²*,
+  *limit 60 A/mm²: pass*, or with no limit of yours *default 60 A/mm² (attention): 3 spots
+  above* or *below* ([the rule](technical.md#physics)). It follows
+  the layer and the rail shown. The colour scale tops at the layer's 99.5th percentile of |J|.
 - **Problems**, fails first: click a row to zoom to it. *FAIL* appears only against the limits
   you set. An amber *ATTENTION* badge marks a crowding spot above Coppernicus's
   current-density default ([why](technical.md#current-density-default)): never a verdict, and

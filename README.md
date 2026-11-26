@@ -115,7 +115,9 @@ loads on the far side get less voltage.
 ### 5. Find where the copper is crowded
 
 Set *Show* to **Current density (A/mm²)**. Bright areas carry a lot of current through little
-copper. **Double-click** anywhere to read the voltage, the drop and the current density at that
+copper. Above the colour bar, the layer's **peak** |J| (mesh-dependent) and its verdict, as the
+problem list judges it: against your maximum current density, or Coppernicus's attention
+default. **Double-click** anywhere to read the voltage, the drop and the current density at that
 point in the status bar.
 
 <p align="center">

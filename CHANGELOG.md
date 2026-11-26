@@ -29,6 +29,14 @@ results against your own judgement.
   **View → Hover shows** chooses the values under it: the layer by default; a choice of your
   own saved by 0.3.1 is kept under the new number, and a readout turned off stays off. The
   label follows the app's light or dark look.
+- Every current-density map (the HTML report, the PNG maps, the app) writes above its colour
+  bar the layer's peak |J| (degenerate triangles left out, marked mesh-dependent) and, when a
+  limit applies, the layer's verdict as the problem list judges it from the spot means:
+  "limit 60 A/mm²: FAIL · worst spot 89.1 A/mm² over 3.02 mm²", "limit 60 A/mm²: pass", or
+  with no `max_current_density` "default 60 A/mm² (attention): 3 spots above" or "below". It
+  follows the layer, the rail or group and the map shown, so copper above the colour scale's
+  top no longer goes unseen. The scale itself is unchanged (the layer's 99.5th percentile), as
+  are the maps' colours and every verdict.
 
 ## 0.3.1 (2026-11-26)
 
