@@ -479,7 +479,7 @@ def tree_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
     lines = ["", f"### Power tree: `{_cell(project)}`", ""]
     if "error" in doc:
         return lines + [f"**Error:** {_cell(doc['error'].get('message', ''))}"]
-    from coppernicus.power_tree import attention_text
+    from coppernicus.power_tree import ACROSS_NOTE, attention_text
     lines += [f"Verdict: **{_cell(doc.get('verdict'))}**. {_cell(doc.get('verdict_note', ''))}", ""]
     lines += [x for a in attention_text(doc.get("groups", [])) for x in (_cell(a), "")]
     lines += ["| VRM | Kind | Group | V set (V) | V out (V) | I out (A) | I max (A) | V in (V) "
@@ -494,15 +494,18 @@ def tree_markdown(project: str, doc: Dict[str, Any]) -> List[str]:
                      f"{_num(v.get('v_in_v'), '.5g')} | "
                      f"{_num(v.get('i_in_a'), '.4g')} | {_num(loss_mw, '.3g')} | "
                      f"{_cell(v.get('regulation') or '')} |")
-    lines += ["", "| Load | Group | I (A) | Nominal (V) | Across (V) | Drop (mV) | Drop (%) | Verdict |",
-              "|---|---|---:|---:|---:|---:|---:|---|"]
+    lines += ["", "| Load | Group | I (A) | Nominal (V) | Across, mean (V) | Worst pins (V) | Drop (mV) | "
+              "Drop (%) | Verdict |", "|---|---|---:|---:|---:|---:|---:|---:|---|"]
     for ld in doc.get("loads", []):
         ex = ld.get("exceeds_drop_limit")
         verdict = ld.get("status") or ("**FAIL**" if ex else "pass" if ex is False else "not judged")
         lines.append(f"| {_cell(ld['name'])} | {_cell(ld['group'])} | {_num(ld.get('current_a'), '.4g')} | "
                      f"{_num(ld.get('nominal_v'), '.4g')} | {_num(ld.get('v_across_v'), '.5g')} | "
+                     f"{_num(ld.get('v_worst_v'), '.5g')} | "
                      f"{_num(ld.get('drop_mv'), '.3g')} | {_num(ld.get('drop_pct'), '.3g')} | "
                      f"{_cell(verdict)} |")
+    if doc.get("loads"):
+        lines += ["", f"_{ACROSS_NOTE[0].upper()}{ACROSS_NOTE[1:]}_"]
     if doc.get("thermal"):
         lines += _thermal_markdown(doc["thermal"])
     return lines

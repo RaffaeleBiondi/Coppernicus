@@ -146,6 +146,10 @@ def estimate_note(draws: Sequence[Draw]) -> List[str]:
 
 LIMIT_FIELDS = ("max_drop_pct", "max_current_density", "max_via_current", "max_ground_rise_mv")
 UNJUDGED = (DISCONNECTED, NOT_CONVERGED, OUT_OF_REGULATION)
+#: Why a load's "across" and its drop can disagree (the CLI table, the HTML report's note).
+ACROSS_NOTE = ("supply, ground and across are means over the part's pins; worst pins is the lowest "
+               "supply pin minus the highest ground pin, which sets the drop (nominal − worst pins), "
+               "so on a part with several pins the two can differ.")
 
 LIMITS_RULE = (
     "Limits are looked up per net: a load by its supply net (the net its pins are on; a limit "
@@ -774,7 +778,7 @@ def tree_text(doc: Dict[str, Any], split: bool = False) -> List[str]:
                      + _input_text(v))
     lines += ["Loads (the voltage across supply and ground pins)",
               f"  {'name':<14} {'group':<10} {'I':>8} {'nominal':>8} {'supply':>9} {'ground':>9} "
-              f"{'across':>9} {'drop':>14}  verdict"]
+              f"{'across (mean)':>13} {'worst pins':>10} {'drop':>14}  verdict"]
     for ld in doc["loads"]:
         verdict = ("FAIL" if ld["exceeds_drop_limit"] else "pass" if ld["exceeds_drop_limit"] is False
                    else "not judged")
@@ -782,8 +786,11 @@ def tree_text(doc: Dict[str, Any], split: bool = False) -> List[str]:
                 if ld["drop_mv"] is not None else "—")
         lines.append(f"  {ld['name']:<14} {ld['group']:<10} {_fmt(ld['current_a'], 8, '.4g', 'A')} "
                      f"{_fmt(ld['nominal_v'], 8, '.4g', 'V')} {_fmt(ld['v_supply_v'], 9, '.5f', 'V')} "
-                     f"{_fmt(ld['v_ground_v'], 9, '.2f', 'mV', 1e3)} {_fmt(ld['v_across_v'], 9, '.5f', 'V')} "
+                     f"{_fmt(ld['v_ground_v'], 9, '.2f', 'mV', 1e3)} "
+                     f"{_fmt(ld['v_across_v'], 13, '.5f', 'V')} {_fmt(ld['v_worst_v'], 10, '.5f', 'V')} "
                      f"{drop:>14}  {ld['status'] or verdict}")
+    if doc["loads"]:
+        lines.append(f"  {ACROSS_NOTE}")
     lines.append("Groups")
     worsts = [_group_worst(gr) + "," for gr in doc["groups"]]
     width = max(map(len, worsts), default=0)

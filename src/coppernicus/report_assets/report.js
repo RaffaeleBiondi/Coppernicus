@@ -258,11 +258,15 @@ function panels() {
   // load, each by its own net's limit; a rail alone: the worst pin against the rail's limit.
   const verdictCell = (t) => t.status ? t.status : t.exceeds === null || t.exceeds === undefined
     ? (rail.tree || lim ? "not judged" : "no limit set") : (t.exceeds ? el("span", { class: "badge fail" }, "FAIL") : "within");
+  // A tree group shows the mean across and the worst pins (which set the drop) side by side.
+  const volts = (v) => [ok(v) ? sig(v, 7) : "–", "num"];
+  $("loads-note").hidden = !rail.tree;
   table("loads", [["Load", ""], ["Ref", ""], ["Pins", "num"], ["Current (A)", "num"],
-    [rail.tree ? "Across (V)" : "V at worst pin (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"],
+    ...(rail.tree ? [["Across, mean (V)", "num"], ["Worst pins (V)", "num"]] : [["V at worst pin (V)", "num"]]),
+    ["Drop (mV)", "num"], ["Drop (%)", "num"],
     [rail.tree ? "Verdict" : lim ? `vs ${sig(lim, 3)} % limit` : "Limit", ""], ...(rail.tree ? [["Split", ""]] : [])],
     rail.loads.map((t) => [[t.estimated ? el("span", { title: "estimated at nominal voltages, without copper losses" }, t.name, " ", el("span", { class: "muted small" }, "estimated draw")) : t.name, ""], [t.ref, ""], [t.pins, "num"], [sig(t.current_a, 4), "num"],
-      [ok(rail.tree ? t.v_across_v : (t.v_worst_v ?? t.v_min_v)) ? sig(rail.tree ? t.v_across_v : (t.v_worst_v ?? t.v_min_v), 7) : "–", "num"],
+      ...(rail.tree ? [volts(t.v_across_v), volts(t.v_worst_v)] : [volts(t.v_worst_v ?? t.v_min_v)]),
       [ok(t.drop_mv) ? sig(t.drop_mv, 4) : "–", "num"], [ok(t.drop_pct) ? sig(t.drop_pct, 3) : "–", "num"], [verdictCell(t), ""],
       ...(rail.tree ? [[splitCell(t), ""]] : [])]));
   netSplit(rail);
@@ -366,10 +370,11 @@ if (M.tree) {                 // solve --tree --html: the tree's own tables, onc
       [sig(v.i_out_a, 4), "num"], [ok(v.i_max_a) ? sig(v.i_max_a, 4) : "–", "num"],
       [ok(v.v_in_v) ? sig(v.v_in_v, 6) : "–", "num"], [ok(v.i_in_a) ? sig(v.i_in_a, 4) : "–", "num"],
       [mw(v.p_loss_w), "num"], [v.regulation || "", ""]]));
-  table("tree-loads", [["Load", ""], ["Group", ""], ["I (A)", "num"], ["Nominal (V)", "num"], ["Across (V)", "num"],
-    ["Drop (mV)", "num"], ["Drop (%)", "num"], ["Verdict", ""]],
+  table("tree-loads", [["Load", ""], ["Group", ""], ["I (A)", "num"], ["Nominal (V)", "num"], ["Across, mean (V)", "num"],
+    ["Worst pins (V)", "num"], ["Drop (mV)", "num"], ["Drop (%)", "num"], ["Verdict", ""]],
     T.loads.map((l) => [[l.name, ""], [l.group, ""], [sig(l.current_a, 4), "num"], [sig(l.nominal_v, 4), "num"],
-      [ok(l.v_across_v) ? sig(l.v_across_v, 6) : "–", "num"], [ok(l.drop_mv) ? sig(l.drop_mv, 4) : "–", "num"],
+      [ok(l.v_across_v) ? sig(l.v_across_v, 6) : "–", "num"], [ok(l.v_worst_v) ? sig(l.v_worst_v, 6) : "–", "num"],
+      [ok(l.drop_mv) ? sig(l.drop_mv, 4) : "–", "num"],
       [ok(l.drop_pct) ? sig(l.drop_pct, 3) : "–", "num"],
       [l.status || (l.exceeds_drop_limit ? el("span", { class: "badge fail" }, "FAIL") : l.exceeds_drop_limit === false ? "within" : "not judged"), ""]]));
   table("tree-links", [["Link", ""], ["Nets", ""], ["Current (A)", "num"], ["Loss (mW)", "num"]],

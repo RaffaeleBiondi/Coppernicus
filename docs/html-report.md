@@ -97,7 +97,10 @@ the links. Here, the power chain with a 1 % limit on +3V3 and on +1V8 and a 30 m
 
 In a group, the **loads table and the worst-load card show what the tree judged**: the voltage
 across each load's supply and ground pins (a regulator's input pins, for a regulator the group
-feeds), its drop from its nominal voltage, and the tree's verdict, each by its own net's limit.
+feeds) as a mean over the pins (*Across, mean*) and at its worst pins (*Worst pins*, the lowest
+supply pin minus the highest ground pin), its drop from its nominal voltage, which is taken at
+the worst pins, and the tree's verdict, each by its own net's limit. A note under the table
+says why the two voltages differ on a part with several pins.
 The **map** is the copper drop below the group's source output, as its scale says: the two
 differ by the ground's rise and by the source's own output voltage. Here U2's input is judged
 at 147.06 mV (4.46 %) across its pins, against the +3V3 limit of 1 %: *FAIL*.

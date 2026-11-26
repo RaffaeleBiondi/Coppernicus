@@ -99,9 +99,10 @@ VRMs (sources and regulators)
   U1             smps   +3V3           3.3V  3.30569V   2.5020A 11.99469V   0.7702A   977.3mW  input drop on VIN 11.00 mV (0.09 %): not judged
   U2             ldo    +1V8           1.8V  1.84537V   2.0000A  3.18377V   2.0020A  2683.1mW  input drop on +3V3_F 147.06 mV (4.46 %): not judged
 Loads (the voltage across supply and ground pins)
-  name           group             I  nominal    supply    ground    across           drop  verdict
-  U4             +3V3           0.5A     3.3V  3.29768V   14.32mV  3.28336V 16.64 mV (0.50 %)  not judged
-  U3             +1V8             2A     1.8V  1.83847V   38.47mV  1.80000V 0.00 mV (0.00 %)  not judged
+  name           group             I  nominal    supply    ground across (mean) worst pins           drop  verdict
+  U4             +3V3           0.5A     3.3V  3.29768V   14.32mV      3.28336V   3.28336V 16.64 mV (0.50 %)  not judged
+  U3             +1V8             2A     1.8V  1.83847V   38.47mV      1.80000V   1.80000V 0.00 mV (0.00 %)  not judged
+  supply, ground and across are means over the part's pins; worst pins is the lowest supply pin minus the highest ground pin, which sets the drop (nominal − worst pins), so on a part with several pins the two can differ.
 Groups
   +1V8       rail   +1V8                   max drop 0.000 mV (0.000 %) below 1.83847 V,   copper loss 13.8 mW: not_judged
   +3V3       rail   +3V3 + +3V3_F          max drop 121.916 mV (3.688 %) below 3.30569 V, copper loss 248 mW: not_judged
@@ -116,9 +117,13 @@ Verdict: not_judged. No limits set: nothing is judged, problems are ranked only.
   judged as a load on the rail that feeds it: *input drop on +3V3_F*. When a source has a rated
   output current (`PI_IMAX`, `current_limit_a`), an **I max** column shows it next to I out,
   and the regulator is judged against it (Verdicts, below).
-- **Loads:** the voltage **across** each load's supply and ground pins, and its drop from the
-  nominal voltage: nominal − (lowest supply pin − highest ground pin). The ground's rise counts
-  in the drop, since that is what the part sees. U3 sits at exactly 1.8 V because U2 holds it
+- **Loads:** the voltage **across** each load's supply and ground pins, as the mean over its
+  supply pins minus the mean over its ground pins, then its **worst pins**: the lowest supply
+  pin minus the highest ground pin. The drop is from the worst pins: nominal − worst pins. On a
+  part with one pin of each, as here, the two are equal; on a part with several ground (or
+  supply) pins at different voltages, across reads higher than the worst pins on a positive
+  rail, and nominal − across is not the drop. The ground's rise counts in the drop, since that
+  is what the part sees. U3 sits at exactly 1.8 V because U2 holds it
   there by remote sense; U2's output (V out 1.84537 V) rises to make up for the copper.
 - **Groups:** a group is a set of nets joined by links and net ties, solved from its one
   source: here +3V3 and +3V3_F, joined by FB1, are one group. A rail group gives its largest
