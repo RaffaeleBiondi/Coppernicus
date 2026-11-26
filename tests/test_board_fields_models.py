@@ -318,6 +318,33 @@ def test_library_tolerances_reach_a_project_rail_by_part():
     assert merge(overridden, library).project.rail("+1V0").loads[0].tol_pct == (-4.0, 4.0)
 
 
+def test_the_merge_names_the_kicad_field_that_holds_each_tolerance():
+    """Merged.tolerance_field (the app's Tolerance tab shows those cells read-only): the field
+    giving either unit of a family, on a fields rail and on a project rail by part (the part
+    carrying the field: the buck's IC, not its inductor); none for what no field gives, nor
+    under override_board_fields."""
+    merged = merge(Project(), STRIP)
+    fv = merged.tolerance_field("VCC", "load", 0, "tol_mv")
+    assert (fv.ref, fv.field, fv.text) == ("U1", "PI_TOL", "-3%,+5%")
+    assert merged.tolerance_field("VCC", "load", 0, "tol_pct") == fv
+    acc = merged.tolerance_field("VCC", "source", 0, "accuracy_mv")
+    assert acc.origin() == 'from KiCad field PI_ACC "1%" on J1'
+    assert [merged.tolerance_field("VCC", "load", 0, k) for k in ("dc_tol_pct", "ac_tol_mv", "ripple_mv",
+                                                                  "transient_mv")] == [None] * 4
+    assert merged.tolerance_field("VIO", "load", 0, "tol_pct") is None
+    own = Project(rails=[Rail("+1V0", sources=[Source("L1", 1.0, name="U1", kind="smps", efficiency=0.9,
+                                                      input_ref="U1", input_net="VIN")],
+                              loads=[Load("U5", 2.0, tol_pct=4)])])
+    library = {"U5": {"PI_DC_TOL": "3%"}, "U1": {"PI_ACC": "1.5%", "PI_KIND": "smps", "PI_EFF": "90%"}}
+    merged = merge(own, library)
+    assert merged.origins["+1V0"].source == "project"
+    assert merged.tolerance_field("+1V0", "source", 0, "accuracy_pct").ref == "U1"
+    assert merged.tolerance_field("+1V0", "load", 0, "dc_tol_mv").field == "PI_DC_TOL"
+    assert merged.tolerance_field("+1V0", "load", 0, "tol_pct") is None       # the project's own
+    own.rails[0].override_board_fields = True
+    assert merge(own, library).tolerance_field("+1V0", "source", 0, "accuracy_pct") is None
+
+
 def test_pi_tol_and_pi_acc_give_the_tolerance_stack_up_its_limits(tmp_path, capsys):
     """J1's PI_ACC and U1's PI_TOL are judged; the project's ripple and transient are carried."""
     def run(tol):

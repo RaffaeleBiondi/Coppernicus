@@ -98,7 +98,16 @@ tolerance:                 # optional
 
 ## Run it
 
-- **App:** the app's Tolerance tab (coming).
+- **App:** the Tolerance tab, after "Ripple & noise". Its editor holds each load's
+  tolerances and entered parts, each source's accuracy and the `tolerance:` options; the table
+  is built only from the results the app already holds (a stale one counts as missing), and
+  its Solve button runs the selected load's next missing solve in the tab that owns it. A
+  value a part's KiCad field gives (`PI_TOL`, `PI_DC_TOL`, `PI_AC_TOL`, `PI_ACC`) is the one
+  used, so its cells (both units: `PI_TOL "5%"` holds `tol_pct` and `tol_mv`) are read-only,
+  greyed, showing the field's value; the tooltip names the field and the part, e.g.
+  `from KiCad field PI_ACC "1%" on U3; change it in KiCad, or set override_board_fields: true
+  on rail +3V3 to use the project's`. The row's other cells stay editable. Export writes the
+  CLI's two files.
 - **Command line:** `coppernicus tolerance PROJECT` solves the power tree, then only what a
   load with a tolerance needs: one AC solve per rail (KiPI's transient estimate, when a probe
   has a step and its source a bandwidth) and one noise solve per aggressor listing such a

@@ -230,6 +230,81 @@ def test_a_refused_edit_writes_nothing_not_even_the_mirror():
     assert p.rails[0].loads[0].tol_mv is None and p.rails[0].loads[0].tol_pct == (-5.0, 5.0)
 
 
+HELD_FIELDS = {"J1": {**FIELDS["J1"], "PI_ACC": "1%"}, "U1": {**FIELDS["U1"], "PI_AC_TOL": "20mV"}}
+FREE_LOAD_KEYS = ("tol_pct", "tol_mv", "dc_tol_pct", "dc_tol_mv", "ripple_mv", "transient_mv")
+
+
+def test_a_value_a_kicad_field_holds_is_read_only_cell_by_cell():
+    """KiCad fields always win: PI_ACC on J1 and PI_AC_TOL on U1 hold both units of their
+    family, read-only, naming the field and the part and how to change it; U1's other cells,
+    which no field holds, stay editable (a row partly held). set_value refuses a held key,
+    writing nothing (not even the copy of the fields' parts)."""
+    from coppernicus.app.tolerance_panel import edit_rows, set_value
+    own = Project()
+    merged = BF.merge(own, HELD_FIELDS, PADS)
+    src, load = edit_rows(own, merged)
+    assert src.read_only == load.read_only == ""
+    assert set(src.held) == {"accuracy_pct", "accuracy_mv"} and set(load.held) == {"ac_tol_pct", "ac_tol_mv"}
+    assert src.why("accuracy_mv") == ('from KiCad field PI_ACC "1%" on J1; change it in KiCad, or set '
+                                      "override_board_fields: true on rail VCC to use the project's")
+    assert load.why("ac_tol_pct").startswith('from KiCad field PI_AC_TOL "20mV" on U1; change it in KiCad')
+    assert [load.why(k) for k in FREE_LOAD_KEYS] == [""] * len(FREE_LOAD_KEYS)
+    for kind, key, text in (("source", "accuracy_pct", "2"), ("source", "accuracy_mv", ""),
+                            ("load", "ac_tol_mv", "30"), ("load", "ac_tol_pct", "1")):
+        with pytest.raises(ValueError, match=r"^from KiCad field PI_A\w+ \"\w+%?\" on (J1|U1); change it"):
+            set_value(own, merged, kind, "VCC", 0, key, text)
+    assert own.rails == []
+
+
+def test_a_copy_of_the_fields_parts_keeps_what_a_field_holds_as_merged():
+    """An edit of a free cell on a rail from the fields writes a copy of the fields' parts as
+    merged, the values their fields give included (as Use KiCad fields and Override → start from
+    the KiCad values copy them), so Override in project later keeps them; the same fields merge
+    with no warning, and a field changed in KiCad still wins, with its warning."""
+    from coppernicus.app.tolerance_panel import set_value
+    own = Project()
+    note = set_value(own, BF.merge(own, HELD_FIELDS, PADS), "load", "VCC", 0, "tol_pct", "5")
+    assert "no KiCad field gives U1's tol_pct" in note
+    rail = own.rail("VCC")
+    assert (rail.loads[0].tol_pct, rail.loads[0].ac_tol_mv) == ((-5.0, 5.0), (-20.0, 20.0))
+    assert rail.sources[0].accuracy_pct == (-1.0, 1.0)
+    again = BF.merge(own, HELD_FIELDS, PADS)
+    u1, j1 = again.project.rail("VCC").loads[0], again.project.rail("VCC").sources[0]
+    assert (u1.tol_pct, u1.ac_tol_mv, j1.accuracy_pct) == ((-5.0, 5.0), (-20.0, 20.0), (-1.0, 1.0))
+    assert not again.warnings
+    changed = BF.merge(own, {**HELD_FIELDS, "J1": {**HELD_FIELDS["J1"], "PI_ACC": "2%"}}, PADS)
+    [w] = changed.warnings
+    assert 'KiCad field PI_ACC "2%" on J1' in w
+    assert changed.project.rail("VCC").sources[0].accuracy_pct == (-2.0, 2.0)
+
+
+def test_library_fields_hold_a_project_rails_cells_unless_the_rail_overrides_them():
+    """A part's PI_ACC without PI_RAIL reaches the project file's rail by part: held there too.
+    With override_board_fields the project's value is used, and edits; a per-rail PI_TOL holds
+    only the rail it is given for."""
+    from coppernicus.app.tolerance_panel import edit_rows, set_value
+    own = Project(rails=[Rail("VCC", sources=[Source("J1", 3.3, accuracy_pct=2)], loads=[Load("U1", 1.0)])])
+    library = {"J1": {"PI_ACC": "1%"}}
+    merged = BF.merge(own, library)
+    assert merged.origins["VCC"].source == "project"
+    src, load = edit_rows(own, merged)
+    assert src.term.accuracy_pct == (-1.0, 1.0) and 'PI_ACC "1%" on J1' in src.why("accuracy_pct")
+    assert not load.held
+    with pytest.raises(ValueError, match="PI_ACC"):
+        set_value(own, merged, "source", "VCC", 0, "accuracy_pct", "3")
+    assert own.rails[0].sources[0].accuracy_pct == (-2.0, 2.0)
+    own.rails[0].override_board_fields = True
+    merged = BF.merge(own, library)
+    src, _load = edit_rows(own, merged)
+    assert not src.held and src.why("accuracy_pct") == "" and src.term.accuracy_pct == (-2.0, 2.0)
+    set_value(own, merged, "source", "VCC", 0, "accuracy_pct", "3")
+    assert own.rails[0].sources[0].accuracy_pct == (-3.0, 3.0)
+    dual = {"J1": FIELDS["J1"], "U1": {"PI_RAIL": "VCC;VIO", "PI_LOAD": "1A;50mA", "PI_TOL": "5%;"},
+            "J2": {"PI_RAIL": "VIO", "PI_SOURCE": "1.8V"}}
+    rows = {(r.net, r.term.ref): r for r in edit_rows(Project(), BF.merge(Project(), dual))}
+    assert set(rows["VCC", "U1"].held) == {"tol_pct", "tol_mv"} and not rows["VIO", "U1"].held
+
+
 # ---------------------------------------------------------------------- misspelt keys of the loaded file
 
 
@@ -639,6 +714,64 @@ def test_a_kicad_fields_rail_takes_a_tolerance_in_the_tab_with_no_warning_and_no
         assert "KiCad footprint fields" in window.statusBar().currentMessage()
         assert window.ac_panel.rail_box.currentText() == "VCC" and not window.ac_panel.stale
         assert any("tol_pct of U1 from the project file" in a for a in panel.result.assumptions)
+    '''))
+
+
+def test_a_cell_a_kicad_field_holds_is_read_only_in_the_tab_and_its_neighbours_still_edit(tmp_path):
+    """PI_ACC on J1 and PI_AC_TOL on U1: those cells show the field's value with the look of the
+    tab's other read-only cells and a tooltip naming the field and the part; typed anyway, the
+    value is refused and nothing is written. U1's tol_pct, held by no field, still edits."""
+    run_in_window(FIELDS_PRELUDE + textwrap.dedent(f'''
+        from coppernicus.app.tolerance_panel import LOAD_COLUMNS, READ_ONLY_BG, SOURCE_COLUMNS
+        tmp = Path({str(tmp_path)!r})
+        held = {{"J1": {{**FIELDS["J1"], "PI_ACC": "1%"}}, "U1": {{**FIELDS["U1"], "PI_AC_TOL": "20mV"}}}}
+        write_strip_board(tmp / "strip.kicad_pcb", held)
+        path = Project(board="strip.kicad_pcb").save(tmp / "held.coppernicus.yml")
+        window.dirty = False
+        assert window.open_project(str(path))
+        app.processEvents()
+        panel.refresh()
+
+        def cell(table, columns, key):
+            return table.item(0, 2 + [k for k, _h in columns].index(key))
+        editable = QtCore.Qt.ItemIsEditable
+        for table, columns, key, text, field, part in (
+                (panel.sources, SOURCE_COLUMNS, "accuracy_pct", "1", "PI_ACC", "J1"),
+                (panel.sources, SOURCE_COLUMNS, "accuracy_mv", "", "PI_ACC", "J1"),
+                (panel.loads, LOAD_COLUMNS, "ac_tol_mv", "20", "PI_AC_TOL", "U1"),
+                (panel.loads, LOAD_COLUMNS, "ac_tol_pct", "", "PI_AC_TOL", "U1")):
+            item = cell(table, columns, key)
+            assert item.text() == text and not item.flags() & editable, (key, item.text())
+            assert item.background().color() == READ_ONLY_BG, key
+            tip = item.toolTip()
+            assert f"from KiCad field {{field}}" in tip and f"on {{part}}; change it in KiCad" in tip, tip
+        for key in ("tol_pct", "dc_tol_mv", "ripple_mv", "transient_mv"):
+            item = cell(panel.loads, LOAD_COLUMNS, key)
+            assert item.flags() & editable and item.background().style() == QtCore.Qt.NoBrush, key
+        panel.set_cell("source", "J1", "accuracy_pct", "2")     # typed anyway: refused, nothing written
+        said = panel.status.text()
+        assert said.startswith('Not applied: from KiCad field PI_ACC "1%" on J1'), said
+        assert cell(panel.sources, SOURCE_COLUMNS, "accuracy_pct").text() == "1"
+        assert window.project.rails == [] and not window.dirty
+        panel.set_cell("load", "U1", "tol_pct", "5")
+        assert window.project.rail("VCC").loads[0].tol_pct == (-5.0, 5.0) and window.dirty
+        assert window.merged.warnings == [] and cell(panel.loads, LOAD_COLUMNS, "tol_pct").text() == "5"
+        assert not cell(panel.loads, LOAD_COLUMNS, "ac_tol_mv").flags() & editable
+        assert window.merged.project.rail("VCC").sources[0].accuracy_pct == (-1.0, 1.0)
+
+        def no_dialog(*_a):
+            raise AssertionError("Override in project asked, though nothing differs")
+        fields_view.ask_override = no_dialog
+        assert window.override_fields("VCC")                 # the tooltip's way: the project's values
+        panel.refresh()
+        for table, columns, key, text in ((panel.sources, SOURCE_COLUMNS, "accuracy_pct", "1"),
+                                          (panel.loads, LOAD_COLUMNS, "ac_tol_mv", "20")):
+            item = cell(table, columns, key)
+            assert item.text() == text and item.flags() & editable, (key, item.text())
+            assert item.background().style() == QtCore.Qt.NoBrush, key
+        panel.set_cell("source", "J1", "accuracy_pct", "2")
+        assert window.project.rail("VCC").sources[0].accuracy_pct == (-2.0, 2.0)
+        assert window.merged.project.rail("VCC").sources[0].accuracy_pct == (-2.0, 2.0)
     '''))
 
 

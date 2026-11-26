@@ -2515,7 +2515,10 @@ def run_tolerance(window, check: Checks, args, out: Path):
     KiPI's transient estimate in turn, each through its own tab, its estimate first; then the
     stack-up is the CLI's, number for number (PASS at ±6 %); 3 % FAILs without a solve dropped;
     the row shows U2 on the board; export with the CLI's names; a rail edit turns it NOT JUDGED
-    (the tree dropped, the noise stale); save and reopen keep the tolerances."""
+    (the tree dropped, the noise stale); save and reopen keep the tolerances. Then a synthetic
+    strip (written into ``out``) whose J1 carries PI_ACC and U1 PI_AC_TOL: those cells are
+    read-only, naming the field and the part, a value typed there is refused, and U1's tol_pct,
+    which no field holds, still edits."""
     import csv
     import json
     import math
@@ -2637,7 +2640,59 @@ def run_tolerance(window, check: Checks, args, out: Path):
     print(f"  Tolerance tab: {shot}", flush=True)
     after = {f.name: f.read_bytes() for f in TOLERANCE_DIR.iterdir()}
     check("tolerance: the example's files are unchanged", after == before, str(sorted(after)))
+    run_tolerance_fields(window, check, out)
     window.results_tabs.setCurrentWidget(window.problems)
+    window.dirty = False
+
+
+def run_tolerance_fields(window, check: Checks, out: Path):
+    """The Tolerance tab on a synthetic strip whose KiCad fields hold J1's accuracy (PI_ACC) and
+    U1's AC tolerance (PI_AC_TOL): those cells are read-only, showing the field's value, the
+    tooltip naming the field and the part; typed anyway, refused; U1's tol_pct still edits."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+
+    from coppernicus.app.tolerance_panel import LOAD_COLUMNS, READ_ONLY_BG, SOURCE_COLUMNS
+    from coppernicus.engine.synthetic import write_strip_kicad_pcb
+    from coppernicus.project import Project
+    folder = out / "tolerance_fields"
+    folder.mkdir(parents=True, exist_ok=True)
+    write_strip_kicad_pcb(folder / "strip.kicad_pcb", {
+        "J1": {"PI_RAIL": "VCC", "PI_SOURCE": "3.3V", "PI_ACC": "1%"},
+        "U1": {"PI_RAIL": "VCC", "PI_LOAD": "1A", "PI_AC_TOL": "20mV"}})
+    path = Project(board="strip.kicad_pcb").save(folder / "held.coppernicus.yml")
+    panel = window.tolerance_panel
+    window.dirty = False
+    window.open_project(path)
+    window.results_tabs.setCurrentWidget(panel)
+    QApplication.processEvents()
+
+    def cell(table, columns, key):
+        return table.item(0, 2 + [k for k, _h in columns].index(key)) if table.rowCount() else None
+    acc = cell(panel.sources, SOURCE_COLUMNS, "accuracy_pct")
+    ac = cell(panel.loads, LOAD_COLUMNS, "ac_tol_mv")
+    held = [i for i in (acc, ac) if i is not None]
+    check("tolerance: a cell a KiCad field holds is read-only, showing the field's value, the tooltip "
+          "naming the field and the part",
+          len(held) == 2 and acc.text() == "1" and ac.text() == "20"
+          and not any(i.flags() & Qt.ItemIsEditable for i in held)
+          and all(i.background().color() == READ_ONLY_BG for i in held)
+          and 'KiCad field PI_ACC "1%" on J1; change it in KiCad' in acc.toolTip()
+          and 'KiCad field PI_AC_TOL "20mV" on U1' in ac.toolTip(),
+          " | ".join(f"{i.text()!r} {i.toolTip()[:70]}" for i in held))
+    panel.set_cell("source", "J1", "accuracy_pct", "2")
+    check("tolerance: typed anyway into a field's cell, refused: nothing written",
+          panel.status.text().startswith("Not applied: from KiCad field PI_ACC")
+          and cell(panel.sources, SOURCE_COLUMNS, "accuracy_pct").text() == "1"
+          and window.project.rails == [] and not window.dirty, panel.status.text()[:120])
+    free = cell(panel.loads, LOAD_COLUMNS, "tol_pct")
+    editable = free is not None and bool(free.flags() & Qt.ItemIsEditable)
+    panel.set_cell("load", "U1", "tol_pct", "5")
+    own, merged = window.project.rail("VCC"), window.merged.project.rail("VCC")
+    check("tolerance: U1's tol_pct, held by no field, still edits (the fields' values kept, no warning)",
+          editable and own is not None and own.loads[0].tol_pct == (-5.0, 5.0)
+          and merged.loads[0].ac_tol_mv == (-20.0, 20.0) and merged.sources[0].accuracy_pct == (-1.0, 1.0)
+          and window.merged.warnings == [] and window.dirty, panel.status.text()[:120])
     window.dirty = False
 
 

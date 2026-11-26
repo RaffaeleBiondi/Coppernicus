@@ -6,12 +6,16 @@ An editor beside the table. The editor holds each load's tolerances (``tol``, ``
 ``transient_mv``), each source's DC accuracy, and the ``tolerance:`` options; a cell takes a
 number (± that) or a signed ``below, above`` as datasheets write it, empty is "not set" and 0 is
 a value; an edit builds a new terminal through its own checks (``dataclasses.replace``), so
-nothing the project file would refuse is written. A rail from the fields is editable too (a
-part's own PI_TOL / PI_ACC fields still win over an edit, as in every merge): the edit is
+nothing the project file would refuse is written. A value a part's KiCad field gives (PI_TOL,
+PI_DC_TOL, PI_AC_TOL, PI_ACC: both units of its family) wins over the project's in every merge,
+so its cells are read-only, showing the field's value, the tooltip naming the field and the
+part (:meth:`coppernicus.board_fields.Merged.tolerance_field`); the other cells of the row stay
+editable. A rail from the fields is editable too, where no field holds the cell: the edit is
 held on the project's own rail of that net,
 on the part of the same reference, which the merge carries by ref
 (:func:`coppernicus.board_fields.carried_by_ref`); with no rail of its own there, the
-project's rail becomes a copy of the fields' parts, so the merge sees nothing to warn about.
+project's rail becomes a copy of the fields' parts as merged (what their fields hold
+included, so Override in project keeps it), so the merge sees nothing to warn about.
 
 The table is built from what the window holds (:func:`compose_held`): the power tree, the
 Impedance tab's results and the Ripple & noise tab's. A result held for an older setup is
@@ -155,12 +159,30 @@ def with_tolerance(term: Terminal, key: str, text: str) -> Terminal:
 @dataclass
 class EditRow:
     """A source or load of the merged project (what is solved): its rail, its index there, the
-    terminal as merged (its values shown), and why it cannot be edited ("" when it can)."""
+    terminal as merged (its values shown), why it cannot be edited ("" when it can), and the
+    keys a KiCad field holds, each with why (:func:`field_held`)."""
     kind: str                      # "source" or "load"
     net: str
     index: int
     term: Terminal
     read_only: str = ""
+    held: Dict[str, str] = dataclasses.field(default_factory=dict)
+
+    def why(self, key: str) -> str:
+        """Why the cell of ``key`` cannot be edited ("" when it can): a KiCad field holds it, or
+        the whole row is read-only."""
+        return self.held.get(key) or self.read_only
+
+
+def field_held(merged: BF.Merged, kind: str, net: str, index: int, key: str) -> str:
+    """Why ``key`` of the merged terminal cannot be edited because a KiCad field gives it (the
+    field wins over the project's value in every merge, unless the rail sets
+    ``override_board_fields``); "" when no field does."""
+    fv = merged.tolerance_field(net, kind, index, key)
+    if fv is None:
+        return ""
+    return (f"{fv.origin()}; change it in KiCad, or set override_board_fields: true on rail {net} to use "
+            "the project's")
 
 
 def _terms(rail: Optional[Rail], kind: str) -> List[Terminal]:
@@ -196,13 +218,14 @@ def _holder(project: Project, merged: BF.Merged, kind: str, net: str, index: int
 
 def edit_rows(project: Project, merged: BF.Merged) -> List[EditRow]:
     """Every source and load of the merged project, rail by rail (sources first), each with why
-    it is read-only ("" when editable)."""
+    it is read-only ("" when editable) and the keys a KiCad field holds."""
     rows = []
     for rail in merged.project.rails:
         for kind in ("source", "load"):
             for i, term in enumerate(_terms(rail, kind)):
                 why = _holder(project, merged, kind, rail.net, i)[2]
-                rows.append(EditRow(kind, rail.net, i, term, why))
+                held = {k: w for k in terminal_keys(term) if (w := field_held(merged, kind, rail.net, i, k))}
+                rows.append(EditRow(kind, rail.net, i, term, why, held))
     return rows
 
 
@@ -210,7 +233,11 @@ def set_value(project: Project, merged: BF.Merged, kind: str, net: str, index: i
               text: str) -> str:
     """Write ``key`` of the merged terminal (``kind``, ``net``, ``index``) from a cell's
     ``text`` into ``project``. Returns a note ("" when there is nothing to say); raises
-    :class:`ProjectError` (or ValueError, for a read-only one), writing nothing."""
+    :class:`ProjectError` (or ValueError, for a read-only one or one a KiCad field holds),
+    writing nothing."""
+    held = field_held(merged, kind, net, index, key)
+    if held:
+        raise ValueError(held)
     own, i, why = _holder(project, merged, kind, net, index)
     if why:
         raise ValueError(why)
@@ -220,16 +247,17 @@ def set_value(project: Project, merged: BF.Merged, kind: str, net: str, index: i
         return ""
     fields = merged.project.rail(net)         # a copy of the fields' parts holds it
     sources, loads = copy.deepcopy(fields.sources), copy.deepcopy(fields.loads)
-    held = sources if kind == "source" else loads
-    held[index] = with_tolerance(held[index], key, text)     # refused: nothing written yet
+    terms = sources if kind == "source" else loads
+    label = terms[index].label
+    terms[index] = with_tolerance(terms[index], key, text)    # refused: nothing written yet
     own = project.rail(net)
     if own is None:
         own = Rail(net)
         project.rails.append(own)
     own.sources, own.loads = sources, loads
-    return (f"{net} comes from the KiCad footprint fields, where no field holds a tolerance yet: its sources "
-            f"and loads are now also in the project file's own rail of {net}, which holds it (KiCad still "
-            "gives their values)")
+    return (f"{net} comes from the KiCad footprint fields, where no KiCad field gives {label}'s {key}: its "
+            f"sources and loads are now also in the project file's own rail of {net}, which holds it (KiCad "
+            "still gives their values)")
 
 
 # ---------------------------------------------------------------------- misspelt keys of the loaded file
@@ -632,7 +660,7 @@ class TolerancePanel(QWidget):
     def _fill_editor(self, force: bool = False):
         win = self._win
         rows = edit_rows(win.project, win.merged) if win.board is not None else []
-        signature = [(r.kind, r.net, r.index, r.term.label, r.read_only,
+        signature = [(r.kind, r.net, r.index, r.term.label, r.read_only, tuple(sorted(r.held.items())),
                       tuple(pair_text(getattr(r.term, k)) for k in terminal_keys(r.term))) for r in rows]
         opts = win.project.tolerance
         self.ripple_sum.blockSignals(True)
@@ -660,10 +688,11 @@ class TolerancePanel(QWidget):
                 for c, (key, _h) in enumerate(columns, start=2):
                     item = QTableWidgetItem(pair_text(getattr(r.term, key)))
                     item.setData(Qt.UserRole, self._rows.index(r))
-                    if r.read_only:
+                    why = r.why(key)               # the row, or this cell: a KiCad field holds it
+                    if why:
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                         item.setBackground(QBrush(READ_ONLY_BG))
-                        item.setToolTip(r.read_only)
+                        item.setToolTip(why)
                     else:
                         item.setToolTip(f"{KEY_TIPS[key]}. {PAIR_TIP}")
                     table.setItem(i, c, item)

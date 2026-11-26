@@ -951,6 +951,9 @@ class Origin:
     notes: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     board_fields: Optional[Dict[str, Any]] = None
+    # (kind "source" / "load", index on the merged rail) -> {family ("tol", "dc_tol", "ac_tol",
+    # "accuracy"): the KiCad field that gives it, winning over the project's}.
+    tolerance_fields: Dict[Tuple[str, int], Dict[str, FieldValue]] = field(default_factory=dict)
 
 
 @dataclass
@@ -969,6 +972,14 @@ class Merged:
     @property
     def from_fields(self) -> List[str]:
         return [n for n, o in self.origins.items() if o.source == "fields"]
+
+    def tolerance_field(self, net: str, kind: str, index: int, key: str) -> Optional[FieldValue]:
+        """The KiCad field that gives ``key`` of the merged rail ``net``'s ``kind`` ("source" or
+        "load") at ``index``, either unit of its family (``PI_TOL "5%"`` gives ``tol_pct`` and
+        clears ``tol_mv``); None when no field does, so the project's value is used."""
+        origin = self.origins.get(net)
+        held = origin.tolerance_fields.get((kind, index), {}) if origin is not None else {}
+        return held.get(_family(key))
 
     def notes(self) -> List[str]:
         """Every assumption line, once (rails, then links, then capacitor models)."""
@@ -1155,15 +1166,18 @@ def _library_tolerances(merged: Merged, fields: Mapping[str, Mapping[str, str]])
         origin = merged.origins.get(rail.net)
         if origin is None or origin.source != "project" or rail.override_board_fields:
             continue
-        for terms, names in ((rail.loads, LOAD_FIELDS), (rail.sources, ACCURACY_FIELDS)):
-            for t in terms:
+        for kind, terms, names in (("load", rail.loads, LOAD_FIELDS),
+                                   ("source", rail.sources, ACCURACY_FIELDS)):
+            for i, t in enumerate(terms):
                 part = _source_part(t) if isinstance(t, Source) else t.ref
                 f = fields.get(part)
                 for name in names if f else ():
                     text = _part_value(f, name, rail.net)
                     if text is not None:
                         key, pair = tolerance(part, name, text)
-                        _set_tolerance(t, key, pair, FieldValue(part, name, text), rail.net, origin)
+                        fv = FieldValue(part, name, text)
+                        _set_tolerance(t, key, pair, fv, rail.net, origin)
+                        origin.tolerance_fields.setdefault((kind, i), {})[_family(key)] = fv
 
 
 def _norm_dielectric(text: str) -> str:
@@ -1394,6 +1408,11 @@ def _from_fields(fr: FieldRail, own: Optional[Rail], pads: Optional[PadNets] = N
     rail = fr.rail()
     origin = Origin(fr.net, "fields", [fr.note()], list(fr.warnings),
                     board_fields=fr.listing(None, through))
+    for kind, made_terms in (("source", fr.sources), ("load", fr.loads)):
+        for i, ft in enumerate(made_terms):      # the rail's terminals, in this order
+            held = {TOLERANCE_STEMS[fv.field]: fv for _, fv in ft.values if fv.field in TOLERANCE_STEMS}
+            if held:
+                origin.tolerance_fields[(kind, i)] = held
     if own is None:
         return rail, origin
     # A project rail with no sources and no loads only adds limits: nothing to compare.
