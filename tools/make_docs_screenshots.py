@@ -42,7 +42,15 @@ DEMO = ROOT / "examples" / "demo" / "demo.coppernicus.yml"
 DEMO_BOARD = ROOT / "examples" / "demo" / "demo.kipi.json.gz"
 CHAIN = ROOT / "examples" / "power_chain" / "power_chain.coppernicus.yml"
 FIELDS = ROOT / "examples" / "fields" / "fields.coppernicus.yml"
+DEMO_THERMAL = ROOT / "examples" / "demo" / "demo-thermal.coppernicus.yml"
+PDN = ROOT / "examples" / "pdn" / "pdn.coppernicus.yml"
+NOISE_TIGHT = ROOT / "examples" / "noise" / "noise-tight.coppernicus.yml"
+TOLERANCE_TIGHT = ROOT / "examples" / "tolerance" / "tolerance-tight.coppernicus.yml"
 NET = "+3V3"
+
+
+class Unfinished(Exception):
+    """A scenario did not reach the state its image is meant to show."""
 
 
 @functools.cache
@@ -58,9 +66,10 @@ def gui_check():
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", help=f"output folder (default: {IMAGES.relative_to(ROOT)})")
-    ap.add_argument("--set", choices=("guide", "features", "all"), default="guide",
+    ap.add_argument("--set", choices=("guide", "features", "analyses", "all"), default="guide",
                     help="guide: the README's guide-*.png (default); features: the images of the "
-                         "feature pages in docs/; all: both")
+                         "feature pages in docs/; analyses: the Temperature, Impedance, Ripple & noise "
+                         "and Tolerance tabs and the Results panel; all: every set")
     ap.add_argument("--offscreen", action="store_true",
                     help="no window (Qt's offscreen platform), to check that every scenario runs and "
                          "reaches its state; the board view stays blank, so --out is required")
@@ -305,10 +314,147 @@ def main(argv=None) -> int:
         written.append(out / "revisions-delta.png")
         return 0
 
+    def analyses() -> int:
+        """A window per analysis tab, each solved on its example, and the Results panel with
+        the current-density default's attention rows. Tabs are found by their names, and every
+        step checks that it got where it should (Unfinished stops the run)."""
+        from PySide6.QtWidgets import QDockWidget
+        gc = gui_check()
+
+        def need(ok, what: str):
+            if not ok:
+                raise Unfinished(what)
+
+        def opened(project: Path, net: str):
+            window = new_window()
+            need(window.open_project(project), f"could not open {project.name}")
+            window.nets.select(net)
+            settle()
+            need(window.net == net, f"{project.name}: no net {net}")
+            return window
+
+        def tab(window, text: str):
+            """The Results tab named ``text``, shown, wherever it is in the row of tabs."""
+            tabs = window.results_tabs
+            names = [tabs.tabText(i) for i in range(tabs.count())]
+            need(text in names, f"no {text!r} tab in the Results panel: {names}")
+            tabs.setCurrentIndex(names.index(text))
+            settle()
+            return tabs.currentWidget()
+
+        def results_height(window, px: int):
+            """The Results dock made ``px`` tall: the tabs' plots and tables need more than the
+            app's default."""
+            dock = window.findChild(QDockWidget, "Results")
+            need(dock is not None, "no Results dock")
+            window.resizeDocks([dock], [px], Qt.Vertical)
+            settle()
+            return dock
+
+        def closed(window):
+            window.dirty = False
+            window.close()
+
+        # Temperature: the thermal demo's power tree solved electro-thermally (Ctrl+T), the board
+        # temperature of F.Cu with a double-click's readout on its hottest cell.
+        window = opened(DEMO_THERMAL, NET)
+        results_height(window, 330)
+        tree = gc.solve_tree_and_wait(window, args.timeout)
+        need(tree is not None and tree.thermal is not None, "the thermal demo's power tree did not solve")
+        panel = tab(window, "Temperature")
+        need(panel.shown_layer_rows() and panel.shown_load_rows(), "the Temperature tab shows no rows")
+        window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
+        window.field_box.setCurrentIndex(window.field_box.findData("temperature"))
+        settle()
+        need(window.field_box.currentData() == "temperature" and window.layer_box.currentText() == "F.Cu",
+             "the board temperature of F.Cu is not shown (the app fell back to the drop)")
+        window.view.reset_view()
+        hx, hy, _ = tree.thermal.map("F.Cu").hottest()
+        window.view.probe_at(hx, hy)
+        save(window, "thermal-1-window", "")
+        closed(window)
+
+        # Impedance: Solve impedance on the pdn example (its +3V3 has no DC load, so the view
+        # shows the copper): |Z|(f) at probe U1 against its target, and the probe's row.
+        window = opened(PDN, NET)
+        panel = tab(window, "Impedance")
+        results_height(window, 470)
+        res, _ = gc.solve_ac_and_wait(window, args.timeout)
+        need(res is not None and panel.figure.axes and panel.figure.axes[0].get_lines()
+             and panel.table.rowCount() > 0, f"the impedance did not solve: {panel.status.text()}")
+        save(window, "ac-1-window", "")
+        closed(window)
+
+        # Ripple & noise: noise-tight's VOUT solved (the drop map behind), then Solve noise: the
+        # waveforms, the ripple table and the victims, SIG_LOOP over its margin.
+        window = opened(NOISE_TIGHT, "VOUT")
+        need(solved(window), "noise-tight's VOUT did not solve")
+        panel = tab(window, "Ripple & noise")
+        results_height(window, 470)
+        res, _, _ = gc.solve_noise_and_wait(window, args.timeout)
+        need(res is not None and panel.ripple_table.rowCount() > 0 and panel.victim_table.rowCount() > 0
+             and panel.wave_figure.axes and all(ax.get_lines() for ax in panel.wave_figure.axes),
+             f"the noise did not solve: {panel.status.text()}")
+        plots = [panel.plot_tabs.tabText(i) for i in range(panel.plot_tabs.count())]
+        need("Waveforms" in plots, f"no Waveforms plot: {plots}")
+        panel.plot_tabs.setCurrentIndex(plots.index("Waveforms"))
+        save(window, "noise-1-window", "")
+        closed(window)
+
+        # Tolerance: tolerance-tight, the tab's Solve pressed until nothing is missing (the power
+        # tree, the noise of U1, the impedance with KiPI's transient, each in its own tab), then
+        # U2's stack-up and its verdict.
+        window = opened(TOLERANCE_TIGHT, "VOUT")
+        panel = tab(window, "Tolerance")
+        results_height(window, 470)
+        for _ in range(6):
+            if not panel.solve_button.isEnabled():
+                break
+            step = panel.solve_button.text()
+            panel.solve_next()
+            if window.tree_worker is not None:
+                window.tree_worker.wait(int(args.timeout * 1000))
+            for busy in (window.noise_panel, window.ac_panel):
+                gc.wait_idle(busy, args.timeout)
+            settle()
+            panel = tab(window, "Tolerance")
+            settle()
+            need(not panel.solve_button.isEnabled() or panel.solve_button.text() != step,
+                 f"the Tolerance tab's {step!r} solved nothing: {panel.status.text()}")
+        res = panel.result
+        need(res is not None and res.verdict in ("pass", "fail") and panel.table.rowCount() > 0
+             and not panel.solve_button.isEnabled(), f"the stack-up is not judged: {panel.header.text()}")
+        save(window, "tolerance-1-window", "")
+        closed(window)
+
+        # The Results panel: the thermal demo's +3V3 solved alone (F5), 15.2 A through the demo
+        # board: crowding above the current-density default, amber ATTENTION rows.
+        window = opened(DEMO_THERMAL, NET)
+        need(solved(window), "the thermal demo's +3V3 did not solve")
+        tab(window, "Problems")
+        dock = results_height(window, 420)
+        rows = window.problems.tree
+        attention = [rows.topLevelItem(i) for i in range(rows.topLevelItemCount())
+                     if rows.topLevelItem(i).text(0) == "ATTENTION"]
+        need(attention, "no ATTENTION row in the Problems tab")
+        rows.scrollToItem(attention[0])
+        settle()
+        need(rows.viewport().rect().contains(rows.visualItemRect(attention[0])),
+             "the first ATTENTION row is not in view")
+        save(dock, "results-attention", "")
+        closed(window)
+        return 0
+
     try:
         status = guide() if args.set in ("guide", "all") else 0
         if status == 0 and args.set in ("features", "all"):
             status = features()
+        if status == 0 and args.set in ("analyses", "all"):
+            try:
+                status = analyses()
+            except Unfinished as e:
+                print(f"analyses: {e}", file=sys.stderr)
+                status = 1
         if watch is not None:
             check = gc.Checks()
             watch.finish(check)
