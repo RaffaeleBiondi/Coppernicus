@@ -142,8 +142,10 @@ def test_solve_rail_and_write_project_take_them(tmp_path):
 def test_the_app_settings_edit_them():
     pytest.importorskip("PySide6")
     body = textwrap.dedent('''
+        from PySide6.QtCore import QLocale
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance() or QApplication([])
+        QLocale.setDefault(QLocale.c())                     # as the main window does
         from coppernicus.app.panels import RailPanel
         from coppernicus.project import Settings
         panel = RailPanel()
@@ -158,6 +160,10 @@ def test_the_app_settings_edit_them():
         assert s.min_edge_mm is None and s.grading == 0.1
         panel.set_settings(Settings(min_edge_mm=0.005, grading=0.0))
         assert (panel.min_edge.text(), panel.grading.text()) == ("0.005", "0"), panel.grading.text()
+        s = panel._settings
+        panel.grading.setText("2.5"); panel.min_edge.setText("0")      # not accepted, left there
+        panel.temp.setValue(30.0)                                       # another setting changes
+        assert (s.min_edge_mm, s.grading, s.copper_temp_c) == (0.005, 0.0, 30.0), (s.min_edge_mm, s.grading)
     ''')
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     out = subprocess.run([sys.executable, "-c", body], env=env, capture_output=True, text=True, timeout=180)

@@ -943,8 +943,10 @@ class RailPanel(QWidget):
         self._settings.max_edge_mm = self.max_edge.value()
         self._settings.via_plating_um = _optional_float(self.plating)
         self._settings.copper_temp_c = self.temp.value()
-        self._settings.min_edge_mm = _optional_float(self.min_edge)
-        self._settings.grading = _optional_float(self.grading)
+        # Only a value its validator accepts: a field left at "0" or "2.5" keeps the setting.
+        for key, edit in (("min_edge_mm", self.min_edge), ("grading", self.grading)):
+            if edit.hasAcceptableInput():
+                setattr(self._settings, key, _optional_float(edit))
         self.settings_changed.emit()
 
     def _edit_copper(self):
