@@ -17,6 +17,9 @@ results against your own judgement.
   holders no longer forces the whole return through one holder, which overstated the ground
   rise and the ground copper's loss. Ideal supplies (`kind: source`) only; a single ground part
   gives the same results as before.
+- `COPPERNICUS_DC_DIRECT_MAX=<unknowns>` (opt-in) solves DC systems above KiPI's 200,000-unknown
+  direct limit with a direct factorization instead of AMG-CG, within KiPI's SuperLU limit and
+  half the free memory; results equal within 1e-9 (CG's tolerance).
 
 ## 0.3.1 (2026-11-26)
 
