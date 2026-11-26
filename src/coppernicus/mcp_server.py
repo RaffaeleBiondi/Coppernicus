@@ -45,13 +45,15 @@ power tree at once, ground return included; the board temperature with thermal).
 returns tree_id "t1" and a result_id per group ("t1:GND"): probe (with relative_to for the
 voltage between two points, across groups too), render_map and cut_current take a group's
 id, report the tree's; the tools for one rail result (get_problems, copper_step,
-compare_results, compare_revisions, propose_fields) refuse them;
-solve_ac for the PDN impedance |Z|(f) at the project's probes; solve_noise for a switcher's
-ripple and the noise it couples into victim nets, judged only against the user's noise
-margins (ripple and radiated estimate never judged); solve_tolerance for each load's
-tolerance stack-up (DC drop + accuracy, ripple + transient), judged only against the
-tolerances the user set and only when every part is known (KiPI's transient estimate shown,
-never judged). All three are heavy: read the estimate, and
+compare_results, compare_revisions, propose_fields) refuse them. solve_tree's reference
+({ground_of: "U1"} or {pads: [...]}) only shows the voltages from another 0 V: drops, rises
+and verdicts stay from the solve's 0 V.
+Also from a project file: solve_ac for the PDN impedance |Z|(f) at the project's probes;
+solve_noise for a switcher's ripple and the noise it couples into victim nets, judged only
+against the user's noise margins (ripple and radiated estimate never judged); solve_tolerance
+for each load's tolerance stack-up (DC drop + accuracy, ripple + transient), judged only
+against the tolerances the user set and only when every part is known (KiPI's transient
+estimate shown, never judged). All three are heavy: read the estimate, and
 ask the user before confirm_large. Set up a project for the user with
 write_project (read_project to see one); describe it as KiCad fields with propose_fields (the
 user pastes them; KiCad files are never written). Before/after a change in KiCad:
