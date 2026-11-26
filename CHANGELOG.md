@@ -5,7 +5,7 @@ line, the MCP server or the GitHub Action. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Coppernicus is pre-alpha: check its
 results against your own judgement.
 
-## Unreleased
+## 0.3.1 (2026-11-26)
 
 ### Changed
 
