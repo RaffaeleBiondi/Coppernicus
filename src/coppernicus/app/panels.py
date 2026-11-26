@@ -603,6 +603,8 @@ class RegulatorBox(QGroupBox):
             setattr(s, f"{what}_ref", ref if net else "")
             setattr(s, f"{what}_pins", pins if net else None)
             setattr(s, f"{what}_net", net)
+        if not s.ground_net:          # more pads of a ground terminal that is gone (the file
+            s.extra_ground_pins = None    # keeps them only with their ground)
 
 
 class RailPanel(QWidget):

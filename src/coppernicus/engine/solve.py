@@ -124,6 +124,8 @@ def tree_only_fields(rail: Rail) -> List[str]:
     for s in rail.sources:
         what = [f"kind {s.kind}"] if s.kind != "source" else []
         what += [f"{w.replace('_', ' ')} pins" for w in SOURCE_PIN_REFS if getattr(s, f"{w}_net")]
+        if s.extra_ground_pins:
+            what.append(f"extra ground pins {', '.join(s.extra_ground_pins)}")
         if what:
             parts.append(f"source {s.label} ({', '.join(what)})")
     grounded = [ld.label for ld in rail.loads if ld.ground_net]

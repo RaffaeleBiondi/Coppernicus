@@ -5,6 +5,19 @@ line, the MCP server or the GitHub Action. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Coppernicus is pre-alpha: check its
 results against your own judgement.
 
+## Unreleased
+
+### Added
+
+- A source's ground terminal on several parts, as its output already could be: KiCad field
+  `PI_GND_REF=BT4,BT8` on a source (`PI_GND_PINS` with `REF.PAD` entries or a pad for every
+  listed part), project key `extra_ground_pins: [BT8.*]` beside `ground` (also in
+  `write_project`). In the power tree every pad of every listed part is held at 0 V together
+  and the copper shares the return between them: a battery whose negative pole is two cell
+  holders no longer forces the whole return through one holder, which overstated the ground
+  rise and the ground copper's loss. Ideal supplies (`kind: source`) only; a single ground part
+  gives the same results as before.
+
 ## 0.3.1 (2026-11-26)
 
 ### Changed

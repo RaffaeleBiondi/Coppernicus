@@ -48,6 +48,7 @@ the app they are in the **Rail setup** panel: click a regulator under *Sources* 
 | Quiescent current | `quiescent_a: 0.005` | Drawn from the input on top of the output's share, in A. |
 | Input pins | `input: {net: VIN, pins: ['1']}` | Where the regulator draws from. Required with `ldo` and `smps`. |
 | Ground pins | `ground: {net: GND, pins: ['3']}` | Where a source or a load returns its current. Needed when the ground net is solved. |
+| Extra ground pins | `extra_ground_pins: [BT8.*]` | An ideal supply's ground terminal on more parts (`REF.PAD`, the pad may be a glob: `BT8.*` is every pad of BT8 on the ground net), beside its `ground`: a battery's negative pole on several cell holders. See [The ground return](#the-ground-return). |
 | Remote sense | `sense:` and `ground_sense:` (part, net, pins) | The regulator holds its voltage at the sense pins instead of its own output pins. |
 | Links | `links:` with `a`, `b` and `resistance_ohm` | A ferrite, a sense resistor or a fuse: two nets joined through a small resistance. |
 
@@ -129,6 +130,27 @@ the example, and an assumption line names them). Every other ground voltage is a
 above that point. In the
 app, choose the ground net under **Group** to see it as a map: the picture at the top shows
 GND rising to 38.5 mV at the far end, where U3 returns 2 A.
+
+A supply's ground can be one terminal on several parts, the twin of `extra_pins` on its
+output: a battery whose negative pole is two cell holders, BT4 and BT8, each with its pads on
+the ground net. Name the first in `ground` and the others in `extra_ground_pins`:
+
+```yaml
+  sources:
+  - ref: BT1
+    voltage: 6.4
+    ground: {ref: BT4, net: -V_BAT, pins: all}
+    extra_ground_pins: [BT8.*]
+```
+
+Every pad of every listed part is then held at 0 V together, and the copper sets how the
+return shares itself between them: on a symmetric plane, about half through each, where a
+ground on BT4 alone would force all of it through BT4 and the copper near it, and overstate
+the ground rise and the ground copper's loss. The assumption line names the parts that hold
+0 V. Only an ideal supply (`kind: source`) takes them, with its `ground` set; a part or pad
+not on the ground net is an error that names it. In KiCad it is `PI_GND_REF=BT4,BT8` on the
+part with the supply's fields ([KiCad footprint fields](kicad-fields.md)). The rail-by-rail
+solve, which solves no ground net, does not use them.
 
 A ground net takes a limit of its own, **Max ground rise (mV)**, besides the current-density
 and via limits. In the project file it is a rail of the ground net that holds only limits:

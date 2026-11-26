@@ -177,6 +177,11 @@ class Source:
     # (a battery of cell holders in parallel). "REF.PAD" entries, the pad may be a glob
     # ("BT5.*": every pad of BT5 on the rail). None: the source's own pads only.
     extra_pins: Optional[List[str]] = None
+    # The ground's twin: more pads of its ground terminal, on other parts of ``ground_net``
+    # (a battery's negative pole on several cell holders), all held at the ground's 0 V
+    # reference with its ground pins in the power tree. "REF.PAD" entries, the pad may be a
+    # glob. None: its ground pins only (on ``ground_ref``).
+    extra_ground_pins: Optional[List[str]] = None
     # Task 11: the DC accuracy of its set voltage, as (below, above) in % of it or in mV from
     # it (one of the two; None: not entered, and the tolerance stack-up is then not judged).
     accuracy_pct: Optional[Tuple[float, float]] = None
@@ -1220,6 +1225,8 @@ class Project:
                 if getattr(t, f"{what}_net"):
                     d[what] = _pin_ref_out(getattr(t, f"{what}_ref"), getattr(t, f"{what}_pins"),
                                            getattr(t, f"{what}_net"))
+            if value_key == "voltage" and t.extra_ground_pins:
+                d["extra_ground_pins"] = list(t.extra_ground_pins)
             # Task 11: tolerances, accuracy and entered parts, only when set (0 is a value).
             for key in (SOURCE_ACCURACY_KEYS if value_key == "voltage"
                         else LOAD_TOLERANCE_KEYS + LOAD_PART_KEYS):
@@ -1404,18 +1411,20 @@ def _pin_ref_in(data: Dict[str, Any], what: str, owner: str) -> Dict[str, Any]:
             f"{what}_pins": parse_pins(value.get("pins")), f"{what}_net": net}
 
 
-def _extra_pins_in(value: Any, ref: str) -> Optional[List[str]]:
-    """A source's ``extra_pins``: a list of "REF.PAD" (the pad may be a glob)."""
+def _extra_pins_in(value: Any, ref: str, key: str = "extra_pins", part: str = "BT5",
+                   where: str = "the rail") -> Optional[List[str]]:
+    """A source's ``extra_pins`` (or ``extra_ground_pins``): a list of "REF.PAD" (the pad may
+    be a glob)."""
     if not isinstance(value, list):
-        raise ValueError(f"source {ref}: extra_pins is a list of REF.PAD entries (e.g. [BT5.1]), "
+        raise ValueError(f"source {ref}: {key} is a list of REF.PAD entries (e.g. [{part}.1]), "
                          f"not {value!r}")
     out = []
     for e in value:
-        part, dot, pad = str(e).strip().partition(".")
-        if not (part and dot and pad):
-            raise ValueError(f"source {ref}: extra_pins entry {e!r} is not REF.PAD (e.g. BT5.1, or "
-                             "BT5.* for every pad of BT5 on the rail)")
-        out.append(f"{part}.{pad}")
+        head, dot, pad = str(e).strip().partition(".")
+        if not (head and dot and pad):
+            raise ValueError(f"source {ref}: {key} entry {e!r} is not REF.PAD (e.g. {part}.1, or "
+                             f"{part}.* for every pad of {part} on {where})")
+        out.append(f"{head}.{pad}")
     return out or None
 
 
@@ -1444,6 +1453,12 @@ def _source_in(s: Dict[str, Any]) -> Source:
     refs: Dict[str, Any] = {}
     for what in SOURCE_PIN_REFS:
         refs.update(_pin_ref_in(s, what, f"source {ref}"))
+    if s.get("extra_ground_pins") is not None:
+        extra["extra_ground_pins"] = _extra_pins_in(s["extra_ground_pins"], ref, "extra_ground_pins",
+                                                    "BT8", "the ground net")
+        if extra["extra_ground_pins"] and not refs.get("ground_net"):
+            raise ValueError(f"source {ref}: extra_ground_pins needs its ground (ground: {{ref, net, "
+                             "pins}}): they are more pads of that terminal, on its net")
     extra.update({k: s[k] for k in SOURCE_ACCURACY_KEYS if s.get(k) is not None})
     return Source(ref=ref, voltage=_number(s["voltage"], f"source {ref}: voltage"),
                   pins=parse_pins(s.get("pins")),

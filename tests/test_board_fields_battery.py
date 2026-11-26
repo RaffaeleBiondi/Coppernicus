@@ -1,7 +1,8 @@
 """KiCad footprint fields, third step (additive): a source held at the pads of several parts
 (PI_SOURCE_REF with a list of refs: one equipotential terminal), and a source's ground pins on
-another part (PI_GND_REF). The case: a 2S2P battery of single-contact cell holders, BT1 and BT5
-in parallel on +V_BAT, the negative pole BT4 on -V_BAT. Synthetic parts only."""
+another part (PI_GND_REF), or on several (PI_GND_REF=BT4,BT8: one ground terminal). The case: a
+2S2P battery of single-contact cell holders, BT1 and BT5 in parallel on +V_BAT, the negative pole
+BT4 (and BT8) on -V_BAT. Synthetic parts only."""
 
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from coppernicus.board_fields import FieldError, field_rails, merge, propose
 from coppernicus.project import Link, Load, Project, Rail, Source
 
 PADS = {"BT1": {"1": "+V_BAT"}, "BT5": {"1": "+V_BAT"}, "BT4": {"1": "-V_BAT"},
-        "U1": {"1": "+V_BAT", "2": "-V_BAT"}}
+        "BT8": {"1": "-V_BAT", "2": "-V_BAT"}, "U1": {"1": "+V_BAT", "2": "-V_BAT"}}
 ANCHOR = {"PI_RAIL": "+V_BAT", "PI_KIND": "source", "PI_SOURCE": "6.4V", "PI_SOURCE_REF": "BT1,BT5",
           "PI_GND": "-V_BAT", "PI_GND_REF": "BT4"}
 LOAD = {"PI_RAIL": "+V_BAT", "PI_LOAD": "2A", "PI_GND": "-V_BAT"}
@@ -49,8 +50,8 @@ def test_what_cannot_be_used_says_why():
         merge(Project(), {"BT1": ANCHOR, "U1": LOAD}, {**PADS, "BT4": {"1": "+V_BAT"}})
     with pytest.raises(FieldError, match="PI_GND_REF without PI_GND"):
         field_rails({"BT1": {**ANCHOR, "PI_GND": ""}})
-    with pytest.raises(FieldError, match="one part"):
-        field_rails({"BT1": {**ANCHOR, "PI_GND_REF": "BT4,BT8"}})
+    with pytest.raises(FieldError, match="U1: .*one part"):       # a load's ground pins: one part
+        field_rails({"U1": {**LOAD, "PI_GND_REF": "BT4,BT8"}})
     with pytest.raises(FieldError, match="BT5 gets no pad"):
         field_rails({"BT1": {**ANCHOR, "PI_PINS": "BT1.1"}})
     with pytest.raises(FieldError, match="PI_GND_REF without PI_RAIL"):
@@ -81,6 +82,113 @@ def test_proposals_write_the_battery_back_as_fields():
                              for p in out["parts"]}, PADS)
     assert back.project.rails[0].sources == [BATTERY]
 
+
+# ---------------------------------------------------------------- the ground on several parts
+
+GROUNDS = {**ANCHOR, "PI_GND_REF": "BT4,BT8"}
+PACK = Source("BT1", 6.4, extra_pins=["BT5.*"], ground_ref="BT4", ground_net="-V_BAT",
+              extra_ground_pins=["BT8.*"])
+
+
+def test_a_ground_terminal_on_several_parts():
+    merged = merge(Project(), {"BT1": GROUNDS, "U1": LOAD}, PADS)
+    [rail] = merged.project.rails
+    assert rail.sources == [PACK]
+    assert "ground pins on BT4, BT8" in " ".join(merged.origins["+V_BAT"].notes)
+    # The part carrying the fields first when listed, as in PI_SOURCE_REF.
+    on_bt8 = {**GROUNDS, "PI_GND_REF": "BT4,BT8", "PI_SOURCE_REF": "BT1,BT5"}
+    [src] = field_rails({"BT8": on_bt8}, PADS)["+V_BAT"].sources
+    assert (src.term.ground_ref, src.term.extra_ground_pins) == ("BT8", ["BT4.*"])
+
+
+@pytest.mark.parametrize("pins, anchor, extra", [
+    ("1", ["1"], ["BT8.1"]),                       # a plain pad: on every listed part
+    ("BT4.1,BT8.2", ["1"], ["BT8.2"]),             # REF.PAD: each part its own
+    ("BT4.1,BT8.*", ["1"], ["BT8.*"]),
+])
+def test_pi_gnd_pins_with_several_parts(pins, anchor, extra):
+    [src] = field_rails({"BT1": {**GROUNDS, "PI_GND_PINS": pins}}, PADS)["+V_BAT"].sources
+    assert (src.term.ground_pins, src.term.extra_ground_pins) == (anchor, extra)
+
+
+def test_a_ground_list_that_cannot_be_used_says_why():
+    with pytest.raises(FieldError, match=r"BT1: PI_GND_REF BT9: no part BT9 on the board"):
+        merge(Project(), {"BT1": {**ANCHOR, "PI_GND_REF": "BT4,BT9"}, "U1": LOAD}, PADS)
+    with pytest.raises(FieldError, match=r"PI_GND_REF BT8 has no pad on -V_BAT"):
+        merge(Project(), {"BT1": GROUNDS, "U1": LOAD}, {**PADS, "BT8": {"1": "+V_BAT"}})
+    with pytest.raises(FieldError, match="BT8 gets no pad"):
+        field_rails({"BT1": {**GROUNDS, "PI_GND_PINS": "BT4.1"}})
+    regulator = {"PI_RAIL": "+3V3", "PI_SOURCE": "3.3V", "PI_KIND": "ldo", "PI_INPUT": "+V_BAT",
+                 "PI_GND": "-V_BAT", "PI_GND_REF": "BT4,BT8"}
+    with pytest.raises(FieldError, match="U2: PI_GND_REF.*PI_KIND source"):
+        field_rails({"U2": regulator})
+
+
+def test_a_project_rail_with_one_ground_part_differs_from_the_fields():
+    project = Project(rails=[Rail("+V_BAT", sources=[BATTERY], loads=[Load("U1", 2.0, ground_net="-V_BAT")])])
+    merged = merge(project, {"BT1": GROUNDS, "U1": LOAD}, PADS)
+    assert merged.project.rails[0].sources == [PACK]
+    assert any("ignored" in w and "BT8.*" in w for w in merged.origins["+V_BAT"].warnings)
+
+
+def test_the_listing_shows_the_ground_terminal():
+    from coppernicus.board_fields import listing
+    [rail] = listing({"BT1": GROUNDS, "U1": LOAD}, PADS)["rails"]
+    [src] = rail["sources"]
+    assert (src["ground_ref"], src["extra_ground_pins"]) == ("BT4", ["BT8.*"])
+    assert src["fields"]["PI_GND_REF"] == "BT4,BT8" and "ground pins on BT4, BT8" in rail["note"]
+
+
+@pytest.mark.parametrize("ground_pins, extra, written", [
+    (None, ["BT8.*"], None),                        # every pad of each part: no PI_GND_PINS
+    (["1"], ["BT8.2"], "BT4.1,BT8.2"),              # chosen pads: REF.PAD for each part
+])
+def test_proposals_write_the_ground_terminal_back(ground_pins, extra, written):
+    import dataclasses
+    source = dataclasses.replace(PACK, ground_pins=ground_pins, extra_ground_pins=extra)
+    project = Project(rails=[Rail("+V_BAT", sources=[source], loads=[Load("U1", 2.0, ground_net="-V_BAT")])])
+    out = propose(project, PADS)
+    instance = {p["ref"]: p for p in out["parts"]}["BT1"]["schematic_instance"]
+    assert instance["PI_GND_REF"] == "BT4,BT8" and instance.get("PI_GND_PINS") == written
+    assert out["rails"] == ["+V_BAT"] and not out["not_expressed"]
+    back = merge(Project(), {p["ref"]: {**p["library_symbol"], **p["schematic_instance"]}
+                             for p in out["parts"]}, PADS)
+    assert back.project.rails[0].sources == [source]
+
+
+def pack_board(path):
+    """BT1 and BT5 in parallel on +V_BAT, the negative pole on BT4 and BT8 apart on -V_BAT, the
+    load U1 between them, its ground pad halfway along the -V_BAT track."""
+    parts = [("BT1", [("1", 0.0, 0.0, "+V_BAT")], GROUNDS),
+             ("BT5", [("1", 0.0, 10.0, "+V_BAT")], {}),
+             ("BT4", [("1", 0.0, 30.0, "-V_BAT")], {}),
+             ("BT8", [("1", 40.0, 30.0, "-V_BAT"), ("2", 40.0, 34.0, "-V_BAT")], {}),
+             ("U1", [("1", 20.0, 5.0, "+V_BAT"), ("2", 20.0, 30.0, "-V_BAT")],
+              {"PI_RAIL": "+V_BAT", "PI_LOAD": "2A", "PI_GND": "-V_BAT", "PI_GND_PINS": "2"})]
+    tracks = [("+V_BAT", (0.0, 0.0), (0.0, 10.0), 1.0), ("+V_BAT", (0.0, 5.0), (20.0, 5.0), 1.0),
+              ("-V_BAT", (0.0, 30.0), (40.0, 30.0), 1.0), ("-V_BAT", (40.0, 30.0), (40.0, 34.0), 1.0)]
+    return write_board(path, parts, tracks)
+
+
+def test_the_ground_terminal_from_fields_equals_the_hand_written_project(tmp_path):
+    """End to end on a synthetic KiCad board: the fields give exactly what the project file
+    gives, and the power tree holds both holders' pads at 0 V."""
+    from coppernicus.engine import Board
+    from coppernicus.engine.tree import solve_project_tree
+    from coppernicus.service import Session
+    pack_board(tmp_path / "pack.kicad_pcb")
+    fields = tmp_path / "fields.coppernicus.yml"
+    Project(board="pack.kicad_pcb").save(fields)
+    hand = tmp_path / "hand.coppernicus.yml"
+    Project(board="pack.kicad_pcb", use_board_fields=False, rails=[Rail("+V_BAT", sources=[PACK], loads=[
+        Load("U1", 2.0, ground_pins=["2"], ground_net="-V_BAT")])]).save(hand)
+    session = Session(out_dir=tmp_path / "out")
+    ta, tb = session.solve_tree(fields), session.solve_tree(hand)
+    for key in ("vrms", "loads", "verdict"):
+        assert ta[key] == tb[key], key
+    tree = solve_project_tree(Board.open(tmp_path / "pack.kicad_pcb"), Project.load(hand))
+    [reference] = tree.groups["-V_BAT"].sources
+    assert len(reference.pad_ids) == 3 and reference.v_min == reference.v_max == 0.0   # BT4.1, BT8.1-2
 
 
 def battery_board(path):

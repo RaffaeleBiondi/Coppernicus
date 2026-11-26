@@ -47,7 +47,7 @@ Every field is optional; a part without `PI_*` fields is not touched.
 | `PI_IMAX` | `2A`, `500mA` | source | Its rated output current: shown next to I out in the power tree, where an I out above it fails ([power tree](power-tree.md#verdicts)). |
 | `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its switching frequency (`Hz`, `kHz`, `MHz`): the [ripple and coupled noise](noise.md) use it for an aggressor that gives no `fsw_hz` of its own. |
 | `PI_SOURCE_REF` | `L1`, `BT1,BT5` | source | The part(s) whose pads hold the rail, when not this part: an external-inductor buck's inductor, or several cell holders in parallel, which make **one** terminal, every pad at the source voltage. `PI_PINS` then takes `REF.PAD` entries (`BT1.1,BT5.1`), or a pad for every listed part. |
-| `PI_GND_REF` | `BT4` | source, load | The part whose pads are the ground pins on `PI_GND`, when not this part (one part). |
+| `PI_GND_REF` | `BT4`, `BT4,BT8` | source, load | The part(s) whose pads are the ground pins on `PI_GND`, when not this part. A source's takes a list: several holders of a battery's negative pole make **one** ground terminal, every pad held at the ground's 0 V in the [power tree](power-tree.md#the-ground-return), the copper sharing the return between them. `PI_GND_PINS` then takes `REF.PAD` entries (`BT4.1,BT8.1`), or a pad for every listed part. A load's ground pins are on one part; a regulator (`ldo`, `smps`) cannot take a list. |
 | `PI_TOL` | `5%`, `-3%,+5%`, `50mV` | load | Its supply tolerance, the whole band, for the [tolerance stack-up](#tolerances-and-accuracy): `%` of nominal or `mV` from it. |
 | `PI_DC_TOL`, `PI_AC_TOL` | `2%`, `-20mV,+30mV` | load | The band's DC share and AC share, the same way. |
 | `PI_ACC` | `1%`, `-1.5%,+2%` | source | Its DC accuracy (a regulator's reference, a supply's set point), the same way. |
@@ -88,7 +88,9 @@ Three shapes need the newer fields:
   on a part whose other pads are the enable and the ground.
 - **A battery of cell holders:** the holders BT1 and BT5 in parallel, the negative pole BT4. BT1
   carries `PI_RAIL=+V_BAT`, `PI_SOURCE=6.4V`, `PI_SOURCE_REF=BT1,BT5`, `PI_GND=-V_BAT` and
-  `PI_GND_REF=BT4`; the other holders carry nothing.
+  `PI_GND_REF=BT4`; the other holders carry nothing. When the negative pole is two holders too
+  (BT4 and BT8, each with its pads on -V_BAT), `PI_GND_REF=BT4,BT8`: the return then shares
+  itself between them instead of all going through BT4.
 
 Each worked example, field by field, is in
 [Agents → How to annotate a KiCad library](agents.md#how-to-annotate-a-kicad-library).
