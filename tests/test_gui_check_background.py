@@ -167,6 +167,7 @@ def test_an_activation_is_reported_with_the_step_and_fails_the_window_run():
         from PySide6.QtWidgets import QApplication, QWidget
         app = QApplication.instance() or QApplication([])
         watch = tool.FrontWatch(app, None)
+        watch.timer.stop()                             # only the samples taken as windows show
         tool.show_in_background(app)
         windows = [QWidget(), QWidget()]
         for i, w in enumerate(windows):
