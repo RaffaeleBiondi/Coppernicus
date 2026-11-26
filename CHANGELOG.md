@@ -30,6 +30,14 @@ results against your own judgement.
   own saved by 0.3.1 is kept under the new number, and a readout turned off stays off. The
   label follows the app's light or dark look.
 
+### Fixed
+
+- The HTML report samples each layer in blocks: the same pages, several times faster and with
+  far less memory on boards with large planes.
+- A power tree that fails because its loads' ground return is broken now says so and names the
+  ground net, instead of saying that the supply rail's loads are not connected.
+- A layer that carries only round-off current gets no ranked current-crowding spots.
+
 ## 0.3.1 (2026-11-26)
 
 ### Changed
