@@ -1,22 +1,48 @@
 """Screenshots for the README and the docs, made from the synthetic examples only.
 
-    uv run python tools/make_docs_screenshots.py              # writes docs/images/guide-*.png
-    uv run python tools/make_docs_screenshots.py --set features   # the docs pages' images
-    uv run python tools/make_docs_screenshots.py --out DIR    # somewhere else, e.g. to review
+The real capture, which replaces the images in docs/images (about two minutes):
 
-It opens a real window, which closes itself, and drives the app from code. ``--set guide``
-(the default) makes the README's six ``guide-*.png``: it picks pads on the bare demo board,
-opens the demo project's rail setup, solves, and shows the maps, a probe readout and the
-problems. ``--set features`` makes the images of the feature pages in ``docs/``:
-``tree-*.png`` (the power chain's power tree and ground rise), ``fields-*.png`` (the rail of
-the fields example, from KiCad footprint fields), ``whatif-*.png`` (the copper thickness
-editor, Pin as baseline and Compare on the demo) and ``revisions-delta.png`` (two revisions
-of the demo board compared, solved in a temporary folder that is deleted afterwards).
-``--set all`` makes both.
+    uv run python tools/make_docs_screenshots.py --set all        # every PNG below but report-*
+    uv run python tools/make_docs_screenshots.py --set reports    # the pages for report-*.png,
+                                                                  # captured in a browser by hand
 
-It never saves a project and takes no board argument: only ``examples/demo``,
-``examples/power_chain`` and ``examples/fields`` are used, so no real board can end up in the
-docs. Message boxes are answered in code, so a scripted run never waits on one.
+One set at a time: ``--set guide`` (the default), ``features``, ``analyses``, ``cli``.
+``--out DIR`` writes somewhere else, e.g. to review. ``--offscreen --out DIR`` runs every
+scenario without a window and checks that it reaches its state (tabs shown, solves finished,
+rows present); the board view is blank there, so such images never go into docs/images.
+
+The sets, and the docs that show their images:
+
+- ``guide``: the README's six ``guide-*.png``: pads picked on the bare demo board, the demo
+  project's rail setup, the solved maps, a probe readout and the problems.
+- ``features``: ``tree-*.png`` (the power chain's power tree and ground rise,
+  docs/power-tree.md), ``fields-*.png`` (the fields example's rail from KiCad footprint fields,
+  docs/kicad-fields.md), ``whatif-*.png`` (the copper thickness editor, Pin as baseline and
+  Compare on the demo) and ``revisions-delta.png`` (two revisions of the demo board, solved in
+  a temporary folder), both docs/what-if-and-compare.md.
+- ``analyses``: a window per analysis tab, each solved on its example: ``thermal-1-window.png``
+  (the thermal demo's power tree, F.Cu's board temperature and the Temperature tab;
+  docs/thermal.md), ``ac-1-window.png`` (Solve impedance on examples/pdn; docs/ac-impedance.md),
+  ``noise-1-window.png`` (Solve noise on noise-tight; docs/noise.md),
+  ``tolerance-1-window.png`` (the Tolerance tab's Solve on tolerance-tight; docs/tolerance.md)
+  and ``results-attention.png`` (the Results panel: the thermal demo's +3V3 solved alone,
+  amber ATTENTION rows; docs/technical.md#current-density-default and the README's step 6).
+- ``cli``: the command line's own PNGs, written by ``coppernicus`` into a temporary folder:
+  ``thermal-map.png`` (docs/thermal.md), ``ac-impedance.png`` (docs/ac-impedance.md) and
+  ``noise-waveforms.png`` (docs/noise.md). No window.
+- ``reports``: no PNG. The HTML pages behind ``report-*.png`` (demo, power tree, thermal,
+  impedance, noise, tolerance; docs/html-report.md and the pages listed) go into
+  ``--html-dir``; the run prints each page's URL, the browser width of the image and the part
+  to capture. The repository has no headless browser.
+
+A real window never takes the focus, as with ``tools/gui_check.py --window``: it opens without
+activating, behind the other applications' windows, and on macOS the process never comes to the
+front (checked at the end: the run fails if it did). The app's settings live in a temporary
+folder for the run, so the estimates' "last solve" lines are the same on every machine.
+
+It never saves a project and takes no board argument: only the projects in ``examples/`` are
+used (the power tree page's limits go into a copy in the pages' folder), so no real board can
+end up in the docs. Message boxes are answered in code, so a scripted run never waits on one.
 
 Numbers are formatted with the C locale (dot decimals), whatever the machine's locale. Images
 are scaled down to at most ``--width`` pixels so the repository stays small. Regenerate them
@@ -27,34 +53,97 @@ from __future__ import annotations
 
 import argparse
 import faulthandler
+import functools
+import importlib.util
 import multiprocessing
+import os
 import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+IMAGES = ROOT / "docs" / "images"
 DEMO = ROOT / "examples" / "demo" / "demo.coppernicus.yml"
 DEMO_BOARD = ROOT / "examples" / "demo" / "demo.kipi.json.gz"
 CHAIN = ROOT / "examples" / "power_chain" / "power_chain.coppernicus.yml"
 FIELDS = ROOT / "examples" / "fields" / "fields.coppernicus.yml"
+DEMO_THERMAL = ROOT / "examples" / "demo" / "demo-thermal.coppernicus.yml"
+PDN = ROOT / "examples" / "pdn" / "pdn.coppernicus.yml"
+NOISE_TIGHT = ROOT / "examples" / "noise" / "noise-tight.coppernicus.yml"
+TOLERANCE_TIGHT = ROOT / "examples" / "tolerance" / "tolerance-tight.coppernicus.yml"
 NET = "+3V3"
+
+
+class Unfinished(Exception):
+    """A scenario did not reach the state its image is meant to show."""
+
+
+@functools.cache
+def gui_check():
+    """tools/gui_check.py, beside this script: its no-focus rule for real windows and its
+    solve-and-wait helpers. Imported by path, so this script runs from anywhere."""
+    spec = importlib.util.spec_from_file_location("gui_check", Path(__file__).with_name("gui_check.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", default=str(ROOT / "docs" / "images"), help="output folder")
-    ap.add_argument("--set", choices=("guide", "features", "all"), default="guide",
+    ap.add_argument("--out", help=f"output folder (default: {IMAGES.relative_to(ROOT)})")
+    ap.add_argument("--set", choices=("guide", "features", "analyses", "cli", "reports", "all"),
+                    default="guide",
                     help="guide: the README's guide-*.png (default); features: the images of the "
-                         "feature pages in docs/; all: both")
+                         "feature pages in docs/; analyses: the Temperature, Impedance, Ripple & noise "
+                         "and Tolerance tabs and the Results panel; cli: the command line's PNGs "
+                         "(no window); all: those four sets; reports: the HTML pages to capture "
+                         "report-*.png from in a browser (no window, no PNG)")
+    ap.add_argument("--html-dir", help="--set reports: folder for the pages (default: a new temporary "
+                                       "folder, kept and printed)")
+    ap.add_argument("--offscreen", action="store_true",
+                    help="no window (Qt's offscreen platform), to check that every scenario runs and "
+                         "reaches its state; the board view stays blank, so --out is required")
     ap.add_argument("--width", type=int, default=1600, help="largest image width, px")
-    ap.add_argument("--timeout", type=float, default=180.0, help="hard limit for the whole run, s")
+    ap.add_argument("--timeout", type=float, default=900.0, help="hard limit for the whole run, s")
     args = ap.parse_args(argv)
+    if args.offscreen:
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    on_screen = os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+    if (not on_screen and args.set not in ("cli", "reports")
+            and (not args.out or Path(args.out).resolve() == IMAGES)):
+        ap.error(f"offscreen (--offscreen or QT_QPA_PLATFORM=offscreen) the board view stays blank: "
+                 f"give --out a folder other than {IMAGES}")
+    gc = gui_check()
+    for key, value in gc.background_env(on_screen).items():   # macOS: never the app in front
+        os.environ.setdefault(key, value)
+    front_before = gc.front_app() if on_screen else None
     faulthandler.dump_traceback_later(args.timeout, exit=True)
-    out = Path(args.out)
+    out = Path(args.out) if args.out else IMAGES
     out.mkdir(parents=True, exist_ok=True)
+    if args.set == "cli":                    # no window: the command line draws these itself
+        try:
+            written = cli_pngs(out, args.timeout)
+        except Unfinished as e:
+            print(f"cli: {e}", file=sys.stderr)
+            return 1
+        for path in written:
+            print(path)
+        return 0
+    if args.set == "reports":                # no window: pages for a browser capture by hand
+        folder = Path(args.html_dir or tempfile.mkdtemp(prefix="coppernicus-reports-"))
+        try:
+            pages = reports(folder, args.timeout)
+        except Unfinished as e:
+            print(f"reports: {e}", file=sys.stderr)
+            return 1
+        print(f"Pages in {folder} (kept). Open each in a browser window of the width given, one "
+              f"colour scheme for all, and save the part named as {out}/<image>:")
+        for name, url, what, width, docs in pages:
+            print(f"{name}  ({docs})\n    {url}\n    {width} px wide: {what}")
+        return 0
 
-    from PySide6.QtCore import QLocale, Qt
+    from PySide6.QtCore import QLocale, QSettings, Qt
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
@@ -65,6 +154,16 @@ def main(argv=None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("Coppernicus")
     app.setWindowIcon(QIcon(str(ICON)))
+    # The app's settings (the last solve times the estimates quote, the hover choice) in a
+    # fresh folder: the same images on every machine, and the user's settings untouched.
+    settings = tempfile.mkdtemp(prefix="coppernicus-shots-settings-")
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, settings)
+    watch = None
+    if on_screen:                            # as gui_check --window: open behind, never activate
+        watch = gc.FrontWatch(app, front_before)
+        gc.show_in_background(app)
+    answer_dialogs()
     windows = []
     written = []
 
@@ -74,6 +173,8 @@ def main(argv=None) -> int:
         w.show()
         windows.append(w)
         settle()
+        if watch is not None:                # once Qt has made its platform window, as gui_check
+            watch.shown(w)
         return w
 
     def settle(n: int = 6):
@@ -82,6 +183,10 @@ def main(argv=None) -> int:
 
     def save(widget, name: str, prefix: str = "guide-"):
         settle()
+        owner = widget.window()
+        if on_screen and isinstance(owner, MainWindow):
+            owner.view.plotter._render()     # pyvistaqt defers its draws on macOS: draw the map now
+            settle()
         pix = widget.grab()
         if pix.width() > args.width:
             pix = pix.scaledToWidth(args.width, Qt.SmoothTransformation)
@@ -169,7 +274,6 @@ def main(argv=None) -> int:
 
     def features() -> int:
         from coppernicus.app.copper_thickness import CopperThicknessDialog
-        answer_dialogs()
 
         # The power tree of the power chain: the regulator box of a rail, then the whole tree
         # solved at once, the ground net's rise on the board and the tree's tables.
@@ -264,10 +368,158 @@ def main(argv=None) -> int:
         written.append(out / "revisions-delta.png")
         return 0
 
+    def analyses() -> int:
+        """A window per analysis tab, each solved on its example, and the Results panel with
+        the current-density default's attention rows. Tabs are found by their names, and every
+        step checks that it got where it should (Unfinished stops the run)."""
+        from PySide6.QtWidgets import QDockWidget
+        gc = gui_check()
+
+        def need(ok, what: str):
+            if not ok:
+                raise Unfinished(what)
+
+        def opened(project: Path, net: str):
+            window = new_window()
+            need(window.open_project(project), f"could not open {project.name}")
+            window.nets.select(net)
+            settle()
+            need(window.net == net, f"{project.name}: no net {net}")
+            return window
+
+        def tab(window, text: str):
+            """The Results tab named ``text``, shown, wherever it is in the row of tabs."""
+            tabs = window.results_tabs
+            names = [tabs.tabText(i) for i in range(tabs.count())]
+            need(text in names, f"no {text!r} tab in the Results panel: {names}")
+            tabs.setCurrentIndex(names.index(text))
+            settle()
+            return tabs.currentWidget()
+
+        def results_height(window, px: int):
+            """The Results dock made ``px`` tall: the tabs' plots and tables need more than the
+            app's default."""
+            dock = window.findChild(QDockWidget, "Results")
+            need(dock is not None, "no Results dock")
+            window.resizeDocks([dock], [px], Qt.Vertical)
+            settle()
+            return dock
+
+        def closed(window):
+            window.dirty = False
+            window.close()
+
+        # Temperature: the thermal demo's power tree solved electro-thermally (Ctrl+T), the board
+        # temperature of F.Cu with a double-click's readout on its hottest cell.
+        window = opened(DEMO_THERMAL, NET)
+        results_height(window, 330)
+        tree = gc.solve_tree_and_wait(window, args.timeout)
+        need(tree is not None and tree.thermal is not None, "the thermal demo's power tree did not solve")
+        panel = tab(window, "Temperature")
+        need(panel.shown_layer_rows() and panel.shown_load_rows(), "the Temperature tab shows no rows")
+        window.layer_box.setCurrentIndex(window.layer_box.findText("F.Cu"))
+        window.field_box.setCurrentIndex(window.field_box.findData("temperature"))
+        settle()
+        need(window.field_box.currentData() == "temperature" and window.layer_box.currentText() == "F.Cu",
+             "the board temperature of F.Cu is not shown (the app fell back to the drop)")
+        window.view.reset_view()
+        hx, hy, _ = tree.thermal.map("F.Cu").hottest()
+        window.view.probe_at(hx, hy)
+        save(window, "thermal-1-window", "")
+        closed(window)
+
+        # Impedance: Solve impedance on the pdn example (its +3V3 has no DC load, so the view
+        # shows the copper): |Z|(f) at probe U1 against its target, and the probe's row.
+        window = opened(PDN, NET)
+        panel = tab(window, "Impedance")
+        results_height(window, 470)
+        res, _ = gc.solve_ac_and_wait(window, args.timeout)
+        need(res is not None and panel.figure.axes and panel.figure.axes[0].get_lines()
+             and panel.table.rowCount() > 0, f"the impedance did not solve: {panel.status.text()}")
+        save(window, "ac-1-window", "")
+        closed(window)
+
+        # Ripple & noise: noise-tight's VOUT solved (the drop map behind), then Solve noise: the
+        # waveforms, the ripple table and the victims, SIG_LOOP over its margin.
+        window = opened(NOISE_TIGHT, "VOUT")
+        need(solved(window), "noise-tight's VOUT did not solve")
+        panel = tab(window, "Ripple & noise")
+        results_height(window, 470)
+        res, _, _ = gc.solve_noise_and_wait(window, args.timeout)
+        need(res is not None and panel.ripple_table.rowCount() > 0 and panel.victim_table.rowCount() > 0
+             and panel.wave_figure.axes and all(ax.get_lines() for ax in panel.wave_figure.axes),
+             f"the noise did not solve: {panel.status.text()}")
+        plots = [panel.plot_tabs.tabText(i) for i in range(panel.plot_tabs.count())]
+        need("Waveforms" in plots, f"no Waveforms plot: {plots}")
+        panel.plot_tabs.setCurrentIndex(plots.index("Waveforms"))
+        save(window, "noise-1-window", "")
+        closed(window)
+
+        # Tolerance: tolerance-tight, the tab's Solve pressed until nothing is missing (the power
+        # tree, the noise of U1, the impedance with KiPI's transient, each in its own tab), then
+        # U2's stack-up and its verdict.
+        window = opened(TOLERANCE_TIGHT, "VOUT")
+        panel = tab(window, "Tolerance")
+        results_height(window, 470)
+        for _ in range(6):
+            if not panel.solve_button.isEnabled():
+                break
+            step = panel.solve_button.text()
+            panel.solve_next()
+            if window.tree_worker is not None:
+                window.tree_worker.wait(int(args.timeout * 1000))
+            for busy in (window.noise_panel, window.ac_panel):
+                gc.wait_idle(busy, args.timeout)
+            settle()
+            panel = tab(window, "Tolerance")
+            settle()
+            need(not panel.solve_button.isEnabled() or panel.solve_button.text() != step,
+                 f"the Tolerance tab's {step!r} solved nothing: {panel.status.text()}")
+        res = panel.result
+        need(res is not None and res.verdict in ("pass", "fail") and panel.table.rowCount() > 0
+             and not panel.solve_button.isEnabled(), f"the stack-up is not judged: {panel.header.text()}")
+        loads = [panel.table.item(r, 0).text() for r in range(panel.table.rowCount())]
+        need("U2" in loads, f"no U2 row in the stack-up: {loads}")
+        said = panel.go_to_row(loads.index("U2"))   # a click on the row: U2 on the board, its verdict
+        settle()
+        need(said.startswith("U2 on VOUT"), f"the U2 row did not show U2: {said!r}")
+        save(window, "tolerance-1-window", "")
+        closed(window)
+
+        # The Results panel: the thermal demo's +3V3 solved alone (F5), 15.2 A through the demo
+        # board: crowding above the current-density default, amber ATTENTION rows.
+        window = opened(DEMO_THERMAL, NET)
+        need(solved(window), "the thermal demo's +3V3 did not solve")
+        tab(window, "Problems")
+        dock = results_height(window, 420)
+        rows = window.problems.tree
+        attention = [rows.topLevelItem(i) for i in range(rows.topLevelItemCount())
+                     if rows.topLevelItem(i).text(0) == "ATTENTION"]
+        need(attention, "no ATTENTION row in the Problems tab")
+        rows.scrollToItem(attention[0])
+        settle()
+        need(rows.viewport().rect().contains(rows.visualItemRect(attention[0])),
+             "the first ATTENTION row is not in view")
+        save(dock, "results-attention", "")
+        closed(window)
+        return 0
+
     try:
         status = guide() if args.set in ("guide", "all") else 0
         if status == 0 and args.set in ("features", "all"):
             status = features()
+        if status == 0 and args.set in ("analyses", "all"):
+            try:
+                status = analyses()
+            except Unfinished as e:
+                print(f"analyses: {e}", file=sys.stderr)
+                status = 1
+        if watch is not None:
+            check = gc.Checks()
+            watch.finish(check)
+            if check.failed:
+                print("the run came to the front: see the FAIL lines above", file=sys.stderr)
+                status = status or 1
         if status:
             return status
     finally:
@@ -275,10 +527,114 @@ def main(argv=None) -> int:
             w.dirty = False                  # never ask to save
             w.close()
         settle()
+        shutil.rmtree(settings, ignore_errors=True)
 
+    if args.set == "all":
+        try:
+            written.extend(cli_pngs(out, args.timeout))
+        except Unfinished as e:
+            print(f"cli: {e}", file=sys.stderr)
+            return 1
     for path in written:
         print(path)
     return 0
+
+
+# The command line's own PNGs that the docs show: (the image, the arguments of `coppernicus`, the
+# file it writes into --out, as a glob). Each example fails a limit on purpose: exit code 1.
+CLI_PNGS = (
+    ("thermal-map.png", ("solve", DEMO_THERMAL, "--thermal"), "*_temperature_F.Cu.png"),
+    ("ac-impedance.png", ("ac", PDN), "*_P3V3_impedance.png"),
+    ("noise-waveforms.png", ("noise", NOISE_TIGHT), "*_U1_noise.png"),
+)
+
+
+def coppernicus(args, out_dir: Path, timeout: float):
+    """``coppernicus ARGS --out OUT_DIR`` in a child process, as a user runs it. Exit codes 0,
+    1 (a limit exceeded) and 3 (not judged) are results; anything else stops the run."""
+    import subprocess
+    cmd = [sys.executable, "-m", "coppernicus", *map(str, args), "--out", str(out_dir)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if proc.returncode not in (0, 1, 3):
+        raise Unfinished(f"coppernicus {' '.join(map(str, args))} exited with {proc.returncode}: "
+                         f"{proc.stderr.strip()[-800:]}")
+    return proc
+
+
+def cli_pngs(out: Path, timeout: float) -> list:
+    """The PNGs of :data:`CLI_PNGS`, each written by its command into a temporary folder (never
+    ``results/`` beside an example) and copied to ``out``."""
+    written = []
+    with tempfile.TemporaryDirectory(prefix="coppernicus-shots-cli-") as tmp:
+        for name, args, pattern in CLI_PNGS:
+            folder = Path(tmp) / Path(name).stem
+            coppernicus(args, folder, timeout)
+            found = sorted(folder.glob(pattern))
+            if len(found) != 1:
+                raise Unfinished(f"{name}: expected one {pattern} from coppernicus {args[0]}, found "
+                                 f"{sorted(p.name for p in folder.iterdir())}")
+            shutil.copyfile(found[0], out / name)
+            written.append(out / name)
+    return written
+
+
+# The HTML pages behind the report-*.png images: (the image, the arguments of `coppernicus`, the
+# fragment to open the page at, what to capture, the browser width of the image in the docs, the
+# docs that show it). The repository has no headless browser: the pages are captured by hand.
+REPORTS = (
+    ("report-demo.png", ("solve", DEMO, "--html"), "",
+     "the top of the page, with a hover readout on the B.Cu drop map", 1360,
+     "README.md, docs/html-report.md, docs/agents.md"),
+    ("report-tree.png", ("solve", "CHAIN_WITH_LIMITS", "--tree", "--html"), "#group=+3V3",
+     "the top of the page down to the Problems table", 1280, "docs/html-report.md"),
+    ("report-thermal.png", ("solve", DEMO_THERMAL, "--thermal", "--html"), "",
+     "the Board temperature section, from its heading to 'Assumptions of the board temperature'",
+     1280, "docs/html-report.md"),
+    ("report-ac.png", ("ac", PDN, "--html"), "", "the whole page", 1200, "docs/html-report.md"),
+    ("report-noise.png", ("noise", NOISE_TIGHT, "--html"), "",
+     "from the title down to the radiated estimate", 900, "docs/html-report.md, docs/noise.md"),
+    ("report-tolerance.png", ("tolerance", TOLERANCE_TIGHT, "--html"), "", "the whole page", 1150,
+     "docs/html-report.md, docs/tolerance.md"),
+)
+
+
+def chain_with_limits(folder: Path) -> Path:
+    """The power chain with the limits docs/power-tree.md gives it for the example (1 % drop on
+    +3V3 and +1V8, 30 mV of ground rise on GND), saved in ``folder`` under the example's name,
+    beside a copy of its board, so that the page names the example's files."""
+    from coppernicus.project import Project
+    project = Project.load(CHAIN)
+    project.rail("+3V3").limits.max_drop_pct = 1.0
+    project.rail("+1V8").limits.max_drop_pct = 1.0
+    project.ensure_rail("GND").limits.max_ground_rise_mv = 30.0
+    folder.mkdir(parents=True, exist_ok=True)
+    board = folder / project.board_path().name
+    shutil.copyfile(project.board_path(), board)
+    project.board = str(board)
+    return project.save(folder / CHAIN.name)
+
+
+def reports(folder: Path, timeout: float) -> list:
+    """Each page of :data:`REPORTS` written into its own subfolder of ``folder``. Returns
+    (image, page URL with its fragment, what to capture, width, docs) per page. A page that
+    names a local folder is refused: it would end up in a public image."""
+    pages = []
+    private = [str(p) for p in (Path.home(), folder.resolve(), ROOT)]
+    for name, args, fragment, what, width, docs in REPORTS:
+        sub = folder / Path(name).stem
+        if "CHAIN_WITH_LIMITS" in args:
+            args = tuple(chain_with_limits(sub / "project") if a == "CHAIN_WITH_LIMITS" else a for a in args)
+        coppernicus(args, sub, timeout)
+        found = sorted(sub.glob("*.html"))
+        if len(found) != 1:
+            raise Unfinished(f"{name}: expected one page from coppernicus {args[0]}, found "
+                             f"{[p.name for p in found]}")
+        text = found[0].read_text(encoding="utf-8")
+        named = [p for p in private if p in text]
+        if named:
+            raise Unfinished(f"{found[0]} names a local folder ({named[0]}): not for a public image")
+        pages.append((name, found[0].resolve().as_uri() + fragment, what, width, docs))
+    return pages
 
 
 def answer_dialogs():
