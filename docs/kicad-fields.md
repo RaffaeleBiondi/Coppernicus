@@ -45,7 +45,7 @@ Every field is optional; a part without `PI_*` fields is not touched.
 | `PI_LINK_PINS` | `1,2;5` | a link part with more nets | The link's two sides on a part with more than two nets (a load switch, a MOSFET, a 3-pin fuse): side A's pads `;` side B's, each side on one net. |
 | `PI_VOUT` | `3.3V` | source | A fixed-output part's voltage, on its library symbol: the source voltage when the placed part has no `PI_SOURCE`. If both are given and differ, `PI_SOURCE` wins, with a warning. |
 | `PI_IMAX` | `2A`, `500mA` | source | Its rated output current: shown next to I out in the power tree, where an I out above it fails ([power tree](power-tree.md#verdicts)). |
-| `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its switching frequency (`Hz`, `kHz`, `MHz`): kept, not used yet. |
+| `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its switching frequency (`Hz`, `kHz`, `MHz`): the [ripple and coupled noise](noise.md) use it for an aggressor that gives no `fsw_hz` of its own. |
 | `PI_SOURCE_REF` | `L1`, `BT1,BT5` | source | The part(s) whose pads hold the rail, when not this part: an external-inductor buck's inductor, or several cell holders in parallel, which make **one** terminal, every pad at the source voltage. `PI_PINS` then takes `REF.PAD` entries (`BT1.1,BT5.1`), or a pad for every listed part. |
 | `PI_GND_REF` | `BT4` | source, load | The part whose pads are the ground pins on `PI_GND`, when not this part (one part). |
 | `PI_TOL` | `5%`, `-3%,+5%`, `50mV` | load | Its supply tolerance, the whole band, for the [tolerance stack-up](#tolerances-and-accuracy): `%` of nominal or `mV` from it. |
@@ -246,11 +246,11 @@ file gives what fields cannot carry and lets you try something else.
   project's. Partial fields leave the project's model in use, with a warning naming what the
   fields lack.
 - **Turning the fields off:** `use_board_fields: false` in the project file,
-  `--no-board-fields` on `coppernicus solve`, or **Project → Use KiCad footprint fields** in the
-  app.
+  `--no-board-fields` on `coppernicus solve`, `noise` or `tolerance`, or **Project → Use KiCad
+  footprint fields** in the app.
 
-The fields are read by the app, `coppernicus solve` (with or without `--tree`), the GitHub
-Action and the agents' tools.
+The fields are read by the app, `coppernicus solve` (with or without `--tree`), `coppernicus
+ac`, `noise` and `tolerance`, the GitHub Action and the agents' tools.
 
 <p align="center">
   <img src="images/fields-2-panel.png" alt="The rail setup of VCC from KiCad fields: the read-only banner naming J1 and U1, the Override in project button, the warning about the project file's rail, the source J1 and the load U1 at 1 A, and the 2 % drop limit locked" width="380">

@@ -121,7 +121,10 @@ For example, to post the verdict elsewhere, give the step an `id` and read
 1. Installs uv and Python, then Coppernicus from the action's own checkout, with the locked
    dependencies (`uv sync --frozen`).
 2. Runs `python -m coppernicus.ci solve` on the matching project files. This runs
-   `coppernicus solve PROJECT --json --html` once per project, each in its own process.
+   `coppernicus solve PROJECT --json --html` once per project, each in its own process. With
+   the `tree`, `ac`, `noise` or `tolerance` input on, it then also runs `coppernicus solve
+   --tree`, `coppernicus ac`, `coppernicus noise` or `coppernicus tolerance` on that project (the
+   last three only on a project with probes, aggressors or a tolerance).
 3. Uploads the results folder, writes the job summary, and turns the exit code into the step's
    result.
 

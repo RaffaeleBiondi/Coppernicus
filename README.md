@@ -131,7 +131,8 @@ then point B. The status bar shows ΔV A→B and both voltages. Press **Esc** to
 
 ### 6. Read the results
 
-The *Results* panel at the bottom has three tabs. **Problems** lists, in order:
+The *Results* panel at the bottom has a tab for each kind of result. For the rail you solved,
+**Problems** lists, in order:
 
 - every load, with the voltage it gets;
 - the most crowded spots;
@@ -156,6 +157,10 @@ listed: via plating, copper temperature and mesh size.
 current, the via plating, or the board itself in KiCad), and solve again. The tab lists the
 change in drop of every load and in loss per layer. *Show → Δ drop vs baseline* paints where
 the drop grew (red) or shrank.
+
+The other tabs, **Temperature**, **Power tree**, **Impedance**, **Ripple & noise** and
+**Tolerance**, hold the analyses of a whole project; each has its guide under
+[More documentation](#more-documentation).
 
 **Export report** (Ctrl+R) writes the offline HTML report described under
 [Command line](#command-line), to send to someone who does not have Coppernicus.
@@ -204,17 +209,23 @@ Everything the app solves can also be run without a window, in scripts or in CI:
 ```sh
 uv run coppernicus nets board.kicad_pcb                  # power and ground nets
 uv run coppernicus parts board.kicad_pcb +3V3            # parts and pins on a net
+uv run coppernicus fields board.kicad_pcb                # KiCad footprint fields (PI_*) and the rails they make
 uv run coppernicus solve project.coppernicus.yml         # solve every rail of a project
 uv run coppernicus solve project.coppernicus.yml --tree  # the whole power tree, ground included
+uv run coppernicus ac project.coppernicus.yml            # PDN impedance |Z|(f) at the project's probes
+uv run coppernicus noise project.coppernicus.yml         # DC-DC ripple and coupled noise
+uv run coppernicus tolerance project.coppernicus.yml     # each load's tolerance stack-up
 uv run coppernicus gui project.coppernicus.yml --solve +3V3 --field current
 ```
 
-Add `--json` to `nets`, `parts` or `solve` to get one JSON document on stdout instead of text.
-The `*_summary.json` file that `solve` writes holds the same document.
+Add `--json` to `nets`, `parts`, `fields`, `solve`, `ac`, `noise` or `tolerance` to get one JSON
+document on stdout instead of text. The `*_summary.json` file that `solve` writes holds the
+same document.
 
 `solve` prints a report per rail and writes a PNG map per layer plus a JSON summary into
 `results/`, next to the project file. It exits with **0** when everything is within your
-limits, **1** when a limit is exceeded and **2** on an error.
+limits, **1** when a limit is exceeded, **3** when a limit you set could not judge something
+(listed as NOT JUDGED) and **2** on an error. `ac`, `noise` and `tolerance` use the same codes.
 
 **HTML report.** Add `--html` to `solve` (and `--open` to open it straight away). Coppernicus
 writes one offline HTML file next to the summary. It holds every rail and copper layer as voltage
@@ -236,15 +247,19 @@ Coppernicus is also a GitHub Action. Add a workflow to your KiCad repository wit
 `uses: RaffaeleBiondi/Coppernicus@main` and `project: hardware/*.coppernicus.yml`. On every push
 it solves the rails of your project files and writes a summary on the run's page: worst load,
 drop, loss and verdict per rail. It attaches the maps and the interactive HTML report, and fails
-the check when a limit you wrote in a project file is exceeded. See [docs/ci.md](docs/ci.md).
+the check when a limit you wrote in a project file is exceeded. Opt-in inputs add the power
+tree (`tree`), the PDN impedance (`ac`), ripple and coupled noise (`noise`) and the tolerance
+stack-up (`tolerance`). See [docs/ci.md](docs/ci.md).
 
 ## Use it from an AI agent
 
 `coppernicus mcp` is an [MCP](https://modelcontextprotocol.io) server over stdio. With it,
 Claude Code, Claude Desktop or another MCP client can open a board, solve rails, read the drop
-and current density, render maps, measure a cross-section, compare what-ifs, and solve a project's whole power tree. An agent that
-only has a shell can use `--json` on `nets`, `parts` and `solve` instead. Registration, the
-tools, conventions and a worked example are in [docs/agents.md](docs/agents.md).
+and current density, render maps, measure a cross-section, compare what-ifs, and solve a
+project's whole power tree (with the board temperature), its PDN impedance, its ripple and
+coupled noise, and each load's tolerance stack-up. An agent that only has a shell can use the
+[command line](#command-line) with `--json` instead. Registration, the tools, conventions and
+a worked example are in [docs/agents.md](docs/agents.md).
 
 For Claude Code there is also a skill that teaches the agent how to use these tools well. It
 shows the order of the calls and the answer to give: numbers, then a verdict only against your
@@ -258,7 +273,8 @@ cp -r skills/analyzing-pdn-with-coppernicus ~/.claude/skills/
 ```
 
 It starts by itself when you ask Claude whether a rail holds, about voltage drop, current
-density, via current or copper heating.
+density, via current or copper heating, PDN impedance, a switcher's ripple or coupled noise, or
+a chip's supply tolerance.
 
 ## Project file
 
@@ -363,6 +379,7 @@ and HyperLynx files, which have not been tried through Coppernicus yet.
 
 ## More documentation
 
+- [Changelog](CHANGELOG.md): what changed in each release.
 - [Installing the packaged app](docs/install.md).
 - Feature guides: [power tree](docs/power-tree.md), [KiCad fields](docs/kicad-fields.md), [what-if and compare](docs/what-if-and-compare.md), [HTML report](docs/html-report.md), [board temperature](docs/thermal.md), [PDN impedance](docs/ac-impedance.md), [ripple and coupled noise](docs/noise.md), [tolerance stack-up](docs/tolerance.md), [CI](docs/ci.md), [agents](docs/agents.md).
 - [How it works](docs/technical.md): architecture, physics, validation, repository layout.

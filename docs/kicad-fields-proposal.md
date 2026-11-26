@@ -163,7 +163,8 @@ So the custom fields are parsed with the rest of the file and then dropped.
    `uA`/`µA` for `PI_IQ`; `Ohm`, `mOhm`, `Ω` for `PI_LINK`); two footprints with the same
    reference carrying fields are an error; a malformed field fails the run, and its hint names
    the off switch. A footprint marked "do not populate" is read like any other.
-8. **Not yet:** the desktop app does not read the fields (the peer will call the merge).
+8. The desktop app reads the fields too (since 0.2.0): rails from KiCad are listed [KiCad]
+   and read-only, with Override in project for a what-if.
    The test board is a synthetic `.kicad_pcb` written by `tests/kicad_fixture.py`.
 
 ## Second step (library-level fields, external inductors, multi-net links)
