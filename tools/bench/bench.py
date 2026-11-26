@@ -73,6 +73,15 @@ CHILD_ENV_KEYS = ("KIPI_SERIAL", "MPLBACKEND", "PYTHONIOENCODING", "OMP_NUM_THRE
                   "VECLIB_MAXIMUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
 
 
+def recorded_env(env: Dict[str, str]) -> Dict[str, Optional[str]]:
+    """The child environment as the run's metadata records it: :data:`CHILD_ENV_KEYS`, and every
+    ``COPPERNICUS_*`` variable set (the engine's opt-in switches, e.g.
+    ``COPPERNICUS_SUPERLU_ORDER``), so that ``compare`` says which mode each run was."""
+    rec: Dict[str, Optional[str]] = {k: env.get(k) for k in CHILD_ENV_KEYS}
+    rec.update({k: v for k, v in sorted(env.items()) if k.startswith("COPPERNICUS_")})
+    return rec
+
+
 def child_env(base: Dict[str, str], tmp: Path, serial: bool) -> Dict[str, str]:
     """A measuring process's environment: KIPI_SERIAL=1 for --mesher serial (as the frozen app,
     whose can_spawn() is False) and never otherwise, UTF-8 output, Agg plots, and its temp
@@ -328,7 +337,7 @@ def cmd_run(args) -> int:
     meta["mesher"] = args.mesher + (" (pool thresholds lowered)" if args.pool_min_triangles is not None
                                     or args.pool_min_spread is not None else "")
     env = child_env(dict(os.environ), Path("<work>"), args.mesher == "serial")
-    meta["child_env"] = {k: env.get(k) for k in CHILD_ENV_KEYS}
+    meta["child_env"] = recorded_env(env)
     meta["child_env"]["TMPDIR"] = "<each measurement's own folder under --out>"
     args.label = args.label or (_dt.datetime.now().strftime("%Y%m%d-%H%M%S")
                                 + (f"-{meta['git_commit'][:7]}" if meta.get("git_commit") else ""))

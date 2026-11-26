@@ -462,3 +462,17 @@ def test_bench_prints_survive_an_ascii_pipe(tmp_path):
     r = subprocess.run([sys.executable, str(BENCH / "bench.py"), "report", str(path)], capture_output=True,
                        env=env, timeout=60, cwd=ROOT)
     assert r.returncode == 0, r.stderr.decode(errors="replace")
+
+
+def test_the_run_records_every_coppernicus_variable_of_the_child_environment():
+    """Opt-in engine switches (COPPERNICUS_SUPERLU_ORDER, ...) reach each measurement through its
+    environment: the run's metadata records them, so compare says which mode each run was."""
+    bench = _bench("bench")
+    env = bench.child_env({"PATH": "x", "COPPERNICUS_SUPERLU_ORDER": "thermal,dc", "COPPERNICUS_X": "1"},
+                          Path("/w/t"), serial=False)
+    rec = bench.recorded_env(env)
+    assert rec["COPPERNICUS_SUPERLU_ORDER"] == "thermal,dc" and rec["COPPERNICUS_X"] == "1"
+    assert rec["PYTHONIOENCODING"] == "utf-8" and "PATH" not in rec
+    assert all(k in rec for k in bench.CHILD_ENV_KEYS)
+    plain = bench.recorded_env(bench.child_env({}, Path("/w/t"), serial=False))
+    assert "COPPERNICUS_SUPERLU_ORDER" not in plain
