@@ -95,7 +95,8 @@ from typing import Mapping, Optional, Set
 import kipi
 import numpy as np
 import scipy.sparse as sp
-from kipi.core.solver import direct
+from kipi.core.memory import free_memory
+from kipi.core.solver import direct, spd
 from scipy.sparse.linalg import splu
 
 ENV = "COPPERNICUS_SUPERLU_ORDER"
@@ -113,11 +114,28 @@ SPD_PIVOT_THRESHOLD = 0.0
 COMPLEX_PIVOT_THRESHOLD = 0.1
 # The proof criteria of "round-off only" per part (see the module's docstring): relative, with
 # an absolute floor per unit of this times the unit's largest magnitude.
-TOLERANCE_REL = {"thermal": 1e-9, "ac": 1e-6, "dc": 1e-9}
+TOLERANCE_REL = {"thermal": 1e-9, "ac": 1e-6, "dc": 1e-9, "dc_direct": 1e-8}
 # KiPI's functions replaced, with the parameters they take.
 _SEAMS = {"_superlu": ["A"], "_superlu_complex": ["A"]}
 # The thread marker that sends a thread's factorizations to KiPI's functions (kipi_path).
 _KIPI = "kipi"
+
+# The raised direct-solve ceiling for the DC copper (opt-in): see set_dc_direct_max.
+DC_DIRECT_ENV = "COPPERNICUS_DC_DIRECT_MAX"
+# The memory a DC direct solve in SuperLU's symmetric order adds, bytes = A · unknowns ** B: the
+# least-squares fit (A 72.15, B 1.2343, within -7 % / +8 % of each point) of the peak resident
+# memory one factorization and one solve added, one fresh process each, on the DC systems of
+# synthetic boards (tools/bench grid-100 to grid-200; macOS arm64), scaled up 8.1 % so that it
+# lies at or above every point: (unknowns, MB added).
+DC_DIRECT_FIT_POINTS = ((102_956, 107), (162_832, 178), (169_188, 205), (262_412, 322),
+                        (274_252, 383), (352_301, 449), (456_000, 633), (620_464, 1036))
+DC_DIRECT_FIT_A, DC_DIRECT_FIT_B = 78.0, 1.2343
+# KiPI's function replaced, with the parameters it takes.
+_SPD_SEAM = {"direct_solve_max_unknowns": []}
+#: KiPI's own, as kipi.core.solver.spd had it when this module was imported.
+KIPI_SPD = {name: getattr(spd, name) for name in _SPD_SEAM}
+_dc_direct_max: Optional[int] = None
+_dc_warned = False
 
 _lock = threading.Lock()
 _enabled: frozenset = frozenset()
@@ -224,15 +242,18 @@ def disable(*parts: str) -> None:
 
 
 def uninstall() -> None:
-    """Put KiPI's functions back and turn every part off."""
-    global _enabled, _kipi, _warned
+    """Put KiPI's functions back, turn every part off and drop a raised DC direct ceiling."""
+    global _enabled, _kipi, _warned, _dc_direct_max, _dc_warned
     with _lock:
         if _kipi is not None:
             for name, fn in _kipi.items():
                 setattr(direct, name, fn)
+        for name, fn in KIPI_SPD.items():
+            setattr(spd, name, fn)
         _kipi = None
         _enabled = frozenset()
-        _warned = False
+        _dc_direct_max = None
+        _warned = _dc_warned = False
         _fell_back.clear()
 
 
@@ -248,7 +269,111 @@ def configure_from_env(environ: Mapping[str, str] = os.environ) -> frozenset:
         parts = parse(value, _stacklevel=3)
     if parts:
         enable(*sorted(parts), _stacklevel=3)
+    ceiling = parse_dc_direct_max(environ.get(DC_DIRECT_ENV), _stacklevel=3)
+    if ceiling is not None:
+        set_dc_direct_max(ceiling, _stacklevel=3)
     return enabled()
+
+
+# ---------------------------------------------------------------------- the DC direct ceiling
+
+def dc_direct_memory_bytes(unknowns: float) -> float:
+    """The memory a DC direct solve of ``unknowns`` adds in SuperLU's symmetric order (the fit
+    of :data:`DC_DIRECT_FIT_POINTS`)."""
+    return DC_DIRECT_FIT_A * float(unknowns) ** DC_DIRECT_FIT_B
+
+
+def dc_direct_memory_cap(free_bytes: float) -> int:
+    """The largest system whose :func:`dc_direct_memory_bytes` fits in KiPI's share of the
+    memory free for PARDISO's factorizations (``spd.PARDISO_MEMORY_SHARE``)."""
+    budget = spd.PARDISO_MEMORY_SHARE * float(free_bytes)
+    if budget <= 0:
+        return 0
+    n = int((budget / DC_DIRECT_FIT_A) ** (1.0 / DC_DIRECT_FIT_B))
+    while n > 0 and dc_direct_memory_bytes(n) > budget:        # the float root, rounded down
+        n -= 1
+    while dc_direct_memory_bytes(n + 1) <= budget:
+        n += 1
+    return n
+
+
+def dc_direct_max() -> Optional[int]:
+    """The raised ceiling set now (None: KiPI's)."""
+    return _dc_direct_max
+
+
+def parse_dc_direct_max(text: Optional[str], _stacklevel: int = 2) -> Optional[int]:
+    """A ceiling from :data:`DC_DIRECT_ENV`'s value (a whole number of unknowns, ``4e5``
+    accepted); None when unset, empty or 0. Anything else is warned of and left out."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        value = float("nan")
+    if not (value >= 0 and value == int(value)):
+        warnings.warn(f"{DC_DIRECT_ENV}: {text!r} is not a number of unknowns; KiPI's ceiling kept",
+                      UserWarning, stacklevel=_stacklevel)
+        return None
+    return int(value) or None
+
+
+def _spd_seam_problem() -> Optional[str]:
+    version = getattr(kipi, "__version__", None)
+    if version != KIPI_VERSION:
+        return f"written for KiPI {KIPI_VERSION}, this is KiPI {version}"
+    for name, params in _SPD_SEAM.items():
+        fn = getattr(spd, name, None)
+        if fn is _direct_solve_max_unknowns:
+            continue
+        if not callable(fn):
+            return f"KiPI has no kipi.core.solver.spd.{name}"
+        try:
+            got = list(inspect.signature(fn).parameters)
+        except (TypeError, ValueError):
+            got = None
+        if got != params:
+            return f"kipi.core.solver.spd.{name} takes ({', '.join(got or ['?'])}), not ()"
+    return None
+
+
+def set_dc_direct_max(unknowns: Optional[int], _stacklevel: int = 2) -> bool:
+    """Raise KiPI's direct-solve ceiling for the DC copper to ``unknowns`` (None: KiPI's own
+    again). It acts only while the ``dc`` part is :func:`active` (SuperLU's symmetric order, with
+    SuperLU as KiPI's backend), never past KiPI's SuperLU limit
+    (``spd.DIRECT_SOLVE_MAX_UNKNOWNS_PARDISO``) nor past the largest system whose estimated
+    memory (:func:`dc_direct_memory_bytes`) fits KiPI's own rule, half the memory free. False,
+    with a warning the first time, on a KiPI this was not written for."""
+    global _dc_direct_max, _dc_warned
+    with _lock:
+        if unknowns is None:
+            for name, fn in KIPI_SPD.items():
+                setattr(spd, name, fn)
+            _dc_direct_max = None
+            return True
+        problem = _spd_seam_problem()
+        if problem is not None:
+            if not _dc_warned:
+                _dc_warned = True
+                warnings.warn(f"{DC_DIRECT_ENV}: KiPI's direct-solve ceiling kept ({problem})",
+                              UserWarning, stacklevel=_stacklevel)
+            return False
+        spd.direct_solve_max_unknowns = _direct_solve_max_unknowns
+        _dc_direct_max = int(unknowns)
+        return True
+
+
+def _direct_solve_max_unknowns() -> int:
+    """KiPI's ``spd.direct_solve_max_unknowns`` (spd.py:53), raised to :func:`dc_direct_max`
+    where it applies (see :func:`set_dc_direct_max`)."""
+    kipis = KIPI_SPD["direct_solve_max_unknowns"]()
+    limit = _dc_direct_max
+    if limit is None or not active("dc"):
+        return kipis
+    free = free_memory()
+    cap = dc_direct_memory_cap(free) if free else 0
+    return max(kipis, min(limit, cap, spd.DIRECT_SOLVE_MAX_UNKNOWNS_PARDISO))
 
 
 @contextmanager
