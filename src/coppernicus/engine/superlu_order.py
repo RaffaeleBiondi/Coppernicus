@@ -77,6 +77,19 @@ with those functions of the expected signature; otherwise a warning (once) and K
 :func:`kipi_path` marks a thread's factorizations as KiPI's whatever is on (the electro-thermal
 drift reference). :func:`uninstall` puts KiPI's back (the tests).
 
+The DC direct ceiling (opt-in: ``COPPERNICUS_DC_DIRECT_MAX=<unknowns>`` or
+:func:`set_dc_direct_max`). KiPI solves a DC system of more than 200,000 unknowns with AMG-CG, to
+a 1e-10 relative residual, where SuperLU is its backend (``spd.DIRECT_SOLVE_MAX_UNKNOWNS``). With
+the ceiling set and the ``dc`` part active, a system up to the ceiling is factorized instead
+(and checked as above), never past KiPI's SuperLU limit (``DIRECT_SOLVE_MAX_UNKNOWNS_PARDISO``,
+1,000,000) nor past the largest system whose estimated memory (:func:`dc_direct_memory_bytes`)
+fits half the memory free, the share KiPI allows PARDISO. On synthetic boards (tools/bench, a
+loaded machine) a rail of 262,000 to 352,000 unknowns solved in about half the time, a power tree
+in 0.6–0.9×, an electro-thermal tree in 0.8–1.0× (each iteration factorizes again, where AMG-CG
+reuses its hierarchy), all with 1.3–1.8× the peak memory; results moved by at most 5.9e-11
+relative. Criterion ``dc_direct``, 1e-9 relative with the floor per unit: CG's 1e-10 relative
+residual bounds its own error at about that order; the exact solve removes it.
+
 The memory estimates (the board temperature's
 :func:`coppernicus.engine.thermal.thermal_ram_estimate`, the AC and noise solves'
 :func:`coppernicus.engine.ac.ram_estimate` and :func:`coppernicus.engine.noise.noise_ram_estimate`)
