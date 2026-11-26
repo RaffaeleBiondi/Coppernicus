@@ -843,3 +843,142 @@ def test_the_q9_warning_shown_follows_a_tolerance_edit_and_the_result_stays():
         app.processEvents()
         assert "disagree" not in panel.notes.toPlainText() and panel.stale
     ''')
+
+
+# ---------------------------------------------------------------------- models from KiCad fields
+
+CAP_FIELDS = {"C1": {"PI_ESR": "5m", "PI_ESL": "0.5nH", "PI_DIELECTRIC": "X7R", "PI_VRATED": "16V"},
+              "C2": {"PI_C": "100nF", "PI_ESR": "20mOhm", "PI_ESL": "0.3nH", "PI_DIELECTRIC": "C0G"},
+              "C3": {"PI_ESR": "5m"},                                     # partial: no model
+              "C5": {"PI_C": "22u", "PI_ESR": "50m", "PI_ESL": "1nH", "PI_DIELECTRIC": "TANT",
+                     "PI_VRATED": "10V"}}
+
+
+def _field_merge(caps):
+    from coppernicus.board_fields import merge
+    return merge(Project(capacitors=caps), CAP_FIELDS, values={"C1": "10u"}, farads={"C1": 10e-6})
+
+
+def test_the_kicad_fields_models_are_found_with_the_fields_that_give_them():
+    """What is solved: the merged project's capacitor models that came from KiCad fields (by
+    the merge's own record, not by their name: it renames one on a clash), and the parts a
+    project model names that went to them, warned about or not."""
+    from coppernicus.app.ac_panel import field_models, lost_parts
+    from coppernicus.board_fields import Merged
+    own = [CapModel("bulk", 10e-6, 0.5e-9, 0.01, ["C1", "C4"])]
+    merged = _field_merge(own)
+    assert [(m.name, m.refs, c.ref) for m, c in field_models(merged)] == [
+        ("C1 (KiCad)", ["C1"], "C1"), ("C2 (KiCad)", ["C2"], "C2"), ("C5 (KiCad)", ["C5"], "C5")]
+    assert lost_parts(own, merged) == {0: [("C1", "C1 (KiCad)")]}
+    same = [CapModel("bulk", 10e-6, 0.5e-9, 0.005, ["C1"], rated_v=16.0, dielectric="X7R")]
+    quiet = _field_merge(same)
+    assert not [w for w in quiet.warnings if "bulk" in w]                  # the same values: no warning
+    assert lost_parts(same, quiet) == {0: [("C1", "C1 (KiCad)")]}          # ... and still lost
+    kept = [CapModel("bulk", 1e-6, 1e-9, 0.01, ["C1"], override_board_fields=True)]
+    merged = _field_merge(kept)
+    assert lost_parts(kept, merged) == {} and [m.name for m, _c in field_models(merged)] == [
+        "C2 (KiCad)", "C5 (KiCad)"]
+    clash = [CapModel("C2 (KiCad)", 1e-6, 1e-9, 0.01, ["C9"])]
+    assert [m.name for m, _c in field_models(_field_merge(clash))] == [
+        "C1 (KiCad)", "C2 (KiCad) 2", "C5 (KiCad)"]
+    assert field_models(Merged(Project(capacitors=own))) == []           # no fields: none
+
+
+def test_a_kicad_fields_rows_tips_say_where_each_value_lives_and_how_to_use_the_projects():
+    from coppernicus.app.fields_view import cap_field_tip, cap_lost_tip
+    held = _field_merge([]).cap_fields
+    c1, c2, c5 = held["C1 (KiCad)"], held["C2 (KiCad)"], held["C5 (KiCad)"]
+    override = "set override_board_fields: true on a project capacitor model naming C1 to use the project's"
+    tip = cap_field_tip(c1, "esr_ohm")
+    assert tip.startswith('set in KiCad field PI_ESR "5m" on C1; ') and override in tip, tip
+    assert 'KiCad field PI_ESL "0.5nH" on C1' in cap_field_tip(c1, "esl_h")
+    assert 'footprint Value "10u" of C1' in cap_field_tip(c1, "capacitance_f")
+    assert 'KiCad field PI_C "100nF" on C2' in cap_field_tip(c2, "capacitance_f")
+    assert 'KiCad field PI_VRATED "16V" on C1' in cap_field_tip(c1, "rated_v")
+    assert "no PI_VRATED on C2" in cap_field_tip(c2, "rated_v")
+    rated = cap_field_tip(c5, "rated_v")
+    assert 'PI_VRATED "10V" on C5' in rated and "not derated" in rated, rated
+    assert 'KiCad field PI_DIELECTRIC "X7R" on C1' in cap_field_tip(c1, "dielectric")
+    assert "KiPI's typical class II value" in cap_field_tip(c1, "kept_at_rated_pct")
+    name = cap_field_tip(c1, "name")
+    assert all(f in name for f in ('PI_ESR "5m"', 'PI_ESL "0.5nH"', 'PI_DIELECTRIC "X7R"', 'PI_VRATED "16V"'))
+    assert "read-only" in name
+    lost = cap_lost_tip([("C1", "C1 (KiCad)")])
+    assert "C1" in lost and "C1 (KiCad)" in lost and "override_board_fields: true" in lost
+
+
+def test_the_kicad_fields_models_are_shown_read_only_and_never_saved(tmp_path):
+    tests = os.path.dirname(os.path.abspath(__file__))
+    run_in_window(f'''
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, {tests!r})
+        from kicad_fixture import write_board
+        from coppernicus.project import CapModel, Project, Rail, Source
+        folder = Path({str(tmp_path)!r})
+        c1 = {{"PI_C": "10u", "PI_ESR": "20mOhm", "PI_ESL": "0.5nH", "PI_DIELECTRIC": "C0G"}}
+        c2 = {{"Value": "100n", "PI_C": "100nF", "PI_ESR": "30mOhm", "PI_ESL": "0.3nH",
+              "PI_DIELECTRIC": "X7R", "PI_VRATED": "16V"}}
+        parts = [("J1", [("1", 0.0, 0.0, "VCC"), ("2", 0.0, 3.0, "GND")], {{}}),
+                 ("C1", [("1", 10.0, 0.0, "VCC"), ("2", 10.0, 3.0, "GND")], c1),
+                 ("C2", [("1", 20.0, 0.0, "VCC"), ("2", 20.0, 3.0, "GND")], c2),
+                 ("C3", [("1", 30.0, 0.0, "VCC"), ("2", 30.0, 3.0, "GND")], {{"Value": "1u"}})]
+        write_board(folder / "caps.kicad_pcb", parts,
+                    [("VCC", (0.0, 0.0), (30.0, 0.0), 0.5), ("GND", (0.0, 3.0), (30.0, 3.0), 0.5)])
+        bulk = CapModel("bulk", 10e-6, 0.5e-9, 0.01, ["C1", "C3"])
+        feed = Source("J1", 3.3, ["1"], ground_net="GND", ground_pins=["2"])
+        path = Project(board="caps.kicad_pcb", capacitors=[bulk], rails=[Rail("VCC", sources=[feed])]).save(
+            folder / "caps.coppernicus.yml")
+        window.open_project(path)
+        app.processEvents()
+        panel = window.ac_panel
+        caps = panel.caps
+        names = [caps.item(r, 0).text() for r in range(caps.rowCount())]
+        assert names == ["bulk", "C1 (KiCad)", "C2 (KiCad)"], names
+        assert [m.name for m in window.project.capacitors] == ["bulk"]
+        for r in (1, 2):
+            for c in range(caps.columnCount()):
+                item = caps.item(r, c)
+                assert not item.flags() & QtCore.Qt.ItemIsEditable, (r, c)
+                assert item.background().color().name() == "#f0f0f0", (r, c)
+        assert caps.item(2, 1).text() == "100n" and caps.item(2, 5).text() == "16"
+        esr = caps.item(1, 3).toolTip()
+        assert 'set in KiCad field PI_ESR "20mOhm" on C1' in esr and "override_board_fields" in esr, esr
+        parts_tip = caps.item(0, 4).toolTip()
+        assert "C1 (KiCad)" in parts_tip and "override_board_fields" in parts_tip, parts_tip
+        assert caps.item(0, 4).text() == "C1, C3" and caps.item(0, 4).flags() & QtCore.Qt.ItemIsEditable
+        note = panel.cap_note.text()
+        assert not panel.cap_note.isHidden() and "C1 (KiCad)" in note and "bulk" in note, note
+
+        caps.item(1, 3).setText("1")                       # an edit of a field row: never applied
+        assert caps.item(1, 3).text() == "20m" and "Not applied" in panel.status.text()
+        assert "PI_ESR" in panel.status.text(), panel.status.text()
+        assert [(m.name, m.refs, m.esr_ohm) for m in window.project.capacitors] == [
+            ("bulk", ["C1", "C3"], 0.01)]
+        assert window.merged.project.capacitors[1].esr_ohm == 0.02
+        caps.clearSelection()
+        caps.selectRow(2)
+        panel._remove_models()                             # a field row selected: nothing removed
+        assert [m.name for m in window.project.capacitors] == ["bulk"] and caps.rowCount() == 3
+        assert "KiCad fields" in panel.status.text(), panel.status.text()
+        caps.setCurrentCell(2, 0)
+        assert "KiCad fields" in panel._pick_part("C3") and window.project.capacitors[0].refs == ["C1", "C3"]
+        msg = panel.models_from_values()                   # C2 has its KiCad fields' model
+        assert [m.name for m in window.project.capacitors] == ["bulk"] and "No capacitor" in msg, msg
+
+        caps.item(0, 4).setText("C3")                      # bulk lets go of C1: no lost part
+        assert window.project.capacitors[0].refs == ["C3"] and "C1 (KiCad)" not in caps.item(0, 4).toolTip()
+        assert caps.rowCount() == 3 and "bulk" not in panel.cap_note.text()
+        panel.add_model()                                  # the field rows stay after the project's
+        shown = [caps.item(r, 0).text() for r in range(caps.rowCount())]
+        assert shown == ["bulk", "", "C1 (KiCad)", "C2 (KiCad)"], shown
+        saved = folder / "saved.coppernicus.yml"
+        window._save(saved)
+        text = saved.read_text(encoding="utf-8")
+        assert "KiCad" not in text and "esr_ohm: 0.02" not in text, text
+        assert [m.name for m in Project.load(saved).capacitors] == ["bulk"]
+        window._use_fields_toggled(False)                  # no fields: no field rows
+        app.processEvents()
+        assert [caps.item(r, 0).text() for r in range(caps.rowCount())] == ["bulk", ""]
+        assert panel.cap_note.isHidden()
+    ''')

@@ -965,6 +965,9 @@ class Merged:
     link_warnings: Dict[str, List[str]] = field(default_factory=dict)
     # The capacitor models of the KiCad fields (their warnings are in ``warnings``).
     cap_notes: List[str] = field(default_factory=list)
+    # Each capacitor model the KiCad fields put in the merged project, by its name there (the
+    # merge renames one whose name a project model has), with the fields that give it.
+    cap_fields: Dict[str, FieldCap] = field(default_factory=dict)
 
     @property
     def from_fields(self) -> List[str]:
@@ -1232,6 +1235,7 @@ def _merge_caps(merged: Merged, caps: Mapping[str, FieldCap]) -> None:
         model.name = name
         names.add(name)
         out.capacitors.append(model)
+        merged.cap_fields[name] = c
         used.append(c)
     if used:
         merged.cap_notes.insert(0, "Capacitor models from KiCad fields (never a default: each has "

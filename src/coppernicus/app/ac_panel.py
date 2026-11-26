@@ -13,8 +13,11 @@ worst point, ratio and verdict; CSV and PNG are the core's writers.
 
 The project solved is the window's merged project (``window.merged.project``: the project
 merged with the board's KiCad footprint fields, as ``coppernicus ac`` merges them); an edit
-writes ``window.project`` and merges again (``window._remerge()``). The pure functions at the
-top (form <-> model, estimate and stats text, results rows) need no window.
+writes ``window.project`` and merges again (``window._remerge()``). The capacitor models the
+KiCad fields give follow the project's in their table, read-only (each cell's tooltip says
+which field holds the value and how a project model takes its place) and never written; a
+project model whose part went to them is marked. The pure functions at the top (form <->
+model, estimate and stats text, results rows) need no window.
 """
 
 from __future__ import annotations
@@ -336,6 +339,40 @@ def usable_caps(rows: Sequence[CapModel]) -> Tuple[List[CapModel], Dict[int, str
     return out, problems
 
 
+def field_models(merged) -> List[Tuple[CapModel, Any]]:
+    """The capacitor models the KiCad fields put in the merged project (what is solved), in its
+    order, each with the fields that give it (a ``board_fields.FieldCap``): by the merge's own
+    record (``Merged.cap_fields``), never by their name. Shown read-only after the project's."""
+    return [(m, merged.cap_fields[m.name]) for m in merged.project.capacitors if m.name in merged.cap_fields]
+
+
+def lost_parts(rows: Sequence[CapModel], merged) -> Dict[int, List[Tuple[str, str]]]:
+    """{row: [(ref, the KiCad fields' model solved for it)]}: the parts each project model row
+    names that the merge gave to the model of their KiCad fields (the fields win unless the
+    project model sets override_board_fields), warned about or not (not when the values agree)."""
+    held = {ref: m.name for m, _c in field_models(merged) for ref in m.refs}
+    out = {}
+    for i, m in enumerate(rows):
+        lost = [(ref, held[ref]) for ref in m.refs if ref in held]
+        if lost:
+            out[i] = lost
+    return out
+
+
+def fields_note(fields: Sequence[Tuple[CapModel, Any]], lost: Dict[int, List[Tuple[str, str]]],
+                rows: Sequence[CapModel]) -> str:
+    """The line under the capacitor models: the KiCad fields' models shown (read-only), and the
+    project rows whose parts went to them; "" when neither."""
+    out = []
+    if fields:
+        out.append("From KiCad fields, read-only (the grey rows; what the solve uses): "
+                   + ", ".join(m.name for m, _c in fields))
+    for i, pairs in sorted(lost.items()):
+        out.append(f"Model {rows[i].name or f'row {i + 1}'}: {', '.join(ref for ref, _n in pairs)} solved "
+                   "with the KiCad fields' model, not this one (see its Parts)")
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------------- rails, bandwidths, links
 
 def solvable_rails(project: Project) -> List[str]:
@@ -579,6 +616,7 @@ def _table(headers, tips=None) -> QTableWidget:
 
 
 PROBLEM_BG, DRAFT_BG, ERROR_BG = QColor("#fdecea"), QColor("#f0f0f0"), QColor("#f8c9c4")
+READ_ONLY_BG, LOST_BG = QColor("#f0f0f0"), QColor("#fff3cd")    # as the Tolerance tab's read-only, missing
 CHART_SURFACE = "#fcfcfb"
 
 
@@ -598,11 +636,12 @@ class AcPanel(QWidget):
         self._generation = 0
         self._loading = False
         self._probe_rows: List[Probe] = []
-        self._cap_rows: List[CapModel] = []
+        self._cap_rows: List[CapModel] = []         # the project's models: the editable rows
+        self._field_rows: List[Tuple[CapModel, Any]] = []   # then the KiCad fields' (field_models)
         self.last_estimate = ""
         self._shown: Dict[str, str] = {}      # what each line edit shows: a commit of it unchanged is no edit
         self._pairs: Tuple[Any, Dict[str, Optional[str]]] = (None, {})   # (key, each load's probe)
-        self._notes_pending = False
+        self._refresh_pending = False
         self._build()
         window.view.pad_picked.connect(self._pad_picked)
         window.rail_panel.pick_changed.connect(lambda kind: kind and self._leave_pick())
@@ -642,8 +681,8 @@ class AcPanel(QWidget):
         add_c, rem_c = QPushButton("Add"), QPushButton("Remove")
         from_values = QPushButton("Models from values")
         from_values.setToolTip("One model per capacitance value of the rail's capacitors that have no "
-                               "model yet, C read from the value; ESL and ESR left empty (the solve "
-                               "asks for them)")
+                               "model yet (in the project or from KiCad fields), C read from the value; "
+                               "ESL and ESR left empty (the solve asks for them)")
         imp, exp = QPushButton("Import…"), QPushButton("Export…")
         imp.setToolTip("A KiPI capacitor model file (kind: kipi-capacitor-model)")
         exp.setToolTip("The selected model as a KiPI capacitor model file (without its parts)")
@@ -657,6 +696,11 @@ class AcPanel(QWidget):
             cb.addStretch(1)
             cl.addLayout(cb)
         cl.addWidget(self.caps, 1)
+        self.cap_note = QLabel()                  # the KiCad fields' models, and the parts they took
+        self.cap_note.setWordWrap(True)
+        self.cap_note.setStyleSheet("color: #52514e")
+        self.cap_note.setVisible(False)
+        cl.addWidget(self.cap_note)
 
         self._pick_buttons = {"supply": self.pick_supply, "ground": self.pick_ground,
                               "parts": self.pick_parts}
@@ -838,12 +882,58 @@ class AcPanel(QWidget):
             self._probe_rows = copy.deepcopy(self.project.probes)
             self._cap_rows = copy.deepcopy(self.project.capacitors)
             self._fill(self.probes, PROBE_COLUMNS, self._probe_rows, probe_cell)
-            self._fill(self.caps, CAP_COLUMNS, self._cap_rows, cap_cell)
+            self._fill_caps()
             self._fill_options()
             self._fill_links()
             self.refresh_rails()
         finally:
             self._loading = False
+
+    def _fill_caps(self):
+        """The capacitor models: the project's (editable), then the KiCad fields' (read-only)."""
+        self._fill(self.caps, CAP_COLUMNS, self._cap_rows, cap_cell)
+        self._show_field_caps()
+
+    def _show_field_caps(self):
+        """After the project's rows, the KiCad fields' models of the merged project (what is
+        solved), read-only, each cell's tooltip saying where its value lives and how a project
+        model takes its place (never in ``_cap_rows``, so never written). A project row whose
+        parts went to them is marked on its Parts cell; the line under the table says both."""
+        from coppernicus.app.fields_view import cap_field_tip, cap_lost_tip
+        merged, t, n = self._win.merged, self.caps, len(self._cap_rows)
+        self._field_rows = field_models(merged)
+        t.blockSignals(True)
+        t.setRowCount(n + len(self._field_rows))
+        for i, (m, held) in enumerate(self._field_rows):
+            for c, (_h, key) in enumerate(CAP_COLUMNS):
+                item = QTableWidgetItem(cap_cell(m, key))
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                item.setBackground(QBrush(READ_ONLY_BG))
+                item.setToolTip(cap_field_tip(held, key))
+                t.setItem(n + i, c, item)
+        t.blockSignals(False)
+        try:
+            problems = usable_caps(self._cap_rows)[1]
+        except ProjectError:
+            problems = {}
+        self._flag_rows(t, problems, n)                # the project rows' marks, the lost parts' on top
+        lost = lost_parts(self._cap_rows, merged)
+        col = [k for _h, k in CAP_COLUMNS].index("refs")
+        t.blockSignals(True)
+        for r, pairs in lost.items():
+            item = t.item(r, col)
+            if item is not None and item.background().color() != ERROR_BG:
+                item.setBackground(QBrush(LOST_BG))
+                item.setToolTip("\n".join(x for x in (item.toolTip(), cap_lost_tip(pairs)) if x))
+        t.blockSignals(False)
+        note = fields_note(self._field_rows, lost, self._cap_rows)
+        self.cap_note.setText(note)
+        self.cap_note.setVisible(bool(note))
+
+    def _field_row(self, row: int) -> Optional[Tuple[CapModel, Any]]:
+        """The KiCad fields' model shown in table row ``row``; None for a project row."""
+        i = row - len(self._cap_rows)
+        return self._field_rows[i] if 0 <= i < len(self._field_rows) else None
 
     def _fill(self, table, columns, rows, cell):
         table.blockSignals(True)
@@ -942,22 +1032,31 @@ class AcPanel(QWidget):
     # ------------------------------------------------------------------ capacitor models
     def add_model(self, model: Optional[CapModel] = None):
         self._cap_rows.append(model or CapModel(""))
-        self._fill(self.caps, CAP_COLUMNS, self._cap_rows, cap_cell)
+        self._fill_caps()
         self.caps.setCurrentCell(len(self._cap_rows) - 1, 0)
         self._write_caps()
 
     def _remove_models(self):
-        rows = sorted({i.row() for i in self.caps.selectedIndexes()}, reverse=True)
-        if not rows and self._cap_rows:
+        chosen = {i.row() for i in self.caps.selectedIndexes()}
+        rows = sorted((r for r in chosen if r < len(self._cap_rows)), reverse=True)
+        fields = [f[0].name for f in map(self._field_row, sorted(chosen)) if f is not None]
+        if fields and not rows:
+            self._report(f"Not removed: {', '.join(fields)} from KiCad fields (change the fields in KiCad, "
+                         "or set override_board_fields: true on a project model naming the part)")
+            return
+        if not chosen and self._cap_rows:
             rows = [len(self._cap_rows) - 1]
         for r in rows:
             self._cap_rows.pop(r)
-        self._fill(self.caps, CAP_COLUMNS, self._cap_rows, cap_cell)
+        self._fill_caps()
         self._write_caps()
 
     def _cap_item_changed(self, item: QTableWidgetItem):
         r, c = item.row(), item.column()
-        if self._loading or r >= len(self._cap_rows):
+        if self._loading:
+            return
+        if r >= len(self._cap_rows):
+            self._refuse_field_edit(item)
             return
         key = CAP_COLUMNS[c][1]
         try:
@@ -973,12 +1072,27 @@ class AcPanel(QWidget):
         self._set_cell(self.caps, r, c, cap_cell(q, key))
         self._write_caps()
 
+    def _refuse_field_edit(self, item: QTableWidgetItem):
+        """A cell of a KiCad fields' row typed into (only a script can: they are not editable):
+        its value back, and where it lives."""
+        from coppernicus.app.fields_view import cap_field_tip
+        shown = self._field_row(item.row())
+        if shown is None:
+            return
+        m, held = shown
+        key = CAP_COLUMNS[item.column()][1]
+        self.caps.blockSignals(True)
+        item.setText(cap_cell(m, key))
+        self.caps.blockSignals(False)
+        self._say(f"Not applied: {m.name} comes from KiCad fields: {cap_field_tip(held, key)}")
+
     def _write_caps(self):
         models, problems = usable_caps(self._cap_rows)
-        self._flag_rows(self.caps, problems)
+        self._flag_rows(self.caps, problems, len(self._cap_rows))
         if models != self.project.capacitors:
             self.project.capacitors = copy.deepcopy(models)
             self._edited()
+        self._show_field_caps()                 # merged again: the fields' rows and lost parts follow
         if problems:
             self._say(" · ".join(f"Model row {i + 1}: {why}" for i, why in sorted(problems.items())))
 
@@ -991,7 +1105,8 @@ class AcPanel(QWidget):
 
     def models_from_values(self) -> str:
         """One model per distinct capacitance of the shown rail's capacitors (between its nets
-        and its ground) that are in no model, C read from the value field; ESL and ESR empty."""
+        and its ground) that are in no model (the project's or the KiCad fields'), C read from
+        the value field; ESL and ESR empty."""
         board, rail = self._win.board, self.rail_box.currentText()
         if board is None or not rail:
             return self._report("Open a board and choose a rail first")
@@ -1000,7 +1115,8 @@ class AcPanel(QWidget):
             return self._report(f"{rail}: give its source or a probe ground pins first, so the "
                                 "capacitors between the rail and its ground can be found")
         from coppernicus.engine.ac import capacitor_candidates
-        used = {r for m in self._cap_rows for r in m.refs}
+        used = {r for m in self._cap_rows for r in m.refs} | {
+            r for m, _c in field_models(self._win.merged) for r in m.refs}
         by_value: Dict[float, List] = {}
         unread = []
         for c in capacitor_candidates(board, sorted(nets | grounds)):
@@ -1013,7 +1129,7 @@ class AcPanel(QWidget):
         for farads, parts in sorted(by_value.items()):
             name = self._unique_name(parts[0].value.strip() or si_text(farads) + "F")
             self._cap_rows.append(CapModel(name, farads, refs=sorted(c.ref for c in parts)))
-        self._fill(self.caps, CAP_COLUMNS, self._cap_rows, cap_cell)
+        self._fill_caps()
         self._write_caps()
         n = sum(len(v) for v in by_value.values())
         msg = (f"Added {len(by_value)} model(s) from the values of {n} capacitor(s) on {rail}: enter "
@@ -1056,10 +1172,19 @@ class AcPanel(QWidget):
         return self._report(f"Imported capacitor model {model.name} from {Path(path).name}"
                             + "".join(f"; {w}" for w in warnings) + ": pick or type its parts")
 
+    def _select_model(self, row: int, what: str) -> str:
+        """Why table row ``row`` cannot take ``what`` ("export", "pick parts into"): no project
+        model is selected, or the row is the KiCad fields'."""
+        shown = self._field_row(row)
+        if shown is not None:
+            return (f"{shown[0].name} comes from KiCad fields (its part and values are set there): "
+                    f"select a project capacitor model to {what}")
+        return f"Select the capacitor model to {what}"
+
     def export_cap_file(self, row: int, path) -> str:
         from coppernicus.engine.ac import write_cap_file
         if not 0 <= row < len(self._cap_rows):
-            return self._report("Select the model to export")
+            return self._report(self._select_model(row, "export"))
         out = write_cap_file(path, self._cap_rows[row])
         return self._report(f"Wrote capacitor model {self._cap_rows[row].name} to {out}")
 
@@ -1072,7 +1197,7 @@ class AcPanel(QWidget):
     def _export_model_dialog(self):
         row = self.caps.currentRow()
         if not 0 <= row < len(self._cap_rows):
-            self._report("Select the model to export")
+            self._report(self._select_model(row, "export"))
             return
         name = self._cap_rows[row].name
         path, _ = QFileDialog.getSaveFileName(self, "Export a capacitor model", f"{name}.yaml",
@@ -1180,6 +1305,7 @@ class AcPanel(QWidget):
         rails = solvable_rails(self.merged_project)
         if rails != [self.rail_box.itemText(i) for i in range(self.rail_box.count())]:
             self.refresh_rails()
+        self._show_field_caps()                 # the KiCad fields turned on or off, too
         self._check_stale()
 
     def _rail_shown(self):
@@ -1276,16 +1402,18 @@ class AcPanel(QWidget):
             self._pairs = (key, load_probes(win.board, win.merged.project))
         return self._pairs[1]
 
-    def schedule_warnings(self):
+    def schedule_refresh(self):
         """The project was merged again (an edit here, in the rail setup or the Tolerance tab):
-        the shown result's Q9 warnings and its verdict line follow, once, after the events now
-        queued (the window calls it from ``_remerge``, which stays quick)."""
-        if self.results and not self._notes_pending:
-            self._notes_pending = True
-            QTimer.singleShot(0, self._warnings_now)
+        the KiCad fields' capacitor models, the shown result's Q9 warnings and its verdict line
+        follow, once, after the events now queued (the window calls it from ``_remerge``, which
+        stays quick)."""
+        if not self._refresh_pending:
+            self._refresh_pending = True
+            QTimer.singleShot(0, self._refresh_now)
 
-    def _warnings_now(self):
-        self._notes_pending = False
+    def _refresh_now(self):
+        self._refresh_pending = False
+        self._show_field_caps()
         self._show_notes()
         self._check_stale()
 
@@ -1311,6 +1439,7 @@ class AcPanel(QWidget):
         super().showEvent(event)
         if not self._busy:
             self.refresh_rails()
+        self._show_field_caps()
 
     # ------------------------------------------------------------------ export
     def _export_start(self, rail: str) -> Path:
@@ -1425,11 +1554,11 @@ class AcPanel(QWidget):
         if not self._cap_rows:
             return self._report("Add a capacitor model first (Add, or Models from values)")
         if not 0 <= r < len(self._cap_rows):
-            return self._report("Select the capacitor model to pick parts into")
+            return self._report(self._select_model(r, "pick parts into"))
         models = copy.deepcopy(self._cap_rows)
         msg = toggle_cap_ref(models, r, ref)
         self._cap_rows = models
-        self._fill(self.caps, CAP_COLUMNS, self._cap_rows, cap_cell)
+        self._fill_caps()
         self.caps.setCurrentCell(r, 0)
         self._write_caps()
         return self._report(msg)
@@ -1453,9 +1582,11 @@ class AcPanel(QWidget):
         item.setToolTip(f"Not applied: {why}")
         table.blockSignals(False)
 
-    def _flag_rows(self, table, problems: Dict[int, str]):
+    def _flag_rows(self, table, problems: Dict[int, str], count: Optional[int] = None):
+        """Mark the first ``count`` rows (every row: None) by ``problems``; a cell refused
+        (ERROR_BG) keeps its mark."""
         table.blockSignals(True)
-        for r in range(table.rowCount()):
+        for r in range(table.rowCount() if count is None else min(count, table.rowCount())):
             why = problems.get(r, "")
             bg = QBrush(DRAFT_BG if why.startswith("draft") else PROBLEM_BG) if why else QBrush()
             for c in range(table.columnCount()):
