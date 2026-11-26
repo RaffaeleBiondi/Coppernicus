@@ -114,7 +114,7 @@ SPD_PIVOT_THRESHOLD = 0.0
 COMPLEX_PIVOT_THRESHOLD = 0.1
 # The proof criteria of "round-off only" per part (see the module's docstring): relative, with
 # an absolute floor per unit of this times the unit's largest magnitude.
-TOLERANCE_REL = {"thermal": 1e-9, "ac": 1e-6, "dc": 1e-9, "dc_direct": 1e-8}
+TOLERANCE_REL = {"thermal": 1e-9, "ac": 1e-6, "dc": 1e-9, "dc_direct": 1e-9}
 # KiPI's functions replaced, with the parameters they take.
 _SEAMS = {"_superlu": ["A"], "_superlu_complex": ["A"]}
 # The thread marker that sends a thread's factorizations to KiPI's functions (kipi_path).
