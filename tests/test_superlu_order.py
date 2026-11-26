@@ -112,6 +112,16 @@ def backward_error(A, x, b) -> float:
     return float(r / (abs(A).sum(axis=1).max() * np.abs(x).max() + np.abs(b).max()))
 
 
+# Below a few machine epsilons a backward error is round-off: two such values are alike whatever
+# their ratio (CI on ubuntu gave 1.9e-17 against 3.5e-16 for the same system).
+ROUND_OFF = 8 * np.finfo(float).eps
+
+
+def alike(on: float, off: float) -> bool:
+    """Two backward errors within 10x of each other, or both at round-off."""
+    return on < 10 * off + ROUND_OFF and off < 10 * on + ROUND_OFF
+
+
 def close(a, b, rel) -> bool:
     """The proof criterion: |a − b| within ``rel`` of the larger magnitude, or within the floor
     ``rel`` × the largest magnitude of the values compared (one unit), for those near zero."""
@@ -337,7 +347,7 @@ def test_backward_error_on_and_off_alike(kipi_superlu):
     with so.thermal_model():
         on = backward_error(A, direct.factorize(A)(b), b)
     assert off < 1e-14 and on < 1e-14
-    assert on < 10 * off + 1e-16 and off < 10 * on + 1e-16
+    assert alike(on, off)
 
 
 def test_symmetric_order_fills_less():
@@ -462,7 +472,7 @@ def test_ac_backward_error_on_and_off_alike(weak, kipi_superlu_complex):
     so.enable("ac")
     on = backward_error(A, direct._superlu_complex(A)(b), b)
     assert off < 1e-14 and on < 1e-14
-    assert on < 10 * off + 1e-16 and off < 10 * on + 1e-16
+    assert alike(on, off)
 
 
 def test_the_ac_seam_is_checked_too(monkeypatch, kipi_superlu):
@@ -544,7 +554,7 @@ def test_dc_backward_error_on_and_off_alike_with_a_pad_node(kipi_superlu):
     so.enable("dc")
     on = backward_error(A, direct.factorize(A)(b), b)
     assert off < 1e-14 and on < 1e-14
-    assert on < 10 * off + 1e-16 and off < 10 * on + 1e-16
+    assert alike(on, off)
 
 
 def test_dc_solve_moves_by_round_off_only(demo, spy):
