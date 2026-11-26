@@ -472,7 +472,8 @@ def run_in_window(body: str) -> None:
 
 def test_the_tolerance_tab_follows_ripple_and_noise_and_opening_changes_nothing():
     run_in_window(f'''
-        tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
+        from coppernicus.app import shown_label
+        tabs = [shown_label(window.results_tabs.tabText(i)) for i in range(window.results_tabs.count())]
         assert tabs[tabs.index("Ripple & noise") + 1] == "Tolerance", tabs
         assert window.results_tabs.widget(tabs.index("Tolerance")) is panel
         window.show()

@@ -388,9 +388,11 @@ def main(argv=None) -> int:
             return window
 
         def tab(window, text: str):
-            """The Results tab named ``text``, shown, wherever it is in the row of tabs."""
+            """The Results tab named ``text`` (as the screen shows it: "Ripple & noise"), shown,
+            wherever it is in the row of tabs."""
+            from coppernicus.app import shown_label
             tabs = window.results_tabs
-            names = [tabs.tabText(i) for i in range(tabs.count())]
+            names = [shown_label(tabs.tabText(i)) for i in range(tabs.count())]
             need(text in names, f"no {text!r} tab in the Results panel: {names}")
             tabs.setCurrentIndex(names.index(text))
             settle()

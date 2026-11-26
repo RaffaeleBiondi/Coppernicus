@@ -34,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from coppernicus import __version__, bootstrap_triangle
 from coppernicus import board_fields as BF
-from coppernicus.app import fields_view
+from coppernicus.app import fields_view, label_text
 from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
@@ -302,7 +302,7 @@ class MainWindow(QMainWindow):
         self.ac_panel = AcPanel(self)
         self.results_tabs.addTab(self.ac_panel, "Impedance")
         self.noise_panel = NoisePanel(self)              # DC-DC ripple and coupled noise
-        self.results_tabs.addTab(self.noise_panel, "Ripple & noise")
+        self.results_tabs.addTab(self.noise_panel, label_text("Ripple & noise"))   # "&&": not a mnemonic
         self.tolerance_panel = TolerancePanel(self)      # each load's stack-up, from the results held
         self.results_tabs.addTab(self.tolerance_panel, "Tolerance")
         for panel in (self.ac_panel, self.noise_panel):

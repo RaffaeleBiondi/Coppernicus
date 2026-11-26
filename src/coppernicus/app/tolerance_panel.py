@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
 )
 
 from coppernicus import board_fields as BF
+from coppernicus.app import label_text
 from coppernicus.app.panels import FieldComboBox
 from coppernicus.project import (
     LOAD_PART_KEYS,
@@ -807,7 +808,7 @@ class TolerancePanel(QWidget):
             self.solve_button.setToolTip("Nothing a solve would add to the selected load" if self.result
                                          else "Open a board or a project")
         else:
-            self.solve_button.setText(self._next[2])
+            self.solve_button.setText(label_text(self._next[2]))   # a net or part name may hold "&"
             self.solve_button.setEnabled(True)
             self.solve_button.setToolTip(f"{self._next[2]}, in its own tab (its estimate first)")
 

@@ -465,6 +465,18 @@ def test_the_export_names_are_the_clis():
     assert export_stem(None, "board.kicad_pcb") == "board"
 
 
+def test_a_label_shows_its_ampersand_and_a_lookup_reads_what_qt_shows():
+    """Qt takes a lone "&" in a tab, menu, action or button label for a mnemonic marker:
+    label_text doubles it, shown_label is what Qt then draws (lookups by the words on screen)."""
+    from coppernicus.app import label_text, shown_label
+    assert label_text("Ripple & noise") == "Ripple && noise" and label_text("Tolerance") == "Tolerance"
+    assert shown_label("Ripple && noise") == "Ripple & noise"
+    assert shown_label("Ripple & noise") == "Ripple  noise"           # the "&" eaten, as on screen
+    assert shown_label("&File") == "File" and shown_label("a&&&b") == "a&b"
+    for text in ("Ripple & noise", "Solve noise of A&B", "&&", "Tolerance"):
+        assert shown_label(label_text(text)) == text, text
+
+
 # ---------------------------------------------------------------------- in a window (child process)
 
 PRELUDE = '''
@@ -496,9 +508,22 @@ def _precise_copy(tmp_path):
 def test_the_noise_tab_follows_the_impedance_tab_and_opening_changes_nothing(tmp_path):
     precise = _precise_copy(tmp_path)
     run_in_window(f'''
-        tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
+        from PySide6.QtGui import QKeySequence
+        from coppernicus.app import shown_label
+        tabs = [shown_label(window.results_tabs.tabText(i)) for i in range(window.results_tabs.count())]
         assert tabs[tabs.index("Power tree") + 1] == "Impedance", tabs
-        assert tabs[tabs.index("Impedance") + 1] == "Ripple & noise", tabs
+        assert tabs[tabs.index("Impedance") + 1] == "Ripple & noise", tabs     # its "&" on screen
+        label = window.results_tabs.tabText(tabs.index("Ripple & noise"))
+        assert QKeySequence.mnemonic(label).isEmpty(), label                   # no Alt+Space mnemonic
+        for box in [window.results_tabs] + window.findChildren(QtWidgets.QTabWidget):
+            for i in range(box.count()):                  # no tab, button or toolbar action eats a "&"
+                assert QKeySequence.mnemonic(box.tabText(i)).isEmpty(), box.tabText(i)
+        for button in window.findChildren(QtWidgets.QAbstractButton):
+            assert QKeySequence.mnemonic(button.text()).isEmpty(), button.text()
+        for group in window.findChildren(QtWidgets.QGroupBox):
+            assert QKeySequence.mnemonic(group.title()).isEmpty(), group.title()
+        for action in window.findChild(QtWidgets.QToolBar, "Main").actions():
+            assert QKeySequence.mnemonic(action.text()).isEmpty(), action.text()
         bar = window.findChild(QtWidgets.QToolBar, "Main")
         act = next(a for a in bar.actions() if a.text() == "Solve noise")
         assert act.shortcut().toString() == "Ctrl+Shift+N"

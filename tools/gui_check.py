@@ -2615,6 +2615,7 @@ def run_tolerance(window, check: Checks, args, out: Path):
 
     from PySide6.QtWidgets import QApplication
 
+    from coppernicus.app import shown_label  # the words on screen: "Ripple && noise" shows "&"
     from coppernicus.cli import main as cli_main
     project = TOLERANCE_DIR / "tolerance.coppernicus.yml"
     before = {f.name: f.read_bytes() for f in TOLERANCE_DIR.iterdir()}
@@ -2623,7 +2624,7 @@ def run_tolerance(window, check: Checks, args, out: Path):
     window.open_project(project)
     window.results_tabs.setCurrentWidget(panel)
     QApplication.processEvents()
-    tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
+    tabs = [shown_label(window.results_tabs.tabText(i)) for i in range(window.results_tabs.count())]
     row = [panel.loads.item(0, c).text() for c in range(panel.loads.columnCount())]
     check("tolerance: the tab follows Ripple & noise and shows U2's tolerances and U1's accuracy",
           tabs[tabs.index("Ripple & noise") + 1] == "Tolerance"
