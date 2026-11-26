@@ -36,6 +36,13 @@ results against your own judgement.
   solved, the Save dialog is for the tree's page alone. Same folder as before (`results/` next
   to the project, or `~/Documents/Coppernicus/results`); as during a rail solve, export is
   refused while the tree solves.
+- The HTML report's map has a label next to the pointer, as the app's: the value of the map
+  shown in large type, worded and rounded as in the app (the drop with its % of the source
+  voltage, the voltage, or |J|), then the drop's side and the layer, small and muted. It flips
+  at the map's edges, takes the page's dark or light colours, hides off the copper and when the
+  pointer leaves the map, and follows the layer, the map and the rail or tree group shown. The
+  readout line under the map keeps its words and digits, and now also reads the point again
+  after a zoom under a still pointer.
 
 ### Changed
 

@@ -238,7 +238,8 @@ limits, **1** when a limit is exceeded, **3** when a limit you set could not jud
 
 **HTML report.** Add `--html` to `solve` (and `--open` to open it straight away). Coppernicus
 writes one offline HTML file next to the summary. It holds every rail and copper layer as voltage
-drop, voltage or current density, with zoom, pan and a readout under the mouse, plus the problems
+drop, voltage or current density, with zoom, pan, a label beside the pointer that leads with the
+value of the map shown (as in the app) and a readout under the map, plus the problems
 table (click a row to zoom), the worst values per rail and the assumptions. It needs no network,
 so you can send it to a colleague. On a 10-layer board with four rails it weighs about 6 MB.
 

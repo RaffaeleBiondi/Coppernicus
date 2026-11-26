@@ -12,11 +12,39 @@ function el(tag, attrs, ...kids) {
   for (const k of kids) if (k !== null && k !== undefined) e.append(k instanceof Node ? k : String(k));
   return e;
 }
+// pure (no DOM: tests/test_report_hover.py runs this block in node) ------------------------
 const ok = (x) => typeof x === "number" && isFinite(x);
 function sig(x, n = 4) { if (!ok(x)) return "–"; if (x === 0) return "0";
   const a = Math.abs(x); return (a >= 1e-3 && a < 1e6) ? String(Number(x.toPrecision(n))) : x.toExponential(n - 1); }
 function fix(x, d) { return ok(x) ? x.toFixed(d) : "–"; }
 function xy(x, y) { return `(${fix(x, 2)}, ${fix(y, 2)}) mm`; }
+// The label beside the pointer, as the app's: {lead, secondary, lines}, what app/hover.py's
+// hover_readout gives with the map's value and the layer (lead, secondary, label_lines). lead:
+// the value of the map shown at the app's precision ("7.261 mV", "3.29274 V", "2.65 A/mm²");
+// secondary: the drop's % of the source voltage ("0.22 %"); lines, small and muted: the drop's
+// side ("drop below 3.3 V") and the layer. The readout line under the map keeps its finer digits.
+// at: {V, J} under the pointer (V NaN: copper with no path to a source, "not connected" as in
+// the app); null off copper: no label.
+function hoverLabel(field, at, rail, layer) {
+  if (!at) return null;
+  if (!ok(at.V)) return { lead: "", secondary: "", lines: ["not connected", layer] };
+  if (field === "voltage") return { lead: `${at.V.toFixed(5)} V`, secondary: "", lines: [layer] };
+  if (field === "current") return { lead: `${at.J.toFixed(2)} A/mm²`, secondary: "", lines: [layer] };
+  const unit = rail.drop_unit || `mV below ${sig(rail.v_ref_v, 4)} V`, cut = unit.indexOf(" ");
+  const drop = (rail.drop_sign === -1 ? -1 : 1) * (rail.v_ref_v - at.V) * 1e3;      // as dropSign
+  return { lead: `${drop.toFixed(3)} ${unit.slice(0, cut)}`,
+    secondary: rail.v_ref_v ? `${(drop / (10 * Math.abs(rail.v_ref_v))).toFixed(2)} %` : "",
+    lines: [`${rail.drop_word || "drop"} ${unit.slice(cut + 1)}`, layer] };
+}
+// Top-left corner of a label of size [w, h] beside the cursor, in a viewport [w, h] (px, y down):
+// 16 px right and 12 px down, flipped to the left or above where it would leave the viewport,
+// then clamped inside (app/hover.py label_position, to the pixel).
+function labelPosition([cx, cy], [w, h], [vw, vh], [ox, oy] = [16, 12]) {
+  const x = cx + ox + w <= vw ? cx + ox : cx - ox - w, y = cy + oy + h <= vh ? cy + oy : cy - oy - h;
+  return [Math.trunc(Math.min(Math.max(x, 0), Math.max(vw - w, 0))),
+          Math.trunc(Math.min(Math.max(y, 0), Math.max(vh - h, 0)))];
+}
+// end pure -----------------------------------------------------------------------------------
 
 // ---------------------------------------------------------------- state
 const S = { rail: 0, layer: 0, field: "drop", view: null, mark: null, drag: null,
@@ -147,9 +175,35 @@ async function draw() {
     ctx.beginPath(); ctx.moveTo(x - 6, y - 6); ctx.lineTo(x + 6, y + 6); ctx.moveTo(x + 6, y - 6); ctx.lineTo(x - 6, y + 6); ctx.stroke(); }
   if (S.mark) { ctx.strokeStyle = "#2f6fb2"; ctx.lineWidth = 2.5; ctx.beginPath();
     ctx.arc(X(S.mark[0]), Y(S.mark[1]), 14, 0, 2 * Math.PI); ctx.stroke(); }
+  if (S.hover && !S.drag) hover(S.hover);        // the board, layer, field or rail changed under it
 }
 
 // ---------------------------------------------------------------- readout
+// The label beside the pointer (hoverLabel), inside the map's box; S.hover: the pointer's last
+// place on the map (null once it left), read again when the map changes under it (draw).
+const hoverBox = el("div", { class: "hoverlabel", "aria-hidden": "true" });
+hoverBox.hidden = true;
+canvas.parentElement.append(hoverBox);
+let hoverSeq = 0;                       // the latest pointer event; an older one's late decode is dropped
+function hideHover() { hoverBox.hidden = true; }
+function showHover(ev, parts) {
+  if (!parts) { hideHover(); return; }
+  hoverBox.textContent = "";
+  if (parts.lead) hoverBox.append(el("div", {}, el("span", { class: "lead" }, parts.lead),
+    parts.secondary ? el("span", { class: "sec" }, parts.secondary) : null));
+  for (const line of parts.lines) hoverBox.append(el("div", { class: "rest" }, line));
+  hoverBox.hidden = false;
+  const r = canvas.getBoundingClientRect();
+  const [x, y] = labelPosition([ev.clientX - r.left, ev.clientY - r.top], [hoverBox.offsetWidth, hoverBox.offsetHeight],
+    [r.width, r.height]);
+  hoverBox.style.left = `${x}px`; hoverBox.style.top = `${y}px`;
+}
+// The pointer at ev: the readout line under the map, then the label of the same point; a later
+// event, or the pointer leaving the map, drops this one's label (its layer may be decoding).
+async function hover(ev) {
+  const seq = ++hoverSeq, p = await readout(ev);
+  if (seq === hoverSeq) showHover(ev, p ? hoverLabel(S.field, p, p.rail, p.layer) : null);
+}
 async function readout(ev) {
   if (!S.view) return;
   const r = canvas.getBoundingClientRect(), x = (ev.clientX - r.left - S.view.tx) / S.view.s,
@@ -171,6 +225,7 @@ async function readout(ev) {
   out.append(text, el("br"), el("span", { class: "muted small" },
     `Values at the centre of the ${sig(c, 3)} mm cell under the pointer, (${fix(g.x0 + (i + 0.5) * c, 3)}, ${fix(g.y0 + (j + 0.5) * c, 3)}) mm, ` +
     `taken from the full-resolution solution; stored in steps of ${sig(vstep * 1e6, 2)} µV and ${sig(jstep, 2)} A/mm².`));
+  return { V: cv === 1 ? NaN : rail.v_lo_v + (cv - 2) * vstep, J, rail, layer: lay.name };   // for hover
 }
 
 // ---------------------------------------------------------------- colour bar and notes
@@ -307,9 +362,11 @@ for (const k of ["sources", "loads", "hotspots"]) $("t-" + k).addEventListener("
 $("fit").addEventListener("click", () => { S.mark = null; fit(); });
 canvas.addEventListener("wheel", (e) => { e.preventDefault(); const r = canvas.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
   const f = Math.exp(-e.deltaY * 0.0015), v = S.view; v.tx = mx - (mx - v.tx) * f; v.ty = my - (my - v.ty) * f; v.s *= f; draw(); }, { passive: false });
-canvas.addEventListener("pointerdown", (e) => { S.drag = [e.clientX, e.clientY, S.view.tx, S.view.ty]; canvas.setPointerCapture(e.pointerId); });
-canvas.addEventListener("pointermove", (e) => { if (S.drag) { S.view.tx = S.drag[2] + e.clientX - S.drag[0]; S.view.ty = S.drag[3] + e.clientY - S.drag[1]; draw(); } else readout(e); });
-canvas.addEventListener("pointerup", () => { S.drag = null; });
+canvas.addEventListener("pointerdown", (e) => { S.drag = [e.clientX, e.clientY, S.view.tx, S.view.ty]; canvas.setPointerCapture(e.pointerId); hideHover(); });
+canvas.addEventListener("pointermove", (e) => { S.hover = { clientX: e.clientX, clientY: e.clientY };
+  if (S.drag) { S.view.tx = S.drag[2] + e.clientX - S.drag[0]; S.view.ty = S.drag[3] + e.clientY - S.drag[1]; draw(); } else hover(e); });
+canvas.addEventListener("pointerup", (e) => { S.drag = null; hover(e); });
+canvas.addEventListener("pointerleave", () => { S.hover = null; hoverSeq++; hideHover(); });
 window.addEventListener("resize", () => draw());
 document.addEventListener("coppernicus-theme", () => draw());   // the outline takes the text colour
 if (typeof DecompressionStream === "undefined") { $("busy").textContent = "This browser cannot decompress the maps (no DecompressionStream); use a current Chrome, Edge, Firefox or Safari."; $("busy").hidden = false; }
