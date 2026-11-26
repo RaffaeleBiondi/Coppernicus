@@ -1476,3 +1476,42 @@ Also:
 - KiPI's estimate is shown even when its AC result hangs on something assumed (capacitors
   without a model, an assumed εr); it is never judged.
 - One-sided tolerances (a `null` end) are not offered: both ends are entered.
+
+---
+
+## Solver order options: SuperLU's symmetric mode (`kipi/core/solver/direct.py`, opt-in)
+
+KiPI factorizes with SciPy's SuperLU in the COLAMD column order (`direct._superlu`), which
+ignores that its matrices are symmetric. SuperLU's symmetric mode (minimum degree on the pattern
+of A + Aᵀ, `SymmetricMode`, the diagonal as pivot) fills about half as much on them, so it takes
+less time and memory. `src/coppernicus/engine/superlu_order.py` offers it per part, each **off
+by default**.
+
+| Part | What runs in SuperLU's symmetric mode | Pivoting |
+|------|---------------------------------------|----------|
+| `thermal` | the board temperature's heat model (`BoardThermalModel`, model.py:282), marked on the calling thread around its construction in `engine/thermal.py` | none (symmetric positive definite) |
+
+How to enable: `COPPERNICUS_SUPERLU_ORDER=thermal` in the environment (comma-separated parts,
+read when `coppernicus.engine` is imported), or `superlu_order.enable("thermal")`.
+
+Off, nothing is replaced and KiPI's own path runs: bit-identical (the drift test of our
+electro-thermal loop against KiPI's `solve_electrothermal` runs with it off). On, a different
+order rounds differently: results move by round-off only. Proof criteria (checks of "round-off
+only", not limits of the product):
+
+- `thermal`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative, with a
+  floor per unit for values near zero (the unit's largest magnitude in the fingerprint × 1e-9);
+- the backward error ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖), on and off, of the same order (a few 1e-16;
+  `tests/test_superlu_order.py`).
+
+Measured (macOS arm64, a loaded machine: provisional), the heat model of a 50 mm synthetic board
+(250,000 unknowns, 4 layers): factors 121 M → 61 M non-zeros, memory +3.2 → +1.4 GB,
+factorization 3.6 → 2.0 s, each later solve 0.37 → 0.15 s; a 6-layer 250 × 250 grid (375,000
+unknowns): 12.6 s / +8.3 GB → 5.2 s / +3.0 GB.
+
+The seam: KiPI's private functions are replaced process-wide, once, only on KiPI 1.0.1 with
+those functions of the expected signature (otherwise a warning, once, and KiPI's path); a part
+that is off hands its factorizations to KiPI's own function. `uninstall()` puts KiPI's back.
+
+Not refitted: the board temperature's memory estimate (`thermal_ram_estimate`) is a fit
+measured in KiPI's order; with `thermal` on it overstates, and its text says so.

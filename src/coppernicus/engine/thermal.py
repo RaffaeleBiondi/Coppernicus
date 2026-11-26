@@ -18,6 +18,7 @@ function: :func:`solve_kipi_reference` runs that one for the drift test.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import time
 from dataclasses import dataclass
@@ -49,6 +50,7 @@ from kipi.dc.thermal.model import (
     board_geometry,
 )
 
+from coppernicus.engine import superlu_order
 from coppernicus.engine.ac import peak_rss_bytes
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import to_pisetup
@@ -132,7 +134,7 @@ def _electrothermal(snap, setup, ts: ThermalSettings, progress, regulator_heat: 
     solve, heat and temperature solve, in the same order. It differs only in the regulator
     heat (``part_pads``), in keeping iteration 1's load drops, and in leaving the settling
     warning to the caller."""
-    with progress.timed("Building the board thermal model"):
+    with progress.timed("Building the board thermal model"), superlu_order.thermal_model():
         model = BoardThermalModel(snap, ts, progress, setup.settings.conductor_by_layer,
                                   setup.settings.via_rules)
     temps = np.where(model.inside, ts.ambient_c, np.nan)[None].repeat(len(model.g), 0)
@@ -470,7 +472,17 @@ class ThermalRam:
 def thermal_ram_estimate(unknowns: float, layers: int, total_bytes: Optional[float]) -> ThermalRam:
     """Whether KiPI's thermal model of ``unknowns`` (cells × ``layers``) could exceed this
     machine's memory, from the fit of :data:`MEM_POINTS` (other boards may need more or less).
-    The power tree's own meshes and factors come on top."""
+    The power tree's own meshes and factors come on top. With the thermal part of
+    :mod:`coppernicus.engine.superlu_order` on, the text says the fit overstates."""
+    ram = _thermal_ram(unknowns, layers, total_bytes)
+    if "thermal" not in superlu_order.enabled():
+        return ram
+    return dataclasses.replace(ram, text=ram.text + (
+        f" The factorization runs in SuperLU's symmetric order ({superlu_order.ENV}=thermal), which "
+        "takes less memory than KiPI's order this fit was measured with, so this overstates."))
+
+
+def _thermal_ram(unknowns: float, layers: int, total_bytes: Optional[float]) -> ThermalRam:
     need = MEM_FIT_A * float(unknowns) ** MEM_FIT_B * float(layers) ** MEM_FIT_C
     outside = not (MEM_UNKNOWNS[0] <= unknowns <= MEM_UNKNOWNS[1]
                    and MEM_LAYERS[0] <= layers <= MEM_LAYERS[1])
