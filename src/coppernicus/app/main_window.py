@@ -17,17 +17,23 @@ from typing import Dict, List, Optional, Tuple
 from PySide6.QtCore import QLocale, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QTabWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -77,6 +83,11 @@ from coppernicus.temperature import apply_thermal_limits, thermal_verdict
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 USER_RESULTS = ("Documents", "Coppernicus", "results")     # under the home folder
 REMOVE_MESHER = "Remove downloaded mesher (Triangle)…"
+# + / − step the Layer selector, as in KiCad: (key, modifiers, step); "=" is "+" without Shift.
+LAYER_KEYS = ((Qt.Key_Plus, Qt.NoModifier, 1), (Qt.Key_Equal, Qt.NoModifier, 1),
+              (Qt.Key_Plus, Qt.KeypadModifier, 1), (Qt.Key_Minus, Qt.NoModifier, -1),
+              (Qt.Key_Minus, Qt.KeypadModifier, -1))
+LAYER_TIP = "The copper layer shown. + / − (also = and the keypad's + / −): next / previous layer"
 
 
 def remove_mesher_shown() -> bool:
@@ -106,6 +117,20 @@ def report_folder(project_dir: Path, home: Optional[Path] = None) -> Tuple[Path,
     user = (Path.home() if home is None else Path(home)).joinpath(*USER_RESULTS)
     _writable_folder(user)                     # if even this fails, the Save dialog says so
     return user, f"{folder} cannot be written, so reports go to {user}"
+
+
+def typing_widget(widget) -> bool:
+    """Whether keys pressed in ``widget`` are typed into it: an editable text field, spin box or
+    combo box, or a table whose cells start editing on a key (or one being edited). The layer
+    keys (:data:`LAYER_KEYS`) are off there, so the key reaches it."""
+    if isinstance(widget, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)):
+        return not widget.isReadOnly()
+    if isinstance(widget, QComboBox):
+        return widget.isEditable()
+    if isinstance(widget, QAbstractItemView):
+        return (widget.state() == QAbstractItemView.EditingState
+                or bool(widget.editTriggers() & QAbstractItemView.AnyKeyPressed))
+    return False
 
 
 def initial_size(avail_w: Optional[int], avail_h: Optional[int]) -> Tuple[int, int]:
@@ -237,6 +262,7 @@ class MainWindow(QMainWindow):
         self.group_box.addItem("Rail solved alone", None)
         self.group_box.setToolTip("After Solve tree: show a rail or ground group of the tree")
         self.layer_box = QComboBox()
+        self.layer_box.setToolTip(LAYER_TIP)
         self.field_box = QComboBox()
         for key, (label, _cmap) in FIELDS.items():
             self.field_box.addItem(label, key)
@@ -346,6 +372,24 @@ class MainWindow(QMainWindow):
         self.rail_panel.pick_changed.connect(self._pick_mode_changed)
         self.rail_panel.banner.action_requested.connect(self._banner_action)
         QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self.stop_clicking)
+        self._layer_keys = [QShortcut(QKeySequence(mods | key), self,
+                                      activated=lambda s=step: self.step_layer(s))
+                            for key, mods, step in LAYER_KEYS]
+        QApplication.instance().focusChanged.connect(self._focus_changed)
+
+    def step_layer(self, step: int):
+        """+ / − (as in KiCad): the next (``step`` 1) or previous (−1) copper layer in the Layer
+        selector, round from the last to the first; nothing without layers."""
+        n = self.layer_box.count()
+        if n:
+            self.layer_box.setCurrentIndex((self.layer_box.currentIndex() + step) % n)
+
+    def _focus_changed(self, _old, new):
+        """The layer keys are off while the focus is where keys are typed (:func:`typing_widget`):
+        a disabled shortcut leaves the key to the widget, so "+3V3" can be typed in a cell."""
+        on = not typing_widget(new)
+        for shortcut in self._layer_keys:
+            shortcut.setEnabled(on)
 
     def _dock(self, title, widget, area):
         dock = QDockWidget(title, self)

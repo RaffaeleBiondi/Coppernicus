@@ -494,6 +494,21 @@ def run_flow_demo(window, check: Checks, args, out: Path):
     check("... with its limits", max_drop == "0.25", max_drop)
     layers = [window.layer_box.itemText(i) for i in range(window.layer_box.count())]
     check("... and the new board's layers", layers == ["F.Cu", "B.Cu"], str(layers))
+    if not args.window:       # + / − as in KiCad (real keys need the window active: offscreen only)
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        window.activateWindow()
+        stepped = []
+        for widget, key in ((window.layer_box, Qt.Key_Plus), (window.layer_box, Qt.Key_Minus),
+                            (window.rail_panel.max_drop, Qt.Key_Minus)):
+            widget.setFocus()
+            QApplication.processEvents()
+            QTest.keyClick(widget, key)
+            QApplication.processEvents()
+            stepped.append(window.layer_box.currentText())
+        check("+ and − step the layer, not while a text field has focus",
+              stepped == ["B.Cu", "F.Cu", "F.Cu"] and window.rail_panel.max_drop.text() == max_drop,
+              f"{stepped} {window.rail_panel.max_drop.text()!r}")
     # One number format whatever the system locale: dots, as in the limits and the problems.
     spin_texts = [window.rail_panel.max_edge.text(), window.rail_panel.temp.text(),
                   window.rail_panel.sources.table.cellWidget(0, 3).text(),

@@ -26,6 +26,10 @@ results against your own judgement.
   The tree counts in the session's memory bounds and is dropped whole. On the command line,
   `coppernicus solve PROJECT --tree --probe LAYER@X,Y` (repeatable) prints the readouts
   (`probes` in the JSON).
+- **+** and **−** in the app step the Layer selector to the next and previous copper layer, as
+  in KiCad (also **=** and the keypad's + and −), round from the last layer to the first. They
+  are left to the field while you type in a text field, a spin box or a table cell. The Layer
+  selector's tooltip says so.
 
 ### Changed
 

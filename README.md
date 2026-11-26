@@ -105,7 +105,9 @@ per via (A).
 
 Press **Solve rail** (or **F5**). The board turns into a map of **how many millivolts each point is
 below the source**. The view opens on the layer that loses the most power, and the *Layer* menu
-shows the others. Drag to pan, use the wheel to zoom, and press **Fit** to see the whole board.
+shows the others; **+** and **−** step to the next and previous layer, as in KiCad (also **=**
+and the keypad's keys; not while you type in a field). Drag to pan, use the wheel to zoom, and
+press **Fit** to see the whole board.
 
 Tick **Isolines** to draw lines of equal drop, at the same levels on every layer, and
 **Arrows** to show which way the current flows. A longer arrow means more current. In the
