@@ -256,23 +256,26 @@ def test_a_value_a_kicad_field_holds_is_read_only_cell_by_cell():
     assert own.rails == []
 
 
-def test_a_copy_of_the_fields_parts_leaves_what_a_field_holds_to_the_field():
-    """An edit of a free cell on a rail from the fields writes a copy of the fields' parts:
-    without the values a field holds, so a later change in KiCad warns about nothing the user
-    entered, and KiCad still gives them."""
+def test_a_copy_of_the_fields_parts_keeps_what_a_field_holds_as_merged():
+    """An edit of a free cell on a rail from the fields writes a copy of the fields' parts as
+    merged, the values their fields give included (as Use KiCad fields and Override → start from
+    the KiCad values copy them), so Override in project later keeps them; the same fields merge
+    with no warning, and a field changed in KiCad still wins, with its warning."""
     from coppernicus.app.tolerance_panel import set_value
     own = Project()
     note = set_value(own, BF.merge(own, HELD_FIELDS, PADS), "load", "VCC", 0, "tol_pct", "5")
     assert "no KiCad field gives U1's tol_pct" in note
     rail = own.rail("VCC")
-    assert rail.loads[0].tol_pct == (-5.0, 5.0) and rail.loads[0].ac_tol_mv is None
-    assert rail.sources[0].accuracy_pct is None
+    assert (rail.loads[0].tol_pct, rail.loads[0].ac_tol_mv) == ((-5.0, 5.0), (-20.0, 20.0))
+    assert rail.sources[0].accuracy_pct == (-1.0, 1.0)
     again = BF.merge(own, HELD_FIELDS, PADS)
     u1, j1 = again.project.rail("VCC").loads[0], again.project.rail("VCC").sources[0]
     assert (u1.tol_pct, u1.ac_tol_mv, j1.accuracy_pct) == ((-5.0, 5.0), (-20.0, 20.0), (-1.0, 1.0))
     assert not again.warnings
-    changed = {**HELD_FIELDS, "J1": {**HELD_FIELDS["J1"], "PI_ACC": "2%"}}
-    assert not BF.merge(own, changed, PADS).warnings
+    changed = BF.merge(own, {**HELD_FIELDS, "J1": {**HELD_FIELDS["J1"], "PI_ACC": "2%"}}, PADS)
+    [w] = changed.warnings
+    assert 'KiCad field PI_ACC "2%" on J1' in w
+    assert changed.project.rail("VCC").sources[0].accuracy_pct == (-2.0, 2.0)
 
 
 def test_library_fields_hold_a_project_rails_cells_unless_the_rail_overrides_them():
@@ -755,6 +758,20 @@ def test_a_cell_a_kicad_field_holds_is_read_only_in_the_tab_and_its_neighbours_s
         assert window.merged.warnings == [] and cell(panel.loads, LOAD_COLUMNS, "tol_pct").text() == "5"
         assert not cell(panel.loads, LOAD_COLUMNS, "ac_tol_mv").flags() & editable
         assert window.merged.project.rail("VCC").sources[0].accuracy_pct == (-1.0, 1.0)
+
+        def no_dialog(*_a):
+            raise AssertionError("Override in project asked, though nothing differs")
+        fields_view.ask_override = no_dialog
+        assert window.override_fields("VCC")                 # the tooltip's way: the project's values
+        panel.refresh()
+        for table, columns, key, text in ((panel.sources, SOURCE_COLUMNS, "accuracy_pct", "1"),
+                                          (panel.loads, LOAD_COLUMNS, "ac_tol_mv", "20")):
+            item = cell(table, columns, key)
+            assert item.text() == text and item.flags() & editable, (key, item.text())
+            assert item.background().style() == QtCore.Qt.NoBrush, key
+        panel.set_cell("source", "J1", "accuracy_pct", "2")
+        assert window.project.rail("VCC").sources[0].accuracy_pct == (-2.0, 2.0)
+        assert window.merged.project.rail("VCC").sources[0].accuracy_pct == (-2.0, 2.0)
     '''))
 
 

@@ -14,8 +14,8 @@ editable. A rail from the fields is editable too, where no field holds the cell:
 held on the project's own rail of that net,
 on the part of the same reference, which the merge carries by ref
 (:func:`coppernicus.board_fields.carried_by_ref`); with no rail of its own there, the
-project's rail becomes a copy of the fields' parts (without what their fields hold), so the
-merge sees nothing to warn about.
+project's rail becomes a copy of the fields' parts as merged (what their fields hold
+included, so Override in project keeps it), so the merge sees nothing to warn about.
 
 The table is built from what the window holds (:func:`compose_held`): the power tree, the
 Impedance tab's results and the Ripple & noise tab's. A result held for an older setup is
@@ -247,11 +247,6 @@ def set_value(project: Project, merged: BF.Merged, kind: str, net: str, index: i
         return ""
     fields = merged.project.rail(net)         # a copy of the fields' parts holds it
     sources, loads = copy.deepcopy(fields.sources), copy.deepcopy(fields.loads)
-    for k, terms in (("source", sources), ("load", loads)):   # what a field holds stays the field's
-        for j, t in enumerate(terms):
-            gone = {name: None for name in terminal_keys(t) if merged.tolerance_field(net, k, j, name)}
-            if gone:
-                terms[j] = dataclasses.replace(t, **gone)
     terms = sources if kind == "source" else loads
     label = terms[index].label
     terms[index] = with_tolerance(terms[index], key, text)    # refused: nothing written yet

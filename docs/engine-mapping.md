@@ -1434,8 +1434,8 @@ solves), 0.70 GB peak RSS.
   field holds anything, so every cell edits.
 - Elsewhere a rail from the KiCad fields is editable: the edit goes to the
   project's part of the same ref (`carried_by_ref`'s pairing); with no project rail of its own
-  there, that rail becomes a copy of the fields' sources and loads, without the values their
-  fields hold, which `_differences` sees
+  there, that rail becomes a copy of the fields' sources and loads as merged (the values their
+  fields give included, as Use KiCad fields copies them), which `_differences` sees
   as no difference (no warning; KiCad still gives the values). A row is read-only where the
   project's own rail differs from the fields and has no part of that ref ("Override in
   project"). Use KiCad fields keeps the tolerances by ref the same way, and names the parts
