@@ -232,10 +232,10 @@ class ThermalPanel(QWidget):
         self._loading = False
         self._points: List[Tuple[str, float, float, str]] = []
 
-        self.enabled = QCheckBox("Electro-thermal: Solve power tree heats the copper")
-        self.enabled.setToolTip("Solve power tree (Ctrl+T) also solves the board temperature: the copper "
+        self.enabled = QCheckBox("Electro-thermal: Solve tree heats the copper")
+        self.enabled.setToolTip("Solve tree (Ctrl+T) also solves the board temperature: the copper "
                                 "heated by its own losses, solved again at that temperature (KiPI's "
-                                "co-simulation). Solve (F5) of one rail is not heated.")
+                                "co-simulation). Solve rail (F5) is not heated.")
         self.ambient = DecimalSpinBox(decimals=2, minimum=-100.0, maximum=1000.0, singleStep=1.0,
                                       suffix=" °C")
         self.ambient.setToolTip("The air and the board without current")

@@ -124,7 +124,7 @@ error. The full rules are in
 - [Ripple and coupled noise](noise.md): a switcher's ripple and the noise in victim nets, against your margins.
 - [Tolerance stack-up](tolerance.md): each load's DC drop, accuracy, ripple and transient, against your tolerances.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
-- [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
+- [What-if and compare](what-if-and-compare.md): copper thickness, Pin baseline, revisions.
 - [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance, the noise and the tolerance stack-up.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

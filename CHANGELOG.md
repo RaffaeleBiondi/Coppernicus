@@ -26,6 +26,23 @@ results against your own judgement.
   The tree counts in the session's memory bounds and is dropped whole. On the command line,
   `coppernicus solve PROJECT --tree --probe LAYER@X,Y` (repeatable) prints the readouts
   (`probes` in the JSON).
+- **+** and **−** in the app step the Layer selector to the next and previous copper layer, as
+  in KiCad (also **=** and the keypad's + and −), round from the last layer to the first. They
+  are left to the field while you type in a text field, a spin box or a table cell. The Layer
+  selector's tooltip says so.
+- **Export report** in the app writes the power tree's page too when the tree is solved: the page
+  `coppernicus solve --tree --html` writes, beside the rails' report with the command line's
+  `_tree_report` suffix (`demo_report.html` → `demo_tree_report.html`). With only the tree
+  solved, the Save dialog is for the tree's page alone. Same folder as before (`results/` next
+  to the project, or `~/Documents/Coppernicus/results`); as during a rail solve, export is
+  refused while the tree solves.
+- The HTML report's map has a label next to the pointer, as the app's: the value of the map
+  shown in large type, worded and rounded as in the app (the drop with its % of the source
+  voltage, the voltage, or |J|), then the drop's side and the layer, small and muted. It flips
+  at the map's edges, takes the page's dark or light colours, hides off the copper and when the
+  pointer leaves the map, and follows the layer, the map and the rail or tree group shown. The
+  readout line under the map keeps its words and digits, and now also reads the point again
+  after a zoom under a still pointer.
 
 ### Changed
 
@@ -48,6 +65,9 @@ results against your own judgement.
   follows the layer, the rail or group and the map shown, so copper above the colour scale's
   top no longer goes unseen. The scale itself is unchanged (the layer's 99.5th percentile), as
   are the maps' colours and every verdict.
+- Shorter names in the app: **Solve rail** (F5, was Solve), **Solve tree** (Ctrl+T, was Solve
+  power tree), **Pin baseline** (Ctrl+B, was Pin as baseline), and the net-tie option is
+  **Follow net ties**, its long text in the tooltip. The shortcuts are unchanged.
 
 ### Fixed
 

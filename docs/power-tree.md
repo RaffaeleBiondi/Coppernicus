@@ -16,14 +16,15 @@ feeds U1, a switcher making 3.3 V; U1 feeds the load U4 and, through the ferrite
 U2, which makes 1.8 V for U3 with remote sense.
 
 <p align="center">
-  <img src="images/tree-1-ground.png" alt="The app after Solve power tree on the power-chain example: the GND group shown as a ground-rise map, the Power tree tab with the regulator and load tables" width="820">
+  <img src="images/tree-1-ground.png" alt="The app after Solve tree on the power-chain example: the GND group shown as a ground-rise map, the Power tree tab with the regulator and load tables" width="820">
 </p>
 
 ## Run it
 
-- **App:** open the project, then **Solve power tree** (Ctrl+T). The **Power tree** tab lists
+- **App:** open the project, then **Solve tree** (Ctrl+T). The **Power tree** tab lists
   the regulators, the loads and the links; **Group** shows one rail group or the ground net on
-  the board.
+  the board. **Export report** (Ctrl+R) writes the tree's offline page (see
+  [HTML report](html-report.md#the-power-tree-report)).
 - **Command line:** `coppernicus solve PROJECT --tree` prints the tables;
   `--html` also writes one offline page with every group (see [HTML report](html-report.md#the-power-tree-report));
   `--split` also prints each drop part by part and each net's range (see
@@ -305,7 +306,7 @@ A rail solved on its own (F5 in the app, `coppernicus solve` without `--tree`) a
 regulators and links it feeds, with their input current **estimated** at nominal voltages,
 without copper losses; such a load is named `U1 (input, estimated)` and an assumption line
 says so. The tree computes the same currents from the solved voltages, and adds the ground.
-The rail-by-rail solve is the quick check of one rail, and the one that **Pin as baseline**,
+The rail-by-rail solve is the quick check of one rail, and the one that **Pin baseline**,
 the agents' what-ifs and comparisons work on; the tree gives the whole board's verdict. The
 agents' maps, probes and cuts work on both: a tree group by its id (`t1:GND`, see
 [Agents](agents.md#probing-mapping-and-cutting-tree-groups)), and on the command line
@@ -319,7 +320,7 @@ agents' maps, probes and cuts work on both: a tree group by its id (`t1:GND`, se
 - [Ripple and coupled noise](noise.md): a switcher's ripple and the noise in victim nets, against your margins.
 - [Tolerance stack-up](tolerance.md): each load's DC drop, accuracy, ripple and transient, against your tolerances.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
-- [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
+- [What-if and compare](what-if-and-compare.md): copper thickness, Pin baseline, revisions.
 - [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance, the noise and the tolerance stack-up.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

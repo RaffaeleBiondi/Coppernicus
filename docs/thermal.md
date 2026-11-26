@@ -14,8 +14,8 @@ It is part of the [power tree](power-tree.md): a rail solved on its own is never
 
 ## Run it
 
-- **App:** in the **Temperature** tab, tick **Electro-thermal: Solve power tree heats the
-  copper**, set the options, then **Solve power tree** (Ctrl+T).
+- **App:** in the **Temperature** tab, tick **Electro-thermal: Solve tree heats the
+  copper**, set the options, then **Solve tree** (Ctrl+T).
 - **Command line:** `coppernicus solve PROJECT --thermal` (it implies `--tree`); `--tree` alone
   does it too when the project enables it. One PNG per copper layer is written next to the
   summary (`<project>_temperature_<layer>.png`), unless `--no-maps`; `<project>` is the project
@@ -33,7 +33,7 @@ Try it on `examples/demo/demo-thermal.coppernicus.yml`: the demo rail at 8 + 6 +
 15 °C rise limit.
 
 <p align="center">
-  <img src="images/thermal-1-window.png" alt="The app after Solve power tree on the thermal demo: the board temperature of F.Cu with its hottest point, 42.31 °C at J1; the Temperature tab with the electro-thermal options, the two layers over the 15 °C rise limit (FAIL), the iterations and each load's drop at the ambient and electro-thermal" width="900">
+  <img src="images/thermal-1-window.png" alt="The app after Solve tree on the thermal demo: the board temperature of F.Cu with its hottest point, 42.31 °C at J1; the Temperature tab with the electro-thermal options, the two layers over the 15 °C rise limit (FAIL), the iterations and each load's drop at the ambient and electro-thermal" width="900">
 </p>
 
 ## The settings
@@ -43,7 +43,7 @@ optional and the defaults are KiPI's:
 
 ```yaml
 thermal:
-  enabled: true          # Solve power tree also solves the temperature
+  enabled: true          # Solve tree also solves the temperature
   ambient_c: 25.0        # °C
   airflow_m_s: 0.0       # air speed over the board
   iterations: 3          # electro-thermal passes, at least 1
@@ -132,7 +132,7 @@ every laminate and what it was taken as.
 - [Ripple and coupled noise](noise.md): a switcher's ripple and the noise in victim nets, against your margins.
 - [Tolerance stack-up](tolerance.md): each load's DC drop, accuracy, ripple and transient, against your tolerances.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
-- [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
+- [What-if and compare](what-if-and-compare.md): copper thickness, Pin baseline, revisions.
 - [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance, the noise and the tolerance stack-up.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

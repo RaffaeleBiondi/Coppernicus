@@ -17,17 +17,23 @@ from typing import Dict, List, Optional, Tuple
 from PySide6.QtCore import QLocale, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDockWidget,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QTabWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -64,6 +70,7 @@ from coppernicus.power_tree import (
     has_limits,
     not_judged_text,
     rating_origins,
+    tree_summary,
     tree_verdicts,
     unsolved_limits,
 )
@@ -77,6 +84,11 @@ from coppernicus.temperature import apply_thermal_limits, thermal_verdict
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 USER_RESULTS = ("Documents", "Coppernicus", "results")     # under the home folder
 REMOVE_MESHER = "Remove downloaded mesher (Triangle)…"
+# + / − step the Layer selector, as in KiCad: (key, modifiers, step); "=" is "+" without Shift.
+LAYER_KEYS = ((Qt.Key_Plus, Qt.NoModifier, 1), (Qt.Key_Equal, Qt.NoModifier, 1),
+              (Qt.Key_Plus, Qt.KeypadModifier, 1), (Qt.Key_Minus, Qt.NoModifier, -1),
+              (Qt.Key_Minus, Qt.KeypadModifier, -1))
+LAYER_TIP = "The copper layer shown. + / − (also = and the keypad's + / −): next / previous layer"
 
 
 def remove_mesher_shown() -> bool:
@@ -106,6 +118,29 @@ def report_folder(project_dir: Path, home: Optional[Path] = None) -> Tuple[Path,
     user = (Path.home() if home is None else Path(home)).joinpath(*USER_RESULTS)
     _writable_folder(user)                     # if even this fails, the Save dialog says so
     return user, f"{folder} cannot be written, so reports go to {user}"
+
+
+def tree_report_path(path: Path) -> Path:
+    """The power tree's page beside the rails' report ``path``, with the CLI's "_tree_report"
+    suffix: "demo_report.html" → "demo_tree_report.html", any other "name.html" →
+    "name_tree_report.html" (never ``path`` itself)."""
+    path = Path(path)
+    stem = path.stem[: -len("_report")] if path.stem.endswith("_report") else path.stem
+    return path.with_name(f"{stem}_tree_report{path.suffix or '.html'}")
+
+
+def typing_widget(widget) -> bool:
+    """Whether keys pressed in ``widget`` are typed into it: an editable text field, spin box or
+    combo box, or a table whose cells start editing on a key (or one being edited). The layer
+    keys (:data:`LAYER_KEYS`) are off there, so the key reaches it."""
+    if isinstance(widget, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)):
+        return not widget.isReadOnly()
+    if isinstance(widget, QComboBox):
+        return widget.isEditable()
+    if isinstance(widget, QAbstractItemView):
+        return (widget.state() == QAbstractItemView.EditingState
+                or bool(widget.editTriggers() & QAbstractItemView.AnyKeyPressed))
+    return False
 
 
 def initial_size(avail_w: Optional[int], avail_h: Optional[int]) -> Tuple[int, int]:
@@ -235,8 +270,9 @@ class MainWindow(QMainWindow):
         self.view = BoardView()
         self.group_box = QComboBox()
         self.group_box.addItem("Rail solved alone", None)
-        self.group_box.setToolTip("After Solve power tree: show a rail or ground group of the tree")
+        self.group_box.setToolTip("After Solve tree: show a rail or ground group of the tree")
         self.layer_box = QComboBox()
+        self.layer_box.setToolTip(LAYER_TIP)
         self.field_box = QComboBox()
         for key, (label, _cmap) in FIELDS.items():
             self.field_box.addItem(label, key)
@@ -346,6 +382,24 @@ class MainWindow(QMainWindow):
         self.rail_panel.pick_changed.connect(self._pick_mode_changed)
         self.rail_panel.banner.action_requested.connect(self._banner_action)
         QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self.stop_clicking)
+        self._layer_keys = [QShortcut(QKeySequence(mods | key), self,
+                                      activated=lambda s=step: self.step_layer(s))
+                            for key, mods, step in LAYER_KEYS]
+        QApplication.instance().focusChanged.connect(self._focus_changed)
+
+    def step_layer(self, step: int):
+        """+ / − (as in KiCad): the next (``step`` 1) or previous (−1) copper layer in the Layer
+        selector, round from the last to the first; nothing without layers."""
+        n = self.layer_box.count()
+        if n:
+            self.layer_box.setCurrentIndex((self.layer_box.currentIndex() + step) % n)
+
+    def _focus_changed(self, _old, new):
+        """The layer keys are off while the focus is where keys are typed (:func:`typing_widget`):
+        a disabled shortcut leaves the key to the widget, so "+3V3" can be typed in a cell."""
+        on = not typing_widget(new)
+        for shortcut in self._layer_keys:
+            shortcut.setEnabled(on)
 
     def _dock(self, title, widget, area):
         dock = QDockWidget(title, self)
@@ -365,9 +419,9 @@ class MainWindow(QMainWindow):
                                      ("Save project", QKeySequence.Save, self.save_project),
                                      ("Save project as…", QKeySequence.SaveAs, self.save_project_as),
                                      (None, None, None),
-                                     ("Solve", "F5", self.solve),
-                                     ("Solve power tree", "Ctrl+T", self.solve_tree),
-                                     ("Pin as baseline", "Ctrl+B", self.pin_baseline),
+                                     ("Solve rail", "F5", self.solve),
+                                     ("Solve tree", "Ctrl+T", self.solve_tree),
+                                     ("Pin baseline", "Ctrl+B", self.pin_baseline),
                                      ("Export maps…", "Ctrl+E", self.export_maps),
                                      ("Export report…", "Ctrl+R", self.export_report)):
             if text is None:
@@ -549,7 +603,7 @@ class MainWindow(QMainWindow):
         self._diff_cache = None
         if self.net:
             self.problems.clear(f"<b>{self.net}</b>: KiCad footprint fields turned "
-                                f"{'on' if on else 'off'} — press Solve (F5)")
+                                f"{'on' if on else 'off'} — press Solve rail (F5)")
             self._refresh_results()
             self.refresh_view()
 
@@ -722,28 +776,45 @@ class MainWindow(QMainWindow):
         """Write the offline HTML report of every solved rail (WS1's coppernicus.report), off
         the UI thread, to a file chosen in a Save dialog that starts in results/ next to the
         project (the CLI's folder), or in the home folder for an unsaved project, never next to
-        a board elsewhere."""
-        if self.worker is not None and self.worker.isRunning():
+        a board elsewhere. With the power tree solved, also its page, the one ``solve --tree
+        --html`` writes, beside it (:func:`tree_report_path`); with only the tree solved, the
+        dialog is for the tree's page alone."""
+        if any(w is not None and w.isRunning() for w in (self.worker, self.tree_worker)):
             self.statusBar().showMessage("A solve is running: export the report when it has finished")
             return
-        if self.board is None or not self.results:
-            self.statusBar().showMessage("Solve at least one rail first: the report shows the solved rails")
+        if self.board is None or not (self.results or self.tree is not None):
+            self.statusBar().showMessage("Solve a rail or the power tree first: the report shows what "
+                                         "is solved")
             return
         if self.report_worker is not None and self.report_worker.isRunning():
             self.statusBar().showMessage("A report is already being written")
             return
         start = self._report_start_path()
+        if not self.results:
+            start = tree_report_path(start)
         path, _ = QFileDialog.getSaveFileName(self, "Export report", str(start), "HTML report (*.html)")
         if not path:
             return
         path = Path(path)
         if path.suffix.lower() not in (".html", ".htm"):
             path = path.with_name(path.name + ".html")
-        self.report_worker = ReportWorker(self.results.values(), copy.deepcopy(self.merged.project), path,
-                                          self.board.outline(), self.board.name, self)
+        tree_job, what = None, [f"{len(self.results)} rail(s)"] if self.results else []
+        if self.tree is not None:
+            # As the CLI writes it, judged as the Power tree tab shows it now: the records a limit
+            # edit judges again are copied (the solved groups are not: nothing changes them).
+            tree = dataclasses.replace(self.tree, limits=dict(self.tree.limits),
+                                       loads=copy.deepcopy(self.tree.loads),
+                                       vrms=copy.deepcopy(self.tree.vrms))
+            tree_job = (tree, tree_summary(tree), tree_report_path(path) if self.results else path,
+                        Path(self.project.path).name if self.project.path else "",
+                        dict(vars(self.merged.project.settings)))
+            what.append("the power tree")
+        self.report_worker = ReportWorker(self.results.values(), copy.deepcopy(self.merged.project),
+                                          path if self.results else None, self.board.outline(),
+                                          self.board.name, self, tree=tree_job)
         self.report_worker.succeeded.connect(self._report_written)
         self.report_worker.failed.connect(self._report_failed)
-        self.statusBar().showMessage(f"Writing the report of {len(self.results)} rail(s)… "
+        self.statusBar().showMessage(f"Writing the report of {' and '.join(what)}… "
                                      "(a few seconds on big boards)")
         self.report_worker.start()
 
@@ -762,19 +833,24 @@ class MainWindow(QMainWindow):
             self._report_fallback = None
         return folder / f"{stem}_report.html"
 
-    def _report_written(self, path):
-        path = Path(path)
-        size_mb = path.stat().st_size / 1e6
+    def _report_written(self, paths):
+        """``paths``: the page written, or the pages (the rails', then the power tree's)."""
+        paths = [Path(paths)] if isinstance(paths, (str, Path)) else [Path(p) for p in paths]
+        sizes = [p.stat().st_size / 1e6 for p in paths]
         fallback = self._report_fallback
-        note = fallback[1] if fallback and path.parent.resolve() == fallback[0].resolve() else ""
-        status = f"Report written: {path.name} ({size_mb:.2f} MB) in {path.parent}"
+        note = fallback[1] if fallback and paths[0].parent.resolve() == fallback[0].resolve() else ""
+        one = len(paths) == 1
+        names = " and ".join(f"{p.name} ({mb:.2f} MB)" for p, mb in zip(paths, sizes))
+        status = f"{'Report' if one else 'Reports'} written: {names} in {paths[0].parent}"
         self.statusBar().showMessage(f"{status} ({note})" if note else status)
-        answer = QMessageBox.question(self, "Report written",
-                                      f"{path}\n{size_mb:.2f} MB." + (f"\n{note}." if note else "")
-                                      + " Open it in the browser?",
+        answer = QMessageBox.question(self, "Report written" if one else "Reports written",
+                                      "\n".join(f"{p}\n{mb:.2f} MB." for p, mb in zip(paths, sizes))
+                                      + (f"\n{note}." if note else "")
+                                      + (" Open it in the browser?" if one else " Open them in the browser?"),
                                       QMessageBox.Open | QMessageBox.Close)
         if answer == QMessageBox.Open:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            for p in paths:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
 
     def remove_mesher(self):
         """Help → Remove downloaded mesher (Triangle)… (packaged app): after a confirmation,
@@ -845,8 +921,8 @@ class MainWindow(QMainWindow):
         """The Problems line of the shown net before it is solved: a rail from the KiCad
         fields is set up already."""
         if self._kicad_shown:
-            return f"<b>{self.net}</b>: rail from KiCad footprint fields — press Solve (F5)"
-        return f"<b>{self.net}</b>: add a source and a load, then Solve (F5)"
+            return f"<b>{self.net}</b>: rail from KiCad footprint fields — press Solve rail (F5)"
+        return f"<b>{self.net}</b>: add a source and a load, then Solve rail (F5)"
 
     def _show_rail(self, net: str) -> Rail:
         """Fill the rail panel for ``net`` as its origin says: a rail from the KiCad fields is
@@ -1042,7 +1118,8 @@ class MainWindow(QMainWindow):
         self.runs.pop(changed, None)
         self._diff_cache = None
         if self.results.pop(changed, None) is not None:          # the old result no longer applies
-            self.problems.clear(f"<b>{changed}</b>: setup changed since the last solve — press Solve (F5)")
+            self.problems.clear(f"<b>{changed}</b>: setup changed since the last solve — press "
+                                "Solve rail (F5)")
             self._refresh_results()
         self.refresh_view()
 
@@ -1073,7 +1150,7 @@ class MainWindow(QMainWindow):
             self.results.clear()
             self.runs.clear()
             self._diff_cache = None
-            self.problems.clear("Solve settings changed — press Solve (F5) to recompute")
+            self.problems.clear("Solve settings changed — press Solve rail (F5) to recompute")
             self._refresh_results()
             self.refresh_view()
 
@@ -1249,7 +1326,7 @@ class MainWindow(QMainWindow):
         if self._is_stale():
             return
         if getattr(self.sender(), "revision", self._revision) != self._revision:
-            msg = f"The setup changed while {res.net} was solving: press Solve (F5) again"
+            msg = f"The setup changed while {res.net} was solving: press Solve rail (F5) again"
             if res.net == self.net:
                 self.problems.clear(msg)
             self.statusBar().showMessage(msg)
@@ -1455,7 +1532,7 @@ class MainWindow(QMainWindow):
         """An electro-thermal option ``key`` changed (Temperature tab). Ticking or unticking
         Electro-thermal, or any option while it is ticked (or while the tree holds a board
         temperature), makes the power tree stale; with it off, the other options change no
-        solve. The rails solved alone stay: Solve (F5) does not heat copper."""
+        solve. The rails solved alone stay: Solve rail (F5) does not heat copper."""
         self._remerge()                           # the merged project holds a copy of them
         self.dirty = True
         self._update_title()
@@ -1575,8 +1652,8 @@ class MainWindow(QMainWindow):
         run = self.runs.get(self.net) if self.net else None
         base = self.baseline
         if base is None:
-            return None, None, ("No baseline yet. Solve, press 'Pin as baseline', change the loads, the "
-                                "settings or the board, and solve again.")
+            return None, None, ("No baseline yet. Solve the rail, press 'Pin baseline', change the loads, "
+                                "the settings or the board, and solve again.")
         if base.rail.net != self.net:
             return None, None, f"The baseline is a result of {base.rail.net}: select that net to compare."
         if run is None:

@@ -13,7 +13,10 @@ so you can send it to someone who does not have Coppernicus, or attach it to a d
 ## Make one
 
 - **App:** **Export report** (Ctrl+R) writes the report of every rail you have solved. The Save
-  dialog starts in `results/` next to the project file.
+  dialog starts in `results/` next to the project file. With the power tree solved, the tree's
+  page ([below](#the-power-tree-report)) is written beside it, with the command line's
+  `_tree_report` suffix: `demo_report.html` → `demo_tree_report.html`. With only the tree
+  solved, the dialog is for the tree's page alone.
 - **Command line:** `coppernicus solve PROJECT --html` writes `<out>/<project>_report.html`
   (`<out>` is `results/` next to the project file unless `--out` says otherwise); `--html PATH`
   writes it elsewhere, and `--open` also opens it in the browser.
@@ -47,10 +50,13 @@ For each rail, chosen at the top of the page:
   it is, the strongest current crowding, the most loaded via.
 - **The maps**, one per copper layer: **Drop** (how many mV each point is below the source),
   **Voltage** or **Current density**. Scroll to zoom, drag to pan, **Fit** to see the whole
-  board; toggles show or hide the sources, the loads and the crowding spots. Point at the map
-  for the voltage, the drop and |J| under the pointer. On **Current density**, above the colour
-  bar: the layer's **peak** |J| (marked mesh-dependent) and its verdict as the problem list
-  judges it, for example *limit 60 A/mm²: FAIL · worst spot 89.1 A/mm² over 3.02 mm²*,
+  board; toggles show or hide the sources, the loads and the crowding spots. Point at the map:
+  a label next to the pointer leads with the value of the map shown in large type, worded and
+  rounded as in the app (the drop with its % of the source voltage, the voltage, or |J|), then
+  the drop's side and the layer; the line under the map gives the voltage, the drop and |J|
+  there with more digits. The label hides off the copper and when the pointer leaves the map.
+  On **Current density**, above the colour bar: the layer's **peak** |J| (marked
+  mesh-dependent) and its verdict as the problem list judges it, for example *limit 60 A/mm²: FAIL · worst spot 89.1 A/mm² over 3.02 mm²*,
   *limit 60 A/mm²: pass*, or with no limit of yours *default 60 A/mm² (attention): 3 spots
   above* or *below* ([the rule](technical.md#physics)). It follows
   the layer and the rail shown. The colour scale tops at the layer's 99.5th percentile of |J|.
@@ -179,7 +185,7 @@ solve's estimate. In CI, the Action's `tolerance` input writes it with the other
 - [Ripple and coupled noise](noise.md): a switcher's ripple and the noise in victim nets, against your margins.
 - [Tolerance stack-up](tolerance.md): each load's DC drop, accuracy, ripple and transient, against your tolerances.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
-- [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
+- [What-if and compare](what-if-and-compare.md): copper thickness, Pin baseline, revisions.
 - [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance, the noise and the tolerance stack-up.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

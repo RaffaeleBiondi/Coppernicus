@@ -141,8 +141,8 @@ def test_a_rail_solve_that_finishes_after_the_setup_changed_is_dropped():
         temp = window.rail_panel.temp
         msg = solve_then(lambda: temp.setValue(temp.value() + 40.0))
         assert "+3V3" not in window.results and "+3V3" not in window.runs, msg
-        assert msg == "The setup changed while +3V3 was solving: press Solve (F5) again", msg
-        assert "press Solve (F5) again" in window.problems.summary.text()
+        assert msg == "The setup changed while +3V3 was solving: press Solve rail (F5) again", msg
+        assert "press Solve rail (F5) again" in window.problems.summary.text()
         msg = solve_then(lambda: window.rail_panel.loads.table.cellWidget(0, 3).setValue(0.75))
         assert "+3V3" not in window.results and "changed while +3V3 was solving" in msg, msg
         msg = solve_then(lambda: None)

@@ -953,7 +953,8 @@ file. It needs no network and no installed software beyond a current browser (te
 Chromium and Chrome; Safari and Firefox not yet). It holds:
 
 - every rail and every copper layer, as voltage drop, voltage or current density, with zoom
-  (wheel), pan (drag) and a **hover readout** of V, drop and |J|;
+  (wheel), pan (drag), a label beside the pointer that leads with the value of the map shown
+  (as in the app) and a **hover readout** of V, drop and |J| under the map;
 - toggles for sources, loads and current-crowding spots;
 - the verdict, which names the limits you set ("not judged" when there are none), and a
   worst-values summary per rail: worst load, largest drop, copper loss, strongest current
