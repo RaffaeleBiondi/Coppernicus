@@ -23,7 +23,8 @@ and why, and ask for what is missing.
    `PI_SOURCE`, `PI_LOAD`, `PI_KIND`, `PI_INPUT`, `PI_GND`, `PI_LINK`, and the library
    symbol's `PI_VOUT`, `PI_IMAX`, `PI_FSW`; `PI_SOURCE_REF` for an external-inductor buck or,
    as a list, a battery of cell holders in parallel; `PI_GND_REF` for ground pins on another
-   part; `PI_LINK_PINS` for a load switch), which
+   part or, as a list on a source, one ground terminal on several holders, every pad at 0 V;
+   `PI_LINK_PINS` for a load switch), which
    `board_fields(board_id)` lists and `solve_project` / `solve_tree` use by default. Numbers
    from the fields are the designer's, not yours: say "from KiCad field PI_LOAD" when you
    report them. For a net the fields define they win over the project file's rail; report

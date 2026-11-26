@@ -199,6 +199,11 @@ Decided by the owner for a battery of single-contact cell holders, additive:
   extra_pins=["BT5.*"])`: rail by rail the voltage source holds the union of the pads; in the
   power tree KiPI's mesh sense holds each part's pads (one sense point per part), refused with
   a remote sense of the source's own. Without `extra_pins`, both paths are unchanged.
-- `PI_GND_REF=<ref>` puts a source's (or load's) ground pins on another part: one part now,
-  since KiPI's VRM takes its ground pins on one part.
+- `PI_GND_REF=<ref>` puts a source's (or load's) ground pins on another part: one part at
+  first, since KiPI's VRM takes its ground pins on one part.
+- Later, decided by the owner "as for the + terminal": a source's `PI_GND_REF` takes a list
+  (`BT4,BT8`, parsed as `PI_SOURCE_REF` lists; `PI_GND_PINS` as `PI_PINS`), the project file
+  `extra_ground_pins: [BT8.*]`. In the power tree every listed part's pads hold the ground's
+  0 V together (one KiPI voltage source on their union, through a guarded seam: see
+  `docs/engine-mapping.md`). A load's ground stays on one part; a regulator cannot take a list.
 

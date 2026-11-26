@@ -175,7 +175,8 @@ app or CI. It writes one file, at the path you give (a `*.coppernicus.yml`):
 - it starts from `from_project` (to save an edited copy elsewhere), else the file at
   `project_path` when it exists, else an empty project for `board_path`;
 - `rails` are added, or replaced **whole** by net (sources with their v2 fields: `kind`,
-  `efficiency`, `quiescent_a`, `input`, `ground`, `sense`, `ground_sense`; loads with
+  `efficiency`, `quiescent_a`, `input`, `ground`, `sense`, `ground_sense`, `extra_pins`,
+  `extra_ground_pins`; loads with
   `ground`; `limits`; `follow_net_ties`; `override_board_fields`); `remove_rails` removes by
   net; `links` and `remove_links` work by name; `settings` keys are set, and null removes one
   (its default again); `use_board_fields: false` turns the KiCad fields off;
@@ -228,7 +229,7 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
 | `PI_IMAX` | `2A`, `500mA` | source | Its rated output current: kept as the source's `current_limit_a` and shown next to I_out (rail summary `current_limit_a`, tree `vrms[].i_max_a`, the report and CI tables). **Judged in the power tree:** an I_out above it fails (see [Regulator ratings](#regulator-ratings-in-the-power-tree)); not judged while the solve is unsettled or its rail is not solved. |
 | `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its fixed switching frequency (`Hz`, `kHz`, `MHz`): kept as the source's `fsw_hz`, which the noise solve uses for an aggressor that gives no `fsw_hz` of its own (an assumption line says where it came from). |
 | `PI_SOURCE_REF` | `L1`, `BT1,BT5` | source | The part whose pads hold the rail, when it is not this part: an external-inductor buck's inductor. `PI_PINS` then selects that part's pads; input, ground and kind stay on this part. A list of parts (`BT1,BT5`) makes **one terminal**: every listed part's pads on the rail, all held at the source voltage (cell holders in parallel), not parallel regulators; `PI_PINS` then takes `REF.PAD` entries (`BT1.1,BT5.1`), and a plain pad applies to every listed part. An error when a part has no pad on the rail. |
-| `PI_GND_REF` | `BT4` | source, load | The part whose pads are the ground pins on `PI_GND`, when not this part (`PI_GND_PINS` chooses them). One part. An error when it has no pad on that net. |
+| `PI_GND_REF` | `BT4`, `BT4,BT8` | source, load | The part whose pads are the ground pins on `PI_GND`, when not this part (`PI_GND_PINS` chooses them). A source's takes a list of parts (`BT4,BT8`): **one ground terminal**, every listed part's pads held at the ground's 0 V in the power tree (a battery's negative pole on several holders; project key `extra_ground_pins`); `PI_GND_PINS` then takes `REF.PAD` entries, or a pad for every listed part. A load's is one part; a regulator cannot take a list. An error when a part has no pad on that net. |
 | `PI_TOL` | `5%`, `-3%,+5%`, `50mV` | load | Its tolerance band, the load's `tol_pct` / `tol_mv` for the tolerance stack-up: one value is ± that, two are `below,above` (below ≤ 0 ≤ above, one unit: `%` of nominal or `mV` from it). |
 | `PI_DC_TOL`, `PI_AC_TOL` | `2%`, `-20mV,+30mV` | load | Its DC and AC shares (`dc_tol_*`, `ac_tol_*`), the same syntax. |
 | `PI_ACC` | `1%`, `-1.5%,+2%` | source | Its DC accuracy (`accuracy_pct` / `accuracy_mv`), the same syntax. |
@@ -450,6 +451,16 @@ of BT5 on the rail), and `ground: {ref: BT4, net: -V_BAT}`. Rail by rail every p
 terminal is held at the voltage; the power tree holds them with KiPI's mesh sense (one point
 per part), so it cannot be combined with a remote sense of the source's own. To use only some
 pads: `PI_PINS=BT1.1,BT5.1`, or `PI_PINS=1` for pad 1 of every listed part.
+
+When the negative pole is two holders as well (BT4 and BT8, each with its pads on -V_BAT),
+BT1 carries `PI_GND_REF=BT4,BT8`: **one ground terminal**, every pad of both holders held at
+the ground's 0 V in the power tree, the copper sharing the return between them (with BT4 alone
+all of it would go through BT4, overstating the ground rise and the ground copper's loss). In
+a project file: `ground: {ref: BT4, net: -V_BAT}` and `extra_ground_pins: [BT8.*]` ("REF.PAD",
+as `extra_pins`). `PI_GND_PINS` then takes `REF.PAD` entries (`BT4.1,BT8.1`) or a pad for
+every listed part. Only an ideal supply (`PI_KIND=source`) takes a list; the tree's
+assumption line names the parts that hold 0 V. The rail-by-rail solve solves no ground, so it
+does not use them.
 
 **Loads** carry instance fields: `PI_RAIL=+3V3`, `PI_LOAD=1.2A`, and `PI_GND=GND` for the
 power tree. A chip on two rails gives one value per rail: `PI_RAIL=+3V3;+1V2`,
