@@ -195,6 +195,15 @@ function bar() {
     note = "Scale clipped at this layer's 99.5th percentile of |J|. " +
       `The point maximum on this layer, ${sig(lay.j_point_max_a_mm2, 4)} A/mm², sits at a sharp corner or a hole edge and is mesh-dependent: use the hotspot means.`; }
   $("bar-top").textContent = top; $("bar-bottom").textContent = bottom; $("bar-unit").textContent = unit;
+  // Above the |J| scale: the layer's peak (mesh-dependent) and its verdict as the problem list
+  // judged it (j_check, written by Python; reports written before it have none).
+  const chk = $("bar-check"), jc = S.field === "current" ? lay.j_check : null;
+  chk.textContent = ""; chk.hidden = !jc;
+  if (jc) {
+    chk.append(el("div", {}, el("strong", {}, jc.peak_text), " ",
+      el("span", { class: "muted small", title: jc.peak_tip }, `(${jc.peak_note})`)));
+    if (jc.verdict_text) chk.append(el("div", { class: "v-" + jc.verdict }, jc.verdict_text));
+  }
   $("scalenote").textContent = note + " Grey: copper with no path to a source.";
 }
 
@@ -242,6 +251,7 @@ function panels() {
       [el("span", {}, p.title, el("br"), el("span", { class: "muted small" }, p.detail)), ""], [p.layer || "–", ""], [xy(p.x_mm, p.y_mm), ""]]),
     (n) => { const p = rail.problems[n];
       if (p.layer) { const li = rail.layers.findIndex((l) => l.name === p.layer); if (li >= 0) setLayer(li, false); }
+      if (!ok(p.x_mm) || !ok(p.y_mm)) { S.mark = null; draw(); return; }      // no place to zoom to
       S.mark = [p.x_mm, p.y_mm]; zoomTo(p.x_mm, p.y_mm, 8); $("map").scrollIntoView({ block: "nearest", behavior: "smooth" }); });
   const lim = rail.limits.max_drop_pct;
   // A tree group: the voltage across supply (input) and ground pins and the tree's verdict per

@@ -22,7 +22,7 @@ KiPI's geometry snap) is in no spot (:func:`_spots`).
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -98,8 +98,24 @@ class Problem:
     data: Dict[str, Any] = field(default_factory=dict)
 
 
+class Problems(list):
+    """The problems of a rail or a tree group, as :func:`find_problems` and
+    :func:`find_tree_problems` return them: a plain list that also keeps what judged it.
+    ``limits`` are the limits its copper was judged against (a rail's own, a tree group's
+    strictest; none for a group that did not converge) and ``default`` whether Coppernicus's
+    current-density default applied where no ``max_current_density`` is set. The |J| maps
+    read them for the label above their colour scale (:func:`density_check`). A copy
+    (``list(p)``, a slice, ``sorted``) is a plain list without them."""
+
+    def __init__(self, items: Iterable[Problem] = (), limits: Optional[Limits] = None,
+                 default: bool = True):
+        super().__init__(items)
+        self.limits = limits if limits is not None else Limits()
+        self.default = default
+
+
 def find_problems(result: RailResult, limits: Optional[Limits] = None,
-                  top: int = 5) -> List[Problem]:
+                  top: int = 5) -> Problems:
     """Every load, then at most ``top`` current-crowding spots and ``top`` vias (more when
     they exceed a limit), and every spot above the current-density default (attention), each
     spot once (:func:`_hotspots`). Fails first, then attention items, then the ranked ones."""
@@ -107,7 +123,8 @@ def find_problems(result: RailResult, limits: Optional[Limits] = None,
     rise = _rise(result, limits) if not result.v_ref else []    # a ground-rise limit: 0 V nets only
     out = rise + _loads(result, limits) + _hotspots(result, limits, top) + _vias(result, limits, top)
     order = {"rise": 0, "load": 0, "hotspot": 1, "via": 2}
-    return sorted(out, key=lambda p: (SEVERITY_RANK[p.severity], order[p.kind], -p.value))
+    return Problems(sorted(out, key=lambda p: (SEVERITY_RANK[p.severity], order[p.kind], -p.value)),
+                    limits, True)
 
 
 def _loads(result: RailResult, limits: Limits) -> List[Problem]:
@@ -281,6 +298,130 @@ def _vias(result: RailResult, limits: Limits, top: int, source: str = "") -> Lis
     return out
 
 
+# ---------------------------------------------------------------------- the |J| maps' label
+
+PEAK_NOTE = "mesh-dependent"
+PEAK_TIP = ("The point maximum |J| on this layer, degenerate triangles left out. At a sharp corner or "
+            "a hole edge it depends on the mesh, so it is never judged: the verdict uses the spot "
+            "means, as the problem list does.")
+
+
+def _jtext(value: float) -> str:
+    """A |J| in A/mm² for the label: 3 significant figures, never an exponent ("220", "2500")."""
+    return f"{value:.3g}" if abs(value) < 999.5 else f"{value:.0f}"
+
+
+@dataclass
+class DensityCheck:
+    """What every |J| map writes above its colour scale for one layer (the HTML report, the
+    PNG maps, the app): :meth:`lines`. Line 1, the layer's peak |J|: the point maximum with
+    degenerate triangles left out, mesh-dependent, never judged. Line 2, when a limit applies,
+    the verdict of the current density on the layer as the problem list judged it (the spot
+    means, :func:`_hotspots`), read off the list, never judged again: against the user's
+    ``max_current_density``, or without one against Coppernicus's attention default for the
+    layer's thickness. Made by :func:`density_check`."""
+    layer: str
+    peak_j_a_mm2: float                     # 0 on a layer with no current
+    limit_j_a_mm2: Optional[float] = None
+    limit_kind: Optional[str] = None        # "limit" (the user's), "default", or None: none applies
+    # "fail" / "pass" against a limit, "attention" / "below" against the default, "not_judged"
+    # (a tree group that did not converge), None when no limit applies.
+    verdict: Optional[str] = None
+    spots: int = 0                          # the failed (limit) or attention (default) spots on the layer
+    worst: Optional[Dict[str, Any]] = None  # the strongest of them: mean_j_a_mm2, area_mm2, ...
+    peak_above: bool = False                # the peak is above the limit (no spot above: a corner)
+    small_only: bool = False                # every failed spot is under MIN_SPOT_ELEMENTS elements
+
+    def peak_text(self) -> str:
+        """"Peak 220 A/mm²"."""
+        return f"Peak {_jtext(self.peak_j_a_mm2)} A/mm²"
+
+    def verdict_text(self) -> str:
+        """Line 2: "limit 60 A/mm²: FAIL · worst spot 89.1 A/mm² over 3.02 mm²", "limit 60
+        A/mm²: pass", "default 60 A/mm² (attention): 3 spots above · worst ..." or "default 60
+        A/mm² (attention): below"; empty when no limit applies."""
+        if self.limit_kind is None:
+            return ""
+        worst = self.worst or {}
+        spot = (f"{worst.get('mean_j_a_mm2', 0.0):.1f} A/mm² over "
+                f"{worst['area_mm2']:.3g} mm²" if worst.get("area_mm2") is not None else "")
+        if self.limit_kind == "limit":
+            head = f"limit {self.limit_j_a_mm2:g} A/mm²"
+            if self.verdict == "not_judged":
+                return f"{head}: not judged (did not converge)"
+            if self.verdict == "fail":
+                text = f"{head}: FAIL · worst spot {spot}"
+                if self.spots > 1:
+                    text += f" · {self.spots} spots above"
+                if self.small_only:
+                    text += f" · under {MIN_SPOT_ELEMENTS} mesh elements: may be a mesh artefact"
+                return text
+            corner = " · peak above the limit at a corner; spots pass" if self.peak_above else ""
+            return f"{head}: pass{corner}"
+        head = f"default {self.limit_j_a_mm2:.3g} A/mm² (attention)"
+        if self.verdict == "attention":
+            return f"{head}: {self.spots} spot{'s' if self.spots != 1 else ''} above · worst {spot}"
+        corner = " · peak above the default at a corner; spots below" if self.peak_above else ""
+        return f"{head}: below{corner}"
+
+    def lines(self) -> List[str]:
+        """The label: the peak, marked mesh-dependent, and the verdict when a limit applies."""
+        return [f"{self.peak_text()} ({PEAK_NOTE})"] + ([self.verdict_text()] if self.limit_kind else [])
+
+    def as_dict(self) -> Dict[str, Any]:
+        """As plain data, keyed with units (the HTML report's ``j_check`` of each layer)."""
+        return {"peak_j_a_mm2": self.peak_j_a_mm2, "peak_text": self.peak_text(), "peak_note": PEAK_NOTE,
+                "peak_tip": PEAK_TIP, "limit_j_a_mm2": self.limit_j_a_mm2, "limit_kind": self.limit_kind,
+                "verdict": self.verdict, "verdict_text": self.verdict_text(), "spots_above": self.spots,
+                "worst_spot": self.worst, "peak_above_limit": self.peak_above, "lines": self.lines()}
+
+
+def density_check(result: RailResult, layer: LayerField, problems: Optional[List[Problem]] = None,
+                  limits: Optional[Limits] = None) -> DensityCheck:
+    """The label above ``layer``'s |J| colour scale (:class:`DensityCheck`). The verdict is
+    read off ``problems``, judged against what judged them: a :class:`Problems` list keeps it;
+    a plain list is taken as judged by ``limits``; with no list, ``limits`` judge the rail
+    here (:func:`find_problems`). With neither, only the peak is known. A tree group that did
+    not converge is not judged: with a ``max_current_density`` (in ``limits`` or the list's)
+    line 2 says so."""
+    j = layer.current_density
+    kept = j[np.isfinite(j) & layer.resolved()] if j.size else j
+    out = DensityCheck(layer.name, float(kept.max()) if kept.size else 0.0)
+    if problems is None and limits is not None:
+        problems = find_problems(result, limits)
+    judged, default = getattr(problems, "limits", None), getattr(problems, "default", True)
+    if judged is None:
+        if problems is None or limits is None:          # nothing says what judged the list
+            return out
+        judged = limits
+    user = judged.max_current_density
+    if not getattr(result, "converged", True):
+        named = user if user is not None else (limits.max_current_density if limits else None)
+        if named is not None:
+            out.limit_j_a_mm2, out.limit_kind, out.verdict = float(named), "limit", "not_judged"
+            return out
+    mine = [p for p in problems if p.kind == "hotspot" and p.layer == layer.name]
+    if user is not None:
+        above = [p for p in mine if p.severity == FAIL]
+        out.limit_j_a_mm2, out.limit_kind, out.verdict = float(user), "limit", "fail" if above else "pass"
+    elif default and layer.thickness_mm:
+        above = [p for p in mine if p.severity == ATTENTION]
+        out.limit_j_a_mm2 = density_default(float(layer.thickness_mm), layer.outer is not False)
+        out.limit_kind, out.verdict = "default", "attention" if above else "below"
+    else:
+        return out
+    out.spots = len(above)
+    out.peak_above = out.peak_j_a_mm2 > out.limit_j_a_mm2
+    if above:
+        w = max(above, key=lambda p: p.value)
+        out.worst = {"mean_j_a_mm2": w.data.get("mean_j_a_mm2", w.value), "area_mm2": w.data.get("area_mm2"),
+                     "peak_j_a_mm2": w.data.get("peak_j_a_mm2"), "elements": w.data.get("elements"),
+                     "x_mm": w.x, "y_mm": w.y}
+        out.small_only = out.verdict == "fail" and all(
+            (p.data.get("elements") or MIN_SPOT_ELEMENTS) < MIN_SPOT_ELEMENTS for p in above)
+    return out
+
+
 # ---------------------------------------------------------------------- power tree
 
 # Limit keys as the agent interface names them (units in the key).
@@ -327,7 +468,7 @@ NetLimits = Callable[..., Tuple[Limits, Dict[str, str]]]      # (net, rail=None)
 
 
 def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = None,
-                       top: int = 5) -> List[Problem]:
+                       top: int = 5) -> Problems:
     """The problems of one group of a power-tree solve, fails first. On a rail: its loads
     and the inputs of the regulators it feeds, ranked by the drop across their supply (input)
     and ground pins. On a ground: its return pins, ranked by their rise from 0 V (no drop
@@ -370,7 +511,8 @@ def find_tree_problems(tree: TreeResult, group: str, limits: Optional[Limits] = 
            + _hotspots(res, glim, top, source("max_current_density"), default)
            + _vias(res, glim, top, source("max_via_current")))
     order = {"rise": 0, "load": 0, "return": 0, "regulator": 0, "hotspot": 1, "via": 2}
-    return sorted(out, key=lambda p: (SEVERITY_RANK[p.severity], order[p.kind], -p.value))
+    return Problems(sorted(out, key=lambda p: (SEVERITY_RANK[p.severity], order[p.kind], -p.value)),
+                    glim, default)
 
 
 def _limit_text(value: Optional[float], unit: str, origin: str, own: str) -> str:

@@ -518,6 +518,10 @@ def run_flow_demo(window, check: Checks, args, out: Path):
             QApplication.processEvents()
             secs = render_scene(window.view, out / f"t3_{name.replace('.', '')}_{field}_scene.png")
             print(f"  off-screen VTK render {name} {field}: {secs:.3f} s", flush=True)
+            if field == "current":          # the layer's peak and verdict, above the scale
+                head = window.view.colorbar.header()
+                check(f"the current map of {name} writes its peak and verdict above the scale",
+                      len(head) == 2 and head[0].startswith("Peak ") and "A/mm²" in head[1], str(head))
     window.field_box.setCurrentIndex(window.field_box.findData("drop"))
 
     # Arrows on U3's feeder track (F.Cu, via at y=26 → pad at y=33) point toward U3. The view

@@ -17,7 +17,8 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.tri import Triangulation
 
-from coppernicus.problems import FAIL, Problem
+from coppernicus.problems import FAIL, Problem, density_check
+from coppernicus.project import Limits
 from coppernicus.results import LayerField, RailResult
 
 DROP_CMAP = "viridis"
@@ -102,20 +103,25 @@ def _rail_voltage_range(result: RailResult):
 
 def render_layer_map(result: RailResult, layer: LayerField, field: str,
                      outline: Sequence[np.ndarray], path, problems: Optional[List[Problem]] = None,
-                     region: Optional[Sequence[float]] = None, dpi: int = 150) -> Dict[str, object]:
+                     region: Optional[Sequence[float]] = None, dpi: int = 150,
+                     limits: Optional[Limits] = None) -> Dict[str, object]:
     """One colour map of ``field`` ('drop', 'voltage' or 'current') on ``layer``, saved as
     a PNG at ``path``. ``region`` = (x_min, y_min, x_max, y_max) in mm zooms the view; the
     colour scale stays the rail's (drop, voltage) or the layer's (current). Returns the
-    scale: ``{"unit", "min", "max", "clipped"}``."""
+    scale: ``{"unit", "min", "max", "clipped"}``; on the current map also ``"label"``, the
+    lines written above its colour bar: the layer's peak |J| and, when a limit applies, its
+    verdict as ``problems`` judged it (:func:`coppernicus.problems.density_check`; ``limits``
+    judge a list that does not say what judged it, and the rail when no list is given)."""
     if field not in FIELDS:
         raise ValueError(f"field must be one of {', '.join(FIELDS)}, not {field!r}")
+    judged = problems                       # as given: a Problems list keeps what judged it
     problems = problems or []
     tri = _triangulation(layer)
     fig = Figure(figsize=(8, 6), dpi=dpi, layout="constrained")
     FigureCanvasAgg(fig)
     ax = fig.add_subplot()
     vrange = _rail_voltage_range(result)
-    clipped = False
+    clipped, label = False, None
     if field == "drop":
         # The drop as shown_drop_unit names it (on a ground below 0 V, the depth below it).
         drop_max = max(float(result.shown_drop_at(vrange).max()), 0.0) * 1e3 if vrange else 0.0
@@ -141,6 +147,10 @@ def render_layer_map(result: RailResult, layer: LayerField, field: str,
         im = ax.tripcolor(tri, facecolors=j, cmap=J_CMAP, vmin=lo, vmax=hi, rasterized=True)
         fig.colorbar(im, ax=ax, label=f"current density (A/mm²), scale clipped at "
                                       f"{J_CLIP_PERCENTILE:g}th percentile", extend="max")
+        # Above the colour bar, right-aligned with it: the layer's peak and its verdict, as the
+        # problem list judged it. A figure title, so the layout makes room above, not beside.
+        label = density_check(result, layer, judged, limits).lines()
+        fig.suptitle("\n".join(label), x=0.99, ha="right", fontsize=8.5)
         title = "current density"
     ax.set_title(f"{result.net} — {layer.name}: {title}")
     _decorate(ax, outline, result, problems, layer.name)
@@ -149,11 +159,15 @@ def render_layer_map(result: RailResult, layer: LayerField, field: str,
         ax.set_xlim(min(x0, x1), max(x0, x1))
         ax.set_ylim(max(y0, y1), min(y0, y1))   # KiCad: y down
     fig.savefig(path)
-    return {"unit": unit, "min": float(lo), "max": float(hi), "clipped": clipped}
+    scale = {"unit": unit, "min": float(lo), "max": float(hi), "clipped": clipped}
+    return scale if label is None else {**scale, "label": label}
 
 
 def save_layer_maps(result: RailResult, outline: Sequence[np.ndarray], out_dir,
-                    problems: Optional[List[Problem]] = None, dpi: int = 150) -> List[Path]:
+                    problems: Optional[List[Problem]] = None, dpi: int = 150,
+                    limits: Optional[Limits] = None) -> List[Path]:
+    """The drop and current maps of every layer of ``result`` in ``out_dir``; ``problems``
+    and ``limits`` as for :func:`render_layer_map`."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
@@ -161,6 +175,6 @@ def save_layer_maps(result: RailResult, outline: Sequence[np.ndarray], out_dir,
         stem = f"{safe_name(result.net)}_{safe_name(layer.name)}"
         for field, suffix in (("drop", "drop"), ("current", "current")):
             path = out_dir / f"{stem}_{suffix}.png"
-            render_layer_map(result, layer, field, outline, path, problems, dpi=dpi)
+            render_layer_map(result, layer, field, outline, path, problems, dpi=dpi, limits=limits)
             written.append(path)
     return written
