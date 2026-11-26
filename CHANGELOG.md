@@ -12,6 +12,8 @@ results against your own judgement.
 - The board temperature and DC solves factor with SuperLU's symmetric ordering by default
   (about half the time and memory of the electro-thermal solve on a large board);
   `COPPERNICUS_SUPERLU_ORDER=off` restores KiPI's method.
+- Boards open faster: a bit-identical stand-in for the KiCad reader's remove-unused-layers
+  trims (`COPPERNICUS_FAST_TRIM=0` restores KiPI's own).
 
 ### Fixed
 
