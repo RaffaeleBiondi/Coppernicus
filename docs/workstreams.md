@@ -129,7 +129,8 @@ First make Coppernicus functional; efficiency and packaging come afterwards.
   (Windows) holding the complete app **except Triangle**. On first start the app fetches the
   `triangle` package from PyPI into the user's folder, once, before the engine loads. Triangle's
   licence allows telling users how to obtain it for free; bundling it in a GPL-3 app is not
-  compatible. Unsigned builds first (macOS asks once: right-click → Open). It can start before
+  compatible. Unsigned builds first (macOS asks once, at the first start: the steps for each
+  macOS version are in [install.md](install.md#macos)). It can start before
   T11, since it does not depend on the analyses.
 - Also on the table: a permission request to Triangle's author (draft by the coordinator, sent
   by the owner), and an experiment with our own clean-room mesher (Delaunay refinement from the
