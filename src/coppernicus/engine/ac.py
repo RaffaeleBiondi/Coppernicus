@@ -12,6 +12,7 @@ source (VRM) is left out: the result is the open-loop impedance. Field by field:
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import os
 import re
@@ -45,6 +46,7 @@ from kipi.dc.solver import SolveError
 from kipi.dc.solver.setup import REF_TEMP_C
 from kipi.tolerance.gather import BW_LIMIT_HZ
 
+from coppernicus.engine import superlu_order
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import _numbers, _pads, terminal_names, to_pisetup
 from coppernicus.engine.pisetup import ground_nets as project_ground_nets
@@ -750,7 +752,25 @@ def ram_estimate(unknowns: float, total_bytes: Optional[float],
     may need more or less). The run's peak is higher: after
     the first frequency KiPI solves others side by side, each with its own factorization, as
     many as fit in half the memory free (``free_bytes``, see :func:`free_memory_bytes`); that
-    part is sized to the memory, so one factorization is the risk."""
+    part is sized to the memory, so one factorization is the risk. With the ``ac`` part of
+    :mod:`coppernicus.engine.superlu_order` on, the text says the fit overstates."""
+    return superlu_order_note(_ram_estimate(unknowns, total_bytes, free_bytes))
+
+
+def superlu_order_note(ram: RamEstimate) -> RamEstimate:
+    """``ram`` with a sentence saying it overstates when the AC factorizations run in SuperLU's
+    symmetric order (the ``ac`` part active: on, with SuperLU as KiPI's backend; a fit measured
+    in KiPI's order); ``ram`` itself otherwise."""
+    if not superlu_order.active("ac"):
+        return ram
+    return dataclasses.replace(ram, text=ram.text + (
+        " The factorizations run in SuperLU's symmetric order (the ac part of "
+        f"{superlu_order.ENV}), which takes less memory than KiPI's order this estimate was "
+        "measured with, so this overstates."))
+
+
+def _ram_estimate(unknowns: float, total_bytes: Optional[float],
+                  free_bytes: Optional[float] = None) -> RamEstimate:
     need = MEM_FIT_A * float(unknowns) ** MEM_FIT_B
     beyond = " (extrapolated beyond the measured range)" if unknowns > MEM_FIT_UNKNOWNS[1] else ""
     how = (f"estimated from a fit measured on synthetic plane pairs, {MEM_FIT_UNKNOWNS[0]:,} to "
