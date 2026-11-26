@@ -172,9 +172,9 @@ def main(argv=None) -> int:
         w.resize(1500, 920)
         w.show()
         windows.append(w)
-        if watch is not None:
-            watch.shown(w)
         settle()
+        if watch is not None:                # once Qt has made its platform window, as gui_check
+            watch.shown(w)
         return w
 
     def settle(n: int = 6):
@@ -478,6 +478,11 @@ def main(argv=None) -> int:
         res = panel.result
         need(res is not None and res.verdict in ("pass", "fail") and panel.table.rowCount() > 0
              and not panel.solve_button.isEnabled(), f"the stack-up is not judged: {panel.header.text()}")
+        loads = [panel.table.item(r, 0).text() for r in range(panel.table.rowCount())]
+        need("U2" in loads, f"no U2 row in the stack-up: {loads}")
+        said = panel.go_to_row(loads.index("U2"))   # a click on the row: U2 on the board, its verdict
+        settle()
+        need(said.startswith("U2 on VOUT"), f"the U2 row did not show U2: {said!r}")
         save(window, "tolerance-1-window", "")
         closed(window)
 
