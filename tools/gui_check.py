@@ -29,6 +29,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import traceback
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,34 +79,97 @@ def _quiet_dialogs():
 
 
 # A --window run must never take the focus: its windows used to pop up over the user's work.
-# On macOS Qt makes a plain process a foreground app and activates it at launch unless this is
-# set (Qt 6.12: the process then stays "prohibited": no Dock icon, never active).
-QT_BACKGROUND_ENV = {"QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM": "1"}
+# On macOS Qt makes a plain process a foreground app and activates it at launch unless the first
+# switch is set (Qt 6.12: the process then stays "prohibited": no Dock icon). After launch Qt
+# activates the application in one place only, QWindow::raise() on a visible window
+# ([NSApp activateIgnoringOtherApps:] in qcocoawindow.mm), unless the second is "0".
+QT_BACKGROUND_ENV = {"QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM": "1",
+                     "QT_MAC_SET_RAISE_PROCESS": "0"}
 
 
 def background_env(window: bool, platform: str = sys.platform) -> dict:
     """What a run puts in its environment before Qt starts so that it never comes to the
-    front: Qt's own switch, on macOS with a real window only (offscreen there is no window)."""
+    front: Qt's own switches, on macOS with a real window only (offscreen there is no window)."""
     return dict(QT_BACKGROUND_ENV) if window and platform == "darwin" else {}
 
 
-def show_in_background(app):
+def _window_name(widget) -> str:
+    title = widget.windowTitle()
+    return type(widget).__name__ + (f" {title!r}" if title else "")
+
+
+def show_in_background(app, input_through: bool = False):
     """From now on every top-level window or dialog shown opens without activating (Qt's
     WA_ShowWithoutActivating) and then goes behind the other applications' windows. Qt copies
     the attribute to the platform window only when it creates one, so a widget whose native
-    window exists already (a VTK view) gets the property the platform window reads, too."""
+    window exists already (a VTK view) gets the property the platform window reads, too.
+    ``input_through``: the windows also let the mouse through to whatever is behind them (Qt's
+    WindowTransparentForInput), so a click meant for another application never lands on one
+    and activates this one; for a run that sends no real mouse input.
+
+    The filter returned records every top-level shown and every raise of one (anything but
+    its own lowering); :meth:`audit` turns them into checks, which also run offscreen."""
     from PySide6.QtCore import QEvent, QObject, Qt, QTimer
     from PySide6.QtWidgets import QWidget
 
+    handled = (Qt.Window, Qt.Dialog, Qt.Tool)
+
     class Background(QObject):
+        def __init__(self, parent):
+            super().__init__(parent)
+            self.input_through = input_through
+            self.shown = []                   # (window, what could let it take the focus)
+            self.raised = []                  # (window, the Python stack that raised it)
+            self._lowering = False
+
         def eventFilter(self, obj, event):
-            if (event.type() == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow()
-                    and obj.windowType() in (Qt.Window, Qt.Dialog, Qt.Tool)):
-                obj.setAttribute(Qt.WA_ShowWithoutActivating)
-                if obj.windowHandle() is not None:
-                    obj.windowHandle().setProperty("_q_showWithoutActivating", True)
-                QTimer.singleShot(0, obj, obj.lower)          # once it is on screen
+            kind = event.type()
+            if kind == QEvent.Show and isinstance(obj, QWidget) and obj.isWindow():
+                if obj.windowType() in handled:
+                    obj.setAttribute(Qt.WA_ShowWithoutActivating)
+                    handle = obj.windowHandle()
+                    if handle is not None:
+                        handle.setProperty("_q_showWithoutActivating", True)
+                        if input_through:
+                            handle.setFlag(Qt.WindowTransparentForInput, True)
+                    QTimer.singleShot(0, obj, lambda w=obj: self._lower(w))   # once it is on screen
+                self.shown.append((_window_name(obj), self._risks(obj)))
+            elif (kind == QEvent.ZOrderChange and not self._lowering and isinstance(obj, QWidget)
+                  and obj.isWindow()):
+                self.raised.append((_window_name(obj), "".join(traceback.format_stack(limit=7)[:-1])))
             return False
+
+        def _lower(self, widget):
+            self._lowering = True             # its own ZOrderChange is no raise
+            try:
+                widget.lower()
+            finally:
+                self._lowering = False
+
+        def _risks(self, w) -> list:
+            risks = []
+            handle = w.windowHandle()
+            if w.windowType() not in handled:
+                risks.append(f"a {w.windowType().name} window (Qt raises it as it shows it)")
+            elif (not w.testAttribute(Qt.WA_ShowWithoutActivating) or handle is None
+                  or handle.property("_q_showWithoutActivating") is not True):
+                risks.append("shown activating")
+            elif input_through and not handle.flags() & Qt.WindowTransparentForInput:
+                risks.append("takes mouse clicks")
+            if w.windowModality() != Qt.NonModal:
+                risks.append("modal (it waits for a user, and a modal session activates the app)")
+            return risks
+
+        def audit(self, check: Checks):
+            """Every top-level opened without activating, behind the others (and letting clicks
+            through with ``input_through``), none modal; and none was raised."""
+            bad = [f"{name}: {', '.join(risks)}" for name, risks in self.shown if risks]
+            check("no focus: every window opens without activating, behind the others"
+                  + (", clicks passing through" if input_through else ""), bool(self.shown) and not bad,
+                  f"{len(self.shown)} window(s) shown" + "".join(f"; {b}" for b in bad[:5]))
+            check("no focus: no window raised over the other applications", not self.raised,
+                  "".join(f"\n  {name}, from:\n{stack}" for name, stack in self.raised[:3]))
+
     background = Background(app)
     app.installEventFilter(background)
     return background
@@ -133,48 +198,124 @@ def _app_name(front) -> str:
     return f"{front[0]} (pid {front[1]})" if front else "not readable here"
 
 
+def front_sequence(fronts, me: int) -> str:
+    """The application in front sample by sample, a run of the same one counted once:
+    "Safari ×12, this run ×2, Terminal ×30"."""
+    runs = []
+    for front in fronts:
+        name = "unreadable" if not front else "this run" if front[1] == me else front[0]
+        if runs and runs[-1][0] == name:
+            runs[-1][1] += 1
+        else:
+            runs.append([name, 1])
+    return ", ".join(f"{name} ×{n}" for name, n in runs) or "no sample"
+
+
+_POLICIES = {0: "regular", 1: "accessory", 2: "prohibited"}
+_EVENTS = {1: "a left mouse press (a click)", 3: "a right mouse press (a click)",
+           25: "a mouse press (a click)", 10: "a key press", 13: "an AppKit event"}
+
+
+def macos_app_state() -> str:
+    """This process's macOS activation policy and the event AppKit is handling (a mouse press
+    means a click), read through pyobjc (which pyvista installs on macOS)."""
+    if sys.platform != "darwin":
+        return "not macOS"
+    try:
+        from AppKit import NSApp
+        app = NSApp()
+        if app is None:
+            return "no NSApplication"
+        event = app.currentEvent()
+        what = "no event" if event is None else _EVENTS.get(event.type(), f"event type {event.type()}")
+        policy = _POLICIES.get(app.activationPolicy(), app.activationPolicy())
+    except Exception as e:                    # noqa: BLE001 - a report line, never a crash
+        return f"macOS state not readable ({type(e).__name__}: {e})"
+    return f"activation policy {policy}, AppKit handling {what}"
+
+
 class FrontWatch:
     """A --window run never becomes the application in front: the front application before
-    Qt starts, then every second while Qt runs events and at the end; and every change of Qt's
-    application state, where "active" would mean it took the focus."""
+    Qt starts, then every second while Qt runs events, as each window is shown and at the end;
+    and every change of Qt's application state, where "active" would mean it took the focus.
+
+    For the report, ``step`` names what the run is doing; each sample keeps it, and each
+    activation is recorded with it, macOS's activation policy and the event being handled (a
+    mouse press: a click), the run's windows under the mouse, and the Python frames that were
+    pumping events."""
 
     def __init__(self, app, before):
         from PySide6.QtCore import Qt, QTimer
-        self.before, self.fronts, self.active, self.exposed = before, [], 0, []
-        self.window, self.without_activating = None, False
+        self.before, self.fronts, self.exposed = before, [], []   # fronts: (origin, step, front)
+        self.windows, self.activations, self.step = [], [], ""    # windows: (name, opened without activating)
+        self.window, self.t0 = None, time.monotonic()
+        self.policy_start = macos_app_state().split(",")[0]
         app.applicationStateChanged.connect(lambda state: self._state(state == Qt.ApplicationActive))
         self.timer = QTimer()
         self.timer.timeout.connect(self.sample)
         self.timer.start(1000)
 
+    @property
+    def active(self) -> int:
+        return len(self.activations)
+
     def _state(self, active: bool):
-        self.active += active
+        if not active:
+            return
+        try:
+            detail = self._activation_detail()
+        except Exception as e:                # noqa: BLE001 - the activation counts, whatever its detail
+            detail = f"no detail ({type(e).__name__}: {e})"
+        self.activations.append(f"{time.monotonic() - self.t0:.1f} s, step {self.step or '(start)'!r}: "
+                                f"{detail}")
+
+    @staticmethod
+    def _activation_detail() -> str:
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QApplication
+        at = QCursor.pos()
+        under = [_window_name(w) for w in QApplication.topLevelWidgets()
+                 if w.isVisible() and w.frameGeometry().contains(at)]
+        frames = [f"{Path(f.filename).name}:{f.lineno} {f.name}"
+                  for f in traceback.extract_stack(limit=10)[:-2]]
+        return (f"{macos_app_state()}; mouse over {', '.join(under) or 'none of its windows'}; "
+                f"events pumped from {' <- '.join(reversed(frames))}")
 
     def shown(self, window):
-        """The main window is on screen: it opened without activating?"""
+        """A window is on screen: it opened without activating? Every window given is checked."""
         from PySide6.QtCore import Qt
         self.window = window
-        self.without_activating = (window.testAttribute(Qt.WA_ShowWithoutActivating)
-                                   and window.windowHandle().property("_q_showWithoutActivating") is True)
-        self.sample()
+        self.windows.append((_window_name(window), window.testAttribute(Qt.WA_ShowWithoutActivating)
+                             and window.windowHandle().property("_q_showWithoutActivating") is True))
+        self.sample("shown")
 
-    def sample(self):
-        self.fronts.append(front_app())
+    def sample(self, origin: str = "timer"):
+        self.fronts.append((origin, self.step, front_app()))
         if self.window is not None and self.window.isVisible():
             self.exposed.append(self.window.windowHandle().isExposed())
 
     def finish(self, check: Checks):
         self.timer.stop()
-        self.sample()
-        mine = sum(1 for f in self.fronts if f and f[1] == os.getpid())
-        read = [f for f in self.fronts if f]
+        self.sample("finish")
+        me = os.getpid()
+        fronts = [front for _, _, front in self.fronts]
+        mine = [(origin, step) for origin, step, front in self.fronts if front and front[1] == me]
+        read = [front for front in fronts if front]
         print(f"[INFO] front application before the run: {_app_name(self.before)}; at the end: "
-              f"{_app_name(self.fronts[-1])}; main window exposed in {sum(self.exposed)} of "
-              f"{len(self.exposed)} sample(s)", flush=True)
-        check("window run: the main window opens without activating", self.without_activating)
-        check("window run: never the application in front, never active", mine == 0 and not self.active,
-              f"{len(read)} of {len(self.fronts)} sample(s) read, {mine} were this run (pid {os.getpid()}); "
-              f"Qt reported it active {self.active} time(s)")
+              f"{_app_name(fronts[-1])}; main window exposed in {sum(self.exposed)} of "
+              f"{len(self.exposed)} sample(s); {self.policy_start} at the start, "
+              f"{macos_app_state().split(',')[0]} at the end", flush=True)
+        print(f"[INFO] front application, sample by sample: {front_sequence(fronts, me)}", flush=True)
+        for origin, step in mine:
+            print(f"[INFO] this run in front: the {origin} sample, step {step or '(start)'!r}", flush=True)
+        for activation in self.activations:
+            print(f"[INFO] Qt reported this run active at {activation}", flush=True)
+        opened = [name for name, ok in self.windows if not ok]
+        check("window run: every window opens without activating", bool(self.windows) and not opened,
+              f"{len(self.windows)} window(s)" + (f"; activating: {', '.join(opened)}" if opened else ""))
+        check("window run: never the application in front, never active", not mine and not self.activations,
+              f"{len(read)} of {len(self.fronts)} sample(s) read, {len(mine)} were this run (pid {me}); "
+              f"Qt reported it active {len(self.activations)} time(s)")
 
 
 def time_remerge(window, n: int = 20) -> str:

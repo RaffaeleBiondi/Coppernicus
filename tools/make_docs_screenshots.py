@@ -36,8 +36,12 @@ The sets, and the docs that show their images:
   to capture. The repository has no headless browser.
 
 A real window never takes the focus, as with ``tools/gui_check.py --window``: it opens without
-activating, behind the other applications' windows, and on macOS the process never comes to the
-front (checked at the end: the run fails if it did). The app's settings live in a temporary
+activating, behind the other applications' windows, and lets mouse clicks through to whatever is
+behind it (the run sends no real input), and Qt is told never to activate the process when a
+window is raised. Every window shown is checked, offscreen too (none modal, none raised); with
+a real display the application in front is also read every second, around each ``coppernicus``
+command too, and the run fails if this process or a command came to the front, saying in which
+step and, for each activation, whether a click caused it. The app's settings live in a temporary
 folder for the run, so the estimates' "last solve" lines are the same on every machine.
 
 It never saves a project and takes no board argument: only the projects in ``examples/`` are
@@ -123,7 +127,7 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     if args.set == "cli":                    # no window: the command line draws these itself
         try:
-            written = cli_pngs(out, args.timeout)
+            written = cli_pngs(out, args.timeout, watch_front=on_screen)
         except Unfinished as e:
             print(f"cli: {e}", file=sys.stderr)
             return 1
@@ -133,7 +137,7 @@ def main(argv=None) -> int:
     if args.set == "reports":                # no window: pages for a browser capture by hand
         folder = Path(args.html_dir or tempfile.mkdtemp(prefix="coppernicus-reports-"))
         try:
-            pages = reports(folder, args.timeout)
+            pages = reports(folder, args.timeout, watch_front=on_screen)
         except Unfinished as e:
             print(f"reports: {e}", file=sys.stderr)
             return 1
@@ -159,17 +163,23 @@ def main(argv=None) -> int:
     settings = tempfile.mkdtemp(prefix="coppernicus-shots-settings-")
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, settings)
-    watch = None
-    if on_screen:                            # as gui_check --window: open behind, never activate
-        watch = gc.FrontWatch(app, front_before)
-        gc.show_in_background(app)
+    # As gui_check --window: every window opens behind the others without activating, and here
+    # it also lets clicks through (the run sends no real mouse input), so a click meant for
+    # another application cannot land on it. Offscreen too, where audit() checks every window.
+    watch = gc.FrontWatch(app, front_before) if on_screen else None
+    background = gc.show_in_background(app, input_through=True)
     answer_dialogs()
     windows = []
     written = []
 
+    def step(text: str):
+        if watch is not None:                # what the run is doing, in the focus report
+            watch.step = text
+
     def new_window():
         w = MainWindow()
         w.resize(1500, 920)
+        step(f"window {len(windows) + 1}")
         w.show()
         windows.append(w)
         settle()
@@ -182,6 +192,7 @@ def main(argv=None) -> int:
             app.processEvents()
 
     def save(widget, name: str, prefix: str = "guide-"):
+        step(f"{prefix}{name}.png")
         settle()
         owner = widget.window()
         if on_screen and isinstance(owner, MainWindow):
@@ -270,6 +281,8 @@ def main(argv=None) -> int:
         window.view.measure_at(50.0, 10.0)                           # B: U1
         save(window, "6-measure")
         window.measure.setChecked(False)
+        window.dirty = False
+        window.close()                       # no window stays on screen for the later sets
         return 0
 
     def features() -> int:
@@ -521,12 +534,14 @@ def main(argv=None) -> int:
             except Unfinished as e:
                 print(f"analyses: {e}", file=sys.stderr)
                 status = 1
+        check = gc.Checks()
+        background.audit(check)
         if watch is not None:
-            check = gc.Checks()
             watch.finish(check)
-            if check.failed:
-                print("the run came to the front: see the FAIL lines above", file=sys.stderr)
-                status = status or 1
+        if check.failed:
+            print("a window could take the focus, or the run came to the front: see the FAIL lines "
+                  "above", file=sys.stderr)
+            status = status or 1
         if status:
             return status
     finally:
@@ -538,7 +553,7 @@ def main(argv=None) -> int:
 
     if args.set == "all":
         try:
-            written.extend(cli_pngs(out, args.timeout))
+            written.extend(cli_pngs(out, args.timeout, watch_front=on_screen))
         except Unfinished as e:
             print(f"cli: {e}", file=sys.stderr)
             return 1
@@ -556,32 +571,76 @@ CLI_PNGS = (
 )
 
 
-def coppernicus(args, out_dir: Path, timeout: float):
-    """``coppernicus ARGS --out OUT_DIR`` in a child process, as a user runs it. Exit codes 0,
-    1 (a limit exceeded) and 3 (not judged) are results; anything else stops the run."""
+def run_child(cmd, timeout: float, watch_front: bool = False):
+    """Run ``cmd`` with matplotlib's file-only backend (Agg) and the run's environment (on
+    macOS with a real display, Qt's no-focus switches). With ``watch_front`` the application in
+    front is read every half second while it runs: the run stops (:class:`Unfinished`) if the
+    child or this process ever came to the front. Returns (exit code, stdout, stderr, the
+    number of front samples read)."""
     import subprocess
+    import time
+    front_app = gui_check().front_app
+    what = " ".join(map(str, cmd[1:]))
+    env = dict(os.environ, MPLBACKEND="Agg")
+    with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as err:
+        proc = subprocess.Popen(cmd, stdout=out, stderr=err, text=True, env=env)
+        fronts, t0 = [], time.monotonic()
+        while True:
+            try:
+                proc.wait(timeout=0.5 if watch_front else timeout)
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() - t0 > timeout:
+                    proc.kill()
+                    proc.wait()
+                    raise Unfinished(f"{what} took more than {timeout:.0f} s") from None
+                if watch_front:
+                    fronts.append(front_app())
+        if watch_front:
+            fronts.append(front_app())
+        out.seek(0)
+        err.seek(0)
+        stdout, stderr = out.read(), err.read()
+    came = [f for f in fronts if f and f[1] in (proc.pid, os.getpid())]
+    if came:
+        raise Unfinished(f"{what} came to the front: {came[0][0]} (pid {came[0][1]}) in {len(came)} of "
+                         f"{len(fronts)} sample(s)")
+    return proc.returncode, stdout, stderr, sum(1 for f in fronts if f)
+
+
+def coppernicus(args, out_dir: Path, timeout: float, watch_front: bool = False) -> int:
+    """``coppernicus ARGS --out OUT_DIR`` in a child process, as a user runs it (see
+    :func:`run_child`). Exit codes 0, 1 (a limit exceeded) and 3 (not judged) are results;
+    anything else stops the run. Returns the number of front samples read."""
     cmd = [sys.executable, "-m", "coppernicus", *map(str, args), "--out", str(out_dir)]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    if proc.returncode not in (0, 1, 3):
-        raise Unfinished(f"coppernicus {' '.join(map(str, args))} exited with {proc.returncode}: "
-                         f"{proc.stderr.strip()[-800:]}")
-    return proc
+    code, _, stderr, read = run_child(cmd, timeout, watch_front)
+    if code not in (0, 1, 3):
+        raise Unfinished(f"coppernicus {' '.join(map(str, args))} exited with {code}: "
+                         f"{stderr.strip()[-800:]}")
+    return read
 
 
-def cli_pngs(out: Path, timeout: float) -> list:
+def _never_in_front(commands: int, read: int, watch_front: bool):
+    if watch_front:
+        print(f"[INFO] the {commands} coppernicus command(s) never came to the front "
+              f"({read} front sample(s) read while they ran)", flush=True)
+
+
+def cli_pngs(out: Path, timeout: float, watch_front: bool = False) -> list:
     """The PNGs of :data:`CLI_PNGS`, each written by its command into a temporary folder (never
     ``results/`` beside an example) and copied to ``out``."""
-    written = []
+    written, read = [], 0
     with tempfile.TemporaryDirectory(prefix="coppernicus-shots-cli-") as tmp:
         for name, args, pattern in CLI_PNGS:
             folder = Path(tmp) / Path(name).stem
-            coppernicus(args, folder, timeout)
+            read += coppernicus(args, folder, timeout, watch_front)
             found = sorted(folder.glob(pattern))
             if len(found) != 1:
                 raise Unfinished(f"{name}: expected one {pattern} from coppernicus {args[0]}, found "
                                  f"{sorted(p.name for p in folder.iterdir())}")
             shutil.copyfile(found[0], out / name)
             written.append(out / name)
+    _never_in_front(len(CLI_PNGS), read, watch_front)
     return written
 
 
@@ -621,17 +680,17 @@ def chain_with_limits(folder: Path) -> Path:
     return project.save(folder / CHAIN.name)
 
 
-def reports(folder: Path, timeout: float) -> list:
+def reports(folder: Path, timeout: float, watch_front: bool = False) -> list:
     """Each page of :data:`REPORTS` written into its own subfolder of ``folder``. Returns
     (image, page URL with its fragment, what to capture, width, docs) per page. A page that
     names a local folder is refused: it would end up in a public image."""
-    pages = []
+    pages, read = [], 0
     private = [str(p) for p in (Path.home(), folder.resolve(), ROOT)]
     for name, args, fragment, what, width, docs in REPORTS:
         sub = folder / Path(name).stem
         if "CHAIN_WITH_LIMITS" in args:
             args = tuple(chain_with_limits(sub / "project") if a == "CHAIN_WITH_LIMITS" else a for a in args)
-        coppernicus(args, sub, timeout)
+        read += coppernicus(args, sub, timeout, watch_front)
         found = sorted(sub.glob("*.html"))
         if len(found) != 1:
             raise Unfinished(f"{name}: expected one page from coppernicus {args[0]}, found "
@@ -641,6 +700,7 @@ def reports(folder: Path, timeout: float) -> list:
         if named:
             raise Unfinished(f"{found[0]} names a local folder ({named[0]}): not for a public image")
         pages.append((name, found[0].resolve().as_uri() + fragment, what, width, docs))
+    _never_in_front(len(REPORTS), read, watch_front)
     return pages
 
 
