@@ -347,7 +347,7 @@ class BoardView(QWidget):
         self._field: Optional[str] = None   # the map shown: a key of FIELDS, None before a solve
         # (result, its problem list), as the Problems panel shows them: the current map's label
         # reads its verdict there (set_problems).
-        self._problems: Optional[Tuple[RailResult, list]] = None
+        self._problems: Optional[tuple] = None    # (result, problems, limits)
         # Hover readout: a move stores the pointer and starts the timer if it is idle, so a
         # moving pointer is probed every HOVER_MS, at its latest position.
         self.hover_label = HoverLabel(self.plotter.interactor)
@@ -457,11 +457,12 @@ class BoardView(QWidget):
         self._add_measure()
         self._finish(fit)
 
-    def set_problems(self, result: RailResult, problems: list):
+    def set_problems(self, result: RailResult, problems: list, limits=None):
         """The problem list of ``result`` (a rail's or a tree group's, as judged against its
         limits): the current map of ``result`` writes the layer's verdict above its scale
-        from it. Shown at once when that map is on screen (the limits were edited)."""
-        self._problems = (result, problems)
+        from it. Shown at once when that map is on screen (the limits were edited).
+        ``limits``: a tree group's, so one that did not converge says it was not judged."""
+        self._problems = (result, problems, limits)
         self._set_density_check()
 
     def _set_density_check(self):
@@ -470,8 +471,8 @@ class BoardView(QWidget):
         if self._field != "current" or self._layer is None or self._result is None:
             return
         held = self._problems
-        problems = held[1] if held is not None and held[0] is self._result else None
-        self.colorbar.set_check(density_check(self._result, self._layer, problems))
+        problems, limits = held[1:] if held is not None and held[0] is self._result else (None, None)
+        self.colorbar.set_check(density_check(self._result, self._layer, problems, limits))
 
     def show_temperature(self, temp, layer_name: str, outline: Sequence[np.ndarray], fit: bool = False):
         """The board temperature on copper layer ``layer_name`` of ``temp`` (a

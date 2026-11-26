@@ -220,6 +220,35 @@ def test_saved_maps_take_the_limits_when_no_list_is_given(tmp_path, monkeypatch)
     assert ["Peak 80 A/mm² (mesh-dependent)", "limit 100 A/mm²: pass"] in seen
 
 
+@pytest.mark.parametrize("limit, line", [(60.0, "limit 60 A/mm²: FAIL · worst spot "),
+                                         (200.0, "limit 200 A/mm²: pass"),
+                                         (None, "default 60 A/mm² (attention): 1 spot above")])
+def test_the_services_maps_get_the_verdict_from_the_results_problems(tmp_path, monkeypatch, limit, line):
+    """render_map (MCP, CLI) passes the result's problem list, which keeps the limits that
+    judged it: the PNG gets line 2 with no limits passed beside it."""
+    from test_density_default import amps_for, neck_board
+
+    from coppernicus.engine.synthetic import save_snapshot
+    from coppernicus.service import session as service
+    path = tmp_path / "neck.kipi.json.gz"
+    save_snapshot(neck_board(), path)
+    seen = []
+    real = service.render_layer_map
+
+    def spy(*a, **kw):
+        seen.append(real(*a, **kw))
+        return seen[-1]
+    monkeypatch.setattr(service, "render_layer_map", spy)
+    s = service.Session(out_dir=tmp_path / "out")
+    bid = s.open_board(path)["board_id"]
+    limits = {} if limit is None else {"max_current_density_a_mm2": limit}
+    rid = s.solve_rail(bid, "VCC", [{"ref": "J1", "voltage_v": 1.0}],
+                       [{"ref": "U1", "current_a": amps_for(80.0, 0.035)}], limits=limits)["result_id"]
+    s.render_map(rid, "F.Cu", "current", dpi=40)
+    [scale] = seen
+    assert scale["label"][0].startswith("Peak ") and scale["label"][1].startswith(line), scale["label"]
+
+
 # ---------------------------------------------------------------------- a power tree
 
 @pytest.fixture(scope="module")
@@ -242,8 +271,9 @@ def test_a_tree_groups_label_reads_the_trees_problems(chain):
 
 
 def test_every_tree_problem_in_the_report_has_a_place_or_none(chain, tmp_path):
-    """Each problem row of a tree group zooms to its x_mm, y_mm: a finite place, or null for
-    one with no place (a load that cannot be reached), which the page then does not zoom to."""
+    """Each problem row of a tree group zooms to its x_mm, y_mm (the page's click handler is
+    the rails'): both finite, or both null for a row with no place, which the page does not
+    zoom to (it would land on (0, 0))."""
     from coppernicus.power_tree import tree_summary
     from coppernicus.report import write_tree_report
     path = write_tree_report(chain, tree_summary(chain), tmp_path / "tree.html")
@@ -255,6 +285,7 @@ def test_every_tree_problem_in_the_report_has_a_place_or_none(chain, tmp_path):
         assert (p["x_mm"] is None) == (p["y_mm"] is None), p
     groups = {r["net"]: r for r in meta["rails"]}
     assert groups["+3V3"]["layers"][0]["j_check"]["verdict"] == "fail"
+    assert "if (!ok(p.x_mm) || !ok(p.y_mm)) { S.mark = null; draw(); return; }" in text
 
 
 # ---------------------------------------------------------------------- the app (offscreen)
@@ -291,6 +322,12 @@ assert lines[1].startswith("default 60 A/mm² (attention): 2 spots above"), line
 other = strip_result()                                             # another result: no list yet
 view.show_field(other, other.layers[0], "current", [])
 assert view.colorbar.header() == ["Peak 80 A/mm² (mesh-dependent)"], view.colorbar.header()
+from coppernicus.problems import Problems
+stuck = strip_result()                                             # a tree group that did not converge
+stuck.converged = False
+view.set_problems(stuck, Problems([], Limits(), default=False), Limits(max_current_density=55.0))
+view.show_field(stuck, stuck.layers[0], "current", [])
+assert view.colorbar.header()[1] == "limit 55 A/mm²: not judged (did not converge)", view.colorbar.header()
 view.colorbar.grab()                                               # paints with the label
 view.close()
 '''
