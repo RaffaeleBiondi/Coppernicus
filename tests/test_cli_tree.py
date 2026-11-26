@@ -72,6 +72,44 @@ def test_tree_summary_file_is_written_with_forward_slashes(chain, tmp_path, caps
     assert main(["solve", str(chain), "--tree", "--json", "--out", str(tmp_path / "o")]) == EXIT_OK
     doc = json.loads(capsys.readouterr().out)
     assert "\\" not in doc["summary_file"] and doc["summary_file"].endswith("_tree_summary.json")
+    assert "probes" not in doc                                # only asked for with --probe
+
+
+def test_tree_probe_reads_the_group_under_each_point(chain, tmp_path, capsys):
+    """``--probe LAYER@X,Y`` (repeatable): the group with copper there, its voltage and its
+    drop or rise, as the app's readout words them; the power chain's prototype, U3's ground
+    pad rising 38.470 mV."""
+    args = ["solve", str(chain), "--tree", "--out", str(tmp_path / "o"),
+            "--probe", "B.Cu@97.5,1.0", "--probe", "F.Cu@90,1", "--probe", "F.Cu@50,20"]
+    assert main(args) == EXIT_OK
+    out = capsys.readouterr().out
+    gnd = next(line for line in out.splitlines() if line.startswith("Probe B.Cu"))
+    assert "GND" in gnd and "rise = 38.470 mV above 0 V (ground rise)" in gnd, gnd
+    rail = next(line for line in out.splitlines() if line.startswith("Probe F.Cu (90"))
+    assert "+1V8" in rail and "drop = " in rail, rail
+    assert any(line.startswith("Probe F.Cu (50") and "no solved copper" in line
+               for line in out.splitlines())
+    assert main([*args, "--json"]) == EXIT_OK
+    doc = json.loads(capsys.readouterr().out)
+    first, second, off = doc["probes"]
+    assert first["group"] == "GND" and first["kind"] == "ground" and first["layer"] == "B.Cu"
+    assert first["drop_mv"] == pytest.approx(38.470, abs=5e-4) and first["drop_word"] == "rise"
+    assert second["group"] == "+1V8" and off["on_copper"] is False
+    saved = json.loads((tmp_path / "o" / "chain.coppernicus_tree_summary.json").read_text(encoding="utf-8"))
+    assert saved["probes"] == doc["probes"]
+
+
+@pytest.mark.parametrize("extra, word", [
+    (["--tree", "--probe", "B.Cu97.5,1"], "LAYER@X,Y"),
+    (["--tree", "--probe", "B.Cu@97.5"], "LAYER@X,Y"),
+    (["--tree", "--probe", "In9.Cu@1,1"], "B.Cu"),
+    (["--probe", "B.Cu@97.5,1"], "--tree"),
+])
+def test_tree_probe_errors_before_solving(chain, tmp_path, capsys, extra, word):
+    assert main(["solve", str(chain), "--json", "--out", str(tmp_path / "o"), *extra]) == EXIT_ERROR
+    err = json.loads(capsys.readouterr().out)["error"]
+    assert err["code"] == "invalid_input" and word in err["message"] + err["hint"], err
+    assert not (tmp_path / "o" / "chain.coppernicus_tree_summary.json").exists()
 
 
 def test_solve_prints_a_negative_rail_load_at_its_worst_pin(tmp_path, capsys):
