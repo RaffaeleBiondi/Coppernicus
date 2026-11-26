@@ -68,8 +68,10 @@ def cap_field_tip(cap, key: str) -> str:
         else:
             where = f"no PI_VRATED on {ref}: not derated for DC bias ({m.dielectric})"
     elif key == "kept_at_rated_pct":
-        where = ("no KiCad field gives it (empty: KiPI's typical class II value)" if m.rated_v is not None
-                 else "no KiCad field gives it, and without a voltage rating it is not derated")
+        from coppernicus.board_fields import CLASS_II
+        where = ("no KiCad field gives it (empty: KiPI's typical class II value)"
+                 if m.rated_v is not None and m.dielectric in CLASS_II
+                 else f"no KiCad field gives it: a {m.dielectric} capacitor is not derated for DC bias")
     else:
         where = f"{ref}: the part whose KiCad fields give this model"
     return f"{where}; {_use_project_cap(ref)}"
