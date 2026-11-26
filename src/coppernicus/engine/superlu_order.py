@@ -38,10 +38,13 @@ Off, nothing is replaced and KiPI's own path runs: bit-identical. On, a differen
 differently, so results move by round-off only. The proof criteria for that (checks of
 "round-off only", not limits of the product), :data:`TOLERANCE_REL`: the benchmark fingerprint's
 scalars agree within 1e-9 relative (thermal, dc), with a floor per unit for values near zero (the
-unit's largest magnitude in the fingerprint × 1e-9); |Z| within 1e-8 relative (ac: at low
-frequency the rail is tied to ground only through the plane capacitance, an ill-conditioned
-system in which round-off grows, measured up to 8.6e-10); and the backward error
-‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) is of the same order on and off (both a few 1e-16).
+unit's largest magnitude in the fingerprint × 1e-9); |Z| within 1e-6 relative (ac), since KiPI's
+own |Z| carries round-off of order 1e-7: on KiPI's noise example its own call (COLAMD,
+threshold 1.0) on the same systems with their unknowns permuted at random (6 seeds) moves |Z|
+by up to 6.0e-8, as far as this order does (5.2e-8), up to about 10 MHz (that probe has no
+target: never judged); on the pdn example both agree to 3.3e-11 everywhere, 1.9e-11 in its
+judged band; and the backward error ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖) is of the same order on and off
+(both a few 1e-16).
 
 The seam: KiPI's private ``direct._superlu`` and ``direct._superlu_complex`` are replaced
 process-wide, once, by functions that hand every factorization outside an enabled part to KiPI's
@@ -80,7 +83,7 @@ SPD_PIVOT_THRESHOLD = 0.0
 COMPLEX_PIVOT_THRESHOLD = 0.1
 # The proof criteria of "round-off only" per part (see the module's docstring): relative, with
 # an absolute floor per unit of this times the unit's largest magnitude.
-TOLERANCE_REL = {"thermal": 1e-9, "ac": 1e-8, "dc": 1e-9}
+TOLERANCE_REL = {"thermal": 1e-9, "ac": 1e-6, "dc": 1e-9}
 # KiPI's functions replaced, with the parameters they take.
 _SEAMS = {"_superlu": ["A"], "_superlu_complex": ["A"]}
 

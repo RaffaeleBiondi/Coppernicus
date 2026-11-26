@@ -1503,9 +1503,15 @@ only", not limits of the product):
 
 - `thermal` and `dc`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative, with a
   floor per unit for values near zero (the unit's largest magnitude in the fingerprint × 1e-9);
-- `ac`: |Z| within 1e-8 relative (and the noise and tolerance scalars that come from it): at low
-  frequency the rail is tied to ground only through the plane capacitance, an ill-conditioned
-  system in which round-off grows (measured up to 8.6e-10);
+- `ac`: |Z| within 1e-6 relative (and the noise and tolerance scalars that come from it), since
+  KiPI's own |Z| carries round-off of order 1e-7. On KiPI's noise example (1 kHz to 300 MHz),
+  KiPI's own call (COLAMD, threshold 1.0) on the same systems with their unknowns put through a
+  random symmetric permutation moves |Z| by 4.0e-8 to 5.8e-8 (6 seeds; 6.0e-8 between any two of
+  the 7 orders), and this order by 5.2e-8: inside KiPI's own spread. That spread is 4.5e-8 below
+  1 MHz and 1.3e-8 above, over 1e-10 up to about 10 MHz; the probe there has no target, so its
+  |Z| is never judged. On the pdn example's judged band (from its 100 kHz bandwidth to 9.93 MHz)
+  everything agrees to about 2e-11 (KiPI's four orders 2.3e-11, this one 1.9e-11), and to
+  3.3e-11 over the whole sweep;
 - the backward error ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖), on and off, of the same order (a few 1e-16;
   `tests/test_superlu_order.py`).
 
