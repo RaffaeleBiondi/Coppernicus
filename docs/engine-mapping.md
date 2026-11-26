@@ -1427,10 +1427,16 @@ solves), 0.70 GB peak RSS.
   per source the accuracy; the options. A cell is a number (± n) or `below, above` (also
   `[-3, 2]`, `-3 / +2`; `3,3` reads 3.3); empty is unset, 0 a value; the new terminal is
   built by `dataclasses.replace` (its checks run: a `_pct` beside its `_mv` is refused).
-- A rail from the KiCad fields is editable (no field holds a tolerance): the edit goes to the
+- A cell whose value a KiCad field gives is read-only, cell by cell (`Merged.tolerance_field`,
+  recorded by the merge in `_from_fields` and `_library_tolerances`; both units of the family;
+  never `ripple_mv` / `transient_mv`), its tooltip naming the field and the part
+  (`field_held`); `set_value` refuses it with that text. Under `override_board_fields` no
+  field holds anything, so every cell edits.
+- Elsewhere a rail from the KiCad fields is editable: the edit goes to the
   project's part of the same ref (`carried_by_ref`'s pairing); with no project rail of its own
-  there, that rail becomes a copy of the fields' sources and loads, which `_differences` sees
-  as no difference (no warning; KiCad still gives the values). Read-only only where the
+  there, that rail becomes a copy of the fields' sources and loads, without the values their
+  fields hold, which `_differences` sees
+  as no difference (no warning; KiCad still gives the values). A row is read-only where the
   project's own rail differs from the fields and has no part of that ref ("Override in
   project"). Use KiCad fields keeps the tolerances by ref the same way, and names the parts
   whose go; Override → start from the KiCad values keeps them (the merged rail carried them).
