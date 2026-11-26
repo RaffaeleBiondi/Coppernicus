@@ -108,7 +108,14 @@ with `max_ground_rise_mv`. On a **negative rail** percentages are of |`v_ref_v`|
 positive like the drops.
 
 `solve_rail` settings, all optional:
-- `max_edge_mm`: the largest mesh edge on planes (default 0.5).
+- `max_edge_mm`: the largest mesh edge on planes (default 0.5). It does not refine the mesh
+  at plated holes; the next two do.
+- `min_edge_mm` (advanced): the smallest mesh element, at a plated hole's wall, in mm
+  (default: KiPI's 0.02).
+- `grading` (advanced): how fast elements grow away from a plated hole, mm of edge per mm of
+  distance, 0 (off) to 2 (default: KiPI's 0.2). Set both smaller (e.g. 0.01 and 0.1) to check
+  whether a small current-density spot at a via is resolved: a resolved one keeps its area and
+  mean |J|. Left out, KiPI's defaults apply and results are unchanged.
 - `via_plating_um`: plating for every plated hole. The default is the engine's table by hole
   type.
 - `copper_temp_c`: copper temperature for ρ(T) (default 20).

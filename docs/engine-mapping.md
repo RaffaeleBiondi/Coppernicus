@@ -111,6 +111,8 @@ spread over several tied nets raise `EngineError`: pick the pins on one net.
 | Coppernicus | KiPI | Unit | Default | Notes |
 |---|---|---|---|---|
 | `settings.max_edge_mm` | `settings.max_edge_mm` (`SolveSettings`) | mm | 0.5 | Through `engine_settings()`, as in the per-rail solve, so the numbers match. |
+| `settings.min_edge_mm` | `settings.min_edge_mm` (`SolveSettings`) | mm | `None` = KiPI's 0.02 | Advanced: the smallest element at a plated hole's wall. Set only when given; `None` leaves KiPI's default untouched. |
+| `settings.grading` | `settings.grading` (`SolveSettings`) | mm/mm | `None` = KiPI's 0.2 | Advanced: element growth away from plated holes, 0 (off) to 2, the range of KiPI's own "Via grading" field. Same path. |
 | `settings.via_plating_um` | `settings.via_rules` | µm → mm | `None` = KiPI's table | Same as the per-rail solve. |
 | `settings.copper_temp_c` | not in `PISetup`: `solve_tree(temperature=…)` | °C | 20 | A callable from xy (mm) to °C, which `tree` hands to `NetProblem(temperature=…)`. Task 7 passes the same uniform field that `solve_rail` sets on `NetProblem.temperature`. |
 | `rails[].limits.max_drop_pct` | — | % | `None` | Judged by Coppernicus on each group's result (Task 7), never inside KiPI. |

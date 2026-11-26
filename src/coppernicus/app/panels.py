@@ -40,6 +40,7 @@ from coppernicus.app.fields_view import FieldsBanner
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.problems import ATTENTION, FAIL, Problem
 from coppernicus.project import (
+    GRADING_RANGE,
     LOAD_PART_KEYS,
     LOAD_TOLERANCE_KEYS,
     SOURCE_ACCURACY_KEYS,
@@ -658,6 +659,18 @@ class RailPanel(QWidget):
                                 "table (micro 12, buried 13, others 20 µm). Ask your fabricator.")
         self.temp = DecimalSpinBox(decimals=1, minimum=-55.0, maximum=250.0, suffix=" °C")
         self.temp.setToolTip("Copper temperature; resistivity is referenced to 20 °C")
+        # Advanced, the mesh near plated holes (KiPI's): empty = KiPI's default.
+        self.min_edge = QLineEdit(placeholderText="engine default 0.02")
+        self.min_edge.setValidator(OptionalDecimalValidator(0.0001, 5.0, 4))
+        self.min_edge.setToolTip("Advanced: the smallest mesh element, at a plated hole's wall, in mm. "
+                                 "The largest mesh edge does not refine there; a smaller value here "
+                                 "does, to check a small current-density spot at a via. Empty: the "
+                                 "engine's 0.02 mm.")
+        self.grading = QLineEdit(placeholderText="engine default 0.2")
+        self.grading.setValidator(OptionalDecimalValidator(GRADING_RANGE[0], GRADING_RANGE[1], 3))
+        self.grading.setToolTip("Advanced: how fast mesh elements grow away from a plated hole, mm of "
+                                "edge per mm of distance, 0 (off) to 2. Lower keeps the mesh fine "
+                                "further from the hole. Empty: the engine's 0.2.")
         self.copper_summary = QLabel("board file")
         self.copper_summary.setWordWrap(True)            # many layers: wrap, never widen the panel
         self.copper_summary.setToolTip("What-if copper thickness by layer, for every solve. "
@@ -673,6 +686,8 @@ class RailPanel(QWidget):
         sform.addRow("Via plating (µm)", self.plating)
         sform.addRow("Copper temperature", self.temp)
         sform.addRow("Copper thickness", copper)
+        sform.addRow("Mesh at holes, min edge (mm)", self.min_edge)
+        sform.addRow("Mesh at holes, grading", self.grading)
 
         self.solve = QPushButton("Solve  (F5)")
         self.solve.setMinimumHeight(34)
@@ -697,6 +712,8 @@ class RailPanel(QWidget):
         self.max_edge.valueChanged.connect(self._write_settings)
         self.temp.valueChanged.connect(self._write_settings)
         self.plating.editingFinished.connect(self._write_settings)
+        self.min_edge.editingFinished.connect(self._write_settings)
+        self.grading.editingFinished.connect(self._write_settings)
         self.copper_edit.clicked.connect(self._edit_copper)
         self.solve.clicked.connect(self.solve_requested.emit)
         self._settings: Optional[Settings] = None
@@ -729,6 +746,8 @@ class RailPanel(QWidget):
         self.max_edge.setValue(settings.max_edge_mm)
         self.plating.setText("" if settings.via_plating_um is None else f"{settings.via_plating_um:g}")
         self.temp.setValue(settings.copper_temp_c)
+        self.min_edge.setText("" if settings.min_edge_mm is None else f"{settings.min_edge_mm:g}")
+        self.grading.setText("" if settings.grading is None else f"{settings.grading:g}")
         self.copper_summary.setText(thickness_summary(settings.copper_thickness_mm))
         self._loading = False
 
@@ -924,6 +943,8 @@ class RailPanel(QWidget):
         self._settings.max_edge_mm = self.max_edge.value()
         self._settings.via_plating_um = _optional_float(self.plating)
         self._settings.copper_temp_c = self.temp.value()
+        self._settings.min_edge_mm = _optional_float(self.min_edge)
+        self._settings.grading = _optional_float(self.grading)
         self.settings_changed.emit()
 
     def _edit_copper(self):

@@ -127,7 +127,8 @@ follow the hint. `result_evicted` means you must solve again.
 **Without MCP**, use the CLI:
 - `uv run --project <Coppernicus repo> coppernicus nets|parts BOARD [NET] --json`;
 - `coppernicus solve PROJECT.coppernicus.yml --json --out DIR [--top N] [--html]`. The project
-  YAML takes `settings: {max_edge_mm, via_plating_um, copper_temp_c, copper_thickness_mm?}`;
+  YAML takes `settings: {max_edge_mm, via_plating_um, copper_temp_c, copper_thickness_mm?,
+  min_edge_mm?, grading?}` (the last two advanced: the mesh at plated holes);
   `copper_thickness_mm: {B.Cu: 0.07}` is the optional what-if of step 7.
 - Write the YAML and the outputs outside the board's folder.
 - Exit codes: 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit that was set

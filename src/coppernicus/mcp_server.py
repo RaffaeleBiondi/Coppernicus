@@ -192,6 +192,13 @@ class SettingsSpec(BaseModel):
                           "at most one step from the design's thickness on that layer; anything "
                           "else is refused (real changes are made in KiCad). copper_step does "
                           "the same from a result. The board file is not changed.")
+    min_edge_mm: Optional[float] = Field(None, gt=0, description="Advanced: the smallest mesh "
+                                         "element, at a plated hole's wall, mm (default: KiPI's "
+                                         "0.02). A smaller max_edge_mm does not refine there; this "
+                                         "does, to check a small spot at a via.")
+    grading: Optional[float] = Field(None, ge=0, le=2, description="Advanced: how fast mesh "
+                                     "elements grow away from a plated hole, mm of edge per mm "
+                                     "of distance, 0 (off) to 2 (default: KiPI's 0.2).")
 
 
 def _error_result(err: dict) -> CallToolResult:
@@ -586,7 +593,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                           description="Names of links to remove.")] = None,
                       settings: Annotated[Optional[dict[str, Any]], Field(
                           description="Settings keys to set (max_edge_mm, via_plating_um, copper_temp_c, "
-                                      "copper_thickness_mm); null removes one (its default). "
+                                      "copper_thickness_mm, and the advanced min_edge_mm and "
+                                      "grading near plated holes); null removes one (its default). "
                                       "copper_thickness_mm merges by layer (a layer set to null "
                                       "goes back to the board file); each layer changed takes a "
                                       "standard weight at most one step from the board file's "

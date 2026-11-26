@@ -72,11 +72,28 @@ def engine_settings(s: Settings) -> Tuple[SolveSettings, List[str]]:
         "their plated wall only.",
         f"Copper at {s.copper_temp_c:g} °C: ρ = {rho_t:.4g} Ω·mm "
         f"(ρ₂₀ = {RHO_CU_OHM_MM:g} Ω·mm, α = {TCR_CU:g} /°C).",
-        f"Mesh: largest edge {s.max_edge_mm:g} mm on planes, refined toward plated holes.",
+        f"Mesh: largest edge {s.max_edge_mm:g} mm on planes, refined toward plated holes"
+        + _near_holes(s) + ".",
         "Loads draw their current split equally across their pins; source pins are held at "
         "the source voltage.",
     ]
-    return SolveSettings(max_edge_mm=s.max_edge_mm, via_rules=rules), assumptions
+    solve = SolveSettings(max_edge_mm=s.max_edge_mm, via_rules=rules)
+    if s.min_edge_mm is not None:            # None: KiPI's own defaults, untouched
+        solve.min_edge_mm = s.min_edge_mm
+    if s.grading is not None:
+        solve.grading = s.grading
+    return solve, assumptions
+
+
+def _near_holes(s: Settings) -> str:
+    """The advanced mesh settings near plated holes the user set, for the mesh assumption
+    line; empty when both are KiPI's defaults."""
+    parts = []
+    if s.min_edge_mm is not None:
+        parts.append(f"smallest edge {s.min_edge_mm:g} mm at the hole walls")
+    if s.grading is not None:
+        parts.append(f"grading {s.grading:g}" + (" (off)" if s.grading == 0 else ""))
+    return f" ({', '.join(parts)}: user settings)" if parts else ""
 
 
 def thickness_note(thickness: Dict[str, float], file_mm: Dict[str, float]) -> List[str]:
