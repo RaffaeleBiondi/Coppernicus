@@ -49,11 +49,68 @@ SYNTHETIC_STEPS = ("open", "mesh", "dc", "tree")
 
 
 def _slug(text: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("_") or "x"
+    """A file-name-safe, one-to-one form of ``text``: every character but letters, digits,
+    "." and "-" written _<hex>_ ("+3V3" -> "_2b_3V3", "-3V3" stays)."""
+    return re.sub(r"[^A-Za-z0-9.-]", lambda m: f"_{ord(m.group()):x}_", text) or "_"
 
 
 def _say(text: str = "") -> None:
     print(text, flush=True)
+
+
+def _utf8_output() -> None:
+    """Names and estimates hold µ, Ω, °: print UTF-8 whatever the pipe's encoding says."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
+#: The child environment's keys recorded in the run's metadata.
+CHILD_ENV_KEYS = ("KIPI_SERIAL", "MPLBACKEND", "PYTHONIOENCODING", "OMP_NUM_THREADS",
+                  "VECLIB_MAXIMUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS")
+
+
+def child_env(base: Dict[str, str], tmp: Path, serial: bool) -> Dict[str, str]:
+    """A measuring process's environment: KIPI_SERIAL=1 for --mesher serial (as the frozen app,
+    whose can_spawn() is False) and never otherwise, UTF-8 output, Agg plots, and its temp
+    folder (KiPI's pool writes the board there for its workers) in the run's work folder."""
+    env = dict(base)
+    env.pop("KIPI_SERIAL", None)
+    if serial:
+        env["KIPI_SERIAL"] = "1"
+    env.setdefault("MPLBACKEND", "Agg")
+    env["PYTHONIOENCODING"] = "utf-8"
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        env[key] = str(tmp)
+    return env
+
+
+def tolerance_flags(ac: Dict[str, Optional[Dict[str, Any]]], noise: Dict[str, Optional[Dict[str, Any]]],
+                    allow: bool) -> List[str]:
+    """The tolerance command's --skip-ac / --skip-noise from the estimates of every AC rail and
+    aggressor it may solve (a superset of those it needs): a solve whose estimate could exceed
+    this machine's memory, or did not run, is left out unless ``allow``."""
+    if allow:
+        return []
+    out = []
+    for flag, ests in (("--skip-ac", ac), ("--skip-noise", noise)):
+        if any(e is None or e.get("exceeds_memory") for e in ests.values()):
+            out.append(flag)
+    return out
+
+
+def stored_case(case: Dict[str, Any]) -> Dict[str, Any]:
+    """What the run file keeps of a case: never an external project's path (only its
+    position, project1...), an example's path relative to the repository."""
+    out = {"name": case["name"], "kind": case["kind"]}
+    if case["kind"] == "example":
+        out["project"] = Path(case["project"]).resolve().relative_to(ROOT).as_posix()
+    elif case["kind"] == "synthetic":
+        out["synthetic"] = case["synthetic"]
+    return out
 
 
 def _mb(b: Optional[float]) -> str:
@@ -67,30 +124,51 @@ class Runner:
         self.label = args.label
         self.work = self.out / f"{self.label}.work"
         self.logs = self.out / f"{self.label}.logs"
-        self.env = dict(os.environ)
-        self.env.pop("KIPI_SERIAL", None)
-        if args.mesher == "serial":            # KiPI's switch: as the frozen app (can_spawn False)
-            self.env["KIPI_SERIAL"] = "1"
-        self.env.setdefault("MPLBACKEND", "Agg")
         self.max_rss = args.max_rss_gb * 1e9 if args.max_rss_gb else None
+        self.private: List[str] = []           # an external project's names, kept out of the file
 
-    def child(self, case: Dict[str, Any], step: str, target: Optional[str], rep: int) -> Dict[str, Any]:
+    def child(self, case: Dict[str, Any], step: str, target: Optional[str], rep: int,
+              **extra) -> Dict[str, Any]:
         sid = "-".join(_slug(p) for p in (case["name"], step, target or "", f"r{rep}") if p)
         tmp = self.work / f"{sid}.tmp"
         tmp.mkdir(parents=True, exist_ok=True)
         spec = {"id": sid, "case": case, "step": step, "target": target, "tmp_dir": str(tmp),
                 "pool": {"min_triangles": self.args.pool_min_triangles,
-                         "min_spread": self.args.pool_min_spread}}
+                         "min_spread": self.args.pool_min_spread}, **extra}
+        env = child_env(dict(os.environ), tmp, self.args.mesher == "serial")
         rec = R.run_child(spec, self.work, self.logs / f"{sid}.log", timeout_s=self.args.timeout,
-                          max_rss_bytes=self.max_rss, sample_s=self.args.sample_s, env=self.env)
+                          max_rss_bytes=self.max_rss, sample_s=self.args.sample_s, env=env)
         shutil.rmtree(tmp, ignore_errors=True)
+        for key in ("error", "traceback", "killed"):  # stored: no path, no private name
+            rec[key] = R.redact(rec.get(key), self.private)
         return rec
 
     def plan(self, case: Dict[str, Any]) -> Dict[str, Any]:
+        if case["kind"] == "project":
+            p = Path(case["project"])
+            self.private = [str(p.parent), p.name, p.name.split(".")[0]]
         rec = self.child(case, "plan", None, 0)
         if rec.get("error"):
             raise SystemExit(f"{case['name']}: cannot open the case: {rec['error']}")
-        return rec["plan"]
+        plan = rec["plan"]
+        board = plan.pop("board_file", None)
+        if case["kind"] == "project" and board:
+            self.private += [board, board.split(".")[0]]
+            for key in ("board_warnings", "fields_warnings"):
+                plan[key] = [R.redact(w, self.private) for w in plan.get(key, [])]
+        return plan
+
+    def estimate(self, case, step: str, target: str, estimates, steps) -> Optional[Dict[str, Any]]:
+        """An estimate already made in this case, or made now once (a gate, listed as a step)."""
+        if (step, target) not in estimates:
+            entry = {"case": case["name"], "case_kind": case["kind"], "step": step, "target": target,
+                     "repeats": [], "gate": True}
+            steps.append(entry)
+            rec = self.child(case, step, target, 1)
+            entry["repeats"].append(rec)
+            _say(f"  {step} {target} (gate)\n    " + _line(rec, 1, 1))
+            estimates[(step, target)] = rec.get("estimate")
+        return estimates[(step, target)]
 
     def steps_for(self, case: Dict[str, Any], plan: Dict[str, Any]) -> List[tuple]:
         """(step, target) in run order, from the plan, --steps, --rail and --aggressor."""
@@ -147,8 +225,6 @@ class Runner:
                 return f"skipped: its estimate ({ESTIMATE_OF[step]}) did not run"
         elif step == "tree" and case["kind"] == "project":
             _say("    estimate: none exists for the power tree (every rail and ground at once)")
-        elif step == "tolerance":
-            _say("    estimate: the tolerance command prints its own (in the child's log)")
         if est is None:
             return None
         _say(f"    estimate: {est.get('text')}")
@@ -165,9 +241,22 @@ class Runner:
              + ", ".join(s + (f" {t}" if t else "") for s, t in todo))
         steps, estimates = [], {}
         for step, target in todo:
-            entry = {"case": case["name"], "step": step, "target": target, "repeats": []}
+            extra = {}
+            if step == "tolerance":            # its AC and noise solves, gated as the others
+                ac = {r: self.estimate(case, "ac_estimate", r, estimates, steps) for r in plan["ac_rails"]}
+                noise = {g: self.estimate(case, "noise_estimate", g, estimates, steps)
+                         for g in plan["aggressors"]}
+                for name, est in {**ac, **noise}.items():
+                    if est is not None:
+                        _say(f"    estimate {name}: {est.get('text')}")
+                extra["tolerance_flags"] = tolerance_flags(ac, noise, self.args.allow_memory_risk)
+            entry = {"case": case["name"], "case_kind": case["kind"], "step": step, "target": target,
+                     "repeats": [], **extra}
             steps.append(entry)
             _say(f"  {step}{' ' + target if target else ''}")
+            if extra.get("tolerance_flags"):
+                _say(f"    runs with {' '.join(extra['tolerance_flags'])}: an estimate could exceed this "
+                     "machine's memory or did not run (--allow-memory-risk runs every solve)")
             skip = self.gate(case, step, target, plan, estimates)
             if skip:
                 entry["skipped"] = skip
@@ -175,15 +264,14 @@ class Runner:
                 continue
             n = 1 if step in self.auto else self.args.repeats
             for k in range(1, n + 1):
-                rec = self.child(case, step, target, k)
+                rec = self.child(case, step, target, k, **extra)
                 entry["repeats"].append(rec)
                 _say("    " + _line(rec, k, n))
                 if rec.get("estimate") and (step, target) not in estimates:
                     estimates[(step, target)] = rec["estimate"]
                 if rec.get("error"):
                     break                        # the same error again tells nothing new
-        return {"name": case["name"], "kind": case["kind"], "project": case.get("project"),
-                "plan": plan, "steps": steps}
+        return {**stored_case(case), "plan": plan, "steps": steps}
 
 
 def _line(rec: Dict[str, Any], k: int, n: int) -> str:
@@ -232,9 +320,16 @@ def cmd_run(args) -> int:
         if bad:
             raise SystemExit(f"unknown step {', '.join(bad)}; steps: {', '.join(STEPS)}")
     cases = _cases(args)
-    meta = bench_meta.run_metadata(ROOT)
+    if os.name != "posix":
+        _say("warning: on Windows the process tree's memory is not sampled (--max-rss-gb does nothing), "
+             "a timeout kills only the measuring process, not KiPI's mesher workers, and the workers' "
+             "CPU and peak memory are not read")
+    meta = bench_meta.run_metadata(ROOT, exclude=[Path(args.out)])
     meta["mesher"] = args.mesher + (" (pool thresholds lowered)" if args.pool_min_triangles is not None
                                     or args.pool_min_spread is not None else "")
+    env = child_env(dict(os.environ), Path("<work>"), args.mesher == "serial")
+    meta["child_env"] = {k: env.get(k) for k in CHILD_ENV_KEYS}
+    meta["child_env"]["TMPDIR"] = "<each measurement's own folder under --out>"
     args.label = args.label or (_dt.datetime.now().strftime("%Y%m%d-%H%M%S")
                                 + (f"-{meta['git_commit'][:7]}" if meta.get("git_commit") else ""))
     runner = Runner(args)
@@ -280,7 +375,15 @@ def cmd_compare(args) -> int:
     diffs = bench_meta.differences(a["metadata"], b["metadata"])
     if diffs:
         lines += ["Runs differ in: " + "; ".join(f"{k}: {va} -> {vb}" for k, va, vb in diffs), ""]
-    lines.append(C.compare_table(C.compare_runs(a, b)))
+    lines.append(f"Load average at start: A {a['metadata'].get('load_average')}, "
+                 f"B {b['metadata'].get('load_average')}")
+    lines.append("")
+    rows = C.compare_runs(a, b)
+    lines.append(C.compare_table(rows))
+    details = C.diff_details(rows)
+    if details:
+        lines += ["", f"Largest scalar differences (rel: over the larger value, floored at "
+                      f"{C.UNIT_EPS:g} x the largest of the same unit):", details]
     text = "\n".join(lines)
     _say(text)
     if args.out:
@@ -343,6 +446,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
+    _utf8_output()
     args = build_parser().parse_args(argv)
     return args.func(args)
 

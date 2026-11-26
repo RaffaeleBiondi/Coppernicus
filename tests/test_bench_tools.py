@@ -9,6 +9,7 @@ import math
 import re
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -268,28 +269,196 @@ def test_the_serial_mesher_reaches_the_measuring_process(tmp_path):
     rep = run["cases"][0]["steps"][0]["repeats"][0]
     assert rep["mesher"]["kipi_serial"] == "1"
     assert rep["mesher"]["workers_for_8_tasks"] == 0             # KiPI meshes every layer in-process
+    assert rep["temp_in_work"] is True                           # pool pickles stay under --out
+    assert run["metadata"]["child_env"]["PYTHONIOENCODING"] == "utf-8"
+    assert run["metadata"]["child_env"]["KIPI_SERIAL"] == "1"
 
 
 # ---------------------------------------------------------------------------------- the probes
 
-def test_nested_stages_are_exclusive_and_a_stage_name_can_depend_on_its_parent():
+def test_nested_stages_are_exclusive_and_a_stage_name_can_depend_on_its_parent(monkeypatch):
     probes = _bench("bench_probes")
     rec = probes.Recorder()
     clock = iter(range(100))
-    real = probes.time.perf_counter
-    probes.time.perf_counter = lambda: float(next(clock))
-    try:
-        inner = rec.wrap(lambda: None, lambda parent: "thermal_factor" if parent == "thermal_model" else None)
-        with rec.span("thermal_model"):          # t 0 .. 3
-            inner()                              # t 1 .. 2: inside thermal_model
-        inner()                                  # outside: not timed
-        with rec.span("factor"):                 # t 4 .. 5
-            pass
-    finally:
-        probes.time.perf_counter = real
+    # The module's own clock replaced, never the global time.perf_counter.
+    monkeypatch.setattr(probes, "time", types.SimpleNamespace(perf_counter=lambda: float(next(clock))))
+    inner = rec.wrap(lambda: None, lambda parent: "thermal_factor" if parent == "thermal_model" else None)
+    with rec.span("thermal_model"):              # t 0 .. 3
+        inner()                                  # t 1 .. 2: inside thermal_model
+    inner()                                      # outside: not timed
+    with rec.span("factor"):                     # t 4 .. 5
+        pass
     snap = rec.snapshot(wall_s=10.0)
     st = snap["stages"]
     assert st["thermal_model"]["seconds"] == 2.0 and st["thermal_model"]["inclusive_s"] == 3.0
     assert st["thermal_factor"]["seconds"] == 1.0 and st["thermal_factor"]["calls"] == 1
     assert st["factor"]["seconds"] == 1.0
     assert snap["unattributed_s"] == 10.0 - 4.0
+
+
+def test_a_stage_that_should_have_run_but_has_no_call_is_named():
+    probes = _bench("bench_probes")
+    seen = {"mesh": {"calls": 1}, "assemble": {"calls": 1}, "factor": {"calls": 1}, "solve": {"calls": 1},
+            "post": {"calls": 1}, "convert": {"calls": 1}, "problems": {"calls": 1}, "dc_solve": {"calls": 1}}
+    assert probes.missing_stages("dc", seen) == []
+    del seen["factor"]
+    assert probes.missing_stages("dc", seen) == ["factor"]
+    assert probes.missing_stages("plan", {}) == []
+
+
+# ------------------------------------------------------------------------------- fix round (I, M)
+
+def _fp(scalars, h="h"):
+    return {"hash": h, "scalars": scalars}
+
+
+def _rep(scalars, h="h", wall=1.0, rss=100e6, after_open=40e6, counts=None, load=None):
+    return {"wall_s": wall, "cpu_s": wall, "rss_peak_bytes": rss, "rss_after_open_bytes": after_open,
+            "fingerprint": _fp(scalars, h), "counts": {"triangles": 10.0, **(counts or {})}, "error": None,
+            "load_1m": load}
+
+
+def _st(reps, case="c", kind="example", step="dc", target="VCC", skipped=None):
+    out = {"case": case, "case_kind": kind, "step": step, "target": target, "repeats": reps}
+    if skipped:
+        out["skipped"] = skipped
+    return out
+
+
+def test_round_off_zeros_are_judged_against_their_unit_scale():
+    cmp = _bench("bench_compare")
+    a = {"drop_v": 5.97e-13, "v_ref_v": 1.8, "loss_w": 2.0}
+    b = {"drop_v": 2.1e-13, "v_ref_v": 1.8, "loss_w": 2.0}
+    diffs = cmp.scalar_diffs(a, b)
+    top = diffs[0]
+    assert top["key"] == "drop_v"
+    assert top["abs"] == pytest.approx(3.87e-13)
+    assert top["rel"] == pytest.approx(3.87e-13 / (1.8 * cmp.UNIT_EPS))     # the volts' floor, not 6e-13
+    assert top["rel"] < 1e-3
+    assert cmp.unit_of("group[GND].load[U1].v_min_v") == "v"
+    assert cmp.unit_of("max_j_a_mm2") == "a_mm2"
+    assert cmp.unit_of("triangles") == ""
+
+
+def test_compare_shows_the_top_differences_with_absolute_and_relative_values():
+    cmp = _bench("bench_compare")
+    a = _st([_rep({"x_v": 1.0, "y_v": 2.0, "z_w": 3.0}, "h1")])
+    b = _st([_rep({"x_v": 1.1, "y_v": 2.0, "z_w": 3.3}, "h2")])
+    row = cmp.compare_steps(a, b)
+    assert [d["key"] for d in row["top_diffs"]][:2] == ["x_v", "z_w"] or \
+        [d["key"] for d in row["top_diffs"]][:2] == ["z_w", "x_v"]
+    text = cmp.diff_details([row])
+    assert "x_v" in text and "abs" in text and "rel" in text
+
+
+def test_compare_diffs_every_repeat_not_only_the_first():
+    cmp = _bench("bench_compare")
+    a = _st([_rep({"x_v": 1.0}, "h1"), _rep({"x_v": 1.0}, "h1")])
+    b = _st([_rep({"x_v": 1.0}, "h2"), _rep({"x_v": 1.5}, "h3")])     # only B's 2nd repeat differs
+    verdict = cmp.compare_steps(a, b)["fingerprint"]
+    assert "x_v" in verdict and "max rel diff" in verdict
+
+
+def test_compare_says_skipped_flags_duplicates_and_adaptive_changes():
+    cmp = _bench("bench_compare")
+    skipped = _st([], skipped="skipped: memory")
+    assert cmp.compare_steps(skipped, skipped)["fingerprint"] == "skipped (both)"
+    assert cmp.compare_steps(skipped, _st([_rep({"x_v": 1.0})]))["fingerprint"].startswith("skipped in A")
+    a = _st([_rep({"x_v": 1.0}, counts={"pool_workers": 0, "field_threads": 9})])
+    b = _st([_rep({"x_v": 1.0}, counts={"pool_workers": 4, "field_threads": 9})])
+    assert "pool_workers 0 -> 4" in cmp.compare_steps(a, b)["notes"]
+    run_a = {"cases": [{"steps": [a, a]}]}                         # the same step twice
+    run_b = {"cases": [{"steps": [b]}]}
+    rows = cmp.compare_runs(run_a, run_b)
+    assert len(rows) == 1 and "duplicate in A" in rows[0]["fingerprint"]
+    # Matched on case kind too: an example and an external project of the same name differ.
+    other = _st([_rep({"x_v": 1.0})], kind="project")
+    assert len(cmp.compare_runs({"cases": [{"steps": [a]}]}, {"cases": [{"steps": [other]}]})) == 2
+
+
+def test_compare_gives_the_step_rss_above_the_open_and_the_load():
+    cmp = _bench("bench_compare")
+    a = _st([_rep({"x_v": 1.0}, rss=100e6, after_open=40e6, load=2.0)])
+    b = _st([_rep({"x_v": 1.0}, rss=70e6, after_open=40e6, load=6.0)])
+    row = cmp.compare_steps(a, b)
+    assert row["step_rss_a"] == 60e6 and row["step_rss_b"] == 30e6
+    assert row["step_rss_ratio"] == pytest.approx(0.5)
+    assert (row["load_a"], row["load_b"]) == (2.0, 6.0)
+    assert "step RSS" in cmp.compare_table([row])
+
+
+def test_tolerance_skips_the_solves_whose_estimate_is_missing_or_too_large():
+    flags = _bench("bench").tolerance_flags
+    fits = {"exceeds_memory": False}
+    big = {"exceeds_memory": True}
+    assert flags({"VCC": fits}, {"U1": fits}, allow=False) == []
+    assert flags({"VCC": big}, {"U1": fits}, allow=False) == ["--skip-ac"]
+    assert flags({"VCC": fits}, {"U1": None}, allow=False) == ["--skip-noise"]   # cost unknown
+    assert flags({"VCC": big}, {"U1": big}, allow=True) == []
+    assert flags({}, {}, allow=False) == []
+
+
+def test_no_absolute_path_of_an_external_project_is_stored():
+    bench = _bench("bench")
+    case = {"name": "project1", "kind": "project", "project": "/home/someone/secret/board.coppernicus.yml"}
+    stored = bench.stored_case(case)
+    assert "project" not in stored and stored["name"] == "project1"
+    example = {"name": "demo", "kind": "example", "project": str(ROOT / "examples/demo/demo.coppernicus.yml")}
+    assert bench.stored_case(example)["project"] == "examples/demo/demo.coppernicus.yml"
+    redact = _bench("bench_runner").redact
+    text = ('FileNotFoundError: /home/someone/secret/board.kicad_pcb\n  File "C:\\Users\\x\\a.py", '
+            'line 3; drop 1/3 of 5 A/mm2')
+    out = redact(text, ["board"])
+    assert "/home" not in out and "secret" not in out and "board" not in out and "Users" not in out
+    assert "1/3" in out and "A/mm2" in out                         # not paths
+
+
+def test_run_metadata_reads_git_from_the_coppernicus_it_imports():
+    meta = _bench("bench_meta").run_metadata(ROOT)
+    import kipi
+
+    import coppernicus
+    assert meta["coppernicus_file"] == coppernicus.__file__ and meta["kipi_file"] == kipi.__file__
+    assert meta["kipi_commit"] is None or re.fullmatch(r"[0-9a-f]{40}", meta["kipi_commit"])
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=Path(coppernicus.__file__).parent,
+                         capture_output=True, text=True)
+    if top.returncode == 0:
+        assert Path(meta["git_repo"]).resolve() == Path(top.stdout.strip()).resolve()
+    assert "git_untracked" in meta
+
+
+def test_one_failed_ps_does_not_end_the_tree_sampling(monkeypatch):
+    runner = _bench("bench_runner")
+    replies = iter([None, "  42  1  1000\n", None, "  42  1  3000\n"])
+    monkeypatch.setattr(runner, "_ps", lambda: next(replies, "  42  1  2000\n"))
+    monkeypatch.setattr(runner, "_can_sample", lambda: True)
+    s = runner._Sampler(42, 0.001, None)
+    s.start()
+    deadline = __import__("time").monotonic() + 5
+    while s.samples < 3 and __import__("time").monotonic() < deadline:
+        __import__("time").sleep(0.005)
+    s.stop()
+    s.join(2)
+    assert s.failures == 2
+    assert s.peak_bytes == 3000 * 1024
+
+
+def test_slugs_never_collide_and_children_get_their_own_temp_and_utf8():
+    bench = _bench("bench")
+    names = ["+3V3", "-3V3", "3V3", "_3V3", "3 V3", "3/V3", "3_2bV3"]
+    assert len({bench._slug(n) for n in names}) == len(names)
+    env = bench.child_env({"PATH": "x", "TMPDIR": "/elsewhere"}, Path("/w/t"), serial=True)
+    assert env["TMPDIR"] == env["TEMP"] == env["TMP"] == str(Path("/w/t"))
+    assert env["PYTHONIOENCODING"] == "utf-8" and env["KIPI_SERIAL"] == "1"
+    assert "KIPI_SERIAL" not in bench.child_env({"KIPI_SERIAL": "1"}, Path("/w/t"), serial=False)
+
+
+def test_bench_prints_survive_an_ascii_pipe(tmp_path):
+    run = {"schema": "coppernicus-bench/1", "label": "µ", "metadata": {}, "cases": [
+        {"name": "µ-case", "kind": "example", "steps": [_st([_rep({"x_v": 1.0})], case="µ-case")]}]}
+    path = tmp_path / "u.json"
+    path.write_text(json.dumps(run), encoding="utf-8")
+    env = {**__import__("os").environ, "PYTHONIOENCODING": "ascii"}
+    r = subprocess.run([sys.executable, str(BENCH / "bench.py"), "report", str(path)], capture_output=True,
+                       env=env, timeout=60, cwd=ROOT)
+    assert r.returncode == 0, r.stderr.decode(errors="replace")

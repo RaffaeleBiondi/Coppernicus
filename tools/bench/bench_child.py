@@ -16,6 +16,7 @@ import json
 import multiprocessing
 import os
 import sys
+import tempfile
 import time
 import traceback
 from dataclasses import dataclass
@@ -105,7 +106,8 @@ def step_mesh(case: Case, spec, rec):
     try:
         solve_rail(case.board, _rail(case, spec["target"]), case.project.settings, project=case.project)
     except P.StopAfterMesh as stop:
-        return F.mesh(stop.mesh), {}
+        mesh = stop.mesh
+        return (lambda: F.mesh(mesh)), {}
     finally:
         rec.stop_after_mesh = False
     raise RuntimeError("the rail solved without meshing through kipi's mesh_nets")
@@ -121,7 +123,7 @@ def step_dc(case: Case, spec, rec):
     rail = _rail(case, spec["target"])
     res = solve_rail(case.board, rail, case.project.settings, project=case.project)
     find_problems(res, rail.limits, top=5)
-    return F.rail(res), {}
+    return (lambda: F.rail(res)), {}
 
 
 def _tree(case: Case, spec, rec, thermal: bool):
@@ -136,7 +138,7 @@ def _tree(case: Case, spec, rec, thermal: bool):
         rating_origins(tree, case.merged)
         tree_summary(tree, top=5)
     extra = {"tree_seconds": tree.stats.get("seconds")}
-    return F.tree(tree), extra
+    return (lambda: F.tree(tree)), extra
 
 
 def step_tree(case: Case, spec, rec):
@@ -152,7 +154,7 @@ def step_ac_estimate(case: Case, spec, rec):
 
     from coppernicus.service.session import ac_estimate
     est = ac_estimate(case.board, case.project, spec["target"])
-    return F.estimate(est), {"estimate": est}
+    return (lambda: F.estimate(est)), {"estimate": est}
 
 
 def step_ac(case: Case, spec, rec):
@@ -162,7 +164,7 @@ def step_ac(case: Case, spec, rec):
     from coppernicus.engine.ac import solve_ac_rail
     res = solve_ac_rail(case.board, case.project, spec["target"])
     case.merged.annotate(res)
-    return F.impedance(res), {"method_note": res.stats.get("method")}
+    return (lambda: F.impedance(res)), {"method_note": res.stats.get("method")}
 
 
 def step_noise_estimate(case: Case, spec, rec):
@@ -170,7 +172,7 @@ def step_noise_estimate(case: Case, spec, rec):
 
     from coppernicus.service.session import noise_estimate
     est = noise_estimate(case.board, case.project, spec["target"], fields_rails=case.merged.from_fields)
-    return F.estimate(est), {"estimate": est}
+    return (lambda: F.estimate(est)), {"estimate": est}
 
 
 def step_noise(case: Case, spec, rec):
@@ -180,13 +182,14 @@ def step_noise(case: Case, spec, rec):
     from coppernicus.engine.noise import solve_aggressor
     res = solve_aggressor(case.board, case.project, spec["target"], fields_rails=case.merged.from_fields)
     case.merged.annotate(res)
-    return F.noise(res), {}
+    return (lambda: F.noise(res)), {}
 
 
 def step_tolerance(case: Case, spec, rec):
     """``coppernicus tolerance PROJECT --json --out TMP`` itself (it opens the project again,
     as a user's run does): the power tree, then the AC and noise solves it needs, each
-    estimate first. Its result is caught from ``coppernicus.tolerance.compose``."""
+    estimate first, less the solves the runner's memory gate left out (``tolerance_flags``:
+    --skip-ac, --skip-noise). Its result is caught from ``coppernicus.tolerance.compose``."""
     import contextlib
     import io
 
@@ -197,6 +200,7 @@ def step_tolerance(case: Case, spec, rec):
     if case.path is None:
         raise ValueError("the tolerance step runs the CLI on a project file")
     caught = {}
+    flags = list(spec.get("tolerance_flags") or [])      # the runner's memory gate (--skip-ac...)
     original = T.compose
 
     def compose(*args, **kwargs):
@@ -206,13 +210,14 @@ def step_tolerance(case: Case, spec, rec):
     stdout = io.StringIO()
     try:
         with contextlib.redirect_stdout(stdout):
-            code = cli.main(["tolerance", str(case.path), "--json", "--out", spec["tmp_dir"]])
+            code = cli.main(["tolerance", str(case.path), "--json", "--out", spec["tmp_dir"], *flags])
     finally:
         T.compose = original
     if code == 2 or "result" not in caught:
         raise RuntimeError(f"coppernicus tolerance exited with {code}: {stdout.getvalue()[-300:]}")
-    return F.tolerance(caught["result"]), {"exit_code": code,
-                                           "estimates": caught["result"].estimates}
+    result = caught["result"]
+    return (lambda: F.tolerance(result)), {"exit_code": code, "tolerance_flags": flags,
+                                           "estimates": result.estimates}
 
 
 def step_plan(case: Case, spec, rec):
@@ -249,8 +254,9 @@ def step_plan(case: Case, spec, rec):
             "thermal_estimate": thermal_estimate(board, p.thermal) if p.rails else None,
             "ac_rails": ac_rails, "ac_note": ac_note, "aggressors": [a.name for a in p.aggressors],
             "tolerance": case.path is not None and any(ld.has_tolerance() for r in p.rails for ld in r.loads),
-            "board_warnings": list(board.warnings), "fields_warnings": list(case.merged.warnings)}
-    return F.board(board), {"plan": plan}
+            "board_warnings": list(board.warnings), "fields_warnings": list(case.merged.warnings),
+            "board_file": board.path.name if board.path is not None else None}
+    return (lambda: F.board(board)), {"plan": plan}
 
 
 RUNNERS: Dict[str, Callable] = {"mesh": step_mesh, "dc": step_dc, "tree": step_tree, "thermal": step_thermal,
@@ -300,20 +306,27 @@ def main(spec_path: str, out_path: str) -> int:
         rec = P.Recorder()
         record["patched"] = P.install(rec)
         record["mesher"] = _mesher(spec.get("pool") or {})
+        # KiPI's pool writes the board to the temp folder for its workers: the run's own.
+        record["temp_in_work"] = (Path(tempfile.gettempdir()).resolve() == Path(spec["tmp_dir"]).resolve()
+                                  if spec.get("tmp_dir") else None)
         record["import_s"] = time.perf_counter() - t_start
         record["rss_after_import_bytes"] = peak_rss_bytes()
         step = spec["step"]
         if step == "open":
             case, wall, cpu, child_cpu = _measure(open_case, rec, spec, rec)
-            fingerprint, extra = F.board(case.board), {}
+            thunk, extra = (lambda: F.board(case.board)), {}
         else:
             case, record["open_s"], _, _ = _measure(open_case, rec, spec, rec)
             record["rss_after_open_bytes"] = peak_rss_bytes()
             rec.reset()
-            (fingerprint, extra), wall, cpu, child_cpu = _measure(RUNNERS[step], rec, case, spec, rec)
-        record.update(wall_s=wall, cpu_s=cpu, children_cpu_s=child_cpu,
-                      cpu_total_s=cpu + (child_cpu or 0.0), fingerprint=fingerprint, **extra)
-        record.update(rec.snapshot(wall))
+            (thunk, extra), wall, cpu, child_cpu = _measure(RUNNERS[step], rec, case, spec, rec)
+        snap = rec.snapshot(wall)          # before the fingerprint, which is not timed
+        t_fp = time.perf_counter()
+        fingerprint = thunk()
+        record.update(wall_s=wall, cpu_s=cpu, children_cpu_s=child_cpu, cpu_total_s=cpu + (child_cpu or 0.0),
+                      fingerprint=fingerprint, fingerprint_s=time.perf_counter() - t_fp, **extra)
+        record.update(snap)
+        record["missing_stages"] = P.missing_stages(step, snap["stages"], spec["case"]["kind"])
     except BaseException as e:               # noqa: BLE001 - recorded: the runner reads it
         record["error"] = f"{type(e).__name__}: {e}".strip()
         record["traceback"] = traceback.format_exc()[-4000:]

@@ -12,16 +12,35 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 HERE = Path(__file__).resolve().parent
 CHILD = HERE / "bench_child.py"
+REPO = HERE.parents[1]
+
+# An absolute path: POSIX (a "/" not after a word character, ".", ">" or "~", so "1/3",
+# "A/mm2" and "<repo>/src" stay) or Windows ("C:\\..."), up to a space, quote or bracket.
+_ABS_PATH = re.compile(r"(?<![\w.>~])/[^\s'\"`,;()\[\]{}<>]+|\b[A-Za-z]:\\[^\s'\"`,;()\[\]{}<>]+")
+
+
+def redact(text: Optional[str], private: Sequence[str] = ()) -> Optional[str]:
+    """``text`` with this repository's folder written ``<repo>``, every other absolute path
+    ``<path>``, and each of ``private`` (an external project's file and board names)
+    ``<private>``: error messages and tracebacks go into run files that may be shared."""
+    if not text:
+        return text
+    text = text.replace(str(REPO), "<repo>")
+    text = _ABS_PATH.sub("<path>", text)
+    for name in sorted({p for p in private if p}, key=len, reverse=True):
+        text = text.replace(name, "<private>")
+    return text
 
 
 def maxrss_bytes(value: float, platform: str = sys.platform) -> int:
@@ -57,9 +76,12 @@ def tree_rss_kib(ps_text: str, root: int) -> Optional[int]:
     return total
 
 
+def _can_sample() -> bool:
+    """Process-tree memory is read with ``ps``: macOS and Linux only."""
+    return os.name == "posix"
+
+
 def _ps() -> Optional[str]:
-    if os.name != "posix":
-        return None
     try:
         return subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss="], capture_output=True, text=True,
                               timeout=10).stdout
@@ -73,14 +95,19 @@ class _Sampler(threading.Thread):
         self.pid, self.interval, self.cap = pid, interval, cap_bytes
         self.peak_bytes: Optional[int] = None
         self.samples = 0
+        self.failures = 0                  # ps calls that gave nothing (retried at the next tick)
         self.over_cap = False
         self._halt = threading.Event()
 
     def run(self):
+        if not _can_sample():
+            return
         while not self._halt.is_set():
             text = _ps()
             if text is None:
-                return
+                self.failures += 1
+                self._halt.wait(self.interval)
+                continue
             kib = tree_rss_kib(text, self.pid)
             if kib is not None:
                 self.samples += 1
@@ -116,6 +143,10 @@ def run_child(spec: Dict[str, Any], work: Path, log_path: Path, timeout_s: Optio
     spec_path.write_text(json.dumps(spec), encoding="utf-8")
     out_path.unlink(missing_ok=True)
     cmd = [sys.executable, str(CHILD), str(spec_path), str(out_path)]
+    try:
+        load = os.getloadavg()[0]          # the machine's load as this measurement starts
+    except (AttributeError, OSError):      # Windows
+        load = None
     t0 = time.perf_counter()
     with open(log_path, "w", encoding="utf-8", errors="replace") as log:
         proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, cwd=str(work),
@@ -147,9 +178,10 @@ def run_child(spec: Dict[str, Any], work: Path, log_path: Path, timeout_s: Optio
     # The tree holds the child: its own exact peak is a floor for the sampled sum, which can
     # miss a short peak between two samples.
     floor = [b for b in (sampler.peak_bytes, record.get("rss_peak_bytes")) if b]
-    record.update({"returncode": proc.returncode, "killed": killed, "process_s": elapsed,
+    record.update({"returncode": proc.returncode, "killed": killed, "process_s": elapsed, "load_1m": load,
                    "rss_tree_peak_bytes": max(floor) if floor else None,
-                   "rss_tree_sampled_bytes": sampler.peak_bytes, "rss_tree_samples": sampler.samples})
+                   "rss_tree_sampled_bytes": sampler.peak_bytes, "rss_tree_samples": sampler.samples,
+                   "rss_tree_sample_failures": sampler.failures})
     spec_path.unlink(missing_ok=True)
     out_path.unlink(missing_ok=True)
     return record

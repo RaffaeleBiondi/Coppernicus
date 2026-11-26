@@ -40,7 +40,7 @@ class Print:
         h = hashlib.sha256()
         for name, a in self._arrays:
             h.update(f"{name}|{a.dtype.str}|{a.shape}|".encode())
-            h.update(a.tobytes())
+            h.update(memoryview(a))       # C-contiguous: hashed in place, no copy
         keys = sorted(self._scalars)
         h.update("|".join(keys).encode())
         h.update(np.array([self._scalars[k] for k in keys], dtype=np.float64).tobytes())

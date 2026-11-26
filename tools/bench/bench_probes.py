@@ -264,6 +264,25 @@ FUNCTIONS: List[Tuple[str, str, Any, Optional[Callable]]] = [
     ("coppernicus.engine.ac", "_convert", "convert", None),
     ("coppernicus.problems", "find_problems", "problems", None),
 ]
+#: Stages each step always runs (a missing call means a patch that no longer reaches its
+#: target, e.g. after a KiPI update renamed a private function).
+_DC = ("mesh", "assemble", "factor", "solve", "post", "convert")
+EXPECTED = {"mesh": ("mesh",), "dc": _DC + ("problems", "dc_solve"), "tree": _DC + ("tree_solve",),
+            "thermal": _DC + ("tree_solve", "thermal_model", "thermal_factor", "thermal_solve"),
+            "ac_estimate": ("mesh", "ac_size"),
+            "ac": ("mesh", "ac_model", "ac_factor", "ac_port_solve", "ac_field_solves", "convert",
+                   "ac_solve"),
+            "noise_estimate": ("noise_size",), "noise": ("noise_solve",), "tolerance": ("tree_solve",)}
+
+
+def missing_stages(step: str, stages: Dict[str, Any], kind: str = "example") -> List[str]:
+    """The stages ``step`` always runs that recorded no call."""
+    expected = EXPECTED.get(step, ())
+    if step == "open" and kind != "synthetic":
+        expected = ("project_load", "board_open")
+    return [s for s in expected if not (stages.get(s) or {}).get("calls")]
+
+
 #: Stages that are entry points or wrap others: reports also give their inclusive time.
 PHASES = ("board_open", "dc_solve", "tree_solve", "ac_solve", "ac_size", "noise_solve", "noise_size")
 # (module, class, method, stage, hook): methods, wrapped on their class.

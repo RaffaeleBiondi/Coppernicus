@@ -7,20 +7,22 @@ known): ``compare`` prints the keys that differ.
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import os
 import platform
 import subprocess
 import sys
 from importlib import metadata as _md
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 #: Environment variables that set how many threads BLAS, OpenMP and the solvers use.
 THREAD_VARS = ("OMP_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
                "NUMEXPR_NUM_THREADS", "KIPI_SERIAL")
 #: Keys whose difference between two runs is worth saying before their times are compared.
-COMPARED_KEYS = ("git_commit", "git_dirty", "kipi_version", "python", "numpy", "scipy", "blas",
-                 "kipi_direct_backend", "thread_env", "cpu_count", "ram_bytes", "machine", "mesher")
+COMPARED_KEYS = ("git_commit", "git_dirty", "kipi_version", "kipi_commit", "python", "numpy", "scipy",
+                 "blas", "kipi_direct_backend", "thread_env", "child_env", "cpu_count", "ram_bytes",
+                 "machine", "mesher")
 
 
 def _git(repo: Path, *args: str) -> Optional[str]:
@@ -36,6 +38,39 @@ def _version(dist: str) -> Optional[str]:
         return _md.version(dist)
     except _md.PackageNotFoundError:
         return None
+
+
+def _kipi_commit() -> Optional[str]:
+    """The KiPI commit pip/uv installed (its dist-info ``direct_url.json``), if from git."""
+    try:
+        info = json.loads(_md.distribution("kipi").read_text("direct_url.json") or "{}")
+    except (_md.PackageNotFoundError, ValueError, OSError):
+        return None
+    return (info.get("vcs_info") or {}).get("commit_id")
+
+
+def _code_state(package_dir: Path, exclude: Sequence[Path] = ()) -> Dict[str, Any]:
+    """The git state of the checkout holding ``package_dir`` (the coppernicus the children
+    import, which may not be the checkout holding tools/bench): its root, commit, branch,
+    whether tracked files changed, and the untracked files outside ``exclude``."""
+    root = _git(package_dir, "rev-parse", "--show-toplevel")
+    if root is None:
+        return {"git_repo": None, "git_commit": None, "git_branch": None, "git_dirty": None,
+                "git_untracked": None}
+    repo = Path(root)
+    tracked = _git(repo, "status", "--porcelain", "--untracked-files=no")
+    listed = _git(repo, "status", "--porcelain", "--untracked-files=all") or ""
+    skip = [Path(e).resolve() for e in exclude]
+    untracked = 0
+    for line in listed.splitlines():
+        if not line.startswith("?? "):
+            continue
+        path = (repo / line[3:].strip().strip('"')).resolve()
+        if not any(path == d or d in path.parents for d in skip):
+            untracked += 1
+    return {"git_repo": str(repo), "git_commit": _git(repo, "rev-parse", "HEAD"),
+            "git_branch": _git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
+            "git_dirty": None if tracked is None else bool(tracked), "git_untracked": untracked}
 
 
 def _blas(module) -> Optional[Dict[str, Any]]:
@@ -60,12 +95,17 @@ def _cpu_name() -> Optional[str]:
     return platform.processor() or None
 
 
-def run_metadata(repo: Path) -> Dict[str, Any]:
-    """The run's code (git commit, dirty flag), libraries (KiPI, Python, numpy, scipy, BLAS),
-    KiPI's direct solver backend, thread variables, CPU count, RAM, load and date."""
+def run_metadata(repo: Path, exclude: Sequence[Path] = ()) -> Dict[str, Any]:
+    """The run's code: git state of the coppernicus package imported (``git_dirty``: tracked
+    files changed; untracked files outside ``exclude``, e.g. the run's --out, counted apart),
+    KiPI's version and commit, both packages' files, the harness's own commit (``repo``);
+    libraries (Python, numpy, scipy, BLAS), KiPI's direct solver backend, thread variables,
+    CPU count, RAM, load and date."""
+    import kipi
     import numpy
     import scipy
 
+    import coppernicus
     from coppernicus import __version__
     from coppernicus.engine.ac import free_memory_bytes, total_memory_bytes
 
@@ -74,18 +114,19 @@ def run_metadata(repo: Path) -> Dict[str, Any]:
         backend = direct.backend()
     except Exception:                               # noqa: BLE001 - recorded as unknown
         backend = None
-    status = _git(repo, "status", "--porcelain")
     now = _dt.datetime.now(_dt.timezone.utc)
     try:
         load = list(os.getloadavg())
     except (AttributeError, OSError):               # Windows
         load = None
     return {
-        "git_commit": _git(repo, "rev-parse", "HEAD"),
-        "git_dirty": None if status is None else bool(status),
-        "git_branch": _git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
+        **_code_state(Path(coppernicus.__file__).resolve().parent, exclude),
+        "bench_commit": _git(repo, "rev-parse", "HEAD"),
         "coppernicus_version": __version__,
+        "coppernicus_file": coppernicus.__file__,
         "kipi_version": _version("kipi"),
+        "kipi_commit": _kipi_commit(),
+        "kipi_file": kipi.__file__,
         "python": platform.python_version(),
         "python_implementation": platform.python_implementation(),
         "numpy": numpy.__version__,

@@ -12,9 +12,10 @@ its first load and one modelled capacitor beside it, for the AC steps.
 
 Every net has copper on two layers, so a large one can reach KiPI's process pool (its layers
 meshed side by side). With KiPI's 0.5 mm largest edge a plane meshes into about
-2 A / (√3/4 · 0.5²) ≈ 18.5 triangles per mm², plus the finer rings around the vias: the
-power tree (all rails and GND) grows from about 2·10^4 triangles at 25 mm to about 10^6 at
-170 mm; one rail is about a quarter of that.
+2 A / (√3/4 · 0.5²) ≈ 18.5 triangles per mm², plus the finer rings around the vias. Measured
+(two rails): the power tree (all rails and GND) has 96k triangles at 25 mm, 240k at 50, 766k at
+100, 1.2M at 130, 2.0M at 170 and 2.7M at 200 mm; one rail about a quarter of that (22.6k at
+25 mm, 525k at 170).
 """
 
 from __future__ import annotations
