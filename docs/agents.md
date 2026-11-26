@@ -545,6 +545,27 @@ ground net is solved, each regulator's and load's `ground` pins (see
   `limit_pct` (the `max_drop_pct` that judged it) and `limit_from` (the net that limit came
   from: its own, the rail it is listed in, or the group's driving net); a `return` has
   `limit_mv` (`max_ground_rise_mv`) and `limit_from`; both `null` when no limit is set;
+- the **split** (shown, never judged; see [Where each drop comes from](power-tree.md#where-each-drop-comes-from)):
+  - `loads[].segments` and `vrms[].segments` (a regulator's input drop; `[]` for a source or
+    a drop not solved): `{what, name, from, to, mv}` in order, `what` one of `regulation`
+    (nominal − (the driver's output − its ground pins); `name` is the driver), `copper` (a net
+    of the rail, `name` the net), `link` (`name` the link or `"net tie NT1"`), `ground copper`,
+    `ground link`, or `ground` (one step, when the load's and the driver's ground pins are not
+    on one ground group); `from` / `to` are pads (`"U1.2"`, `"FB1.1"`) or `"3.3 V set"`,
+    `"U1.2 − U1.3"`. `mv` is positive toward 0 V, as the drop. `segments_sum_mv` (`null`
+    without segments) equals `drop_mv` (`input_drop_mv`) to 1e-9 mV;
+  - `groups[].net_split`, one row per net of `groups[].nets` (that key stays the list of
+    names): `net`, `v_min_v`, `v_max_v`, `at_min` / `at_max` (`{x_mm, y_mm, layer}`), `entry`
+    (`{kind, name, pads, v_v}`: `kind` `"source"` (its output pins), `"link"` (the side the
+    net is reached through) or `"reference"` (on a ground, the supply's pins holding it at
+    0 V); `null` when not reached), `drop_mv` (a rail: V(entry) − its lowest; toward 0 V on
+    a negative rail) or `rise_mv` (a ground: its rise above V(entry), the largest in
+    magnitude, signed), `copper_loss_w`, `via_loss_w`. The nets' losses plus the group's
+    links' `power_w` equal `power_loss_w`;
+  - `groups[].split_note`, only when links in parallel or in a loop give a net more than one
+    path: the split follows the highest-current path, and the note names the links;
+  - `links[]` also have `v_a_v`, `v_b_v` (each side's voltage) and `across_mv` (side A − side
+    B: I·R; 0 across a net tie, whose `current_a` is `null`);
 - `assumptions` and `warnings`.
 
 #### Regulator ratings in the power tree

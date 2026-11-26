@@ -25,7 +25,9 @@ U2, which makes 1.8 V for U3 with remote sense.
   the regulators, the loads and the links; **Group** shows one rail group or the ground net on
   the board.
 - **Command line:** `coppernicus solve PROJECT --tree` prints the tables;
-  `--html` also writes one offline page with every group (see [HTML report](html-report.md#the-power-tree-report)).
+  `--html` also writes one offline page with every group (see [HTML report](html-report.md#the-power-tree-report));
+  `--split` also prints each drop part by part and each net's range (see
+  [Where each drop comes from](#where-each-drop-comes-from)).
 - **Agents:** the MCP tool `solve_tree(project_path)` returns the same as JSON (see
   [Agents](agents.md#power-tree)).
 - **CI:** the GitHub Action's `tree` input adds the tree's tables to the job summary (see
@@ -122,6 +124,71 @@ Verdict: not_judged. No limits set: nothing is judged, problems are ranked only.
   source: here +3V3 and +3V3_F, joined by FB1, are one group. A rail group gives its largest
   copper drop from its source's output; a ground group its largest rise.
 - **Links:** the current and the loss of each link.
+
+## Where each drop comes from
+
+A load's drop is one number; `--split` shows what it is made of. Every load and every
+regulator input is followed from its rail's source to its worst pins, and its drop is split
+into parts, each the difference of two voltages the solve gives:
+
+- **regulation:** nominal − (the source's output − its own ground pins): 0 for a source that
+  holds its own pins; negative for a regulator with remote sense, whose output rises to make
+  up for the copper beyond it;
+- **copper** of each net on the way, from where the current enters it (the source's output
+  pins, or the side of the link it comes through) to where it leaves it (the next link), the
+  last one up to the worst supply pin;
+- **link:** the voltage across each link on the way (I·R; 0 across a net tie);
+- **ground copper** and **ground link:** from the worst ground pin back to the source's ground
+  pins, along the ground's nets and links (one **ground** step when they are not on one ground
+  group).
+
+The parts add up to the drop exactly (to the last digit: each part ends on the voltage the next
+one starts from), and the chain starts again at each regulator: each part is measured across
+its own pins against its own source. On the power chain:
+
+```text
+Split (each drop part by part, from its rail's source to its worst pins, toward 0 V; shown, never judged)
+  U4 on +3V3: 16.638 mV
+    regulation     U1             3.3 V set → U1.2 − U1.3      0.000 mV
+    copper         +3V3           U1.2 → U4.1                  8.011 mV
+    ground copper  GND            U4.2 → U1.3                  8.627 mV
+  U3 on +1V8: 0.000 mV
+    regulation     U2             1.8 V set → U2.2 − U2.3    -14.531 mV
+    copper         +1V8           U2.2 → U3.1                  6.896 mV
+    ground copper  GND            U3.2 → U2.3                  7.635 mV
+  U2 (input) on +3V3_F: 147.061 mV
+    regulation     U1             3.3 V set → U1.2 − U1.3      0.000 mV
+    copper         +3V3           U1.2 → FB1.1                14.914 mV
+    link           FB1            FB1.1 → FB1.2              100.100 mV
+    copper         +3V3_F         FB1.2 → U2.1                 6.903 mV
+    ground copper  GND            U2.3 → U1.3                 25.145 mV
+Nets (each from where it is fed; shown, never judged)
+  net          group           V min      V max  fed from                drop/rise     copper      vias
+  +3V3         +3V3         3.290777   3.305691  U1 (U1.2)            drop 14.914 mV    33.9 mW      0 mW
+  +3V3_F       +3V3         3.183774   3.190677  FB1 (FB1.2)          drop 6.903 mV    13.8 mW      0 mW
+  GND          GND          0.000000   0.038470  J1 (J1.2)            rise 38.470 mV    74.3 mW      0 mW
+  link FB1 (+3V3 → +3V3_F): 100.100 mV across
+```
+
+(lines cut to the ones discussed). Of the 147 mV U2's input loses, 100.1 mV is across FB1
+(0.05 Ω carrying 2.002 A), 21.8 mV is the copper of +3V3 and +3V3_F, and 25.1 mV is the ground
+between U2 and U1. U3 sits at exactly 1.8 V: U2's remote sense gives back (−14.531 mV) what
+its own copper and ground take.
+
+The **nets** table gives each net of a group its lowest and highest voltage (and where, in the
+JSON and the HTML report), where it is fed from (its source's output pins, or the side of the
+link it is reached through; on a ground, the pins of the supply holding it at 0 V, or the link
+toward them), its drop from there to its lowest point (a ground: its rise above that point),
+and its own copper and via loss. The nets' losses plus the links' add up to the group's loss.
+
+When links run **in parallel** or **in a loop**, a net can be reached more than one way; the
+split then follows the highest-current path (the path whose weakest link carries the most
+current) and the group says so (`split_note`). Every path adds up to the same total.
+
+None of these parts is judged: the verdicts stay on the drop as before, measured from the
+driving source's set voltage. `--split` only prints; the JSON (`--json`, `solve_tree`) always
+holds the split ([agents.md](agents.md#power-tree)), and the HTML report shows it per group
+([html-report.md](html-report.md#the-power-tree-report)).
 
 ## The ground return
 
