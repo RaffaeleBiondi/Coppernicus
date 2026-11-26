@@ -1576,3 +1576,29 @@ Not refitted: the memory estimates (`thermal_ram_estimate`; the AC `ram_estimate
 `noise_ram_estimate`) were measured in KiPI's order; with their part active (on, with SuperLU as
 KiPI's backend) they overstate, and their text says so: by default the board temperature's
 (`thermal` is on), the AC and noise ones only with `ac`. The DC solves have no estimate.
+
+---
+
+## KiCad reader: the "remove unused layers" trims (`kipi/sources/kicad_pcb/reader.py`, on by default)
+
+KiPI's reader drops the pad of a via (`trim_unused_via_pads`, :334) or the copper of a
+through-hole pad (`trim_unused_layers`, :614) set to remove unused layers, on each layer where
+nothing of its net meets it. To decide, each function first converts every pad shape and zone
+fill of every net to shapely and repairs every invalid one (`make_valid` of KiCad's fractured
+fills). `src/coppernicus/engine/fast_trim.py` replaces the two functions with a stand-in that runs
+the same tests on the same geometries and converts a geometry (with KiPI's own `poly_to_shapely`)
+only when a trimmed item of its net and layer reaches it, and not at all when its coordinates'
+box (padded 1 nm) is apart from what it is tested against. Every decision is the same, so the
+board is the same to the last bit.
+
+- **Default: on.** It changes a default, bit-identically: `COPPERNICUS_FAST_TRIM=0` restores
+  KiPI's own functions (read when `coppernicus.engine` is imported).
+- Proof: the snapshot's pickled bytes and a deep comparison of every field (floats to the bit) are
+  identical with and without it, on the repository's example boards and on KiPI's reader test
+  boards (`tests/boards/kipi_features*.kicad_pcb`, copied from KiPI 1.0.1's tests). Where many vias
+  are set to remove unused layers over large zone fills, the conversion it skips is most of KiPI's
+  trim time. The drift guard,
+  `tests/test_fast_trim.py`, also adds vias and pads set to remove unused layers all over KiPI's
+  board's zone fills, with three seeds.
+- The seam: installed only on KiPI 1.0.1 with the two functions of the expected signatures
+  (otherwise a warning, once, and KiPI's own); `fast_trim.uninstall()` puts KiPI's back.
