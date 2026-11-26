@@ -1482,9 +1482,9 @@ Also:
 ## Solver order options: SuperLU's symmetric mode (`kipi/core/solver/direct.py`, opt-in)
 
 KiPI factorizes with SciPy's SuperLU in the COLAMD column order (`direct._superlu`,
-`direct._superlu_complex`), which ignores that its matrices are symmetric. SuperLU's symmetric mode (minimum degree on the pattern
-of A + Aᵀ, `SymmetricMode`, the diagonal as pivot) fills about half as much on them, so it takes
-less time and memory. `src/coppernicus/engine/superlu_order.py` offers it per part, each **off
+`direct._superlu_complex`), which ignores that its matrices are symmetric. SuperLU's symmetric
+mode (minimum degree on the pattern of A + Aᵀ, `SymmetricMode`, the diagonal as pivot) fills
+about half as much on them, so it takes less time and memory. `src/coppernicus/engine/superlu_order.py` offers it per part, each **off
 by default**.
 
 | Part | What runs in SuperLU's symmetric mode | Pivoting |
@@ -1504,8 +1504,9 @@ electro-thermal loop against KiPI's `solve_electrothermal` runs with it off). On
 order rounds differently: results move by round-off only. Proof criteria (checks of "round-off
 only", not limits of the product):
 
-- `thermal` and `dc`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative, with a
-  floor per unit for values near zero (the unit's largest magnitude in the fingerprint × 1e-9);
+- `thermal` and `dc`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative,
+  with a floor per unit for values near zero (the unit's largest magnitude in the fingerprint ×
+  1e-9);
 - `ac`: |Z| within 1e-6 relative (and the noise and tolerance scalars that come from it), since
   KiPI's own |Z| carries round-off of order 1e-7. On KiPI's noise example (1 kHz to 300 MHz),
   KiPI's own call (COLAMD, threshold 1.0) on the same systems with their unknowns put through a
