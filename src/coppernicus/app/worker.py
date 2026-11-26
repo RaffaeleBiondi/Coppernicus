@@ -86,21 +86,33 @@ class TreeWorker(QThread):
 
 
 class ReportWorker(QThread):
-    """Writes the offline HTML report (seconds on big boards) away from the UI thread."""
-    succeeded = Signal(object)        # Path of the written file
+    """Writes the offline HTML report (seconds on big boards) away from the UI thread: the
+    rails' page at ``path`` (None: none), then with ``tree`` the power tree's page, as
+    ``solve --tree --html`` writes it. ``tree``: (TreeResult, its tree_summary, path, project
+    file name, solve settings)."""
+    succeeded = Signal(object)        # the Path of the written file, or a list of the two
     failed = Signal(str)
 
-    def __init__(self, results, project, path, outline, board_name: str, parent=None):
+    TREE_TOP = 10                     # crowding spots and vias per group, as on the CLI's page
+
+    def __init__(self, results, project, path, outline, board_name: str, parent=None, tree=None):
         super().__init__(parent)
         self._results, self._project, self._path = list(results), project, path
-        self._outline, self._board_name = outline, board_name
+        self._outline, self._board_name, self._tree = outline, board_name, tree
 
     def run(self):
-        from coppernicus.report import write_report
+        from coppernicus.report import write_report, write_tree_report
+        written = []
         try:
-            path = write_report(self._results, self._project, self._path, outline=self._outline,
-                                board_name=self._board_name)
+            if self._path is not None:
+                written.append(write_report(self._results, self._project, self._path,
+                                            outline=self._outline, board_name=self._board_name))
+            if self._tree is not None:
+                tree, doc, path, project, settings = self._tree
+                written.append(write_tree_report(tree, doc, path, outline=self._outline,
+                                                 board_name=self._board_name, project=project,
+                                                 top=self.TREE_TOP, settings=settings))
         except Exception:                                   # noqa: BLE001 - shown to the user
             self.failed.emit("Cannot write the report:\n" + traceback.format_exc())
         else:
-            self.succeeded.emit(path)
+            self.succeeded.emit(written[0] if len(written) == 1 else written)

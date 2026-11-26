@@ -23,7 +23,8 @@ U2, which makes 1.8 V for U3 with remote sense.
 
 - **App:** open the project, then **Solve tree** (Ctrl+T). The **Power tree** tab lists
   the regulators, the loads and the links; **Group** shows one rail group or the ground net on
-  the board.
+  the board. **Export report** (Ctrl+R) writes the tree's offline page (see
+  [HTML report](html-report.md#the-power-tree-report)).
 - **Command line:** `coppernicus solve PROJECT --tree` prints the tables;
   `--html` also writes one offline page with every group (see [HTML report](html-report.md#the-power-tree-report)).
 - **Agents:** the MCP tool `solve_tree(project_path)` returns the same as JSON (see

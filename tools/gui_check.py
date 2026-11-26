@@ -847,7 +847,8 @@ def run_compare(window, check: Checks, args, out: Path):
 def run_report(window, check: Checks, args, out: Path):
     """Export report: refused without results or while a solve runs; otherwise a Save dialog
     that starts in results/ next to the project, the file written off the UI thread, its
-    size reported, and an offer to open it (QDesktopServices is intercepted here)."""
+    size reported, and an offer to open it (QDesktopServices is intercepted here); with the
+    power tree solved (a copy of power_chain), the tree's page beside it."""
     from PySide6.QtGui import QDesktopServices
     from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
@@ -897,6 +898,27 @@ def run_report(window, check: Checks, args, out: Path):
         if window.worker is not None:
             window.worker.wait(int(args.timeout * 1000))
         QApplication.processEvents()
+        # With the power tree solved, its page (solve --tree --html's) goes beside the rails'.
+        import shutil
+        shutil.copytree(ROOT / "examples" / "power_chain", out / "chain", dirs_exist_ok=True)
+        window.open_project(out / "chain" / "power_chain.coppernicus.yml")
+        QApplication.processEvents()
+        tree = solve_tree_and_wait(window, args.timeout)
+        window.nets.select("+3V3")
+        QApplication.processEvents()
+        solve_and_wait(window, args.timeout)
+        target, n = out / "chosen" / "chain_report.html", len(opened)
+        window.export_report()
+        if window.report_worker is not None:
+            window.report_worker.wait(int(args.timeout * 1000))
+        QApplication.processEvents()
+        QApplication.processEvents()
+        page = target.with_name("chain_tree_report.html")
+        tree_text = page.read_text(encoding="utf-8") if page.exists() else ""
+        check("with the power tree solved, Export report also writes its page (the CLI's suffix)",
+              tree is not None and target.exists() and 'id="tree-vrms"' in tree_text
+              and '"vrms":' in tree_text and opened[n:] == [str(target), str(page)],
+              f"{opened[n:]} ({len(tree_text)} chars)")
     finally:
         QFileDialog.getSaveFileName, QDesktopServices.openUrl, QMessageBox.question = (
             real_save, real_open, real_question)

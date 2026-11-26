@@ -167,7 +167,9 @@ The other tabs, **Temperature**, **Power tree**, **Impedance**, **Ripple & noise
 [More documentation](#more-documentation).
 
 **Export report** (Ctrl+R) writes the offline HTML report described under
-[Command line](#command-line), to send to someone who does not have Coppernicus.
+[Command line](#command-line), to send to someone who does not have Coppernicus. With the power
+tree solved it also writes the tree's page beside it, the one `solve --tree --html` writes
+(`demo_report.html` → `demo_tree_report.html`); with only the tree solved, that page alone.
 
 Finally, **Save project**. It writes a small `*.coppernicus.yml` file with the board path, the
 rails, their sources, loads and limits. Open it again later, or use it from the command line.
@@ -352,7 +354,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | The app reads the KiCad fields: rails from KiCad are listed [KiCad] and read-only, with Override in project for a what-if; Project → Use KiCad footprint fields turns them off; File → Reload board (Ctrl+Shift+R). Example: `examples/fields` | ✅ |
 | Before/after comparison: "Pin baseline", Compare tab (per-load, total and per-layer deltas, settings that changed), "Δ drop vs baseline" map | ✅ |
 | Copper loss by layer as a chart (baseline beside current) | ✅ |
-| Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
+| Offline HTML report exported from the app (Export report…, Ctrl+R), with the power tree's page when the tree is solved | ✅ |
 | Readout while hovering: a label next to the pointer leads with the value of the map shown as one large number (the drop and its % of the source voltage, V, \|J\|, the Δ drop or °C, as Show picks); View → Hover shows chooses the values under it (V, drop, \|J\|, layer, net) or turns it off (double-click still pins a point) | ✅ |
 | The double-click reads exactly the point under the pointer, as the hover does; a ground below 0 V reads as a ground shift; a solve whose setup changed meanwhile is dropped with a message | ✅ |
 | Project file v2: regulator kind (source / LDO / switcher), efficiency, quiescent current; input, ground and remote-sense pins; load ground pins; links (ferrites, sense resistors, fuses). Old project files load and save unchanged | ✅ (regulators editable in the app; links set in the project file) |

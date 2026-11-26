@@ -30,6 +30,12 @@ results against your own judgement.
   in KiCad (also **=** and the keypad's + and −), round from the last layer to the first. They
   are left to the field while you type in a text field, a spin box or a table cell. The Layer
   selector's tooltip says so.
+- **Export report** in the app writes the power tree's page too when the tree is solved: the page
+  `coppernicus solve --tree --html` writes, beside the rails' report with the command line's
+  `_tree_report` suffix (`demo_report.html` → `demo_tree_report.html`). With only the tree
+  solved, the Save dialog is for the tree's page alone. Same folder as before (`results/` next
+  to the project, or `~/Documents/Coppernicus/results`); as during a rail solve, export is
+  refused while the tree solves.
 
 ### Changed
 

@@ -13,7 +13,10 @@ so you can send it to someone who does not have Coppernicus, or attach it to a d
 ## Make one
 
 - **App:** **Export report** (Ctrl+R) writes the report of every rail you have solved. The Save
-  dialog starts in `results/` next to the project file.
+  dialog starts in `results/` next to the project file. With the power tree solved, the tree's
+  page ([below](#the-power-tree-report)) is written beside it, with the command line's
+  `_tree_report` suffix: `demo_report.html` → `demo_tree_report.html`. With only the tree
+  solved, the dialog is for the tree's page alone.
 - **Command line:** `coppernicus solve PROJECT --html` writes `<out>/<project>_report.html`
   (`<out>` is `results/` next to the project file unless `--out` says otherwise); `--html PATH`
   writes it elsewhere, and `--open` also opens it in the browser.

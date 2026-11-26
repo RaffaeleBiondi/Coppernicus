@@ -70,6 +70,7 @@ from coppernicus.power_tree import (
     has_limits,
     not_judged_text,
     rating_origins,
+    tree_summary,
     tree_verdicts,
     unsolved_limits,
 )
@@ -117,6 +118,15 @@ def report_folder(project_dir: Path, home: Optional[Path] = None) -> Tuple[Path,
     user = (Path.home() if home is None else Path(home)).joinpath(*USER_RESULTS)
     _writable_folder(user)                     # if even this fails, the Save dialog says so
     return user, f"{folder} cannot be written, so reports go to {user}"
+
+
+def tree_report_path(path: Path) -> Path:
+    """The power tree's page beside the rails' report ``path``, with the CLI's "_tree_report"
+    suffix: "demo_report.html" → "demo_tree_report.html", any other "name.html" →
+    "name_tree_report.html" (never ``path`` itself)."""
+    path = Path(path)
+    stem = path.stem[: -len("_report")] if path.stem.endswith("_report") else path.stem
+    return path.with_name(f"{stem}_tree_report{path.suffix or '.html'}")
 
 
 def typing_widget(widget) -> bool:
@@ -766,28 +776,45 @@ class MainWindow(QMainWindow):
         """Write the offline HTML report of every solved rail (WS1's coppernicus.report), off
         the UI thread, to a file chosen in a Save dialog that starts in results/ next to the
         project (the CLI's folder), or in the home folder for an unsaved project, never next to
-        a board elsewhere."""
-        if self.worker is not None and self.worker.isRunning():
+        a board elsewhere. With the power tree solved, also its page, the one ``solve --tree
+        --html`` writes, beside it (:func:`tree_report_path`); with only the tree solved, the
+        dialog is for the tree's page alone."""
+        if any(w is not None and w.isRunning() for w in (self.worker, self.tree_worker)):
             self.statusBar().showMessage("A solve is running: export the report when it has finished")
             return
-        if self.board is None or not self.results:
-            self.statusBar().showMessage("Solve at least one rail first: the report shows the solved rails")
+        if self.board is None or not (self.results or self.tree is not None):
+            self.statusBar().showMessage("Solve a rail or the power tree first: the report shows what "
+                                         "is solved")
             return
         if self.report_worker is not None and self.report_worker.isRunning():
             self.statusBar().showMessage("A report is already being written")
             return
         start = self._report_start_path()
+        if not self.results:
+            start = tree_report_path(start)
         path, _ = QFileDialog.getSaveFileName(self, "Export report", str(start), "HTML report (*.html)")
         if not path:
             return
         path = Path(path)
         if path.suffix.lower() not in (".html", ".htm"):
             path = path.with_name(path.name + ".html")
-        self.report_worker = ReportWorker(self.results.values(), copy.deepcopy(self.merged.project), path,
-                                          self.board.outline(), self.board.name, self)
+        tree_job, what = None, [f"{len(self.results)} rail(s)"] if self.results else []
+        if self.tree is not None:
+            # As the CLI writes it, judged as the Power tree tab shows it now: the records a limit
+            # edit judges again are copied (the solved groups are not: nothing changes them).
+            tree = dataclasses.replace(self.tree, limits=dict(self.tree.limits),
+                                       loads=copy.deepcopy(self.tree.loads),
+                                       vrms=copy.deepcopy(self.tree.vrms))
+            tree_job = (tree, tree_summary(tree), tree_report_path(path) if self.results else path,
+                        Path(self.project.path).name if self.project.path else "",
+                        dict(vars(self.merged.project.settings)))
+            what.append("the power tree")
+        self.report_worker = ReportWorker(self.results.values(), copy.deepcopy(self.merged.project),
+                                          path if self.results else None, self.board.outline(),
+                                          self.board.name, self, tree=tree_job)
         self.report_worker.succeeded.connect(self._report_written)
         self.report_worker.failed.connect(self._report_failed)
-        self.statusBar().showMessage(f"Writing the report of {len(self.results)} rail(s)… "
+        self.statusBar().showMessage(f"Writing the report of {' and '.join(what)}… "
                                      "(a few seconds on big boards)")
         self.report_worker.start()
 
@@ -806,19 +833,24 @@ class MainWindow(QMainWindow):
             self._report_fallback = None
         return folder / f"{stem}_report.html"
 
-    def _report_written(self, path):
-        path = Path(path)
-        size_mb = path.stat().st_size / 1e6
+    def _report_written(self, paths):
+        """``paths``: the page written, or the pages (the rails', then the power tree's)."""
+        paths = [Path(paths)] if isinstance(paths, (str, Path)) else [Path(p) for p in paths]
+        sizes = [p.stat().st_size / 1e6 for p in paths]
         fallback = self._report_fallback
-        note = fallback[1] if fallback and path.parent.resolve() == fallback[0].resolve() else ""
-        status = f"Report written: {path.name} ({size_mb:.2f} MB) in {path.parent}"
+        note = fallback[1] if fallback and paths[0].parent.resolve() == fallback[0].resolve() else ""
+        one = len(paths) == 1
+        names = " and ".join(f"{p.name} ({mb:.2f} MB)" for p, mb in zip(paths, sizes))
+        status = f"{'Report' if one else 'Reports'} written: {names} in {paths[0].parent}"
         self.statusBar().showMessage(f"{status} ({note})" if note else status)
-        answer = QMessageBox.question(self, "Report written",
-                                      f"{path}\n{size_mb:.2f} MB." + (f"\n{note}." if note else "")
-                                      + " Open it in the browser?",
+        answer = QMessageBox.question(self, "Report written" if one else "Reports written",
+                                      "\n".join(f"{p}\n{mb:.2f} MB." for p, mb in zip(paths, sizes))
+                                      + (f"\n{note}." if note else "")
+                                      + (" Open it in the browser?" if one else " Open them in the browser?"),
                                       QMessageBox.Open | QMessageBox.Close)
         if answer == QMessageBox.Open:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            for p in paths:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
 
     def remove_mesher(self):
         """Help → Remove downloaded mesher (Triangle)… (packaged app): after a confirmation,
