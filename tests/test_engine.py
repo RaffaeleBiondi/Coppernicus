@@ -1,10 +1,13 @@
 """The engine adapter on synthetic boards with closed-form answers."""
 
+import logging
 import math
+import threading
 
 import pytest
 
 from coppernicus.engine import Board, EngineError, solve_rail, tied_nets
+from coppernicus.engine import board as board_module
 from coppernicus.engine.solve import TCR_CU
 from coppernicus.engine.synthetic import (
     OZ1,
@@ -188,3 +191,37 @@ def test_part_nets():
     board = Board(power_chain_board())
     assert board.part_nets("U1") == ["+3V3", "GND", "VIN"]
     assert board.part_nets("NOPE") == []
+
+
+class _LoggingSource:
+    """Stands in for a KiPI importer: logs its own warning, then lets ``during`` run while the
+    import is still going, as another thread's import or solve would."""
+
+    def __init__(self, during=lambda: None):
+        self.during = during
+
+    def load(self):
+        logging.getLogger("kipi.sources").warning("this board's own warning")
+        self.during()
+        return strip_board()
+
+
+def _log_from_another_thread(text):
+    t = threading.Thread(target=logging.getLogger("kipi").warning, args=(text,))
+    t.start()
+    t.join()
+
+
+def test_open_keeps_the_importers_own_warnings(tmp_path, monkeypatch):
+    path = tmp_path / "a.kicad_pcb"
+    path.write_text("")
+    monkeypatch.setattr(board_module.registry, "open_board", lambda p: _LoggingSource())
+    assert Board.open(path).warnings == ["this board's own warning"]
+
+
+def test_open_leaves_out_warnings_logged_by_other_threads(tmp_path, monkeypatch):
+    path = tmp_path / "a.kicad_pcb"
+    path.write_text("")
+    source = _LoggingSource(lambda: _log_from_another_thread("another board's warning"))
+    monkeypatch.setattr(board_module.registry, "open_board", lambda p: source)
+    assert Board.open(path).warnings == ["this board's own warning"]

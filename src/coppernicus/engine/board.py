@@ -10,6 +10,7 @@ import dataclasses
 import fnmatch
 import logging
 import math
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -71,9 +72,12 @@ class _Collect(logging.Handler):
     def __init__(self):
         super().__init__(logging.WARNING)
         self.messages: List[str] = []
+        self.thread = threading.get_ident()
 
     def emit(self, record):
-        self.messages.append(record.getMessage())
+        # One "kipi" logger serves every thread; KiPI's importers log from the opening thread.
+        if record.thread == self.thread:
+            self.messages.append(record.getMessage())
 
 
 def _pin_key(pin: str):
