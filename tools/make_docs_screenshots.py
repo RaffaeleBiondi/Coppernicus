@@ -27,13 +27,17 @@ from __future__ import annotations
 
 import argparse
 import faulthandler
+import functools
+import importlib.util
 import multiprocessing
+import os
 import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+IMAGES = ROOT / "docs" / "images"
 DEMO = ROOT / "examples" / "demo" / "demo.coppernicus.yml"
 DEMO_BOARD = ROOT / "examples" / "demo" / "demo.kipi.json.gz"
 CHAIN = ROOT / "examples" / "power_chain" / "power_chain.coppernicus.yml"
@@ -41,20 +45,42 @@ FIELDS = ROOT / "examples" / "fields" / "fields.coppernicus.yml"
 NET = "+3V3"
 
 
+@functools.cache
+def gui_check():
+    """tools/gui_check.py, beside this script: its no-focus rule for real windows and its
+    solve-and-wait helpers. Imported by path, so this script runs from anywhere."""
+    spec = importlib.util.spec_from_file_location("gui_check", Path(__file__).with_name("gui_check.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--out", default=str(ROOT / "docs" / "images"), help="output folder")
+    ap.add_argument("--out", help=f"output folder (default: {IMAGES.relative_to(ROOT)})")
     ap.add_argument("--set", choices=("guide", "features", "all"), default="guide",
                     help="guide: the README's guide-*.png (default); features: the images of the "
                          "feature pages in docs/; all: both")
+    ap.add_argument("--offscreen", action="store_true",
+                    help="no window (Qt's offscreen platform), to check that every scenario runs and "
+                         "reaches its state; the board view stays blank, so --out is required")
     ap.add_argument("--width", type=int, default=1600, help="largest image width, px")
-    ap.add_argument("--timeout", type=float, default=180.0, help="hard limit for the whole run, s")
+    ap.add_argument("--timeout", type=float, default=900.0, help="hard limit for the whole run, s")
     args = ap.parse_args(argv)
+    if args.offscreen:
+        if not args.out or Path(args.out).resolve() == IMAGES:
+            ap.error(f"--offscreen draws no board view: give --out a folder other than {IMAGES}")
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    on_screen = os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+    gc = gui_check()
+    for key, value in gc.background_env(on_screen).items():   # macOS: never the app in front
+        os.environ.setdefault(key, value)
+    front_before = gc.front_app() if on_screen else None
     faulthandler.dump_traceback_later(args.timeout, exit=True)
-    out = Path(args.out)
+    out = Path(args.out) if args.out else IMAGES
     out.mkdir(parents=True, exist_ok=True)
 
-    from PySide6.QtCore import QLocale, Qt
+    from PySide6.QtCore import QLocale, QSettings, Qt
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
@@ -65,6 +91,16 @@ def main(argv=None) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     app.setApplicationName("Coppernicus")
     app.setWindowIcon(QIcon(str(ICON)))
+    # The app's settings (the last solve times the estimates quote, the hover choice) in a
+    # fresh folder: the same images on every machine, and the user's settings untouched.
+    settings = tempfile.mkdtemp(prefix="coppernicus-shots-settings-")
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, settings)
+    watch = None
+    if on_screen:                            # as gui_check --window: open behind, never activate
+        watch = gc.FrontWatch(app, front_before)
+        gc.show_in_background(app)
+    answer_dialogs()
     windows = []
     written = []
 
@@ -73,6 +109,8 @@ def main(argv=None) -> int:
         w.resize(1500, 920)
         w.show()
         windows.append(w)
+        if watch is not None:
+            watch.shown(w)
         settle()
         return w
 
@@ -82,6 +120,10 @@ def main(argv=None) -> int:
 
     def save(widget, name: str, prefix: str = "guide-"):
         settle()
+        owner = widget.window()
+        if on_screen and isinstance(owner, MainWindow):
+            owner.view.plotter._render()     # pyvistaqt defers its draws on macOS: draw the map now
+            settle()
         pix = widget.grab()
         if pix.width() > args.width:
             pix = pix.scaledToWidth(args.width, Qt.SmoothTransformation)
@@ -169,7 +211,6 @@ def main(argv=None) -> int:
 
     def features() -> int:
         from coppernicus.app.copper_thickness import CopperThicknessDialog
-        answer_dialogs()
 
         # The power tree of the power chain: the regulator box of a rail, then the whole tree
         # solved at once, the ground net's rise on the board and the tree's tables.
@@ -268,6 +309,12 @@ def main(argv=None) -> int:
         status = guide() if args.set in ("guide", "all") else 0
         if status == 0 and args.set in ("features", "all"):
             status = features()
+        if watch is not None:
+            check = gc.Checks()
+            watch.finish(check)
+            if check.failed:
+                print("the run came to the front: see the FAIL lines above", file=sys.stderr)
+                status = status or 1
         if status:
             return status
     finally:
@@ -275,6 +322,7 @@ def main(argv=None) -> int:
             w.dirty = False                  # never ask to save
             w.close()
         settle()
+        shutil.rmtree(settings, ignore_errors=True)
 
     for path in written:
         print(path)
