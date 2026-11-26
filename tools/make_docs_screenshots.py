@@ -108,10 +108,12 @@ def main(argv=None) -> int:
     ap.add_argument("--timeout", type=float, default=900.0, help="hard limit for the whole run, s")
     args = ap.parse_args(argv)
     if args.offscreen:
-        if not args.out or Path(args.out).resolve() == IMAGES:
-            ap.error(f"--offscreen draws no board view: give --out a folder other than {IMAGES}")
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
     on_screen = os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+    if (not on_screen and args.set not in ("cli", "reports")
+            and (not args.out or Path(args.out).resolve() == IMAGES)):
+        ap.error(f"offscreen (--offscreen or QT_QPA_PLATFORM=offscreen) the board view stays blank: "
+                 f"give --out a folder other than {IMAGES}")
     gc = gui_check()
     for key, value in gc.background_env(on_screen).items():   # macOS: never the app in front
         os.environ.setdefault(key, value)
