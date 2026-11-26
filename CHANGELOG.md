@@ -9,6 +9,12 @@ results against your own judgement.
 
 ### Added
 
+- Where each power-tree drop comes from: every load's and regulator input's drop split into the
+  source's regulation, each net's copper, each link and the ground, parts that add up to it
+  exactly (`loads[].segments`, `vrms[].segments`); each net of a group with its range, where it
+  is fed from, its drop or rise and its losses (`groups[].net_split`); each link's voltage across
+  it (`links[].across_mv`). Shown, never judged: `coppernicus solve --tree --split`, the JSON and
+  `solve_tree`, and the HTML report's Split column and Nets table.
 - The power tree shown from another 0 V, with no re-solve: **0 V at** in the app's Power tree tab
   (a part's ground pins, or a pad typed or picked on the map), `tree: {reference: {ground_of:
   U1}}` (or `{pads: [R12.2, NT1.*]}`) in the project file, `--reference U1` on the command line
@@ -84,15 +90,6 @@ results against your own judgement.
 - A power tree that fails because its loads' ground return is broken now says so and names the
   ground net, instead of saying that the supply rail's loads are not connected.
 - A layer that carries only round-off current gets no ranked current-crowding spots.
-- `COPPERNICUS_DC_DIRECT_MAX=<unknowns>` (opt-in) solves DC systems above KiPI's 200,000-unknown
-  direct limit with a direct factorization instead of AMG-CG, within KiPI's SuperLU limit and
-  half the free memory; results equal within 1e-9 (CG's tolerance).
-- Where each power-tree drop comes from: every load's and regulator input's drop split into the
-  source's regulation, each net's copper, each link and the ground, parts that add up to it
-  exactly (`loads[].segments`, `vrms[].segments`); each net of a group with its range, where it
-  is fed from, its drop or rise and its losses (`groups[].net_split`); each link's voltage across
-  it (`links[].across_mv`). Shown, never judged: `coppernicus solve --tree --split`, the JSON and
-  `solve_tree`, and the HTML report's Split column and Nets table.
 
 ## 0.3.1 (2026-11-26)
 

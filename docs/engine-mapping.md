@@ -265,11 +265,13 @@ Which limit judges what (`power_tree.LIMITS_RULE`, also an assumption line of ev
   too. The tree no longer judges them by their rail's net only, which passed a load over
   its own net's limit.
 - **Copper per group, strictest.** The largest ground rise, current crowding and vias of a
-  group are judged against the strictest (lowest) value set on any of its nets, because the
-  solve does not keep which net each triangle belongs to. This is conservative: it may fail
-  copper of a net against a tighter limit of another net of the group, never pass it falsely.
-  A copper fail names the limit and where it came from: "(limit 1 mV from AGND, strictest in
-  group)". Per-net copper attribution is a known limitation.
+  group are judged against the strictest (lowest) value set on any of its nets. This is
+  conservative: it may fail copper of a net against a tighter limit of another net of the
+  group, never pass it falsely. A copper fail names the limit and where it came from: "(limit
+  1 mV from AGND, strictest in group)". The tree knows the net of each mesh node (the per-net
+  split: each net's voltage range, drop or rise and losses; see
+  [Where each drop comes from](power-tree.md#where-each-drop-comes-from)), but that split is
+  shown, never judged: no net's copper is judged against its own net's limits alone.
 - **Links** are not judged as points of their own: a link joins its nets into one group,
   whose loads and regulator inputs are judged directly.
 - **Regulator inputs** are judged as loads on the rail feeding them (`VrmReport.input_*`),

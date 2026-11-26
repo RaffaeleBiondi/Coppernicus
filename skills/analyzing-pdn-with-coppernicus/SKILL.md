@@ -53,6 +53,10 @@ and why, and ask for what is missing.
    image), `probe(layer, x_mm, y_mm)` and `cut_current(layer, x1, y1, x2, y2)`. Use the cut to
    **measure** a neck or track width and the current through it. Do not back-compute widths
    from J or read them off a PNG.
+   - A `current` map's image writes above its colour bar "Peak X A/mm² (mesh-dependent)" (the
+     layer's point maximum, never judged) and, when a limit or the default applies, the
+     layer's verdict line as the problem list judged it (spot means). The colour scale
+     (`scale_a_mm2`) tops at the layer's 99.5th percentile: its top is not the maximum.
 7. What-if: for copper weight, `copper_step(result_id, layer, "up"|"down")` moves one layer one
    standard weight (0.5, 1, 2, 3 oz) and returns the comparison; it refuses bigger jumps, which
    are design changes made in KiCad. For plating or temperature, re-solve with
@@ -78,8 +82,13 @@ and why, and ask for what is missing.
    a group says `drop_word` ("drop", "rise" or "shift") and `drop_unit`: quote the number with
    them. For the voltage between two points, probe with `relative_to` (`{layer, x_mm, y_mm}`
    or `{pad: "U3.2"}`, `result_id` for another group of the same tree): `delta_v`, e.g. a
-   chip's supply pad against its ground pad. `get_problems`, `copper_step`, `compare_results`
-   and `propose_fields` refuse tree ids (the hint says what to use).
+   chip's supply pad against its ground pad. `get_problems`, `copper_step`, `compare_results`,
+   `compare_revisions` and `propose_fields` refuse tree ids (the hint says what to use).
+   - Where a drop comes from: `loads[].segments` and `vrms[].segments` split each drop into
+     the source's regulation, each net's copper, each link and the ground, adding up to
+     `drop_mv` (`input_drop_mv`); `groups[].net_split` gives each net's range, drop or rise
+     and losses, `links[].across_mv` each link's voltage. Shown, never judged: use them to say
+     where the drop is, never as a verdict.
    - Another 0 V: `solve_tree(project_path, reference={ground_of: "U1"})` (or `{pads: ["U3.2"]}`)
      shows the tree from that part's ground pins: a display shift, not saved. The document's
      values stay in the solve's frame; `reference.offset_v` is what to subtract from an
@@ -144,6 +153,9 @@ follow the hint. `result_evicted` means you must solve again.
   YAML takes `settings: {max_edge_mm, via_plating_um, copper_temp_c, copper_thickness_mm?,
   min_edge_mm?, grading?}` (the last two advanced: the mesh at plated holes);
   `copper_thickness_mm: {B.Cu: 0.07}` is the optional what-if of step 7.
+- `--tree` solves the power tree (step 8; `--thermal` with the board temperature). Its JSON
+  always holds the split; `--split` prints it in the text, and `--reference U1` (or pads,
+  `R12.2,NT1.*`) shows the voltages from another 0 V, verdicts unchanged.
 - Write the YAML and the outputs outside the board's folder.
 - Exit codes: 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit that was set
   could not judge something (report each `not_judged` item), 2 an error.

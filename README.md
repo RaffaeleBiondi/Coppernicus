@@ -191,6 +191,20 @@ together. Try it on `examples/power_chain/power_chain.coppernicus.yml`.
 - On a ground net, **Max ground rise (mV)** is an optional limit.
 - A group passes only when everything its limits apply to was judged. A load behind a regulator
   out of regulation, or a disconnected one, is listed as *not judged*, never as a pass.
+- **Where each drop comes from:** every load's and regulator input's drop is split into the
+  source's regulation, each net's copper, each link and the ground, parts that add up to it.
+  Each net gets its voltage range, drop or rise and loss, and each link its voltage across it.
+  Shown, never judged: `solve --tree --split`, the JSON and the HTML report's Split column and
+  Nets table.
+- **0 V at** in the Power tree tab shows the tree from another 0 V: a part's ground pins, or
+  pads, as a scope grounded there would read it. It is a display shift, nothing is solved
+  again: the voltages and the map move, every drop, rise and verdict stays from the solve's
+  0 V. Also `tree: {reference: {ground_of: U1}}` in the project file and `--reference U1` on
+  the command line. Each regulator also shows its output across its own pins (*Across* in
+  the tab, `V across` on the command line), the same from any 0 V.
+
+The details, with the power-chain example's numbers, are in the
+[power tree guide](docs/power-tree.md).
 
 A rail solved on its own (F5) also draws the regulators it feeds, with their input current
 estimated at nominal voltages; its assumptions say so.
@@ -226,6 +240,11 @@ uv run coppernicus noise project.coppernicus.yml         # DC-DC ripple and coup
 uv run coppernicus tolerance project.coppernicus.yml     # each load's tolerance stack-up
 uv run coppernicus gui project.coppernicus.yml --solve +3V3 --field current
 ```
+
+With `--tree`, `--split` also prints where each drop comes from, `--reference U1` shows the
+tree from U1's ground pins (verdicts stay from the solve's 0 V), and `--probe B.Cu@97.5,1.0`
+(repeatable) reads the group, voltage and drop at a point; see the
+[power tree guide](docs/power-tree.md).
 
 Add `--json` to `nets`, `parts`, `fields`, `solve`, `ac`, `noise` or `tolerance` to get one JSON
 document on stdout instead of text. The `*_summary.json` file that `solve` writes holds the
@@ -265,9 +284,10 @@ stack-up (`tolerance`). See [docs/ci.md](docs/ci.md).
 
 `coppernicus mcp` is an [MCP](https://modelcontextprotocol.io) server over stdio. With it,
 Claude Code, Claude Desktop or another MCP client can open a board, solve rails, read the drop
-and current density, render maps, measure a cross-section, compare what-ifs, and solve a
-project's whole power tree (with the board temperature), its PDN impedance, its ripple and
-coupled noise, and each load's tolerance stack-up. An agent that only has a shell can use the
+and current density, render maps, probe a point and measure a cross-section (of a rail or of
+a group of the power tree), compare what-ifs, and solve a project's whole power tree (with
+the board temperature), its PDN impedance, its ripple and coupled noise, and each load's
+tolerance stack-up. An agent that only has a shell can use the
 [command line](#command-line) with `--json` instead. Registration, the tools, conventions and
 a worked example are in [docs/agents.md](docs/agents.md).
 
@@ -349,7 +369,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | GitHub Action for KiCad repositories (`uses: RaffaeleBiondi/Coppernicus@main`), job summary, artifacts; `fail-on-not-judged` (default on) fails on a limit that could not judge; opt-in `tree` adds the power tree's tables to the job summary | ✅ |
 | Sources, loads, converters and links defined in KiCad footprint fields (`PI_RAIL`, `PI_SOURCE`, `PI_LOAD`, `PI_KIND`, `PI_INPUT`, `PI_GND`, `PI_LINK`…) | ✅ read by default from `.kicad_pcb` in the CLI, MCP and Action; KiCad wins over a project rail unless `override_board_fields: true` ([fields](docs/agents.md#kicad-footprint-fields)) |
 | KiCad fields, second step: library-level part data without `PI_RAIL` (`PI_KIND`, `PI_EFF`, `PI_IQ`, `PI_VOUT`, `PI_IMAX`, `PI_FSW`), external-inductor bucks (`PI_SOURCE_REF`), links on multi-net parts such as load switches (`PI_LINK_PINS`); I_max judged in the power tree (below) ([how to annotate](docs/agents.md#how-to-annotate-a-kicad-library)) | ✅ |
-| KiCad fields, third step: one source terminal on several parts (`PI_SOURCE_REF=BT1,BT5`, e.g. cell holders in parallel; project key `extra_pins`) and ground pins on another part (`PI_GND_REF`) | ✅ |
+| KiCad fields, third step: one source terminal on several parts (`PI_SOURCE_REF=BT1,BT5`, e.g. cell holders in parallel; project key `extra_pins`), ground pins on another part (`PI_GND_REF`), and a source's ground terminal on several parts (`PI_GND_REF=BT4,BT8`; project key `extra_ground_pins`), every pad held at 0 V together in the power tree | ✅ |
 | Regulator ratings: a regulator or source over its rated output current (KiCad `PI_IMAX` or `current_limit_a`) fails in the power tree, naming where the rating was written; not judged while the tree has not settled or the rail is not solved; the app's Power tree tab shows I max next to I out | ✅ |
 | `coppernicus fields` and the MCP `board_fields` call a rail complete as a solve does (a load net behind a link, a source feeding a link or a regulator input) and say what completes it; each power-tree problem carries its detail, place and the limit that judged it with the net it came from (`limit_pct`/`limit_mv`, `limit_from`) | ✅ |
 | The app reads the KiCad fields: rails from KiCad are listed [KiCad] and read-only, with Override in project for a what-if; Project → Use KiCad footprint fields turns them off; File → Reload board (Ctrl+Shift+R). Example: `examples/fields` | ✅ |
@@ -360,6 +380,9 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | The double-click reads exactly the point under the pointer, as the hover does; a ground below 0 V reads as a ground shift; a solve whose setup changed meanwhile is dropped with a message | ✅ |
 | Project file v2: regulator kind (source / LDO / switcher), efficiency, quiescent current; input, ground and remote-sense pins; load ground pins; links (ferrites, sense resistors, fuses). Old project files load and save unchanged | ✅ (regulators editable in the app; links set in the project file) |
 | Power tree with ground return: regulators as loads on the rail feeding them, ground rise, remote sense; Solve tree (Ctrl+T), Group selector, Power tree tab; `solve --tree` (and `--json`); MCP `solve_tree` | ✅ |
+| Where each power-tree drop comes from: each load's and regulator input's drop as parts that add up to it (the source's regulation, each net's copper, each link, the ground), each net's range, drop or rise and loss, each link's voltage across it; shown, never judged ([guide](docs/power-tree.md#where-each-drop-comes-from)) | ✅ `solve --tree --split`, the JSON and MCP `solve_tree`, the HTML report's Split column and Nets table |
+| The power tree shown from another 0 V (a part's ground pins, or pads): a display shift with no re-solve, verdicts always from the solve's 0 V; each regulator's output across its own pins (V across, `v_out_across_v`) ([guide](docs/power-tree.md#showing-it-from-another-0-v)) | ✅ app (0 V at), project file (`tree: reference:`), CLI (`--reference`), MCP (`reference`), HTML report |
+| Power-tree groups probed, mapped and cut: MCP `solve_tree` returns `tree_id` (`t1`) and a `result_id` per group (`t1:GND`) for `probe` (`relative_to` for the voltage between two points, across groups too), `render_map` and `cut_current`, and `report` takes the tree's id; `solve --tree --probe LAYER@X,Y` on the command line | ✅ |
 | A rail solved alone draws the regulator inputs and links it feeds, estimated at nominal voltages | ✅ in the app, the CLI (`solve`, `--json`, `--html`), MCP `solve_project` and the Action; MCP `solve_rail` has no project |
 | Optional ground-rise limit (`max_ground_rise_mv`) on a ground net | ✅ (single-rail solves, the power tree, MCP, report and CI summary) |
 | Each limit judges its own kind of net: `max_ground_rise_mv` nets at 0 V (grounds), `max_drop_pct` nets with a nonzero nominal; one set on the other kind is reported as not judged, and the rail panel disables the field that does not apply | ✅ |
@@ -383,9 +406,10 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Tolerance stack-up for agents and CI: MCP `solve_tolerance` (the CLI's document, every AC and noise solve sized first, refused over this machine's memory unless confirmed), `coppernicus tolerance --html`, the Action's opt-in `tolerance` input (1 fail, 3 not judged; KiPI's transient estimate never judged) | ✅ |
 | Component models in KiCad library fields: a capacitor's `PI_ESR`, `PI_ESL`, `PI_DIELECTRIC`, `PI_VRATED` (`PI_C`, else its Value) feed the AC impedance and the noise, never with a default (a missing field: not judged, naming it); a load's `PI_TOL` / `PI_DC_TOL` / `PI_AC_TOL` and a regulator's `PI_ACC` feed the tolerance stack-up ([fields](docs/kicad-fields.md)) | ✅ CLI, MCP, CI and app (the Impedance tab lists the capacitor models from KiCad fields, read-only) |
 | Current-density default: spots above 60 A/mm² at 1 oz, scaled ×√(35 µm / t) per layer (≈85 at 0.5 oz, ≈42 at 2 oz), are flagged ATTENTION, never a verdict; set `max_current_density` to judge them ([why and sources](docs/technical.md#current-density-default)) | ✅ |
+| Above every current-density colour bar, the layer's peak \|J\| (mesh-dependent, never judged) and its verdict as the problem list judges it; the colour scale stays at the layer's 99.5th percentile ([how](docs/technical.md#physics)) | ✅ app, PNG maps (CLI and MCP `render_map`), HTML report |
 | Tolerance stack-up per load: `coppernicus tolerance PROJECT`: the DC drop on the worst pins (power tree) plus the source's DC accuracy, the ripple from the noise solve (or your `ripple_mv`) and your `transient_mv` (KiPI's estimate shown, never judged), against your `tol` / `dc_tol` / `ac_tol`; judged only with every part known, never on a KiPI stand-in or a default 0. Example: `examples/tolerance` | ✅ CLI and app (Tolerance tab: built from the results the app holds; a stale one counts as missing) |
 | Packaged app: macOS `.dmg`, Windows `.zip`; Triangle fetched once on first start, checked against `uv.lock` ([install](docs/install.md)) | ✅ macOS built and tried; Windows built by CI, not yet tried; unsigned |
-| Speed: SuperLU's symmetric ordering for the board temperature and DC solves (about half the time and memory of the electro-thermal solve on a large board; `COPPERNICUS_SUPERLU_ORDER=off` restores KiPI's), a faster bit-identical board opening (`COPPERNICUS_FAST_TRIM=0` restores KiPI's) | ✅ on by default, each factorization checked as KiPI checks its own |
+| Speed: SuperLU's symmetric ordering for the board temperature and DC solves (about half the time and memory of the electro-thermal solve on a large board; `COPPERNICUS_SUPERLU_ORDER=off` restores KiPI's); a DC system above KiPI's 200,000-unknown direct limit factorized directly up to 400,000 unknowns instead of solved with AMG-CG (about half the time on large rails for about a quarter more memory, equal within 1e-9; `COPPERNICUS_DC_DIRECT_MAX=0` or empty restores KiPI's rule, any other value sets the ceiling); a faster bit-identical board opening (`COPPERNICUS_FAST_TRIM=0` restores KiPI's) ([details](docs/technical.md#physics)) | ✅ on by default, each factorization checked as KiPI checks its own |
 | Benchmark harness for every step (`tools/bench`): wall time, CPU, peak memory and a fingerprint of the result per step, compared before and after a change ([README](tools/bench/README.md)) | ✅ developer tooling |
 
 Tested on macOS. The test suite runs in CI on Ubuntu, macOS and Windows, all required; the desktop app itself has not been tried on Windows yet. The engine also reads ODB++
