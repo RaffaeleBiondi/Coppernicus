@@ -141,7 +141,8 @@ uv run --project path/to/Coppernicus python -m coppernicus.ci summary --out resu
   Qt and VTK. setup-uv caches them for later runs. Solving takes from seconds on small boards
   to a few minutes on large multi-rail ones.
 - **Pinning.** `@main` follows this repository's latest commit. To keep a check reproducible,
-  pin a commit SHA, or a release tag once there are releases.
+  pin a commit SHA or a release tag. The `ac`, `noise` and `tolerance` inputs need v0.3.0 or
+  later.
 - **Board temperature.** A project with `thermal.max_temp_c` or `max_rise_c` set needs the
   power tree to judge them: the rail-by-rail check lists each as NOT JUDGED ("solved with the
   power tree only") and exits 3, never a silent pass. With `tree: true` and `thermal: enabled:

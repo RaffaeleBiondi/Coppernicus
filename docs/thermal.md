@@ -32,6 +32,10 @@ It is part of the [power tree](power-tree.md): a rail solved on its own is never
 Try it on `examples/demo/demo-thermal.coppernicus.yml`: the demo rail at 8 + 6 + 1.2 A, with a
 15 °C rise limit.
 
+<p align="center">
+  <img src="images/thermal-1-window.png" alt="The app after Solve power tree on the thermal demo: the board temperature of F.Cu with its hottest point, 42.31 °C at J1; the Temperature tab with the electro-thermal options, the two layers over the 15 °C rise limit (FAIL), the iterations and each load's drop at the ambient and electro-thermal" width="900">
+</p>
+
 ## The settings
 
 The project file's `thermal:` block, the **Electro-thermal options** in the app. Every key is

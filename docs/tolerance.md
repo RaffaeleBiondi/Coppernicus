@@ -135,6 +135,10 @@ The command line only warns when a solve could exceed this machine's memory; an 
 is refused (`solve_too_large`) until the user confirms, or until `skip_ac` / `skip_noise`
 leave the heavy solve out.
 
+<p align="center">
+  <img src="images/tolerance-1-window.png" alt="The app's Tolerance tab on tolerance-tight: U2's tolerances in the editor, the stack-up table with the verdict FAIL next to the load, its DC drop from the power tree, the source accuracy, the ripple from aggressor U1 and the entered transient, and the notes: total 82.94 mV below and 58.57 mV above nominal, over the 54 mV allowed" width="900">
+</p>
+
 ## Reading the results
 
 On `examples/tolerance/tolerance-tight.coppernicus.yml` (U2 at ±3 %):

@@ -105,6 +105,10 @@ field_per_decade`) lower it. The command line only warns, and the app asks befor
 an agent's call that could exceed the memory is refused (`solve_too_large`) until the user
 confirms.
 
+<p align="center">
+  <img src="images/noise-1-window.png" alt="The app's Ripple & noise tab on noise-tight: Solve noise of the 12 V to 1.8 V buck U1 at 1 MHz in 2.7 s, its waveforms (switch node, inductor current, ripple at LOAD, the victims), the ripple table marked never judged and the victims FAIL: SIG_LOOP 655.4 mV against its 500 mV margin" width="900">
+</p>
+
 ## Reading the results
 
 On `examples/noise/noise-tight.coppernicus.yml` (a 0.5 V margin on every victim):
