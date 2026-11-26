@@ -301,6 +301,7 @@ canvas.addEventListener("pointerdown", (e) => { S.drag = [e.clientX, e.clientY, 
 canvas.addEventListener("pointermove", (e) => { if (S.drag) { S.view.tx = S.drag[2] + e.clientX - S.drag[0]; S.view.ty = S.drag[3] + e.clientY - S.drag[1]; draw(); } else readout(e); });
 canvas.addEventListener("pointerup", () => { S.drag = null; });
 window.addEventListener("resize", () => draw());
+document.addEventListener("coppernicus-theme", () => draw());   // the outline takes the text colour
 if (typeof DecompressionStream === "undefined") { $("busy").textContent = "This browser cannot decompress the maps (no DecompressionStream); use a current Chrome, Edge, Firefox or Safari."; $("busy").hidden = false; }
 if (M.tree) {                 // solve --tree --html: the tree's own tables, once for the page
   const T = M.tree, mw = (x) => (ok(x) ? sig(x * 1e3, 3) : "–");

@@ -432,9 +432,10 @@ class ReportBuilder:
         blocks = "\n".join(f'<script type="application/octet-stream" id="{k}">{v}</script>'
                            for k, v in self.blocks.items())
         values = {"TITLE": html.escape(self.title), "STYLE": _asset("report.css"),
+                  "THEME": _asset("theme.js"), "TOGGLE": THEME_TOGGLE,
                   "SCRIPT": _asset("report.js"), "META": meta, "BLOCKS": blocks}
         # One pass over the template: inserted text (net names, data) is never scanned again.
-        return re.sub(r"__(TITLE|STYLE|SCRIPT|META|BLOCKS)__", lambda m: values[m.group(1)],
+        return re.sub(r"__(TITLE|STYLE|THEME|TOGGLE|SCRIPT|META|BLOCKS)__", lambda m: values[m.group(1)],
                       _asset("report.html"))
 
     def write(self, path, text: Optional[str] = None) -> Path:
@@ -575,18 +576,43 @@ def thermal_map_images(temp, outline: Sequence[np.ndarray] = (), dpi: int = 110)
     return out
 
 
+# The button in every page's header that switches the theme (report_assets/theme.js); it names
+# the theme it switches to, and the pages open dark.
+THEME_TOGGLE = ('<button id="theme-toggle" type="button" aria-label="Switch to the light theme" '
+                'title="Switch to the light theme">\u2600 Light</button>')
+
+# The ac, noise and tolerance pages: report.css's palette, dark unless data-theme="light".
 AC_PAGE_CSS = "\n".join([
+    ":root { color-scheme: dark; --bg: #16191c; --fg: #e6e9ec; --muted: #9aa5b0; --line: #2c3238;",
+    "  --panel: #1e2226; --fail: #ef6b6b; --warn: #d9a545; }",
+    ':root[data-theme="light"] { color-scheme: light; --bg: #ffffff; --fg: #1d2125; --muted: #5f6b76;',
+    "  --line: #d9dee3; --panel: #f5f7f9; --fail: #c62828; --warn: #9a6700; }",
     "body { font: 14px/1.45 system-ui, sans-serif; margin: 0 auto; max-width: 1100px; padding: 16px;",
-    "  color: #1d2329; background: #fff; }",
-    "@media (prefers-color-scheme: dark) { body { color: #e6e8eb; background: #15181c; }",
-    "  th, td { border-color: #333a42; } }",
+    "  color: var(--fg); background: var(--bg); }",
+    "header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }",
+    "#theme-toggle { flex: none; font: inherit; font-size: 12.5px; padding: 3px 9px; cursor: pointer;",
+    "  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); }",
     "h1 { font-size: 20px; } h2 { font-size: 16px; margin-top: 28px; }",
-    ".muted { color: #7a838c; font-weight: normal; } .verdict { font-weight: 600; }",
-    "img { width: 100%; max-width: 900px; height: auto; display: block; margin: 8px 0; }",
+    ".muted { color: var(--muted); font-weight: normal; } .verdict { font-weight: 600; }",
+    "/* The plots are PNGs on white, as written to --out: shown on a light panel in both themes. */",
+    "img { box-sizing: border-box; width: 100%; max-width: 900px; height: auto; display: block;",
+    "  margin: 8px 0; background: #fff; padding: 6px; border: 1px solid var(--line); border-radius: 8px; }",
     "table { border-collapse: collapse; width: 100%; margin: 8px 0; }",
-    "th, td { border-bottom: 1px solid #d6dadf; padding: 4px 8px; text-align: left; }",
+    "th, td { border-bottom: 1px solid var(--line); padding: 4px 8px; text-align: left; }",
     "th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }",
 ])
+
+
+def _page_top(head: str, where: str, css: str) -> List[str]:
+    """The start of an ac, noise or tolerance page, down to its header: dark by default, the
+    theme script in the head (a kept choice applies before the page is drawn) and the theme
+    button beside the title."""
+    return ["<!doctype html>", '<html lang="en" data-theme="dark"><head><meta charset="utf-8">',
+            '<meta name="viewport" content="width=device-width, initial-scale=1">',
+            f"<title>{html.escape(head)}</title>", f"<style>{css}</style>",
+            f"<script>{_asset('theme.js')}</script></head><body>",
+            f"<header><div><h1>{html.escape(head)}</h1><p class=muted>{html.escape(where)}</p></div>"
+            f"{THEME_TOGGLE}</header>"]
 
 
 def write_ac_report(doc: Mapping[str, Any], path, *, project: str = "", board_name: str = "",
@@ -625,10 +651,7 @@ def write_ac_report(doc: Mapping[str, Any], path, *, project: str = "", board_na
     where = " · ".join(x for x in (f"Project {project}" if project else "",
                                    f"board {board_name}" if board_name else "") if x)
     page = "\n".join([
-        "<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>{esc(head)}</title>", f"<style>{AC_PAGE_CSS}</style></head><body>",
-        f"<h1>{esc(head)}</h1>", f"<p class=muted>{esc(where)}</p>",
+        *_page_top(head, where, AC_PAGE_CSS),
         f"<p class=verdict>Verdict: {esc(doc.get('verdict'))}. {esc(doc.get('verdict_note', ''))}</p>",
         *parts,
         f"<p class=muted>Generated by Coppernicus {esc(__version__)}. Board files were only read. This "
@@ -641,8 +664,8 @@ def write_ac_report(doc: Mapping[str, Any], path, *, project: str = "", board_na
 
 
 NOISE_PAGE_CSS = AC_PAGE_CSS + "\n" + "\n".join([
-    "figure { margin: 12px 0; } figcaption { color: #7a838c; font-size: 13px; }",
-    ".scroll { overflow-x: auto; } td.fail { color: #c62828; font-weight: 600; }",
+    "figure { margin: 12px 0; } figcaption { color: var(--muted); font-size: 13px; }",
+    ".scroll { overflow-x: auto; } td.fail { color: var(--fail); font-weight: 600; }",
     "td.num { white-space: nowrap; }",
 ])
 
@@ -753,10 +776,7 @@ def write_noise_report(doc: Mapping[str, Any], path, *, project: str = "", board
                                    f"board {board_name}" if board_name else "") if x)
     top_warns = "".join(f"<li>{esc(w)}</li>" for w in doc.get("warnings", []))
     page = "\n".join([
-        "<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>{esc(head)}</title>", f"<style>{NOISE_PAGE_CSS}</style></head><body>",
-        f"<h1>{esc(head)}</h1>", f"<p class=muted>{esc(where)}</p>",
+        *_page_top(head, where, NOISE_PAGE_CSS),
         f"<p class=verdict>Verdict: {esc(doc.get('verdict'))}. {esc(doc.get('verdict_note', ''))}</p>",
         f"<h3>Warnings</h3><ul>{top_warns}</ul>" if top_warns else "",
         *parts,
@@ -770,7 +790,7 @@ def write_noise_report(doc: Mapping[str, Any], path, *, project: str = "", board
     return out
 
 
-TOLERANCE_PAGE_CSS = NOISE_PAGE_CSS + "\n" + "td.missing { color: #b26a00; font-style: italic; }"
+TOLERANCE_PAGE_CSS = NOISE_PAGE_CSS + "\n" + "td.missing { color: var(--warn); font-style: italic; }"
 
 
 def write_tolerance_report(doc: Mapping[str, Any], path, *, project: str = "", board_name: str = "",
@@ -866,10 +886,7 @@ def write_tolerance_report(doc: Mapping[str, Any], path, *, project: str = "", b
     notes = "".join(f"<li>{esc(a)}</li>" for a in doc.get("assumptions", []))
     costs = "".join(f"<li>{esc(e.get('solve'))}: {esc(e.get('text'))}</li>" for e in doc.get("estimates", []))
     page = "\n".join([
-        "<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>{esc(head)}</title>", f"<style>{TOLERANCE_PAGE_CSS}</style></head><body>",
-        f"<h1>{esc(head)}</h1>", f"<p class=muted>{esc(where)}</p>",
+        *_page_top(head, where, TOLERANCE_PAGE_CSS),
         f"<p class=verdict>Verdict: {esc(doc.get('verdict'))}. {esc(doc.get('verdict_note', ''))}</p>",
         ("<h3>Failed and not judged</h3><div class=scroll><table><thead><tr><th>Load</th><th>Net</th>"
          "<th>Tolerance</th><th>Verdict</th><th>Reason</th></tr></thead>"
