@@ -163,10 +163,10 @@ Split (each drop part by part, from its rail's source to its worst pins, toward 
     copper         +3V3_F         FB1.2 → U2.1                 6.903 mV
     ground copper  GND            U2.3 → U1.3                 25.145 mV
 Nets (each from where it is fed; shown, never judged)
-  net          group           V min      V max  fed from                drop/rise     copper      vias
-  +3V3         +3V3         3.290777   3.305691  U1 (U1.2)            drop 14.914 mV    33.9 mW      0 mW
-  +3V3_F       +3V3         3.183774   3.190677  FB1 (FB1.2)          drop 6.903 mV    13.8 mW      0 mW
-  GND          GND          0.000000   0.038470  J1 (J1.2)            rise 38.470 mV    74.3 mW      0 mW
+  net          group           V min      V max  fed from                    drop/rise     copper      vias
+  +3V3         +3V3         3.290777   3.305691  U1 (U1.2)              drop 14.914 mV    33.9 mW      0 mW
+  +3V3_F       +3V3         3.183774   3.190677  FB1 (FB1.2)             drop 6.903 mV    13.8 mW      0 mW
+  GND          GND          0.000000   0.038470  J1 (J1.2)              rise 38.470 mV    74.3 mW      0 mW
   link FB1 (+3V3 → +3V3_F): 100.100 mV across
 ```
 

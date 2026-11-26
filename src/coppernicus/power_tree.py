@@ -730,7 +730,7 @@ def split_text(doc: Dict[str, Any]) -> List[str]:
                   f"{s['mv']:>10.3f} mV" for s in segs]
     lines += ["Nets (each from where it is fed; shown, never judged)",
               f"  {'net':<12} {'group':<10} {'V min':>10} {'V max':>10}  {'fed from':<20} "
-              f"{'drop/rise':>12} {'copper':>10} {'vias':>9}"]
+              f"{'drop/rise':>16} {'copper':>10} {'vias':>9}"]
     notes = []
     for gr in doc["groups"]:
         for n in gr.get("net_split") or ():
@@ -740,7 +740,7 @@ def split_text(doc: Dict[str, Any]) -> List[str]:
             word = "rise" if "rise_mv" in n else "drop"
             lines.append(f"  {n['net']:<12} {gr['group']:<10} {_fmt(n['v_min_v'], 10, '.6f', '')} "
                          f"{_fmt(n['v_max_v'], 10, '.6f', '')}  {fed:<20} "
-                         f"{(word + ' ' + _mv_text(change)) if change is not None else '—':>12} "
+                         f"{(word + ' ' + _mv_text(change)) if change is not None else '—':>16} "
                          f"{_fmt(n['copper_loss_w'], 10, '.3g', ' mW', 1e3)} "
                          f"{_fmt(n['via_loss_w'], 9, '.3g', ' mW', 1e3)}")
         if gr.get("split_note"):
