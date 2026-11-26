@@ -29,13 +29,15 @@ direct = so.direct                     # KiPI's kipi.core.solver.direct, as the 
 @pytest.fixture(autouse=True)
 def nothing_installed():
     """Every test starts with nothing installed; the parts on before it (the engine's default,
-    or what COPPERNICUS_SUPERLU_ORDER says) are on again after it."""
-    before = so.enabled()
+    or what COPPERNICUS_SUPERLU_ORDER says) and the DC direct ceiling are put back after it."""
+    before, ceiling = so.enabled(), so.dc_direct_max()
     so.uninstall()
     yield
     so.uninstall()
     if before:
         so.enable(*sorted(before))
+    if ceiling is not None:
+        so.set_dc_direct_max(ceiling)
 
 
 @pytest.fixture

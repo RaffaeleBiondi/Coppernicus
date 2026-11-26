@@ -1568,10 +1568,10 @@ machine, it did not happen: the DC factorizations took 0.73–0.91× KiPI's time
 `dc` default). `ac` stays opt-in until a real board's AC solve is checked. The heat model's grid
 (at most 7 non-zeros a row) has no such rows.
 
-**DC direct ceiling (opt-in, `COPPERNICUS_DC_DIRECT_MAX=<unknowns>`).** KiPI solves a DC system
-of more than 200,000 unknowns with AMG-CG (to a 1e-10 relative residual) where SuperLU is its
-backend (`spd.direct_solve_max_unknowns`, spd.py:53). With the ceiling set and the `dc` part
-active, a system up to it is factorized instead, checked as above, never past KiPI's SuperLU
+**DC direct ceiling (on by default at 400,000 unknowns, `COPPERNICUS_DC_DIRECT_MAX`).** KiPI
+solves a DC system of more than 200,000 unknowns with AMG-CG (to a 1e-10 relative residual) where
+SuperLU is its backend (`spd.direct_solve_max_unknowns`, spd.py:53). With the `dc` part active, a
+system up to the ceiling is factorized instead, checked as above, never past KiPI's SuperLU
 limit (1,000,000 unknowns) nor past the largest system whose estimated memory fits half the
 memory free (KiPI's own share for PARDISO, spd.py `PARDISO_MEMORY_SHARE`). The estimate,
 `dc_direct_memory_bytes`, is a fit of the memory one factorization and one solve added on
@@ -1589,7 +1589,17 @@ is per system: a power tree holds one factorization per group.
 iteration factorizes again while AMG-CG reuses its hierarchy, so the gain there is smaller.
 Criterion `dc_direct`: 1e-9 relative with the floor per unit, since CG's 1e-10 relative
 residual bounds its own error at about that order and the exact solve removes it (measured: at
-most 5.9e-11 on the fingerprints, 4.5e-11 on solution vectors). Off by default.
+most 5.9e-11 on the fingerprints, 4.5e-11 on solution vectors).
+
+The switch, read when `coppernicus.engine` is imported and only while the `dc` part is on:
+`COPPERNICUS_DC_DIRECT_MAX` unset, a ceiling of 400,000 unknowns (the owner's decision);
+`COPPERNICUS_DC_DIRECT_MAX=0` or empty restores KiPI's rule; any other value sets the ceiling; a
+value that is not a number of unknowns is warned of and keeps KiPI's rule. With
+`COPPERNICUS_SUPERLU_ORDER=off` (or a list without `dc`) nothing is installed for it; with
+PARDISO, KiPI's own rule applies. `superlu_order.set_dc_direct_max(None)` restores KiPI's rule.
+On private real boards, large rails (above KiPI's limit, under the default ceiling) took about
+half the time for about a quarter more memory, every change within `dc_direct`; a system between
+the ceiling and 1,000,000 unknowns stays on AMG-CG by default.
 
 Not refitted: the memory estimates (`thermal_ram_estimate`; the AC `ram_estimate` and
 `noise_ram_estimate`) were measured in KiPI's order; with their part active (on, with SuperLU as

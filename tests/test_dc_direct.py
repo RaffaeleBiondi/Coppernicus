@@ -1,5 +1,6 @@
-"""A raised direct-solve ceiling for the DC copper (coppernicus.engine.superlu_order, opt-in:
-COPPERNICUS_DC_DIRECT_MAX): KiPI solves a system of more than 200,000 unknowns with AMG-CG (to a
+"""A raised direct-solve ceiling for the DC copper (coppernicus.engine.superlu_order, on by
+default at 400,000 unknowns, COPPERNICUS_DC_DIRECT_MAX=0 or empty restores KiPI's rule, any other
+value sets the ceiling): KiPI solves a system of more than 200,000 unknowns with AMG-CG (to a
 1e-10 relative residual) where SuperLU is its backend; with the ceiling raised, and the dc part's
 symmetric order on, it is factorized instead, as long as its estimated memory fits KiPI's own
 rule (half the memory free, the share KiPI allows PARDISO). Results move from CG's tolerance to
@@ -123,15 +124,113 @@ def test_the_memory_estimate_grows_with_the_unknowns():
         assert abs(cap - n) <= 1
 
 
-@pytest.mark.parametrize("value, ceiling", [(None, "-"), ("400000", "400000")])
-def test_importing_the_engine_sets_the_ceiling_the_environment_names(value, ceiling):
-    env = {k: v for k, v in os.environ.items() if k != so.DC_DIRECT_ENV}
+@pytest.mark.parametrize("order, value, ceiling, installed", [
+    (None, None, "400000", True),              # the default
+    (None, "0", "-", False), (None, "", "-", False), (None, "  ", "-", False),   # KiPI's rule
+    (None, "250000", "250000", True), (None, "4e5", "400000", True),
+    ("off", None, "-", False),                 # KiPI's method: nothing installed
+    ("thermal", None, "-", False),             # no dc part: the ceiling does not act
+    (None, "lots", "-", False)])               # not a number: warned, KiPI's rule
+def test_importing_the_engine_sets_the_ceiling_the_environment_names(order, value, ceiling, installed):
+    env = {k: v for k, v in os.environ.items() if k not in (so.DC_DIRECT_ENV, so.ENV)}
     if value is not None:
         env[so.DC_DIRECT_ENV] = value
-    code = "import coppernicus.engine.superlu_order as so; print(so.dc_direct_max() or '-')"
+    if order is not None:
+        env[so.ENV] = order
+    code = ("import coppernicus.engine.superlu_order as so; "
+            "print(so.dc_direct_max() or '-', "
+            "so.spd.direct_solve_max_unknowns is not so.KIPI_SPD['direct_solve_max_unknowns'])")
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr
-    assert out.stdout.split() == [ceiling]
+    assert out.stdout.split() == [ceiling, str(installed)]
+
+
+# ------------------------------------------------------------------- the default (the owner's decision)
+
+def test_unset_the_default_ceiling_is_400000(monkeypatch):
+    monkeypatch.setattr(so, "free_memory", lambda: 64 * 2**30)
+    so.uninstall()
+    assert so.configure_from_env({}) == frozenset({"thermal", "dc"})
+    assert so.DC_DIRECT_DEFAULT == 400_000 == so.dc_direct_max()
+    assert spd.direct_solve_max_unknowns() == 400_000
+
+
+@pytest.mark.parametrize("value", ["0", "", " "])
+def test_0_or_empty_restores_kipis_rule(value):
+    so.uninstall()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        so.configure_from_env({so.DC_DIRECT_ENV: value})
+    assert so.dc_direct_max() is None
+    assert spd.direct_solve_max_unknowns is so.KIPI_SPD["direct_solve_max_unknowns"]
+    assert spd.direct_solve_max_unknowns() == KIPI_LIMIT
+
+
+def test_an_explicit_value_sets_the_ceiling(monkeypatch):
+    monkeypatch.setattr(so, "free_memory", lambda: 64 * 2**30)
+    so.uninstall()
+    so.configure_from_env({so.DC_DIRECT_ENV: "250000"})
+    assert so.dc_direct_max() == 250_000 and spd.direct_solve_max_unknowns() == 250_000
+
+
+def test_an_invalid_value_is_warned_and_keeps_kipis_rule():
+    so.uninstall()
+    with pytest.warns(UserWarning, match="not a number of unknowns"):
+        so.configure_from_env({so.DC_DIRECT_ENV: "lots"})
+    assert so.dc_direct_max() is None
+    assert spd.direct_solve_max_unknowns is so.KIPI_SPD["direct_solve_max_unknowns"]
+
+
+@pytest.mark.parametrize("order", ["off", "", "thermal", "ac"])
+def test_without_the_dc_part_nothing_is_raised(order):
+    """COPPERNICUS_SUPERLU_ORDER=off (or any list without dc) leaves KiPI's direct-solve rule
+    untouched: nothing installed for it."""
+    so.uninstall()
+    so.configure_from_env({so.ENV: order})
+    assert so.dc_direct_max() is None
+    assert spd.direct_solve_max_unknowns is so.KIPI_SPD["direct_solve_max_unknowns"]
+    so.uninstall()
+    so.configure_from_env({so.ENV: order, so.DC_DIRECT_ENV: "300000"})     # named, still no dc
+    assert spd.direct_solve_max_unknowns is so.KIPI_SPD["direct_solve_max_unknowns"]
+    assert spd.direct_solve_max_unknowns() == KIPI_LIMIT
+
+
+def test_with_pardiso_the_default_keeps_kipis_rule(monkeypatch):
+    so.uninstall()
+    so.configure_from_env({})
+    kipis = so.KIPI_SPD["direct_solve_max_unknowns"]
+    monkeypatch.setattr(so.direct, "backend", lambda: "pardiso")
+    assert spd.direct_solve_max_unknowns() == kipis()
+
+
+def test_a_system_between_400k_and_1m_stays_on_amg_cg_by_default(monkeypatch):
+    """The default ceiling: 400,000 unknowns. A 500,000-unknown system is above it (AMG-CG, KiPI's
+    path), and so is any up to KiPI's SuperLU limit; scaled down, the demo rail above a lowered
+    default stays on AMG-CG (nothing factorized) where a ceiling above it factorizes it."""
+    monkeypatch.setattr(so, "free_memory", lambda: 64 * 2**30)
+    so.uninstall()
+    so.configure_from_env({})
+    limit = spd.direct_solve_max_unknowns()
+    assert limit == 400_000 and not 500_000 <= limit and not 999_999 <= limit
+    monkeypatch.setattr(spd, "DIRECT_SOLVE_MAX_UNKNOWNS", 1000)
+    monkeypatch.setattr(so, "DC_DIRECT_DEFAULT", 10_000)     # the demo rail has some 22,000 unknowns
+    calls = []
+    real = so.splu
+
+    def spy(A, **kw):
+        calls.append(A.shape[0])
+        return real(A, **kw)
+    monkeypatch.setattr(so, "splu", spy)
+    so.uninstall()
+    so.configure_from_env({})
+    assert so.dc_direct_max() == 10_000
+    rail = Rail("+3V3", sources=[Source("J1", 3.3)],
+                loads=[Load("U1", 2.0), Load("U2", 1.5), Load("U3", 0.3)])
+    solve_rail(Board(demo_board()), rail)
+    assert calls == []                                       # above the default: AMG-CG
+    so.set_dc_direct_max(10**6)
+    solve_rail(Board(demo_board()), rail)
+    assert len(calls) == 1 and calls[0] > 10_000             # under a ceiling above it: factorized
 
 
 def test_a_rail_over_kipis_ceiling_is_factorized_and_moves_within_cg_s_tolerance(monkeypatch):

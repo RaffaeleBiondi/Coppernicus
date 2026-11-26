@@ -16,11 +16,14 @@ def kipi_factorizations():
 @pytest.fixture
 def kipis_method():
     """KiPI's own factorizations for one test (every superlu_order part out), for a comparison
-    with KiPI to the last bit; the parts that were on are turned on again after it."""
+    with KiPI to the last bit; the parts that were on, and the DC direct ceiling, are put back
+    after it."""
     import coppernicus.engine.superlu_order as so
-    before = so.enabled()
+    before, ceiling = so.enabled(), so.dc_direct_max()
     so.uninstall()
     yield
     so.uninstall()
     if before:
         so.enable(*sorted(before))
+    if ceiling is not None:
+        so.set_dc_direct_max(ceiling)

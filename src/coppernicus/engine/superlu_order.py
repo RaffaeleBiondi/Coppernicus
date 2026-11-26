@@ -77,8 +77,10 @@ with those functions of the expected signature; otherwise a warning (once) and K
 :func:`kipi_path` marks a thread's factorizations as KiPI's whatever is on (the electro-thermal
 drift reference). :func:`uninstall` puts KiPI's back (the tests).
 
-The DC direct ceiling (opt-in: ``COPPERNICUS_DC_DIRECT_MAX=<unknowns>`` or
-:func:`set_dc_direct_max`). KiPI solves a DC system of more than 200,000 unknowns with AMG-CG, to
+The DC direct ceiling: on by default at 400,000 unknowns (:data:`DC_DIRECT_DEFAULT`) while the
+``dc`` part is on; ``COPPERNICUS_DC_DIRECT_MAX=0`` or empty restores KiPI's rule, any other value
+sets the ceiling (a value that is not a number of unknowns is warned of and keeps KiPI's rule); or
+:func:`set_dc_direct_max`. KiPI solves a DC system of more than 200,000 unknowns with AMG-CG, to
 a 1e-10 relative residual, where SuperLU is its backend (``spd.DIRECT_SOLVE_MAX_UNKNOWNS``). With
 the ceiling set and the ``dc`` part active, a system up to the ceiling is factorized instead
 (and checked as above), never past KiPI's SuperLU limit (``DIRECT_SOLVE_MAX_UNKNOWNS_PARDISO``,
@@ -87,8 +89,10 @@ fits half the memory free, the share KiPI allows PARDISO. On synthetic boards (t
 loaded machine) a rail of 262,000 to 352,000 unknowns solved in about half the time, a power tree
 in 0.6–0.9×, an electro-thermal tree in 0.8–1.0× (each iteration factorizes again, where AMG-CG
 reuses its hierarchy), all with 1.3–1.8× the peak memory; results moved by at most 5.9e-11
-relative. Criterion ``dc_direct``, 1e-9 relative with the floor per unit: CG's 1e-10 relative
-residual bounds its own error at about that order; the exact solve removes it.
+relative. On private real boards, large rails took about half the time for about a quarter more
+memory, every change within the criterion. Criterion ``dc_direct``,
+1e-9 relative with the floor per unit: CG's 1e-10 relative residual bounds its own error at about
+that order; the exact solve removes it.
 
 The memory estimates (the board temperature's
 :func:`coppernicus.engine.thermal.thermal_ram_estimate`, the AC and noise solves'
@@ -133,8 +137,11 @@ _SEAMS = {"_superlu": ["A"], "_superlu_complex": ["A"]}
 # The thread marker that sends a thread's factorizations to KiPI's functions (kipi_path).
 _KIPI = "kipi"
 
-# The raised direct-solve ceiling for the DC copper (opt-in): see set_dc_direct_max.
+# The raised direct-solve ceiling for the DC copper (on by default): see set_dc_direct_max.
 DC_DIRECT_ENV = "COPPERNICUS_DC_DIRECT_MAX"
+# The ceiling with the variable unset (the owner's decision, after the measurements in the
+# docstring): 0 or an empty value restores KiPI's rule, any other value sets the ceiling.
+DC_DIRECT_DEFAULT = 400_000
 # The memory a DC direct solve in SuperLU's symmetric order adds, bytes = A · unknowns ** B: the
 # least-squares fit (A 72.15, B 1.2343, within -7 % / +8 % of each point) of the peak resident
 # memory one factorization and one solve added, one fresh process each, on the DC systems of
@@ -272,7 +279,10 @@ def uninstall() -> None:
 
 def configure_from_env(environ: Mapping[str, str] = os.environ) -> frozenset:
     """Turn on the parts :data:`ENV` names: unset, :data:`DEFAULT_PARTS`; ``off`` or empty,
-    none (nothing installed: KiPI's method); else the parts listed. The parts on afterwards."""
+    none (nothing installed: KiPI's method); else the parts listed. With the ``dc`` part on, the
+    DC direct ceiling :data:`DC_DIRECT_ENV` gives: unset, :data:`DC_DIRECT_DEFAULT`; ``0`` or empty
+    (or a value that is not a number of unknowns, warned of), KiPI's rule; else that ceiling.
+    The parts on afterwards."""
     value = environ.get(ENV)
     if value is None:
         parts = set(DEFAULT_PARTS)
@@ -282,9 +292,12 @@ def configure_from_env(environ: Mapping[str, str] = os.environ) -> frozenset:
         parts = parse(value, _stacklevel=3)
     if parts:
         enable(*sorted(parts), _stacklevel=3)
-    ceiling = parse_dc_direct_max(environ.get(DC_DIRECT_ENV), _stacklevel=3)
-    if ceiling is not None:
-        set_dc_direct_max(ceiling, _stacklevel=3)
+    # The DC direct ceiling only acts with the dc part on: without it, nothing is installed.
+    if "dc" in enabled():
+        text = environ.get(DC_DIRECT_ENV)
+        ceiling = DC_DIRECT_DEFAULT if text is None else parse_dc_direct_max(text, _stacklevel=3)
+        if ceiling is not None:
+            set_dc_direct_max(ceiling, _stacklevel=3)
     return enabled()
 
 

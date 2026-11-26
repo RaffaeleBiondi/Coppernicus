@@ -17,9 +17,6 @@ results against your own judgement.
   holders no longer forces the whole return through one holder, which overstated the ground
   rise and the ground copper's loss. Ideal supplies (`kind: source`) only; a single ground part
   gives the same results as before.
-- `COPPERNICUS_DC_DIRECT_MAX=<unknowns>` (opt-in) solves DC systems above KiPI's 200,000-unknown
-  direct limit with a direct factorization instead of AMG-CG, within KiPI's SuperLU limit and
-  half the free memory; results equal within 1e-9 (CG's tolerance).
 - Agents can probe, map and cut the power tree: the MCP `solve_tree` returns `tree_id` (`t1`)
   and a `result_id` per group (`t1:GND`), which `probe`, `render_map` and `cut_current` take;
   `report(result_ids=["t1"])` writes the tree's page. A probe on a group says its group, kind
@@ -32,6 +29,11 @@ results against your own judgement.
 
 ### Changed
 
+- A DC solve above KiPI's 200,000-unknown direct limit is now factorized directly, up to 400,000
+  unknowns by default, instead of solved with AMG-CG: about half the time on large rails, about a
+  quarter more memory, results equal within 1e-9 (CG's tolerance). It stays within KiPI's SuperLU
+  limit and half the free memory. `COPPERNICUS_DC_DIRECT_MAX=0` or empty restores KiPI's rule;
+  any other value sets the ceiling (`COPPERNICUS_SUPERLU_ORDER=off` turns it off too).
 - The hover label in the app leads with the value of the map shown, as one large number: the
   drop (with its % of the source voltage), V, |J|, the change of drop on the Δ map, or the
   board temperature. It switches at once when Show changes under a still pointer.

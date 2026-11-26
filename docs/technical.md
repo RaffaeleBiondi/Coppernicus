@@ -59,7 +59,11 @@ instead (`engine/superlu_order.py`): about half the fill, so on a large board ab
 and memory of the electro-thermal solve (measured on a large private test board). Numbers stay equal within the documented round-off criteria (each factorization is
 checked as KiPI checks the ones it does not trust, and redone by KiPI if it fails); the AC solves
 keep KiPI's order unless `ac` is named. `COPPERNICUS_SUPERLU_ORDER=off` restores KiPI's method
-exactly. Details, criteria and evidence: [engine-mapping.md](engine-mapping.md).
+exactly. A DC system above KiPI's 200,000-unknown direct limit, which KiPI solves with AMG-CG, is
+factorized directly up to 400,000 unknowns by default (within KiPI's SuperLU limit and half the
+free memory): about half the time on large rails for about a quarter more memory, equal within
+1e-9; `COPPERNICUS_DC_DIRECT_MAX=0` or empty restores KiPI's rule, any other value sets the
+ceiling. Details, criteria and evidence: [engine-mapping.md](engine-mapping.md).
 
 **Current density at sharp corners.** With linear elements, |J| at a re-entrant corner (the inner
 corner of an L, the end of a slot) grows as the mesh gets finer: the point value is singular.
