@@ -353,3 +353,73 @@ def test_the_ac_and_noise_ram_estimates_say_they_overstate_with_ac_on():
         assert "symmetric" not in off.text
         assert on.bytes == off.bytes and on.risk == off.risk
         assert on.text.startswith(off.text) and "overstates" in on.text and so.ENV in on.text
+
+
+# ------------------------------------------------------------------- the DC part
+
+def test_dc_part_takes_every_real_factorization_but_the_heat_models():
+    A = grid_spd()
+    b = np.random.default_rng(8).standard_normal(A.shape[0])
+    so.enable("dc")
+    sym = splu(A, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.0, options={"SymmetricMode": True})
+    assert np.array_equal(direct.factorize(A)(b), sym.solve(b))
+    with so.thermal_model():                                          # thermal off: KiPI's
+        assert np.array_equal(direct.factorize(A)(b), KIPI_SUPERLU(A)(b))
+    assert np.array_equal(direct._superlu_complex(ac_like())(b[:960] + 0j),
+                          KIPI_SUPERLU_COMPLEX(ac_like())(b[:960] + 0j))
+
+
+def test_thermal_on_leaves_the_dc_factorizations_kipis():
+    A = grid_spd()
+    b = np.ones(A.shape[0])
+    so.enable("thermal")
+    assert np.array_equal(direct.factorize(A)(b), KIPI_SUPERLU(A)(b))
+
+
+def test_dc_backward_error_on_and_off_alike_with_a_pad_node():
+    """A DC-like system: a grid with a pad node tied stiffly to 300 nodes (a dense row, as a
+    pad's terminal): the symmetric order's backward error is of the order of KiPI's."""
+    G = grid_spd(40, 36, 2, seed=9).tolil()
+    n = G.shape[0]
+    A = sp.lil_matrix((n + 1, n + 1))
+    A[:n, :n] = G
+    tied = np.arange(500, 800)
+    for i in tied:
+        A[n, i] = A[i, n] = -1e3
+        A[i, i] += 1e3
+    A[n, n] = 1e3 * len(tied) + 1e-6
+    A = A.tocsc()
+    b = np.random.default_rng(10).standard_normal(n + 1)
+    off = backward_error(A, KIPI_SUPERLU(A)(b), b)
+    so.enable("dc")
+    on = backward_error(A, direct.factorize(A)(b), b)
+    assert off < 1e-14 and on < 1e-14
+    assert on < 10 * off + 1e-16 and off < 10 * on + 1e-16
+
+
+def test_dc_solve_moves_by_round_off_only(demo, monkeypatch):
+    """The demo rail solved on its own: the same mesh, drops, load voltages, via currents and
+    losses within the proof criterion (1e-9 relative, the floor per unit); its factorization
+    ours."""
+    from coppernicus.engine import solve_rail
+    rail = Rail("+3V3", sources=[Source("J1", 3.3)],
+                loads=[Load("U1", 2.0), Load("U2", 1.5), Load("U3", 0.3)])
+    off = solve_rail(demo, rail)
+    calls = []
+    real = so.splu
+
+    def spy(A, **kw):
+        calls.append(kw["permc_spec"])
+        return real(A, **kw)
+    monkeypatch.setattr(so, "splu", spy)
+    so.enable("dc")
+    on = solve_rail(demo, rail)
+    assert calls and set(calls) == {"MMD_AT_PLUS_A"}
+    assert on.stats.get("triangles") == off.stats.get("triangles")
+    tol = so.TOLERANCE_REL["dc"]
+    assert close([t.v_min for t in off.loads], [t.v_min for t in on.loads], tol)
+    assert close([off.max_drop], [on.max_drop], tol) and close([off.power_loss], [on.power_loss], tol)
+    assert close([v.current for v in off.vias], [v.current for v in on.vias], tol)
+    for la, lb in zip(off.layers, on.layers, strict=True):
+        assert np.array_equal(la.points, lb.points)
+        assert close(la.voltage, lb.voltage, tol)

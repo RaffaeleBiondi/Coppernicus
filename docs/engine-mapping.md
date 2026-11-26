@@ -1490,17 +1490,18 @@ by default**.
 | Part | What runs in SuperLU's symmetric mode | Pivoting |
 |------|---------------------------------------|----------|
 | `thermal` | the board temperature's heat model (`BoardThermalModel`, model.py:282), marked on the calling thread around its construction in `engine/thermal.py` | none (symmetric positive definite) |
+| `dc` | every other real factorization (outside the heat model's marker): the DC copper's direct solves (`SpdSolver`, spd.py:117 and its fallback at :163; SuperLU up to 200,000 unknowns) | none (symmetric positive definite) |
 | `ac` | every complex factorization: the AC field solves, one per field frequency (field.py, fem.py:648), and so the noise and tolerance solves; process-wide, since KiPI solves the frequencies in its own threads | partial, threshold 0.1 (KiPI: SciPy's 1.0): the systems are indefinite |
 
-How to enable: `COPPERNICUS_SUPERLU_ORDER=thermal,ac` in the environment (comma-separated
-parts, read when `coppernicus.engine` is imported), or `superlu_order.enable("thermal", "ac")`.
+How to enable: `COPPERNICUS_SUPERLU_ORDER=thermal,ac,dc` in the environment (comma-separated
+parts, read when `coppernicus.engine` is imported), or `superlu_order.enable("thermal", "ac", "dc")`.
 
 Off, nothing is replaced and KiPI's own path runs: bit-identical (the drift test of our
 electro-thermal loop against KiPI's `solve_electrothermal` runs with it off). On, a different
 order rounds differently: results move by round-off only. Proof criteria (checks of "round-off
 only", not limits of the product):
 
-- `thermal`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative, with a
+- `thermal` and `dc`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative, with a
   floor per unit for values near zero (the unit's largest magnitude in the fingerprint × 1e-9);
 - `ac`: |Z| within 1e-8 relative (and the noise and tolerance scalars that come from it): at low
   frequency the rail is tied to ground only through the plane capacitance, an ill-conditioned
@@ -1519,6 +1520,18 @@ KiPI's name `superlu` and its true memory, which KiPI's thread count reads (fiel
 The seam: KiPI's private functions are replaced process-wide, once, only on KiPI 1.0.1 with
 those functions of the expected signature (otherwise a warning, once, and KiPI's path); a part
 that is off hands its factorizations to KiPI's own function. `uninstall()` puts KiPI's back.
+
+DC: on the rails of a 100 mm synthetic board (103,000 and 169,000 unknowns) the factors halve,
+the factorization takes 0.28 → 0.20 s and 0.58 → 0.42 s, each solve half the time. **Open
+risk:** KiPI's own comment at `direct._superlu` says this order "takes minutes" on its meshes.
+On synthetic meshes it took 0.5 s even with dense pad rows (20 nodes tied to 1,000 nodes each:
+COLAMD 15.8 s there), but that does not refute a remark made on real boards: `dc` is not to be
+made a default before a run on a real board on a quiet machine.
+
+Recorded for a later ruling, not built: with this order a direct solve beats KiPI's AMG-CG
+(above 200,000 unknowns) at 352,000 unknowns (1.13 s against 2.68 s, but 647 MB against
+241 MB) and ties at 620,000 (3.6 s against 3.4 s, 1.7 GB against 0.43 GB): raising the direct
+ceiling would replace CG's 1e-10 relative residual with an exact solve for mid-size rails.
 
 Not refitted: the memory estimates (`thermal_ram_estimate`; the AC `ram_estimate` and
 `noise_ram_estimate`) were measured in KiPI's order; with their part on they overstate, and

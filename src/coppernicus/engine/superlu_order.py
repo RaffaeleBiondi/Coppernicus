@@ -23,6 +23,13 @@ Parts, each off unless enabled:
   memory, which KiPI's thread count reads (``kipi/ac/solver/field.py`` ``threads``). On KiPI's
   pdn example (19,783 unknowns, 111 field frequencies): factors 5.2 M → 3.3 M non-zeros, each
   0.25 → 0.155 s and 208 → 135 MB.
+* ``dc``: every other real factorization, outside :func:`thermal_model`: the DC copper's
+  direct solves (KiPI ``SpdSolver``, up to 200,000 unknowns with SuperLU), symmetric positive
+  definite, without pivoting. On the rails of a 100 mm synthetic board (103,000 and 169,000
+  unknowns): factors halved, factorization 0.28 → 0.20 s and 0.58 → 0.42 s, solves 2× faster.
+  OPEN RISK: KiPI's own comment at ``direct._superlu`` says this order "takes minutes" on its
+  meshes; on synthetic meshes, dense pad rows included, it took 0.5 s. Not to be made a default
+  before a run on a real board.
 
 Enabled by the environment variable ``COPPERNICUS_SUPERLU_ORDER`` (comma-separated parts, read
 when :mod:`coppernicus.engine` is imported) or by :func:`enable`.
@@ -30,7 +37,7 @@ when :mod:`coppernicus.engine` is imported) or by :func:`enable`.
 Off, nothing is replaced and KiPI's own path runs: bit-identical. On, a different order rounds
 differently, so results move by round-off only. The proof criteria for that (checks of
 "round-off only", not limits of the product), :data:`TOLERANCE_REL`: the benchmark fingerprint's
-scalars agree within 1e-9 relative (thermal), with a floor per unit for values near zero (the
+scalars agree within 1e-9 relative (thermal, dc), with a floor per unit for values near zero (the
 unit's largest magnitude in the fingerprint × 1e-9); |Z| within 1e-8 relative (ac: at low
 frequency the rail is tied to ground only through the plane capacitance, an ill-conditioned
 system in which round-off grows, measured up to 8.6e-10); and the backward error
@@ -63,7 +70,7 @@ from kipi.core.solver import direct
 from scipy.sparse.linalg import splu
 
 ENV = "COPPERNICUS_SUPERLU_ORDER"
-PARTS = ("thermal", "ac")
+PARTS = ("thermal", "ac", "dc")
 KIPI_VERSION = "1.0.1"
 # SuperLU's symmetric mode: the column order and, for symmetric positive definite matrices,
 # the diagonal as pivot (threshold 0).
@@ -73,7 +80,7 @@ SPD_PIVOT_THRESHOLD = 0.0
 COMPLEX_PIVOT_THRESHOLD = 0.1
 # The proof criteria of "round-off only" per part (see the module's docstring): relative, with
 # an absolute floor per unit of this times the unit's largest magnitude.
-TOLERANCE_REL = {"thermal": 1e-9, "ac": 1e-8}
+TOLERANCE_REL = {"thermal": 1e-9, "ac": 1e-8, "dc": 1e-9}
 # KiPI's functions replaced, with the parameters they take.
 _SEAMS = {"_superlu": ["A"], "_superlu_complex": ["A"]}
 
@@ -198,8 +205,9 @@ def current_part() -> Optional[str]:
 
 def _superlu(A: sp.spmatrix) -> direct.DirectFactor:
     """KiPI's ``direct._superlu`` (a real symmetric positive definite A), in SuperLU's
-    symmetric mode when the part it belongs to is on."""
-    if current_part() not in _enabled:
+    symmetric mode when the part it belongs to is on: ``thermal`` inside
+    :func:`thermal_model`, ``dc`` outside."""
+    if (current_part() or "dc") not in _enabled:
         return _kipi["_superlu"](A)
     lu = splu(sp.csc_matrix(A), permc_spec=ORDER, diag_pivot_thresh=SPD_PIVOT_THRESHOLD,
               options={"SymmetricMode": True})
