@@ -403,3 +403,19 @@ def test_the_power_tree_tab_and_problems_show_a_regulator_over_its_rating(tmp_pa
                   for i in range(window.problems.tree.topLevelItemCount())]
         assert "U1: 0.5 A out, over its rated 0.4 A (from KiCad field PI_IMAX on U1)" in titles, titles
     ''')
+
+
+def test_the_tree_panel_shows_the_mean_across_beside_the_worst_pins(tmp_path):
+    project = chain_project(tmp_path / "chain")
+    run_in_window(SOLVE + f'''
+        tree = solve_tree({str(project)!r})
+        panel = window.tree_panel
+        headers = [panel.loads.horizontalHeaderItem(c).text() for c in range(panel.loads.columnCount())]
+        assert headers == panel.LOAD_HEADERS and "Across, mean (V)" in headers, headers
+        rows = {{row[0]: dict(zip(headers, row)) for row in panel.load_rows()}}
+        u4 = next(ld for ld in tree.loads if ld.name == "U4")
+        assert rows["U4"]["Worst pins (V)"] == f"{{u4.v_worst_v:.5f}}", rows["U4"]
+        u2 = next(v for v in tree.vrms if v.name == "U2")
+        assert rows["U2 (input)"]["Worst pins (V)"] == f"{{u2.v_in_worst_v:.5f}}", rows["U2 (input)"]
+        assert "which sets the drop" in panel.loads_note.text()
+''')

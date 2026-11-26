@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 from coppernicus.app.copper_thickness import CopperThicknessDialog, thickness_summary
 from coppernicus.app.fields_view import FieldsBanner
 from coppernicus.engine import Board, NetTie, PartPins
+from coppernicus.power_tree import ACROSS_NOTE
 from coppernicus.problems import ATTENTION, FAIL, Problem
 from coppernicus.project import (
     GRADING_RANGE,
@@ -1202,8 +1203,8 @@ class TreePanel(QWidget):
 
     VRM_HEADERS = ["Name", "Kind", "Group", "V set", "V out", "I out (A)", "V in", "I in (A)",
                    "P loss (mW)", "Ground (mV)", "Regulation"]
-    LOAD_HEADERS = ["Name", "Group", "I (A)", "Nominal", "Supply (V)", "Ground (mV)", "Across (V)",
-                    "Drop (mV)", "Drop (%)", "Verdict"]
+    LOAD_HEADERS = ["Name", "Group", "I (A)", "Nominal", "Supply (V)", "Ground (mV)", "Across, mean (V)",
+                    "Worst pins (V)", "Drop (mV)", "Drop (%)", "Verdict"]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1223,6 +1224,9 @@ class TreePanel(QWidget):
         layout.addWidget(self.vrms, 2)
         layout.addWidget(QLabel("<b>Loads</b> (the voltage across their supply and ground pins)"))
         layout.addWidget(self.loads, 3)
+        self.loads_note = QLabel(f"<small>{html.escape(ACROSS_NOTE[0].upper() + ACROSS_NOTE[1:])}</small>")
+        self.loads_note.setWordWrap(True)
+        layout.addWidget(self.loads_note)
         layout.addWidget(self.links)
         layout.addWidget(self.notes)
 
@@ -1286,8 +1290,8 @@ class TreePanel(QWidget):
                 fails.add(len(loads))
             loads.append((ld.name, ld.group, _cell(ld.current_a, ".4g"), f"{ld.nominal_v:g}",
                           _cell(ld.v_supply_v, ".5f"), _cell(ld.v_ground_v, ".2f", 1e3),
-                          _cell(ld.v_across_v, ".5f"), _cell(ld.drop_v, ".2f", 1e3),
-                          _cell(ld.drop_pct, ".2f"), verdict))
+                          _cell(ld.v_across_v, ".5f"), _cell(ld.v_worst_v, ".5f"),
+                          _cell(ld.drop_v, ".2f", 1e3), _cell(ld.drop_pct, ".2f"), verdict))
         # A regulator's input is a load on the rail feeding it, judged as one.
         for v in (v for v in tree.vrms if v.input_group):
             verdict = v.input_status or ("FAIL" if v.input_passed is False
@@ -1297,7 +1301,7 @@ class TreePanel(QWidget):
             across = (v.v_in_v - (v.v_ground_v or 0.0)) if v.v_in_v is not None else None
             loads.append((f"{v.name} (input)", v.input_group, _cell(v.i_in_a, ".4g"),
                           _cell(v.input_nominal_v, "g"), _cell(v.v_in_v, ".5f"),
-                          _cell(v.v_ground_v, ".2f", 1e3), _cell(across, ".5f"),
+                          _cell(v.v_ground_v, ".2f", 1e3), _cell(across, ".5f"), _cell(v.v_in_worst_v, ".5f"),
                           _cell(v.input_drop_v, ".2f", 1e3), _cell(v.input_drop_pct, ".2f"), verdict))
         self._fill(self.vrms, vrms, over)
         self._fill(self.loads, loads, fails)
