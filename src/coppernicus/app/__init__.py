@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -11,6 +12,18 @@ os.environ.setdefault("QT_API", "pyside6")
 
 ICON = Path(__file__).resolve().parent / "resources" / "icon.png"
 APP_NAME = "Coppernicus"
+
+
+def label_text(text: str) -> str:
+    """``text`` as a tab, menu, action or button label: Qt takes a lone "&" for a mnemonic
+    marker and draws "Ripple & noise" as "Ripple  noise", so each "&" is doubled."""
+    return text.replace("&", "&&")
+
+
+def shown_label(label: str) -> str:
+    """The words Qt draws for ``label``: "&&" as "&", a lone "&" (the mnemonic marker) dropped.
+    For finding a tab or an action by what the screen says: "Ripple && noise" -> "Ripple & noise"."""
+    return re.sub(r"&(.?)", r"\1", label, flags=re.DOTALL)
 
 
 def set_macos_app_name(name: str = APP_NAME) -> bool:

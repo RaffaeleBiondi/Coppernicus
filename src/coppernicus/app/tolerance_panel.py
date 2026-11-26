@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
 )
 
 from coppernicus import board_fields as BF
+from coppernicus.app import label_text
 from coppernicus.app.panels import FieldComboBox
 from coppernicus.project import (
     LOAD_PART_KEYS,
@@ -555,6 +556,11 @@ class TolerancePanel(QWidget):
                                       "<project>_tolerance.csv and <project>_tolerance_summary.json")
         self.export_button.setEnabled(False)
         self.table = _table(RESULT_HEADERS, RESULT_TIPS)
+        # Verdict shown next to Load and Net: the part and check cells are long, and it went off
+        # the right edge of a laptop-wide tab. Only the shown order moves; the cells keep their
+        # columns (RESULT_HEADERS), and Why stays last, stretched.
+        head = self.table.horizontalHeader()
+        head.moveSection(head.visualIndex(RESULT_HEADERS.index("Verdict")), RESULT_HEADERS.index("Net") + 1)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.notes = QPlainTextEdit(readOnly=True)
@@ -807,7 +813,7 @@ class TolerancePanel(QWidget):
             self.solve_button.setToolTip("Nothing a solve would add to the selected load" if self.result
                                          else "Open a board or a project")
         else:
-            self.solve_button.setText(self._next[2])
+            self.solve_button.setText(label_text(self._next[2]))   # a net or part name may hold "&"
             self.solve_button.setEnabled(True)
             self.solve_button.setToolTip(f"{self._next[2]}, in its own tab (its estimate first)")
 

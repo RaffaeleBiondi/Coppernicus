@@ -18,8 +18,12 @@ It is part of the [power tree](power-tree.md): a rail solved on its own is never
   copper**, set the options, then **Solve power tree** (Ctrl+T).
 - **Command line:** `coppernicus solve PROJECT --thermal` (it implies `--tree`); `--tree` alone
   does it too when the project enables it. One PNG per copper layer is written next to the
-  summary (`<project>_temperature_<layer>.png`), unless `--no-maps`; `--html` adds the
-  [Board temperature section](html-report.md#board-temperature) to the tree report.
+  summary (`<project>_temperature_<layer>.png`), unless `--no-maps`; `<project>` is the project
+  file's name without `.yml`, as for every command's files, so `demo-thermal.coppernicus.yml`
+  gives `demo-thermal.coppernicus_temperature_F.Cu.png` beside
+  `demo-thermal.coppernicus_tree_summary.json`. `--html` adds the
+  [Board temperature section](html-report.md#board-temperature) to the tree report
+  (`<project>_tree_report.html`).
 - **Agents:** the MCP tool `solve_tree` with `thermal: true`, and `thermal_options` for a
   what-if (see [Agents](agents.md#board-temperature)).
 - **CI:** with the Action's `tree` input, a project that enables it is solved and judged by it

@@ -388,9 +388,11 @@ def main(argv=None) -> int:
             return window
 
         def tab(window, text: str):
-            """The Results tab named ``text``, shown, wherever it is in the row of tabs."""
+            """The Results tab named ``text`` (as the screen shows it: "Ripple & noise"), shown,
+            wherever it is in the row of tabs."""
+            from coppernicus.app import shown_label
             tabs = window.results_tabs
-            names = [tabs.tabText(i) for i in range(tabs.count())]
+            names = [shown_label(tabs.tabText(i)) for i in range(tabs.count())]
             need(text in names, f"no {text!r} tab in the Results panel: {names}")
             tabs.setCurrentIndex(names.index(text))
             settle()
@@ -483,6 +485,11 @@ def main(argv=None) -> int:
         said = panel.go_to_row(loads.index("U2"))   # a click on the row: U2 on the board, its verdict
         settle()
         need(said.startswith("U2 on VOUT"), f"the U2 row did not show U2: {said!r}")
+        from coppernicus.app.tolerance_panel import RESULT_HEADERS
+        head, verdict = panel.table.horizontalHeader(), RESULT_HEADERS.index("Verdict")
+        left = head.sectionViewportPosition(verdict)
+        need(0 <= left and left + head.sectionSize(verdict) <= panel.table.viewport().width(),
+             "the stack-up's Verdict column is not in view")
         save(window, "tolerance-1-window", "")
         closed(window)
 

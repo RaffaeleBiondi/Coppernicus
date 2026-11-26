@@ -472,7 +472,8 @@ def run_in_window(body: str) -> None:
 
 def test_the_tolerance_tab_follows_ripple_and_noise_and_opening_changes_nothing():
     run_in_window(f'''
-        tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
+        from coppernicus.app import shown_label
+        tabs = [shown_label(window.results_tabs.tabText(i)) for i in range(window.results_tabs.count())]
         assert tabs[tabs.index("Ripple & noise") + 1] == "Tolerance", tabs
         assert window.results_tabs.widget(tabs.index("Tolerance")) is panel
         window.show()
@@ -547,6 +548,31 @@ def test_a_rail_edit_turns_a_pass_not_judged_without_a_tab_switch():
         assert cells()[-2] == "NOT JUDGED", cells()
         assert cells()[3].startswith("missing") and cells()[5].startswith("missing")
         assert "the setup changed since its solve" in panel.table.item(0, 5).toolTip()
+    ''')
+
+
+def test_the_verdict_is_in_view_at_the_docs_window_size():
+    """tools/make_docs_screenshots.py's window (1500 x 920, the Results dock 470 px tall): the
+    long part and check cells must not push Verdict off the table's right edge. Only the shown
+    order moves: the cells keep their columns (RESULT_HEADERS), as the code reads them."""
+    run_in_window(f'''
+        from coppernicus.app.tolerance_panel import RESULT_HEADERS
+        window.resize(1500, 920)
+        window.show()
+        window.open_project({EXAMPLE!r})
+        window.results_tabs.setCurrentWidget(panel)
+        dock = window.findChild(QtWidgets.QDockWidget, "Results")
+        window.resizeDocks([dock], [470], QtCore.Qt.Vertical)
+        app.processEvents()
+        held()
+        app.processEvents()
+        verdict, head = RESULT_HEADERS.index("Verdict"), panel.table.horizontalHeader()
+        assert cells()[verdict] == "PASS" and cells()[-2] == "PASS", cells()
+        left, width = head.sectionViewportPosition(verdict), head.sectionSize(verdict)
+        assert 0 <= left and left + width <= panel.table.viewport().width(), (
+            left, width, panel.table.viewport().width())
+        shown = [RESULT_HEADERS[head.logicalIndex(v)] for v in range(head.count())]
+        assert shown[:3] == ["Load", "Net", "Verdict"] and shown[-1] == "Why", shown
     ''')
 
 
