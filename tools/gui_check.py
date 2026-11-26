@@ -1177,7 +1177,7 @@ def solve_tree_and_wait(window, timeout_s: float):
 
 def run_power_tree(window, check: Checks, args, out: Path):
     """Task 7: on the power-chain example, a rail solved alone draws its regulator's
-    estimated input; "Solve power tree" fills the Power tree tab and the group selector; a
+    estimated input; "Solve tree" fills the Power tree tab and the group selector; a
     ground group shows its rise; the regulator box edits a source's kind, efficiency and pins
     and survives table edits and saving."""
     from PySide6.QtWidgets import QApplication
@@ -1196,7 +1196,7 @@ def run_power_tree(window, check: Checks, args, out: Path):
           f"{est[0].current:.4f} A" if est else str(res))
 
     tree = solve_tree_and_wait(window, args.timeout)
-    check("power tree: Solve power tree finishes", tree is not None and set(tree.groups) == {
+    check("power tree: Solve tree finishes", tree is not None and set(tree.groups) == {
         "VIN", "+3V3", "+1V8", "GND"}, "" if tree is None else str(sorted(tree.groups)))
     if tree is None:
         return
@@ -1389,7 +1389,7 @@ def run_power_tree(window, check: Checks, args, out: Path):
 
 
 def run_thermal(window, check: Checks, args, out: Path):
-    """Task 8 on the demo-thermal example: Solve power tree (Ctrl+T) fills the Temperature tab
+    """Task 8 on the demo-thermal example: Solve tree (Ctrl+T) fills the Temperature tab
     with the F.Cu and B.Cu rows and a fail against its 15 °C rise limit; the Board temperature
     map draws (the right way up), writes a PNG, reads °C on a double-click and in the hover
     (the same cell at the same pixel) and redraws in under 1 s; a 100 °C rise limit passes
@@ -2892,7 +2892,7 @@ def run_tolerance(window, check: Checks, args, out: Path):
     check("tolerance: nothing solved, nothing passes: the DC drop missing, solve the power tree (Ctrl+T)",
           panel.result is not None and panel.result.verdict == "not_judged" and cell(3).startswith("missing")
           and "Ctrl+T" in panel.table.item(0, 3).toolTip()
-          and panel.solve_button.text() == "Solve power tree",
+          and panel.solve_button.text() == "Solve tree",
           f"{cell(3)} | {panel.solve_button.text()}")
 
     panel.solve_next()                               # the power tree (cheap: no estimate to show)
@@ -2902,7 +2902,7 @@ def run_tolerance(window, check: Checks, args, out: Path):
     QApplication.processEvents()
     window.results_tabs.setCurrentWidget(panel)
     QApplication.processEvents()
-    check("tolerance: Solve power tree gives U2's DC drop from the tree; next, the noise of U1",
+    check("tolerance: Solve tree gives U2's DC drop from the tree; next, the noise of U1",
           window.tree is not None and cell(3).endswith("mV · tree")
           and panel.solve_button.text() == "Solve noise of U1", f"{cell(3)} | {panel.solve_button.text()}")
     estimates = []

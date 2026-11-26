@@ -235,7 +235,7 @@ class MainWindow(QMainWindow):
         self.view = BoardView()
         self.group_box = QComboBox()
         self.group_box.addItem("Rail solved alone", None)
-        self.group_box.setToolTip("After Solve power tree: show a rail or ground group of the tree")
+        self.group_box.setToolTip("After Solve tree: show a rail or ground group of the tree")
         self.layer_box = QComboBox()
         self.field_box = QComboBox()
         for key, (label, _cmap) in FIELDS.items():
@@ -365,9 +365,9 @@ class MainWindow(QMainWindow):
                                      ("Save project", QKeySequence.Save, self.save_project),
                                      ("Save project as…", QKeySequence.SaveAs, self.save_project_as),
                                      (None, None, None),
-                                     ("Solve", "F5", self.solve),
-                                     ("Solve power tree", "Ctrl+T", self.solve_tree),
-                                     ("Pin as baseline", "Ctrl+B", self.pin_baseline),
+                                     ("Solve rail", "F5", self.solve),
+                                     ("Solve tree", "Ctrl+T", self.solve_tree),
+                                     ("Pin baseline", "Ctrl+B", self.pin_baseline),
                                      ("Export maps…", "Ctrl+E", self.export_maps),
                                      ("Export report…", "Ctrl+R", self.export_report)):
             if text is None:
@@ -549,7 +549,7 @@ class MainWindow(QMainWindow):
         self._diff_cache = None
         if self.net:
             self.problems.clear(f"<b>{self.net}</b>: KiCad footprint fields turned "
-                                f"{'on' if on else 'off'} — press Solve (F5)")
+                                f"{'on' if on else 'off'} — press Solve rail (F5)")
             self._refresh_results()
             self.refresh_view()
 
@@ -845,8 +845,8 @@ class MainWindow(QMainWindow):
         """The Problems line of the shown net before it is solved: a rail from the KiCad
         fields is set up already."""
         if self._kicad_shown:
-            return f"<b>{self.net}</b>: rail from KiCad footprint fields — press Solve (F5)"
-        return f"<b>{self.net}</b>: add a source and a load, then Solve (F5)"
+            return f"<b>{self.net}</b>: rail from KiCad footprint fields — press Solve rail (F5)"
+        return f"<b>{self.net}</b>: add a source and a load, then Solve rail (F5)"
 
     def _show_rail(self, net: str) -> Rail:
         """Fill the rail panel for ``net`` as its origin says: a rail from the KiCad fields is
@@ -1042,7 +1042,8 @@ class MainWindow(QMainWindow):
         self.runs.pop(changed, None)
         self._diff_cache = None
         if self.results.pop(changed, None) is not None:          # the old result no longer applies
-            self.problems.clear(f"<b>{changed}</b>: setup changed since the last solve — press Solve (F5)")
+            self.problems.clear(f"<b>{changed}</b>: setup changed since the last solve — press "
+                                "Solve rail (F5)")
             self._refresh_results()
         self.refresh_view()
 
@@ -1073,7 +1074,7 @@ class MainWindow(QMainWindow):
             self.results.clear()
             self.runs.clear()
             self._diff_cache = None
-            self.problems.clear("Solve settings changed — press Solve (F5) to recompute")
+            self.problems.clear("Solve settings changed — press Solve rail (F5) to recompute")
             self._refresh_results()
             self.refresh_view()
 
@@ -1249,7 +1250,7 @@ class MainWindow(QMainWindow):
         if self._is_stale():
             return
         if getattr(self.sender(), "revision", self._revision) != self._revision:
-            msg = f"The setup changed while {res.net} was solving: press Solve (F5) again"
+            msg = f"The setup changed while {res.net} was solving: press Solve rail (F5) again"
             if res.net == self.net:
                 self.problems.clear(msg)
             self.statusBar().showMessage(msg)
@@ -1455,7 +1456,7 @@ class MainWindow(QMainWindow):
         """An electro-thermal option ``key`` changed (Temperature tab). Ticking or unticking
         Electro-thermal, or any option while it is ticked (or while the tree holds a board
         temperature), makes the power tree stale; with it off, the other options change no
-        solve. The rails solved alone stay: Solve (F5) does not heat copper."""
+        solve. The rails solved alone stay: Solve rail (F5) does not heat copper."""
         self._remerge()                           # the merged project holds a copy of them
         self.dirty = True
         self._update_title()
@@ -1575,8 +1576,8 @@ class MainWindow(QMainWindow):
         run = self.runs.get(self.net) if self.net else None
         base = self.baseline
         if base is None:
-            return None, None, ("No baseline yet. Solve, press 'Pin as baseline', change the loads, the "
-                                "settings or the board, and solve again.")
+            return None, None, ("No baseline yet. Solve the rail, press 'Pin baseline', change the loads, "
+                                "the settings or the board, and solve again.")
         if base.rail.net != self.net:
             return None, None, f"The baseline is a result of {base.rail.net}: select that net to compare."
         if run is None:

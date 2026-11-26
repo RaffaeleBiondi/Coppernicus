@@ -537,7 +537,7 @@ class RegulatorBox(QGroupBox):
     changed = Signal()
 
     def __init__(self, parent=None):
-        super().__init__("Regulator: selected source (used by Solve power tree)", parent)
+        super().__init__("Regulator: selected source (used by Solve tree)", parent)
         self.kind = FieldComboBox()
         for k in SOURCE_KINDS:
             self.kind.addItem(KIND_LABELS[k], k)
@@ -628,10 +628,11 @@ class RailPanel(QWidget):
         self.loads = TerminalTable("Loads (current split equally across pins)", "Current", "A")
         self.ties = QLabel()
         self.ties.setWordWrap(True)
-        self.follow_ties = QCheckBox("Solve nets joined by net ties as one (tie = short)")
+        self.follow_ties = QCheckBox("Follow net ties")
+        self.follow_ties.setToolTip("Solve nets joined by net ties as one (tie = short)")
         self._board: Optional[Board] = None
         self.source_box = RegulatorBox()
-        self.load_box = QGroupBox("Ground pins: selected load (used by Solve power tree)")
+        self.load_box = QGroupBox("Ground pins: selected load (used by Solve tree)")
         self.load_ground = PinRefEdit()
         QVBoxLayout(self.load_box).addWidget(self.load_ground)
         self.load_box.setEnabled(False)
@@ -642,7 +643,7 @@ class RailPanel(QWidget):
         self.max_via = QLineEdit(placeholderText="A")
         self.max_rise = QLineEdit(placeholderText="mV, for a ground net")
         self.max_rise.setToolTip("For a ground net: the largest rise above its 0 V reference. Judged "
-                                 "on its group in Solve power tree, and when this net is solved alone.")
+                                 "on its group in Solve tree, and when this net is solved alone.")
         for e in (self.max_drop, self.max_j, self.max_via, self.max_rise):
             e.setValidator(OptionalDecimalValidator(0.0, 1e9, 6))                   # empty: no limit
         self.max_drop.setToolTip("For a supply net: the largest load drop, % of the source voltage.")
@@ -691,7 +692,7 @@ class RailPanel(QWidget):
         sform.addRow("Mesh at holes, min edge (mm)", self.min_edge)
         sform.addRow("Mesh at holes, grading", self.grading)
 
-        self.solve = QPushButton("Solve  (F5)")
+        self.solve = QPushButton("Solve rail  (F5)")
         self.solve.setMinimumHeight(34)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -1122,7 +1123,7 @@ class ComparePanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.pin = QPushButton("Pin as baseline")
+        self.pin = QPushButton("Pin baseline")
         self.pin.setToolTip("Keep the shown result as the 'before' to compare later solves with")
         self.clear_baseline = QPushButton("Clear baseline")
         self.info = QLabel()
@@ -1207,7 +1208,7 @@ class TreePanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.summary = QLabel("<i>Solve power tree (Ctrl+T) solves every rail and ground "
+        self.summary = QLabel("<i>Solve tree (Ctrl+T) solves every rail and ground "
                               "together</i>")
         self.summary.setWordWrap(True)
         self.vrms = self._table(self.VRM_HEADERS)

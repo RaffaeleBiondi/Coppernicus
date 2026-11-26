@@ -365,7 +365,7 @@ def needed_solve(row, project: Project, has_tree: bool, fresh_noise: Sequence[st
     the impedance of its probe's net with KiPI's transient estimate (shown, never judged), when
     the probe has a load step and its source a bandwidth. None: nothing a solve would add."""
     if not has_tree:
-        return "tree", "", "Solve power tree"
+        return "tree", "", "Solve tree"
     if row.parts.get("ripple") is None and row.probe:
         for a in project.aggressors:
             if row.probe in a.ripple_probes and a.name not in row.ripple_from and a.name not in fresh_noise:

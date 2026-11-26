@@ -48,6 +48,9 @@ results against your own judgement.
   follows the layer, the rail or group and the map shown, so copper above the colour scale's
   top no longer goes unseen. The scale itself is unchanged (the layer's 99.5th percentile), as
   are the maps' colours and every verdict.
+- Shorter names in the app: **Solve rail** (F5, was Solve), **Solve tree** (Ctrl+T, was Solve
+  power tree), **Pin baseline** (Ctrl+B, was Pin as baseline), and the net-tie option is
+  **Follow net ties**, its long text in the tooltip. The shortcuts are unchanged.
 
 ### Fixed
 

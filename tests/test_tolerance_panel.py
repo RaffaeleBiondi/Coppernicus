@@ -391,7 +391,7 @@ def test_the_next_solve_a_row_needs_is_offered_in_order():
     p.probes = [Probe("P1", "U2", "VOUT", ["1"], step_a=1.0, slew_a_per_us=1.0)]
     p.ac.bandwidth_hz = {"U1": 1e5}
     r = _held(p, tree=False)
-    assert needed_solve(r.rows[0], p, has_tree=False) == ("tree", "", "Solve power tree")
+    assert needed_solve(r.rows[0], p, has_tree=False) == ("tree", "", "Solve tree")
     r = _held(p)
     assert needed_solve(r.rows[0], p, has_tree=True) == ("noise", "A1", "Solve noise of A1")
     fresh = {"A1": (_noise_result("A1", (0.002, 0.003, 0.001, 0.002)), "now")}
@@ -668,7 +668,7 @@ def test_the_solve_button_runs_the_rows_next_solve_in_the_tab_that_owns_it():
         window.open_project({EXAMPLE!r})
         app.processEvents()
         held(tree=False, noise=False)
-        assert panel.solve_button.text() == "Solve power tree" and panel.solve_button.isEnabled()
+        assert panel.solve_button.text() == "Solve tree" and panel.solve_button.isEnabled()
         panel.solve_button.click()
         assert asked == ["tree"]
         held(noise=False)

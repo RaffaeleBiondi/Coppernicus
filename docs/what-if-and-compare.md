@@ -6,7 +6,7 @@ Coppernicus answers it in three ways:
 
 - a **what-if setting** on the same board: copper thickness, via plating, copper temperature,
   or the rail's own currents;
-- **Pin as baseline** and **Compare** in the app, which put the new solve next to the old one;
+- **Pin baseline** and **Compare** in the app, which put the new solve next to the old one;
 - **revisions**: two board files, before and after a change made in KiCad, compared part by
   part and point by point.
 
@@ -62,12 +62,12 @@ A bigger jump, a start that is not a standard weight, or a result that is alread
 is refused. The thickness you type in the app or in a project file stays free (up to 1 mm):
 that is your own what-if. See [Agents](agents.md) for the tools.
 
-## Pin as baseline and Compare
+## Pin baseline and Compare
 
 In the app:
 
 1. Solve the rail.
-2. Press **Pin as baseline** (Ctrl+B). The result shown becomes the "before".
+2. Press **Pin baseline** (Ctrl+B). The result shown becomes the "before".
 3. Change something: a current, the via plating, the copper thickness, or the board itself in
    KiCad (then **File → Reload board**).
 4. Solve again, and open the **Compare** tab.
@@ -152,7 +152,7 @@ change and the settings.
 - [Ripple and coupled noise](noise.md): a switcher's ripple and the noise in victim nets, against your margins.
 - [Tolerance stack-up](tolerance.md): each load's DC drop, accuracy, ripple and transient, against your tolerances.
 - [KiCad footprint fields](kicad-fields.md): the power data on the parts, in KiCad.
-- [What-if and compare](what-if-and-compare.md): copper thickness, Pin as baseline, revisions.
+- [What-if and compare](what-if-and-compare.md): copper thickness, Pin baseline, revisions.
 - [HTML report](html-report.md): the offline pages of a solve, the power tree, the impedance, the noise and the tolerance stack-up.
 - [CI](ci.md): the GitHub Action for KiCad repositories.
 - [Agents](agents.md): the MCP server and the `--json` command line for AI agents.

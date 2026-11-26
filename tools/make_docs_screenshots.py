@@ -17,7 +17,7 @@ The sets, and the docs that show their images:
   project's rail setup, the solved maps, a probe readout and the problems.
 - ``features``: ``tree-*.png`` (the power chain's power tree and ground rise,
   docs/power-tree.md), ``fields-*.png`` (the fields example's rail from KiCad footprint fields,
-  docs/kicad-fields.md), ``whatif-*.png`` (the copper thickness editor, Pin as baseline and
+  docs/kicad-fields.md), ``whatif-*.png`` (the copper thickness editor, Pin baseline and
   Compare on the demo) and ``revisions-delta.png`` (two revisions of the demo board, solved in
   a temporary folder), both docs/what-if-and-compare.md.
 - ``analyses``: a window per analysis tab, each solved on its example: ``thermal-1-window.png``

@@ -103,7 +103,7 @@ per via (A).
 
 ### 4. Solve and read the drop map
 
-Press **Solve** (or **F5**). The board turns into a map of **how many millivolts each point is
+Press **Solve rail** (or **F5**). The board turns into a map of **how many millivolts each point is
 below the source**. The view opens on the layer that loses the most power, and the *Layer* menu
 shows the others. Drag to pan, use the wheel to zoom, and press **Fit** to see the whole board.
 
@@ -155,7 +155,7 @@ listed: via plating, copper temperature and mesh size.
 
 **Loss by layer** draws the copper loss of each layer as a bar chart.
 
-**Compare** shows what a change does. Press **Pin as baseline** (Ctrl+B), change something (a
+**Compare** shows what a change does. Press **Pin baseline** (Ctrl+B), change something (a
 current, the via plating, or the board itself in KiCad), and solve again. The tab lists the
 change in drop of every load and in loss per layer. *Show → Δ drop vs baseline* paints where
 the drop grew (red) or shrank.
@@ -173,7 +173,7 @@ rails, their sources, loads and limits. Open it again later, or use it from the 
 ### The whole power tree, ground included
 
 One rail at a time is the quick check. When regulators feed each other (12 V → switcher →
-3.3 V → LDO → 1.8 V), press **Solve power tree** (Ctrl+T) to solve every rail and the ground
+3.3 V → LDO → 1.8 V), press **Solve tree** (Ctrl+T) to solve every rail and the ground
 together. Try it on `examples/power_chain/power_chain.coppernicus.yml`.
 
 - Each regulator is a load on the rail that feeds it. Its input current comes from its output:
@@ -348,13 +348,13 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Regulator ratings: a regulator or source over its rated output current (KiCad `PI_IMAX` or `current_limit_a`) fails in the power tree, naming where the rating was written; not judged while the tree has not settled or the rail is not solved; the app's Power tree tab shows I max next to I out | ✅ |
 | `coppernicus fields` and the MCP `board_fields` call a rail complete as a solve does (a load net behind a link, a source feeding a link or a regulator input) and say what completes it; each power-tree problem carries its detail, place and the limit that judged it with the net it came from (`limit_pct`/`limit_mv`, `limit_from`) | ✅ |
 | The app reads the KiCad fields: rails from KiCad are listed [KiCad] and read-only, with Override in project for a what-if; Project → Use KiCad footprint fields turns them off; File → Reload board (Ctrl+Shift+R). Example: `examples/fields` | ✅ |
-| Before/after comparison: "Pin as baseline", Compare tab (per-load, total and per-layer deltas, settings that changed), "Δ drop vs baseline" map | ✅ |
+| Before/after comparison: "Pin baseline", Compare tab (per-load, total and per-layer deltas, settings that changed), "Δ drop vs baseline" map | ✅ |
 | Copper loss by layer as a chart (baseline beside current) | ✅ |
 | Offline HTML report exported from the app (Export report…, Ctrl+R) | ✅ |
 | Readout while hovering: a label next to the pointer leads with the value of the map shown as one large number (the drop and its % of the source voltage, V, \|J\|, the Δ drop or °C, as Show picks); View → Hover shows chooses the values under it (V, drop, \|J\|, layer, net) or turns it off (double-click still pins a point) | ✅ |
 | The double-click reads exactly the point under the pointer, as the hover does; a ground below 0 V reads as a ground shift; a solve whose setup changed meanwhile is dropped with a message | ✅ |
 | Project file v2: regulator kind (source / LDO / switcher), efficiency, quiescent current; input, ground and remote-sense pins; load ground pins; links (ferrites, sense resistors, fuses). Old project files load and save unchanged | ✅ (regulators editable in the app; links set in the project file) |
-| Power tree with ground return: regulators as loads on the rail feeding them, ground rise, remote sense; Solve power tree (Ctrl+T), Group selector, Power tree tab; `solve --tree` (and `--json`); MCP `solve_tree` | ✅ |
+| Power tree with ground return: regulators as loads on the rail feeding them, ground rise, remote sense; Solve tree (Ctrl+T), Group selector, Power tree tab; `solve --tree` (and `--json`); MCP `solve_tree` | ✅ |
 | A rail solved alone draws the regulator inputs and links it feeds, estimated at nominal voltages | ✅ in the app, the CLI (`solve`, `--json`, `--html`), MCP `solve_project` and the Action; MCP `solve_rail` has no project |
 | Optional ground-rise limit (`max_ground_rise_mv`) on a ground net | ✅ (single-rail solves, the power tree, MCP, report and CI summary) |
 | Each limit judges its own kind of net: `max_ground_rise_mv` nets at 0 V (grounds), `max_drop_pct` nets with a nonzero nominal; one set on the other kind is reported as not judged, and the rail panel disables the field that does not apply | ✅ |
