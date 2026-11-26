@@ -246,7 +246,7 @@ file gives what fields cannot carry and lets you try something else.
   project's. Partial fields leave the project's model in use, with a warning naming what the
   fields lack.
 - **Turning the fields off:** `use_board_fields: false` in the project file,
-  `--no-board-fields` on `coppernicus solve`, `noise` or `tolerance`, or **Project → Use KiCad
+  `--no-board-fields` on `coppernicus solve`, `ac`, `noise` or `tolerance`, or **Project → Use KiCad
   footprint fields** in the app.
 
 The fields are read by the app, `coppernicus solve` (with or without `--tree`), `coppernicus

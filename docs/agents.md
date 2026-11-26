@@ -200,7 +200,8 @@ symbol's fields onto its footprint, so they reach the board file; Coppernicus re
 the `.kicad_pcb` (only; other formats have none) and never writes it. They are **read by
 default** whenever the board has `PI_*` fields; a board without them behaves as before. To
 turn them off: `use_board_fields: false` in the project file, `--no-board-fields` on
-`coppernicus solve`, or `use_board_fields: false` on the `solve_project` / `solve_tree` tools.
+`coppernicus solve`, `ac`, `noise` or `tolerance`, or `use_board_fields: false` on the
+`solve_project` / `solve_tree` tools.
 
 | Field | Example | On | Meaning |
 |---|---|---|---|
@@ -918,8 +919,10 @@ uv run coppernicus solve project.coppernicus.yml --out results --json [--rail NE
   [--top N] [--html [PATH]] [--open] [--no-board-fields] [--tree]
 # --tree --html writes <project>_tree_report.html: every group, the VRM, load and link tables
 uv run coppernicus fields board.kicad_pcb --json
-uv run coppernicus ac project.coppernicus.yml --out results --json [--rail NET] [--html [PATH]]
-uv run coppernicus noise project.coppernicus.yml --out results --json [--aggressor NAME] [--html [PATH]]
+uv run coppernicus ac project.coppernicus.yml --out results --json [--rail NET] [--html [PATH]] \
+  [--no-board-fields]
+uv run coppernicus noise project.coppernicus.yml --out results --json [--aggressor NAME] [--html [PATH]] \
+  [--no-board-fields]
 uv run coppernicus tolerance project.coppernicus.yml --out results --json [--skip-ac] [--skip-noise] \
   [--html [PATH]] [--no-board-fields]
 ```
