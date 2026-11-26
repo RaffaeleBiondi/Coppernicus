@@ -180,9 +180,11 @@ def test_the_stand_in_converts_fewer_geometries(tmp_path, monkeypatch):
 # ------------------------------------------------------------------- the switch and the seam
 
 def test_installed_by_default_on_the_kipi_it_was_written_for():
-    assert ft.installed()
-    assert R.trim_unused_via_pads is ft.trim_unused_via_pads
-    assert R.trim_unused_layers is ft.trim_unused_layers
+    """In this process as the environment set it up (the suite also runs with the variable 0)."""
+    on = os.environ.get(ft.ENV, "").strip() != "0"
+    assert ft.installed() == on
+    assert (R.trim_unused_via_pads is ft.trim_unused_via_pads) == on
+    assert (R.trim_unused_layers is ft.trim_unused_layers) == on
 
 
 @pytest.mark.parametrize("value, installed", [(None, True), ("0", False), ("1", True)])
