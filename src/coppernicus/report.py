@@ -37,7 +37,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 
 from coppernicus import __version__
-from coppernicus.problems import ATTENTION, Problem, find_problems
+from coppernicus.problems import ATTENTION, Problem, density_check, find_problems
 from coppernicus.project import Limits, Project
 from coppernicus.results import LayerField, RailResult, degenerate_triangles
 
@@ -333,6 +333,8 @@ class ReportBuilder:
                 "max_drop_mv": float(result.shown_drop_at(lv).max()) * 1e3 if lv.size else None,
                 "j_scale_a_mm2": max(j_scale, 1e-12), "j_hi_a_mm2": j_hi,
                 "j_point_max_a_mm2": j_hi, "triangles": int(len(lf.tris)),
+                # The label above the |J| colour scale: the peak and the layer's verdict.
+                "j_check": density_check(result, lf, problems, limits).as_dict(),
                 "grid": {"x0": grid.x0, "y0": grid.y0, "nx": grid.nx, "ny": grid.ny},
                 "v": vid, "j": jid,
             })

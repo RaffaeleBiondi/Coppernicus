@@ -45,6 +45,11 @@ nav button[aria-selected="true"] .badge.nj { color:#fff; border-color:rgba(255,2
 .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-bottom:8px; }
 .seg { display:inline-flex; flex-wrap:wrap; gap:4px; }
 .mapwrap { display:flex; gap:8px; align-items:stretch; }
+/* Above the |J| colour scale, right-aligned over it: the layer's peak and its verdict. */
+.barcheck { text-align:right; font-size:13px; line-height:1.35; margin:0 0 6px; }
+.barcheck .v-fail { color:var(--fail); font-weight:600; } .barcheck .v-pass { color:var(--pass); }
+.barcheck .v-attention { color:var(--warn); font-weight:600; }
+.barcheck .v-below, .barcheck .v-not_judged { color:var(--muted); }
 .mapbox { position:relative; flex:1; min-width:0; height:min(70vh, 640px); background:var(--map);
   border:1px solid var(--line); border-radius:8px; overflow:hidden; }
 #map { width:100%; height:100%; display:block; touch-action:none; cursor:crosshair; }

@@ -44,6 +44,7 @@ from coppernicus.app.hover import (  # noqa: E402
 # TriangleLocator is also re-exported here for code that imported it from this module.
 from coppernicus.fields import TriangleLocator, drop_levels, probe, sample_flow  # noqa: E402
 from coppernicus.fields import isolines as isoline_paths  # noqa: E402
+from coppernicus.problems import PEAK_NOTE, PEAK_TIP, DensityCheck, density_check  # noqa: E402
 from coppernicus.results import LayerField, RailResult  # noqa: E402
 
 FIELDS = {
@@ -56,6 +57,9 @@ FIELDS = {
     "temperature": ("Board temperature (°C)", "inferno"),
 }
 J_CLIP_PERCENTILE = 99.5
+COLORBAR_WIDTH = 120              # px: the scale, its title and the peak label above it
+# The verdict line above the |J| scale, on the colour bar's white: each at least 4.5:1 on it.
+VERDICT_COLORS = {"fail": "#c62828", "pass": "#2e7d32", "attention": "#9a6700"}
 SOURCE_COLOR, LOAD_COLOR, OUTLINE_COLOR, COPPER_COLOR = "#1a9850", "#d73027", "#555555", "#b87333"
 CANDIDATE_COLOR = "#7a4a1d"       # outlines of the pads that can be picked
 PAD_STYLE = {"source": (SOURCE_COLOR, 3.0), "load": (LOAD_COLOR, 3.0), "candidate": (CANDIDATE_COLOR, 1.0)}
@@ -151,17 +155,48 @@ def _segments_mesh(segments: np.ndarray, z: float) -> Optional[pv.PolyData]:
 
 
 class ColorBar(QWidget):
-    """A vertical colour scale drawn by Qt beside the render view, so it never covers the board."""
+    """A vertical colour scale drawn by Qt beside the render view, so it never covers the board.
+    On the current map, above its title: the layer's peak |J| and its verdict
+    (:meth:`set_check`)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(104)
+        self.setFixedWidth(COLORBAR_WIDTH)
         self._cmap, self._lo, self._hi, self._title = None, 0.0, 1.0, ""
+        self._check: Optional[DensityCheck] = None
 
     def set_scale(self, cmap: Optional[str], lo: float = 0.0, hi: float = 1.0, title: str = ""):
+        """A new scale; it has no peak label until :meth:`set_check` gives one."""
         self._cmap, self._lo, self._hi, self._title = cmap, lo, hi, title
+        self.set_check(None)
         self.setVisible(cmap is not None)
         self.update()
+
+    def set_check(self, check: Optional[DensityCheck]):
+        """The peak and verdict written above the scale (None: none). The tooltip has the
+        whole label and why the peak is mesh-dependent."""
+        self._check = check
+        self.setToolTip("" if check is None else "\n".join(check.lines()) + "\n\n" + PEAK_TIP)
+        self.update()
+
+    def header(self) -> List[str]:
+        """The label above the scale as text lines, empty when there is none."""
+        return self._check.lines() if self._check is not None else []
+
+    def _header_parts(self) -> List[Tuple[str, QFont, str]]:
+        """(text, font, colour) of each line of the label, in order."""
+        if self._check is None:
+            return []
+        bold, small = QFont(self.font()), QFont(self.font())
+        bold.setWeight(QFont.DemiBold)
+        small.setPointSizeF(max(self.font().pointSizeF() * 0.85, 6.0))
+        parts = [(self._check.peak_text(), bold, "black"), (f"({PEAK_NOTE})", small, "#5f6368")]
+        if self._check.limit_kind:
+            colour = VERDICT_COLORS.get(self._check.verdict, "#5f6368")
+            parts.append((self._check.verdict_text(), small, colour))
+        # A value keeps its unit on its line when the narrow bar wraps the text.
+        return [(text.replace(" A/mm²", " A⁠/⁠mm²").replace(" mm²", " mm²"), font, colour)
+                for text, font, colour in parts]
 
     def paintEvent(self, _event):
         if self._cmap is None:
@@ -169,8 +204,18 @@ class ColorBar(QWidget):
         p = QPainter(self)
         p.fillRect(self.rect(), QColor("white"))
         flags = Qt.AlignLeft | Qt.AlignBottom | Qt.TextWordWrap
+        wrap = Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap
+        y = 4
+        for text, font, colour in self._header_parts():    # the peak and verdict, on top
+            p.setFont(font)
+            p.setPen(QColor(colour))
+            rect = p.fontMetrics().boundingRect(0, 0, self.width() - 6, 1000, wrap, text)
+            p.drawText(4, y, self.width() - 6, rect.height(), wrap, text)
+            y += rect.height() + 1
+        p.setFont(self.font())
+        head = y - 4 + (6 if y > 4 else 0)
         title_h = p.fontMetrics().boundingRect(0, 0, self.width() - 6, 1000, flags, self._title).height()
-        top, bottom, x0, w = title_h + 18, self.height() - 16, 10, 18      # the title sets the top
+        top, bottom, x0, w = head + title_h + 18, self.height() - 16, 10, 18   # label and title set the top
         h = max(bottom - top, 10)
         rgba = (colormaps[self._cmap](np.linspace(1, 0, h))[:, :3] * 255).astype(np.uint8)
         img = np.ascontiguousarray(np.repeat(rgba[:, None, :], w, axis=1))
@@ -300,6 +345,9 @@ class BoardView(QWidget):
         self._measure_result: Optional[RailResult] = None
         self._temperature = None            # (TemperatureMap, cell mm) while the temperature map is shown
         self._field: Optional[str] = None   # the map shown: a key of FIELDS, None before a solve
+        # (result, its problem list), as the Problems panel shows them: the current map's label
+        # reads its verdict there (set_problems).
+        self._problems: Optional[tuple] = None    # (result, problems, limits)
         # Hover readout: a move stores the pointer and starts the timer if it is idle, so a
         # moving pointer is probed every HOVER_MS, at its latest position.
         self.hover_label = HoverLabel(self.plotter.interactor)
@@ -319,6 +367,7 @@ class BoardView(QWidget):
         """A new board: an empty scene, no measurement and no reference to an old result."""
         self.clear()
         self._measure, self._measure_result = [], None
+        self._problems = None
 
     def clear(self):
         # The label goes, the pointer stays: _finish reads the new scene under a still pointer.
@@ -397,6 +446,7 @@ class BoardView(QWidget):
         if arrows:
             self._add_arrows(layer)
         self.colorbar.set_scale(cmap, clim[0], clim[1], units + note)
+        self._set_density_check()
         self._add_outline(outline)
         if show_vias and result.vias:
             self._add_vias(result)
@@ -406,6 +456,23 @@ class BoardView(QWidget):
         self._finder = TriangleLocator(layer.points, layer.tris)
         self._add_measure()
         self._finish(fit)
+
+    def set_problems(self, result: RailResult, problems: list, limits=None):
+        """The problem list of ``result`` (a rail's or a tree group's, as judged against its
+        limits): the current map of ``result`` writes the layer's verdict above its scale
+        from it. Shown at once when that map is on screen (the limits were edited).
+        ``limits``: a tree group's, so one that did not converge says it was not judged."""
+        self._problems = (result, problems, limits)
+        self._set_density_check()
+
+    def _set_density_check(self):
+        """On the current map: the layer's peak |J| and, from the problem list of the result
+        shown, its verdict, above the colour bar (:func:`coppernicus.problems.density_check`)."""
+        if self._field != "current" or self._layer is None or self._result is None:
+            return
+        held = self._problems
+        problems, limits = held[1:] if held is not None and held[0] is self._result else (None, None)
+        self.colorbar.set_check(density_check(self._result, self._layer, problems, limits))
 
     def show_temperature(self, temp, layer_name: str, outline: Sequence[np.ndarray], fit: bool = False):
         """The board temperature on copper layer ``layer_name`` of ``temp`` (a

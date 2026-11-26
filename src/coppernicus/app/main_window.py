@@ -59,6 +59,7 @@ from coppernicus.engine.kicad_fields import read_board_fields
 from coppernicus.engine.pisetup import ground_nets
 from coppernicus.power_tree import (
     apply_limits,
+    group_limits,
     group_verdict,
     has_limits,
     not_judged_text,
@@ -1446,6 +1447,8 @@ class MainWindow(QMainWindow):
         res = self.tree.groups[key]
         gv = group_verdict(self.tree, key)
         self.problems.set_result(tree_header_html(key, res, gv), gv.problems, res.warnings + res.assumptions)
+        self.view.set_problems(res, gv.problems,          # the current map's peak and verdict
+                               group_limits(self.tree, key)[0])
 
     # ------------------------------------------------------------------ board temperature
     def _thermal_edited(self, key: str = ""):
@@ -1638,6 +1641,7 @@ class MainWindow(QMainWindow):
         problems = find_problems(res, rail.limits)
         self.problems.set_result(rail_header_html(res, rail.limits, problems), problems,
                                  res.warnings + res.assumptions)
+        self.view.set_problems(res, problems)             # the current map's peak and verdict
 
     def go_to_problem(self, problem):
         if problem.layer:

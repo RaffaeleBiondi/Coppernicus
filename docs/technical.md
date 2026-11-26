@@ -66,6 +66,32 @@ corner of an L, the end of a slot) grows as the mesh gets finer: the point value
 The Problems panel therefore ranks crowding spots by their area-weighted mean |J| and shows the
 peak only as a mesh-dependent detail.
 
+**The |J| colour scale and the label above it.** Every |J| map (the HTML report, the PNG maps,
+the app) tops its colour scale at the layer's 99.5th percentile of |J|, degenerate triangles
+(below) left out, so a few corner triangles do not turn the rest of the copper dark. Copper above
+that top takes the top colour. Because crowded copper can be well under 0.5 % of a layer, the
+map alone does not say how far above the top it goes, so above the colour bar each map writes,
+for the layer shown:
+
+1. *Peak 220 A/mm² (mesh-dependent)*: the point maximum |J|, degenerate triangles left out. It
+   is never judged.
+2. When a limit applies, the layer's verdict as the problem list judged it, read off that list
+   and never judged again (`problems.density_check`), so it uses the spots' area-weighted means:
+   - against your `max_current_density` (a tree group's strictest over its nets):
+     *limit 60 A/mm²: FAIL · worst spot 89.1 A/mm² over 3.02 mm²* (with *· 12 spots above* when
+     there are more), or *limit 60 A/mm²: pass*. A spot is copper at or above the limit, so a
+     peak above your limit always lies in a failed spot. When every failed spot on the layer is
+     under 3 mesh elements, the line adds *may be a mesh artefact* (the problem's own check);
+   - without one, against the [current-density default](#current-density-default) for the
+     layer's thickness: *default 60 A/mm² (attention): 3 spots above · worst ...*, or *below*.
+     A peak above the default with no attention spot (only slivers of 1 or 2 elements, at a
+     corner or a via wall) adds *peak above the default at a corner; spots below*;
+   - a tree group that did not converge: *not judged (did not converge)*.
+
+The PNG maps take the problem list they are given (`render_layer_map(..., problems)`, which
+keeps the limits that judged it, or `limits=`); without either they write the peak only, and
+`render_layer_map` returns the lines as `label`.
+
 ## Current-density default
 
 Verdicts are only against the user's limits. Coppernicus's one built-in default, on copper
