@@ -32,7 +32,8 @@ Fields, on the part (every one optional; ``PI_RAIL`` is required with any per-ra
 ``PI_VOUT``         ``3.3V``     A fixed-output part's voltage: the source voltage when the
                                  instance has ``PI_RAIL`` and no ``PI_SOURCE``.
 ``PI_IMAX``         ``2A``       A source's rated output current (judged in the power tree).
-``PI_FSW``          ``1.2MHz``   A switcher's fixed switching frequency (stored, not used yet).
+``PI_FSW``          ``1.2MHz``   A switcher's fixed switching frequency: used by a noise
+                                 aggressor on it that gives no ``fsw_hz`` of its own.
 ``PI_SOURCE_REF``   ``L1``       The part whose pads hold the rail (an external-inductor
                                  buck's inductor); ``PI_PINS`` then selects that part's pads,
                                  while input, ground and kind stay on this part. A list,
@@ -698,7 +699,7 @@ def _term(ref: str, net: str, i: int, v: Mapping[str, Optional[str]], explicit=f
             if kind != "smps":
                 raise FieldError(f"{ref}: PI_FSW is for a switcher (PI_KIND smps), not a {kind}")
             fsw = quantity(ref, "PI_FSW", v["PI_FSW"])
-            values.append((f"f_sw {fsw:g} Hz (stored, not used yet)",
+            values.append((f"f_sw {fsw:g} Hz (used by a noise aggressor on it that gives no fsw_hz)",
                            FieldValue(ref, "PI_FSW", v["PI_FSW"])))
         ground, gpins, gref = _ground(ref, v, values)
         # PI_SOURCE_REF: the rail is held at that part's pads; input and ground stay this part's,

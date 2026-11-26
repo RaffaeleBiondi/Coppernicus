@@ -89,7 +89,7 @@ def test_pi_imax_and_pi_fsw_are_kept_on_the_source():
     assert (u1.current_limit_a, u1.fsw_hz) == (2.0, 1.2e6)
     note = " ".join(merged.origins["+3V3"].notes)
     assert 'I_max 2 A (from KiCad field PI_IMAX "2A" on U1)' in note, note   # judged in the tree
-    assert "not judged" not in note and "not used" in note, note
+    assert "not judged" not in note and "f_sw 1.2e+06 Hz (used by a noise aggressor on it" in note, note
     for text, hz in (("500kHz", 5e5), ("2.2MHz", 2.2e6), ("800000Hz", 8e5)):
         rails = field_rails({"U1": {**fields["U1"], "PI_FSW": text}})
         assert rails["+3V3"].sources[0].term.fsw_hz == pytest.approx(hz, rel=1e-12)
