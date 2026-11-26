@@ -1513,7 +1513,17 @@ limits of the product):
 
 - `thermal` and `dc`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative,
   with a floor per unit for values near zero (the unit's largest magnitude in the fingerprint ×
-  1e-9); together: |Δ| ≤ 1e-9 × the largest value of that unit;
+  1e-9); together: |Δ| ≤ 1e-9 × the largest value of that unit. **Exception:** a point maximum
+  (`j_max`) held by a degenerate triangle whose node voltages span fewer than about 1e7 ulp
+  follows those voltages' last bits, and is judged against KiPI's own spread instead. On a real
+  board's electro-thermal solve, the core rail's `j_max` sat on a sub-nanometre sliver (edges
+  1.6e-7 to 4.8e-7 mm, area 3.8e-14 mm², node voltages 2.1e-10 V = 1.9e6 ulp apart): it moved
+  7.5e-7 with the `thermal` part on, and up to 2.7e-7 under KiPI's own call (COLAMD,
+  threshold 1.0) on the heat model with its unknowns permuted at random (3 seeds). The same
+  triangle held it in every run; its temperature agreed to round-off (resistivity factor
+  equal to 6e-16), and it sat well inside a heat-grid cell, away from the board's edge. Node
+  voltages differed by at most 1.4e-14 V; the rail's largest |J| off such triangles agreed to
+  3.9e-12 (KiPI's own permuted runs: 1.2e-13 to 3.6e-13);
 - `ac`: |Z| within 1e-6 relative (and the noise and tolerance scalars that come from it), since
   KiPI's own |Z| carries round-off of order 1e-8 to 1e-7 (max measured 6.0e-8). On the noise
   example (`examples/noise`, 1 kHz to 300 MHz), KiPI's own call (COLAMD, threshold 1.0) on the
