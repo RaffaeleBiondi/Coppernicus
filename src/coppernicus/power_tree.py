@@ -529,6 +529,35 @@ def _clean(obj):
     return obj
 
 
+def _at(where) -> Dict[str, Any]:
+    x, y, layer = where
+    return {"x_mm": _num(x), "y_mm": _num(y), "layer": layer or None}
+
+
+def net_split_rows(res) -> List[Dict[str, Any]]:
+    """A power-tree group's per-net split (``RailResult.net_split``) as JSON-ready rows: each
+    net's lowest and highest voltage and where they are, its entry (``kind`` "source", "link"
+    or "reference", ``name``, ``pads`` as "REF.PAD", ``v_v``), its drop from the entry
+    (``drop_mv``; a ground's rise, ``rise_mv``) and its copper and via losses."""
+    key = "rise_mv" if res.kind == "ground" else "drop_mv"
+    return [{"net": n.net, "v_min_v": _num(n.v_min_v), "v_max_v": _num(n.v_max_v),
+             "at_min": _at(n.at_min), "at_max": _at(n.at_max),
+             "entry": ({"kind": n.entry_kind, "name": n.entry_name, "pads": list(n.entry_pads),
+                        "v_v": _num(n.entry_v)} if n.entry_kind else None),
+             key: None if _num(n.drop_v) is None else n.drop_v * 1e3,
+             "copper_loss_w": float(n.copper_loss_w), "via_loss_w": float(n.via_loss_w)}
+            for n in getattr(res, "net_split", None) or ()]
+
+
+def segment_keys(segments) -> Dict[str, Any]:
+    """A drop's segments (``LoadReport.segments``, ``VrmReport.segments``) as JSON keys:
+    ``segments`` ({what, name, from, to, mv}) and ``segments_sum_mv`` (None without any)."""
+    segs = list(segments or ())
+    return {"segments": [{"what": s.what, "name": s.name, "from": s.frm, "to": s.to, "mv": s.v * 1e3}
+                         for s in segs],
+            "segments_sum_mv": sum(s.v for s in segs) * 1e3 if segs else None}
+
+
 def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
     """A power-tree result (``coppernicus.results.TreeResult``) as a JSON-ready dict: units
     in every key, the assumptions and warnings, the verdict (only against the user's limits,
@@ -565,6 +594,10 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
             "problems": [{"severity": p.severity, "kind": p.kind, "title": p.title,
                           "detail": p.detail, "layer": p.layer, "x_mm": _num(p.x),
                           "y_mm": _num(p.y), **p.data} for p in gv.problems],
+            # Each net's voltages, entry, drop or rise and losses (shown, never judged), and how
+            # links in parallel or in a loop were attributed (only when there are some)
+            "net_split": net_split_rows(res),
+            **({"split_note": res.split_note} if getattr(res, "split_note", "") else {}),
         })
     doc = {
         "kind": "power_tree",
@@ -585,7 +618,9 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
                   # |I out| over the rated output current the user wrote (None: no rating, or
                   # not judged), and where that rating was written (None: no rating)
                   "exceeds_current_limit": None if v.current_passed is None else not v.current_passed,
-                  "current_limit_from": rated_from(v) if v.current_limit_a is not None else None}
+                  "current_limit_from": rated_from(v) if v.current_limit_a is not None else None,
+                  # its input drop, segment by segment (shown, never judged; [] without one)
+                  **segment_keys(v.segments)}
                  for v in tree.vrms],
         "loads": [{"name": ld.name, "group": ld.group, "current_a": ld.current_a,
                    "nominal_v": ld.nominal_v, "v_supply_v": _num(ld.v_supply_v),
@@ -596,7 +631,9 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
                    "exceeds_drop_limit": None if ld.passed is None else not ld.passed,
                    # the net its pins are on, and the rail it is listed in (they differ past
                    # a net tie)
-                   "net": ld.net or None, "rail": ld.rail or ld.net or None}
+                   "net": ld.net or None, "rail": ld.rail or ld.net or None,
+                   # its drop, segment by segment (shown, never judged; [] without one)
+                   **segment_keys(ld.segments)}
                   for ld in tree.loads],
         "links": [dict(k) for k in tree.links],
         "groups": groups,
@@ -672,8 +709,55 @@ def attention_text(groups: Sequence[Dict[str, Any]]) -> List[str]:
             + "; each is listed in its group's problems."]
 
 
-def tree_text(doc: Dict[str, Any]) -> List[str]:
-    """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict."""
+def _mv_text(x: Optional[float]) -> str:
+    return "—" if x is None else f"{x:.3f} mV"
+
+
+def split_text(doc: Dict[str, Any]) -> List[str]:
+    """The lines ``coppernicus solve --tree --split`` adds: each load's and regulator input's
+    drop segment by segment, then each net from where it is fed (shown, never judged)."""
+    items = [(f"{ld['name']} on {ld.get('net') or ld['group']}", ld.get("segments_sum_mv"),
+              ld.get("segments")) for ld in doc["loads"]]
+    items += [(f"{v['name']} (input) on {v['input_net']}", v.get("segments_sum_mv"), v.get("segments"))
+              for v in doc["vrms"] if v.get("input_net")]
+    lines = ["Split (each drop part by part, from its rail's source to its worst pins, toward 0 V; "
+             "shown, never judged)"]
+    for title, total, segs in items:
+        lines.append(f"  {title}: {_mv_text(total)}" + ("" if segs else " (no split: not solved)"))
+        segs = segs or []
+        width = max((len(f"{s['from']} → {s['to']}") for s in segs), default=0)
+        lines += [f"    {s['what']:<14} {s['name']:<14} {s['from'] + ' → ' + s['to']:<{width}} "
+                  f"{s['mv']:>10.3f} mV" for s in segs]
+    lines += ["Nets (each from where it is fed; shown, never judged)",
+              f"  {'net':<12} {'group':<10} {'V min':>10} {'V max':>10}  {'fed from':<20} "
+              f"{'drop/rise':>12} {'copper':>10} {'vias':>9}"]
+    notes = []
+    for gr in doc["groups"]:
+        for n in gr.get("net_split") or ():
+            entry = n.get("entry")
+            fed = f"{entry['name']} ({_text(entry['pads'])})" if entry else "—"
+            change = n.get("rise_mv", n.get("drop_mv"))
+            word = "rise" if "rise_mv" in n else "drop"
+            lines.append(f"  {n['net']:<12} {gr['group']:<10} {_fmt(n['v_min_v'], 10, '.6f', '')} "
+                         f"{_fmt(n['v_max_v'], 10, '.6f', '')}  {fed:<20} "
+                         f"{(word + ' ' + _mv_text(change)) if change is not None else '—':>12} "
+                         f"{_fmt(n['copper_loss_w'], 10, '.3g', ' mW', 1e3)} "
+                         f"{_fmt(n['via_loss_w'], 9, '.3g', ' mW', 1e3)}")
+        if gr.get("split_note"):
+            notes.append(f"  {gr['group']}: {gr['split_note']}")
+    for k in doc["links"]:
+        if "across_mv" in k:
+            lines.append(f"  link {k['name']} ({' → '.join(k['nets'])}): {_mv_text(k['across_mv'])} across")
+    return lines + notes
+
+
+def _text(labels: Sequence[str]) -> str:
+    return ", ".join(labels[:3]) + (f" (+{len(labels) - 3})" if len(labels) > 3 else "")
+
+
+def tree_text(doc: Dict[str, Any], split: bool = False) -> List[str]:
+    """The lines ``coppernicus solve --tree`` prints, from a :func:`tree_summary` dict; with
+    ``split`` (``--split``) the drops segment by segment and the nets too (:func:`split_text`)."""
     # I max: a source's rated output current (PI_IMAX; judged: _rating_text); only when some VRM
     # has one, so the table is unchanged otherwise.
     rated = any(v.get("i_max_a") is not None for v in doc["vrms"])
@@ -710,6 +794,8 @@ def tree_text(doc: Dict[str, Any]) -> List[str]:
     for k in doc["links"]:
         lines.append(f"  link {k['name']}: {_fmt(k['current_a'], 0, '.4f', ' A').strip()}, "
                      f"{_fmt(k['power_w'], 0, '.3g', ' mW', 1e3).strip()} ({' ↔ '.join(k['nets'])})")
+    if split:
+        lines += split_text(doc)
     if doc.get("thermal"):                              # the board temperature (Task 8)
         from coppernicus.temperature import temperature_text
         lines += temperature_text(doc["thermal"], skip=doc["assumptions"])
