@@ -149,10 +149,11 @@ The mark is a file named `.triangle-remove` beside the folder.
 
 ## Licences
 
-The disk image and the zip hold `LICENSE` (Coppernicus, GPL-3.0-or-later) and
-`THIRD_PARTY_NOTICES.txt`: every library in the bundle with its version and licence, and their
-licence texts (Qt and PySide6 under LGPL-3.0, VTK, NumPy, SciPy, shapely, KiPI...). The same
-files are inside the app, with `licenses/TRIANGLE_NOTICE.txt`, Triangle's terms verbatim.
+The disk image and the zip hold `LICENSE.txt` (Coppernicus, GPL-3.0-or-later),
+`THIRD_PARTY_NOTICES.txt` (every library in the bundle with its version and licence, and their
+licence texts: Qt and PySide6 under LGPL-3.0, VTK, NumPy, SciPy, shapely, KiPI...), the
+`licenses` folder (`TRIANGLE_NOTICE.txt`, Triangle's terms verbatim, and the LGPL-3.0 text) and
+`INSTALL.md`, this page. The licence files are also inside the app.
 
 ## Building the packaged app
 

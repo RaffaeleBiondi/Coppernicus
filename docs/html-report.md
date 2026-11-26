@@ -21,6 +21,8 @@ so you can send it to someone who does not have Coppernicus, or attach it to a d
 - **Impedance:** `coppernicus ac PROJECT --html` writes its own page ([below](#the-impedance-page)).
 - **Ripple and noise:** `coppernicus noise PROJECT --html` writes its own page
   ([below](#the-noise-page)).
+- **Tolerance stack-up:** `coppernicus tolerance PROJECT --html` writes its own page
+  ([below](#the-tolerance-page)).
 - **CI:** the GitHub Action attaches the report to every run, in the `coppernicus-results`
   artifact (see [CI](ci.md)).
 - **Agents:** the MCP tool `report` writes one page for the results of a session (see

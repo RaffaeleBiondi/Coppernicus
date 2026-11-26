@@ -130,18 +130,27 @@ thermal check. The default only points at where to look.
 ```text
 Coppernicus/
 ├── src/coppernicus/
-│   ├── engine/          # the only code that imports KiPI: Board, solve_rail, synthetic boards
+│   ├── engine/          # the only code that imports KiPI: Board, rail and tree solves, board
+│   │                    #   temperature, AC impedance, noise, tolerance, synthetic boards
 │   ├── project.py       # project file model (YAML), engine-independent
+│   ├── board_fields.py  # rails, converters, links and models from KiCad footprint fields
 │   ├── results.py       # solve results as plain arrays
 │   ├── problems.py      # ranking and limit checks
+│   ├── power_tree.py, temperature.py, impedance.py, coupled_noise.py, tolerance.py
+│   │                    #   verdicts, summaries, text and files of each analysis (no engine)
 │   ├── fields.py        # field helpers: current vectors, arrows, isolines, point lookup
 │   ├── maps.py          # per-layer PNG maps
+│   ├── report.py        # offline HTML report (page, style and script in report_assets/)
 │   ├── service/         # Session: boards and results by id, JSON functions, probe, cross-section cut
 │   ├── mcp_server.py    # MCP tools over the service (coppernicus mcp)
 │   ├── cli.py           # command line (--json goes through the service)
+│   ├── ci.py            # the GitHub Action's helper (python -m coppernicus.ci)
+│   ├── bootstrap_triangle.py  # the packaged app's first-start download of Triangle
 │   └── app/             # desktop app: main window, panels, board view, background solve
 ├── tests/               # synthetic boards with closed-form answers; boards_local/ tests skip if absent
-├── examples/demo/       # synthetic demo board and project
+├── examples/            # synthetic boards and projects: demo, power_chain, fields, pdn, noise, tolerance
+├── packaging/           # PyInstaller spec and build scripts of the packaged app
+├── action.yml           # the GitHub Action
 ├── tools/               # macOS launcher, scripted GUI check, docs screenshots
 ├── skills/              # Claude Code skill for agents that use the MCP server
 ├── docs/                # this page, the KiPI analysis, plans, images
@@ -167,7 +176,8 @@ worst difference in per-net, per-layer copper area was 1.04 %, and its sign flip
 tolerance is refined, so it comes from how via rings are approximated by polygons. KiPI's accuracy
 suite (DC, AC, coupled noise) passes on macOS.
 
-`tools/gui_check.py` drives the app from code on the demo board (pad picking, solve).
+`tools/gui_check.py` drives the app from code on the synthetic examples (pad picking, solves,
+the power tree, the KiCad fields and the analysis tabs).
 `tools/make_docs_screenshots.py` makes the README screenshots, from the synthetic demo only.
 
 ## Plans

@@ -108,10 +108,10 @@ capacitor models and noise aggressors, mapped to KiPI's `PISetup` inside `engine
 Order (each step needs the previous one):
 1. power tree and ground return; ✅ (T6 project model v2, T7 power-tree solve, optional
    `max_ground_rise_mv`);
-2. electro-thermal (board temperature);
-3. AC PDN impedance (probes, capacitor models, target impedance, load-step response);
-4. coupled noise and DC-DC ripple at probes (fields, victims);
-5. tolerance stack-up per load.
+2. electro-thermal (board temperature); ✅ (T8: CLI in 0.2.0; app, MCP, report and CI after it);
+3. AC PDN impedance (probes, capacitor models, target impedance, load-step response); ✅ (T9);
+4. coupled noise and DC-DC ripple at probes (fields, victims); ✅ (T10);
+5. tolerance stack-up per load. ✅ (T11)
 
 Each step gets synthetic tests (KiPI's validation boards as a model) and is exposed in the
 CLI, MCP and GUI.

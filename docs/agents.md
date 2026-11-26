@@ -218,7 +218,7 @@ turn them off: `use_board_fields: false` in the project file, `--no-board-fields
 | `PI_LINK_PINS` | `1,2;5` | a link part with more nets | The link's two sides on a part with more than two nets (load switch, MOSFET, 3-pin fuse): side A's pads `;` side B's, each side's pads on one net. A two-net part needs none. |
 | `PI_VOUT` | `3.3V` | source | A fixed-output part's voltage: the source voltage when the instance has `PI_RAIL` and no `PI_SOURCE` (the assumption says "from KiCad field PI_VOUT"). When both are given and differ, `PI_SOURCE` wins, with a warning. |
 | `PI_IMAX` | `2A`, `500mA` | source | Its rated output current: kept as the source's `current_limit_a` and shown next to I_out (rail summary `current_limit_a`, tree `vrms[].i_max_a`, the report and CI tables). **Judged in the power tree:** an I_out above it fails (see [Regulator ratings](#regulator-ratings-in-the-power-tree)); not judged while the solve is unsettled or its rail is not solved. |
-| `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its fixed switching frequency (`Hz`, `kHz`, `MHz`): kept as the source's `fsw_hz`. **Not used yet.** |
+| `PI_FSW` | `500kHz`, `2.2MHz` | switcher | Its fixed switching frequency (`Hz`, `kHz`, `MHz`): kept as the source's `fsw_hz`, which the noise solve uses for an aggressor that gives no `fsw_hz` of its own (an assumption line says where it came from). |
 | `PI_SOURCE_REF` | `L1`, `BT1,BT5` | source | The part whose pads hold the rail, when it is not this part: an external-inductor buck's inductor. `PI_PINS` then selects that part's pads; input, ground and kind stay on this part. A list of parts (`BT1,BT5`) makes **one terminal**: every listed part's pads on the rail, all held at the source voltage (cell holders in parallel), not parallel regulators; `PI_PINS` then takes `REF.PAD` entries (`BT1.1,BT5.1`), and a plain pad applies to every listed part. An error when a part has no pad on the rail. |
 | `PI_GND_REF` | `BT4` | source, load | The part whose pads are the ground pins on `PI_GND`, when not this part (`PI_GND_PINS` chooses them). One part. An error when it has no pad on that net. |
 | `PI_TOL` | `5%`, `-3%,+5%`, `50mV` | load | Its tolerance band, the load's `tol_pct` / `tol_mv` for the tolerance stack-up: one value is ± that, two are `below,above` (below ≤ 0 ≤ above, one unit: `%` of nominal or `mV` from it). |
@@ -411,7 +411,8 @@ pin 1 on VIN and returning through U1 pin 3 on GND: in a project file, `ref: L1`
 `ground: {ref: U1, net: GND, pins: ['3']}`. An adjustable buck gives its voltage on the
 instance (`PI_SOURCE`), since it depends on the board's divider; a fixed one can carry
 `PI_VOUT` on the library symbol instead. `PI_IMAX` is shown next to I_out and judged in the
-power tree (an I_out above it fails); `PI_FSW` is stored, not used yet.
+power tree (an I_out above it fails); `PI_FSW` is the switching frequency the noise solve uses
+when the aggressor gives none.
 
 **A load switch** (input pins 1 and 2 on VIN, enable 3, ground 4, output 5 on VOUT), with
 an on-resistance of 20 mΩ: a link between its input and output pads.
@@ -907,7 +908,7 @@ limit. The map is still the copper drop below the group's source output, as its 
 
 ## Without MCP: the CLI with `--json`
 
-`nets`, `parts`, `solve`, `ac`, `noise` and `tolerance` take `--json`. Each prints one JSON document on
+`nets`, `parts`, `fields`, `solve`, `ac`, `noise` and `tolerance` take `--json`. Each prints one JSON document on
 stdout (the same data as the tools) and nothing else; progress from `-v` goes to stderr.
 
 ```sh
