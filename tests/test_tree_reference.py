@@ -112,6 +112,29 @@ def _load(tree, name):
     return next(ld for ld in tree.loads if ld.name == name)
 
 
+def test_ground_of_a_part_with_several_ground_pins_is_their_mean_and_spread():
+    """U1 returns its current through two ground pads at different points of the ground track:
+    the offset is KiPI's v_ground (their mean), the spread their difference."""
+    b = SyntheticBoard("two_grounds", two_layer_stackup())
+    b.square_pad("J1", "1", "VCC", 0.0, 0.0, 1.5)
+    b.square_pad("J1", "2", "GND", 0.0, 5.0, 1.5)
+    b.square_pad("U1", "1", "VCC", 40.0, 0.0, 1.5)
+    b.square_pad("U1", "2", "GND", 40.0, 5.0, 1.5)
+    b.square_pad("U1", "3", "GND", 25.0, 5.0, 1.5)
+    b.track("VCC", F, 0.5, (0.0, 0.0), (40.0, 0.0))
+    b.track("GND", F, 0.5, (0.0, 5.0), (40.0, 5.0))
+    board = Board(b.snapshot())
+    tree = solve_project_tree(board, Project(rails=[Rail("VCC", sources=[
+        Source("J1", 3.3, ["1"], ground_pins=["2"], ground_net="GND")],
+        loads=[Load("U1", 2.0, ["1"], ground_pins=["2", "3"], ground_net="GND")])]))
+    ref = tree_reference(board, tree, {"ground_of": "U1"})
+    [term] = [t for t in tree.groups["GND"].loads if t.name == "U1 (return)"]
+    assert ref.pads == ["U1.2", "U1.3"] and len(term.pad_ids) == 2
+    assert ref.offset_v == pytest.approx(_load(tree, "U1").v_ground_v, abs=1e-15)
+    assert ref.spread_v == pytest.approx(term.v_max - term.v_min, abs=1e-15) and ref.spread_v > 1e-4
+    assert "spread" in tree_text(tree_summary(shown_from(tree, board, {"ground_of": "U1"})))[0]
+
+
 def test_reference_parts_lists_the_parts_whose_ground_pins_are_solved(chain):
     assert reference_parts(chain) == ["J1", "U4", "U3", "U1", "U2"]
 

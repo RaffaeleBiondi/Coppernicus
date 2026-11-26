@@ -664,13 +664,13 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         "links": [dict(k) for k in tree.links],
         "groups": groups,
     }
-    if getattr(tree, "thermal", None) is not None:      # the board temperature (Task 8)
-        doc["thermal"] = thermal_summary(tree)
     # Where the voltages are shown from (S2): every value above stays in the solve's frame; a
     # reader subtracts offset_v from an absolute voltage it shows. The line saying so is added
     # here, never to the tree (its groups copied its assumptions when it was solved).
     ref = getattr(tree, "reference", None)
     doc["reference"] = reference_block(ref)
+    if getattr(tree, "thermal", None) is not None:      # the board temperature (Task 8)
+        doc["thermal"] = thermal_summary(tree)
     note = reference_assumption(ref)
     doc.update({"assumptions": list(tree.assumptions) + ([note] if note else []),
                 "warnings": list(tree.warnings)})
