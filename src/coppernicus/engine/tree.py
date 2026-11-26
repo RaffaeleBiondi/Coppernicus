@@ -11,7 +11,9 @@ sources; rails and grounds are iterated together. Field by field: ``docs/engine-
 
 from __future__ import annotations
 
+import dataclasses
 import math
+import re
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -188,9 +190,39 @@ def solve_project_tree(board: Board, project: Project,
     except Canceled as e:
         raise Cancelled("solve cancelled") from e
     except SolveError as e:
-        raise EngineError(f"Power tree: {e}") from e
+        raise EngineError(f"Power tree: {explain_tree_error(board, project, e)}") from e
     seconds = time.perf_counter() - t0
     return convert_tree(board, project, setup, kt, seconds, thickness)
+
+
+#: KiPI's error when every load of a rail is cut off (kipi/dc/pi/tree.py ``_audit``). It also
+#: counts a load whose ground pins are all cut off from the ground reference, and says only "rail".
+_NO_LOAD = re.compile(r"^(?P<rail>.+?): no load on this rail is connected to (?P<vrm>.+?) through "
+                      r"copper or series links \((?P<loads>.*?)\)\.")
+
+
+def explain_tree_error(board: Board, project: Project, error: SolveError) -> str:
+    """KiPI's tree error, or, when it says no load of a rail is connected but the rail solves
+    with the ground nets left out, that the loads' ground return is what is cut off."""
+    text = str(error)
+    m = _NO_LOAD.match(text)
+    excluded = list(project.engine_options.get("excluded_nets", []) or [])
+    grounds = [n for n in ground_nets(project) if n not in excluded]
+    if not m or not grounds:
+        return text
+    probe = dataclasses.replace(project, engine_options={
+        **project.engine_options, "excluded_nets": excluded + grounds})
+    try:
+        solve_tree(board.snapshot, to_pisetup(board, probe))
+    except SolveError as again:
+        if (_NO_LOAD.match(str(again)) or m).group("rail") == m.group("rail"):
+            return text
+    rail, vrm, loads = m.group("rail"), m.group("vrm"), m.group("loads")
+    return (f"{rail}: the ground pins on {', '.join(grounds)} of its loads ({loads}) have no copper "
+            f"or series-link path to the ground reference, so none of them can return its current. "
+            f"{rail}'s copper does connect {loads} to {vrm}: the break is in the ground. If KiCad "
+            "shows them connected, the link is probably still unrouted (ratsnest) or goes through an "
+            "unfilled zone; refill zones and reload. Solve the ground net as a rail to find where.")
 
 
 def group_keys(project: Project, kt) -> Dict[str, str]:

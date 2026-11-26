@@ -1286,3 +1286,42 @@ def test_solve_tree_from_fields_says_which_net_s_limit_judged_a_regulator_input(
     [inp] = [p for p in _group_doc(doc, "+5V")["problems"] if p.get("name") == "U1 (input)"]
     assert inp["limit_pct"] == 2.0 and inp["limit_from"] == "+5V", inp
     assert "(from +5V)" in inp["detail"], inp["detail"]
+
+
+def _split_board(supply_gap: bool = False, ground_gap: bool = True):
+    """VCC from J1 to U1 on one strip and GND below it, each strip cut in two by a gap when asked:
+    J1 and U1 each have pad 1 on VCC and pad 2 on GND, at the two ends."""
+    from shapely.geometry import box
+
+    from coppernicus.engine.synthetic import F, SyntheticBoard, two_layer_stackup
+    b = SyntheticBoard("split", two_layer_stackup(OZ1))
+    for net, y0, gap in (("VCC", 0.0, supply_gap), ("GND", 4.0, ground_gap)):
+        strips = [box(0, y0, 8, y0 + 2), box(12, y0, 20, y0 + 2)] if gap else [box(0, y0, 20, y0 + 2)]
+        for s in strips:
+            b.zone(net, F, s)
+    for ref, x in (("J1", 1.0), ("U1", 19.0)):
+        b.square_pad(ref, "1", "VCC", x, 1.0, 1.5)
+        b.square_pad(ref, "2", "GND", x, 5.0, 1.5)
+    return Board(b.snapshot())
+
+
+def _split_project():
+    from coppernicus.project import Project, Rail
+    return Project(board="split.kicad_pcb", rails=[Rail(
+        "VCC", sources=[Source("J1", 3.3, ["1"], ground_pins=["2"], ground_net="GND")],
+        loads=[Load("U1", 1.0, ["1"], ground_pins=["2"], ground_net="GND")])])
+
+
+@pytest.mark.parametrize("thermal", [False, True])
+def test_a_broken_ground_return_is_named_as_such_not_as_the_supply_rail(thermal):
+    with pytest.raises(EngineError) as err:
+        solve_project_tree(_split_board(), _split_project(), thermal=thermal)
+    text = str(err.value)
+    assert "ground pins on GND of its loads (U1) have no copper or series-link path to the ground" in text
+    assert "VCC's copper does connect U1 to J1" in text
+
+
+def test_a_broken_supply_rail_keeps_kipis_words():
+    with pytest.raises(EngineError, match="VCC: no load on this rail is connected to J1") as err:
+        solve_project_tree(_split_board(supply_gap=True, ground_gap=False), _split_project())
+    assert "ground reference" not in str(err.value)
