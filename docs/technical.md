@@ -106,8 +106,8 @@ spot, refine the mesh near the holes and solve again (next paragraph).
 **Refining the mesh near holes.** `max_edge_mm` sets the mesh on planes. Near plated holes
 KiPI grades it: elements start at `min_edge_mm` (0.02 mm) on the hole wall and grow by `grading`
 (0.2 mm per mm of distance) up to `max_edge_mm`. A smaller `max_edge_mm` leaves the elements at
-a via wall as they were: halved to 0.25 mm, it left the via-edge spots of the examples with the
-same element counts and their mean |J| within 0.2 %. To check a spot near a via, set the advanced settings `min_edge_mm` (for
+a via wall as they were: halved to 0.25 mm, it left the small via-edge spots of the examples
+with the same element counts and their mean |J| within 0.2 % (the larger via spots within 0.4 %). To check a spot near a via, set the advanced settings `min_edge_mm` (for
 example 0.01) and `grading` (for example 0.1) and solve again: a spot that keeps its area and
 mean |J| is resolved. Unset, KiPI's defaults apply.
 
