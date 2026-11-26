@@ -29,7 +29,8 @@ U2, which makes 1.8 V for U3 with remote sense.
   `--split` also prints each drop part by part and each net's range (see
   [Where each drop comes from](#where-each-drop-comes-from)).
 - **Agents:** the MCP tool `solve_tree(project_path)` returns the same as JSON (see
-  [Agents](agents.md#power-tree)).
+  [Agents](agents.md#power-tree)); `reference` shows it from another 0 V (see
+  [Showing it from another 0 V](#showing-it-from-another-0-v)).
 - **CI:** the GitHub Action's `tree` input adds the tree's tables to the job summary (see
   [CI](ci.md)).
 
@@ -94,10 +95,10 @@ The command line prints the same tables. On the power chain, with no limits set:
 
 ```text
 VRMs (sources and regulators)
-  name           kind   group         V set     V out     I out      V in      I in    P loss
-  J1             source VIN             12V 12.00000V   0.7702A         —         —         —
-  U1             smps   +3V3           3.3V  3.30569V   2.5020A 11.99469V   0.7702A   977.3mW  input drop on VIN 11.00 mV (0.09 %): not judged
-  U2             ldo    +1V8           1.8V  1.84537V   2.0000A  3.18377V   2.0020A  2683.1mW  input drop on +3V3_F 147.06 mV (4.46 %): not judged
+  name           kind   group         V set     V out  V across     I out      V in      I in    P loss
+  J1             source VIN             12V 12.00000V 12.00000V   0.7702A         —         —         —
+  U1             smps   +3V3           3.3V  3.30569V  3.30000V   2.5020A 11.99469V   0.7702A   977.3mW  input drop on VIN 11.00 mV (0.09 %): not judged
+  U2             ldo    +1V8           1.8V  1.84537V  1.81453V   2.0000A  3.18377V   2.0020A  2683.1mW  input drop on +3V3_F 147.06 mV (4.46 %): not judged
 Loads (the voltage across supply and ground pins)
   name           group             I  nominal    supply    ground    across           drop  verdict
   U4             +3V3           0.5A     3.3V  3.29768V   14.32mV  3.28336V 16.64 mV (0.50 %)  not judged
@@ -112,7 +113,9 @@ Verdict: not_judged. No limits set: nothing is judged, problems are ranked only.
 ```
 
 - **VRMs:** each source and regulator, with its set voltage, the voltage it actually holds at
-  its output (V out), its output and input currents and its loss. A regulator's input is also
+  its output (V out, from the solve's 0 V), that output **across its own pins** (V across: V out
+  minus its own ground pins; U1 holds 3.30000 V across them while its ground sits 5.69 mV above
+  J1's), its output and input currents and its loss. A regulator's input is also
   judged as a load on the rail that feeds it: *input drop on +3V3_F*. When a source has a rated
   output current (`PI_IMAX`, `current_limit_a`), an **I max** column shows it next to I out,
   and the regulator is judged against it (Verdicts, below).
@@ -232,6 +235,66 @@ and via limits. In the project file it is a rail of the ground net that holds on
 Under a negative rail the ground can sink **below** 0 V instead. The app, the summaries and
 the HTML report then call it a **ground shift** and show how far below 0 V it goes; a rise
 limit judges its size either way.
+
+## Showing it from another 0 V
+
+The solve's 0 V is the supply's ground pins. Measure the board with a scope grounded at U1's
+ground pin and every voltage reads 5.69 mV lower than the table. **0 V at** shows the tree
+from there instead: a part's ground pins, or pads. It is a display shift, nothing is solved
+again (solving with 0 V elsewhere would turn those pads into the return's sink: other physics).
+
+- **App:** in the **Power tree** tab, **0 V at** offers the solve's 0 V (the sources' ground
+  pins), each part whose ground pins are solved ("U1's ground pins"), or a pad: type REF.PAD
+  (several with commas, `NT1.*` for every pad of NT1) and press Enter, or press **Pick** and
+  click a pad on the map (Esc stops). The tables, the voltage map, the double-click, hover and
+  Measure readouts move at once; a line under the choice says what 0 V is and its offset. A
+  choice that does not resolve says why and changes nothing.
+- **Project file:** where the tree is shown from by default (the app, the command line and an
+  agent start from it):
+
+  ```yaml
+  tree:
+    reference: {ground_of: U1}        # or: {pads: [R12.2, NT1.*]}
+  ```
+
+- **Command line:** `coppernicus solve PROJECT --tree --reference U1` (a part's ground pins), or
+  `--reference R12.2,NT1.*` (pads); it replaces the project's for this run.
+
+```text
+Shown from 0 V at U1's ground pins (U1.3), +5.691 mV in the solve's frame: V out, V in, supply, ground, V min and V max move by it; drops, rises, across, limits and verdicts stay from the solve's 0 V (the sources' ground pins).
+VRMs (sources and regulators)
+  name           kind   group         V set     V out  V across     I out      V in      I in    P loss
+  J1             source VIN             12V 11.99431V 12.00000V   0.7702A         —         —         —
+  U1             smps   +3V3           3.3V  3.30000V  3.30000V   2.5020A 11.98900V   0.7702A   977.3mW  input drop on VIN 11.00 mV (0.09 %): not judged
+  U2             ldo    +1V8           1.8V  1.83968V  1.81453V   2.0000A  3.17808V   2.0020A  2683.1mW  input drop on +3V3_F 147.06 mV (4.46 %): not judged
+Loads (the voltage across supply and ground pins)
+  name           group             I  nominal    supply    ground    across           drop  verdict
+  U4             +3V3           0.5A     3.3V  3.29199V    8.63mV  3.28336V 16.64 mV (0.50 %)  not judged
+  U3             +1V8             2A     1.8V  1.83278V   32.78mV  1.80000V 0.00 mV (0.00 %)  not judged
+Groups
+  +1V8       rail   +1V8                   max drop 0.000 mV (0.000 %) below 1.83278 V,   copper loss 13.8 mW: not_judged
+  +3V3       rail   +3V3 + +3V3_F          max drop 121.916 mV (3.688 %) below 3.3 V,     copper loss 248 mW: not_judged
+  VIN        rail   VIN                    max drop 5.311 mV (0.044 %) below 11.9943 V,   copper loss 4.09 mW: not_judged
+  GND        ground GND                    max ground rise 38.470 mV above -0.00569069 V, copper loss 74.3 mW: not_judged
+```
+
+What moves and what does not:
+
+- **Moves:** absolute voltages: V out, V in, a load's supply and ground, the nets' V min and
+  V max (`--split`), the voltage map and the readouts, and the "below X V" a drop is measured
+  from (the solve's 0 V now reads −5.69 mV, so GND's rise is "above -0.00569069 V").
+- **Never moves:** a difference is the same from any 0 V: every drop and rise, V across, the
+  load's across, the split, a link's voltage across it.
+- **Verdicts:** always from the solve's 0 V, the ground rise's too. The numbers judged are the
+  same with or without a reference, and an assumption line says so.
+
+`ground_of: U1` is the mean of U1's own ground pins as solved (a source's or regulator's ground,
+a load's return pins: exact, each a terminal pad), with their spread when they differ. `pads`
+take each pad's voltage, exact on a terminal pad, interpolated at the pad's centre otherwise,
+and their mean: one offset for the whole tree, even across separate ground groups. A bare net
+is refused: its copper is not one potential. So are a part without solved ground pins, a pad
+on a net the tree does not solve or on copper not connected to a source (a glob just skips
+those pads), and a part or pad that is not on the board: each error says what to give instead.
 
 ## Verdicts
 

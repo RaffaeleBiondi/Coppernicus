@@ -95,6 +95,13 @@ the links. Here, the power chain with a 1 % limit on +3V3 and on +1V8 and a 30 m
   <img src="images/report-tree.png" alt="The power-tree report on the +3V3 group of the power chain: FAIL, the nets +3V3 and +3V3_F joined by the ferrite, worst load U2 (input) at 147.1 mV, 4.46 % from 3.3 V nominal, the drop map and the problems" width="820">
 </p>
 
+Shown from another 0 V (`--reference`, the project's `tree: reference`, or **0 V at** in the
+app before it writes the page; see [the power tree](power-tree.md#showing-it-from-another-0-v)),
+each group's **voltage map and its readout** read from that 0 V ("V = 0.0327794 V from 0 V at
+U1's ground pins") and the voltage scale note says where the solve's 0 V sits. The drop or
+rise map, its % and its words, the tables and every verdict stay in the solve's frame; a note
+in each group says so. Without a reference the page is as before.
+
 In a group, the **loads table and the worst-load card show what the tree judged**: the voltage
 across each load's supply and ground pins (a regulator's input pins, for a regulator the group
 feeds), its drop from its nominal voltage, and the tree's verdict, each by its own net's limit.
