@@ -192,6 +192,12 @@ the board temperature on the command line, and a packaged app.
 
 ### Changed
 
+- A rail solved on its own now also carries the current of the regulator inputs and links it
+  feeds (estimated at nominal voltages), so its drops grow: a check that passed with 0.1.0 can
+  fail.
+- A limit you set that cannot judge something (a % drop limit on a 0 V net, a limit of the
+  wrong kind, a rail that was not solved) is no longer passed silently: the command line exits
+  3, and the Action fails the check unless `fail-on-not-judged: false`.
 - An agent's copper what-if in the MCP tool `solve_rail` takes only a standard weight at most
   one step from the design's thickness on that layer; anything else is refused and is a change
   to make in KiCad.
