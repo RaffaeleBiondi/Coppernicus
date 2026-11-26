@@ -1484,36 +1484,44 @@ Also:
 KiPI factorizes with SciPy's SuperLU in the COLAMD column order (`direct._superlu`,
 `direct._superlu_complex`), which ignores that its matrices are symmetric. SuperLU's symmetric
 mode (minimum degree on the pattern of A + Aᵀ, `SymmetricMode`, the diagonal as pivot) fills
-about half as much on them, so it takes less time and memory. `src/coppernicus/engine/superlu_order.py` offers it per part, each **off
-by default**.
+about half as much on them, so it takes less time and memory.
+`src/coppernicus/engine/superlu_order.py` offers it per part, each **off by default**.
 
 | Part | What runs in SuperLU's symmetric mode | Pivoting |
 |------|---------------------------------------|----------|
 | `thermal` | the board temperature's heat model (`BoardThermalModel`, model.py:282), marked on the calling thread around its construction in `engine/thermal.py` | none (symmetric positive definite) |
-| `dc` | every other real factorization (outside the heat model's marker): the DC copper's direct solves (`SpdSolver`, spd.py:117 and its fallback at :163; SuperLU up to 200,000 unknowns) | none (symmetric positive definite) |
+| `dc` | every other real factorization (outside the heat model's marker): the DC copper's direct solves (`SpdSolver`, spd.py:117, with SuperLU up to 200,000 unknowns) and, at any size, its fallback after a CG that did not converge (spd.py:163) | none (symmetric positive definite) |
 | `ac` | every complex factorization: the AC field solves, one per field frequency (field.py, fem.py:648), and so the noise and tolerance solves; process-wide, since KiPI solves the frequencies in its own threads | partial, threshold 0.1 (KiPI: SciPy's 1.0): the systems are indefinite |
 
-Where PARDISO loads (the optional `pypardiso`, x86-64 Windows and Linux), KiPI factorizes with
-it and reaches SuperLU only when PARDISO fails: the parts then change only that fallback.
+Each factorization is checked as KiPI checks those it does not trust: a real one by its backward
+error for a right-hand side of ones against KiPI's `CHECK_TOL` (1e-12), a complex one by its
+relative residual against KiPI's `CHECK_TOL_COMPLEX` (1e-6); one solve and one product with A.
+One that fails, or that SuperLU refuses, is warned of (once) and redone by KiPI's own function.
+Where PARDISO loads (the optional `pypardiso`, x86-64 Windows and Linux), KiPI reaches these
+functions only after PARDISO failed: KiPI's own functions then always run, and the memory
+estimates say nothing of the symmetric order.
 
 How to enable: `COPPERNICUS_SUPERLU_ORDER=thermal,ac,dc` in the environment (comma-separated
-parts, read when `coppernicus.engine` is imported), or `superlu_order.enable("thermal", "ac", "dc")`.
+parts, read when `coppernicus.engine` is imported), or
+`superlu_order.enable("thermal", "ac", "dc")`.
 
-Off, nothing is replaced and KiPI's own path runs: bit-identical (the drift test of our
-electro-thermal loop against KiPI's `solve_electrothermal` runs with it off). On, a different
-order rounds differently: results move by round-off only. Proof criteria (checks of "round-off
-only", not limits of the product):
+Off, nothing is replaced and KiPI's own path runs: bit-identical. KiPI's reference
+electro-thermal solve (`solve_kipi_reference`, for the drift test) runs under a "kipi" thread
+marker that keeps KiPI's factorizations whatever part is on. On, a different order rounds
+differently: results move by round-off only. Proof criteria (checks of "round-off only", not
+limits of the product):
 
 - `thermal` and `dc`: the benchmark fingerprint's scalars (tools/bench) within 1e-9 relative,
   with a floor per unit for values near zero (the unit's largest magnitude in the fingerprint ×
   1e-9); together: |Δ| ≤ 1e-9 × the largest value of that unit;
 - `ac`: |Z| within 1e-6 relative (and the noise and tolerance scalars that come from it), since
-  KiPI's own |Z| carries round-off of order 1e-7. On the noise example (`examples/noise`, 1 kHz to 300 MHz),
-  KiPI's own call (COLAMD, threshold 1.0) on the same systems with their unknowns put through a
-  random symmetric permutation moves |Z| by 4.0e-8 to 5.8e-8 (6 seeds; 6.0e-8 between any two of
-  the 7 orders), and this order by 5.2e-8: inside KiPI's own spread. That spread is 4.5e-8 below
-  1 MHz and 1.3e-8 above, over 1e-10 up to about 10 MHz; the probe there has no target, so its
-  |Z| is never judged. On the pdn example's judged band (from its 100 kHz bandwidth to 9.93 MHz)
+  KiPI's own |Z| carries round-off of order 1e-8 to 1e-7 (max measured 6.0e-8). On the noise
+  example (`examples/noise`, 1 kHz to 300 MHz), KiPI's own call (COLAMD, threshold 1.0) on the
+  same systems with their unknowns put through a random symmetric permutation moves |Z| by
+  4.0e-8 to 5.8e-8 (6 seeds; 6.0e-8 between any two of the 7 orders), and this order by 5.2e-8:
+  of the same order as KiPI's own spread. That spread is 4.5e-8 below 1 MHz and 1.3e-8 above,
+  over 1e-10 up to about 10 MHz; the probe there has no target, so its |Z| is never judged. On
+  the pdn example's judged band (`examples/pdn`, from its 100 kHz bandwidth to 9.93 MHz)
   everything agrees to about 2e-11 (KiPI's four orders 2.3e-11, this one 1.9e-11), and to
   3.3e-11 over the whole sweep;
 - the backward error ‖b − Ax‖ / (‖A‖ ‖x‖ + ‖b‖), on and off, of the same order (a few 1e-16;
@@ -1522,21 +1530,25 @@ only", not limits of the product):
 Measured (macOS arm64, a loaded machine: provisional), the heat model of a 50 mm synthetic board
 (250,000 unknowns, 4 layers): factors 121 M → 61 M non-zeros, memory +3.2 → +1.4 GB,
 factorization 3.6 → 2.0 s, each later solve 0.37 → 0.15 s; a 6-layer 250 × 250 grid (375,000
-unknowns): 12.6 s / +8.3 GB → 5.2 s / +3.0 GB. The pdn example's AC solve (`examples/pdn`, 19,783 unknowns,
-111 field frequencies): each factorization 5.2 M → 3.3 M non-zeros, 0.25 → 0.155 s, 208 → 135 MB;
-the backward error at every frequency, off and on, at most 6.2e-17 and 4.9e-17. The factor keeps
-KiPI's name `superlu` and its true memory, which KiPI's thread count reads (field.py `threads`).
+unknowns): 12.6 s / +8.3 GB → 5.2 s / +3.0 GB. The pdn example's AC solve (`examples/pdn`,
+19,783 unknowns, 111 field frequencies): each factorization 5.2 M → 3.3 M non-zeros,
+0.25 → 0.155 s, 208 → 135 MB; the backward error at every frequency, off and on, at most 6.2e-17
+and 4.9e-17. The factor keeps KiPI's name `superlu` and its true memory, which KiPI's thread
+count reads (field.py `threads`). DC: on the rails of a 100 mm synthetic board (103,000 and
+169,000 unknowns) the factors halve, the factorization takes 0.28 → 0.20 s and 0.58 → 0.42 s,
+each solve half the time.
 
 The seam: KiPI's private functions are replaced process-wide, once, only on KiPI 1.0.1 with
-those functions of the expected signature (otherwise a warning, once, and KiPI's path); a part
-that is off hands its factorizations to KiPI's own function. `uninstall()` puts KiPI's back.
+those functions of the expected signature (otherwise a warning, once, and KiPI's path); a later
+`enable()` checks by identity that the installed functions are still ours. A part that is off
+hands its factorizations to KiPI's own function. `uninstall()` puts KiPI's back.
 
-DC: on the rails of a 100 mm synthetic board (103,000 and 169,000 unknowns) the factors halve,
-the factorization takes 0.28 → 0.20 s and 0.58 → 0.42 s, each solve half the time. **Open
-risk:** KiPI's own comment at `direct._superlu` says this order "takes minutes" on its meshes.
-On synthetic meshes it took 0.5 s even with dense pad rows (20 nodes tied to 1,000 nodes each:
-COLAMD 15.8 s there), but that does not refute a remark made on real boards: `dc` is not to be
-made a default before a run on a real board on a quiet machine.
+**Open risk (`dc` and `ac`):** KiPI's own comment at `direct._superlu` says this order "takes
+minutes" on its meshes, whose merged pad, ring and port groups give dense rows. On synthetic
+meshes it took 0.5 s even with dense pad rows (20 nodes tied to 1,000 nodes each: COLAMD 15.8 s
+there), but that does not refute a remark made on real boards: neither part is to be made a
+default before a run on a real board on a quiet machine. The heat model's grid (at most 7
+non-zeros a row) has no such rows.
 
 Recorded for a later ruling, not built: with this order a direct solve beats KiPI's AMG-CG
 (above 200,000 unknowns) at 352,000 unknowns (1.13 s against 2.68 s, but 647 MB against
@@ -1544,5 +1556,5 @@ Recorded for a later ruling, not built: with this order a direct solve beats KiP
 ceiling would replace CG's 1e-10 relative residual with an exact solve for mid-size rails.
 
 Not refitted: the memory estimates (`thermal_ram_estimate`; the AC `ram_estimate` and
-`noise_ram_estimate`) were measured in KiPI's order; with their part on they overstate, and
-their text says so.
+`noise_ram_estimate`) were measured in KiPI's order; with their part active (on, with SuperLU as
+KiPI's backend) they overstate, and their text says so.
