@@ -113,6 +113,9 @@ class TerminalResult:
     pad_ids: List[str] = field(default_factory=list)
     positions: List[Tuple[float, float]] = field(default_factory=list)
     net: str = ""                  # the net of its pads, when known (power-tree groups)
+    # V at each of ``pad_ids`` (NaN where not connected), exact; power-tree groups only (the
+    # 0 V reference view reads a pad's voltage from it), else empty.
+    v_pads: List[float] = field(default_factory=list)
 
 
 @dataclass
@@ -405,6 +408,9 @@ class VrmReport:
     v_sense_v: Optional[float] = None
     v_ground_sense_v: Optional[float] = None
     regulation: str = ""           # why it cannot hold its voltage; "" when it can
+    # V out across its own pins: v_out_v − its own ground (v_ground_v; 0 without ground pins).
+    # The same from any 0 V (shown, never judged).
+    v_out_across_v: Optional[float] = None
     # Its input, judged as a load on the rail that feeds it (regulators only):
     input_net: str = ""
     input_group: str = ""          # the TreeResult.groups key of that rail
@@ -455,6 +461,30 @@ class LoadReport:
 
 
 @dataclass
+class TreeReference:
+    """Where a power tree's voltages are shown from (S2, a display shift only): the pads taken
+    as 0 V and their potential in the solve's own frame. KiPI holds 0 V at the ground pins of
+    the sources; every voltage of a :class:`TreeResult` stays in that frame, and every drop,
+    rise, limit and verdict is taken there. ``offset_v`` is subtracted only where an absolute
+    voltage is shown (tables, the voltage map, readouts); a difference never moves."""
+    label: str                     # what it is: "U1's ground pins", "R12.2, NT1.1", ...
+    pads: List[str] = field(default_factory=list)   # its pads, "REF.PAD"
+    offset_v: float = 0.0          # their mean potential in the solve's frame
+    spread_v: float = 0.0          # their highest minus their lowest (0: one potential)
+    # As given ({"ground_of": "U1"} or {"pads": ["R12.2"]}); None: the solve's own 0 V (the
+    # sources' ground pins), nothing shifted.
+    given: Optional[Dict[str, Any]] = None
+
+    def shown(self, v: Optional[float]) -> Optional[float]:
+        """``v`` (solve frame) as shown from this reference; None stays None, and a result
+        within 1 pV of 0 is 0 (no "-0.00000")."""
+        if v is None:
+            return None
+        out = float(v) - self.offset_v
+        return 0.0 if abs(out) < 1e-12 else out
+
+
+@dataclass
 class TreeResult:
     """A whole power tree: every rail and ground group, its sources and regulators, its
     loads, and the limits each group is judged against (only the user's)."""
@@ -479,6 +509,9 @@ class TreeResult:
     assumptions: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     stats: Dict[str, float] = field(default_factory=dict)
+    # Where its voltages are shown from (a display setting, not part of the solve: it may be
+    # replaced at any time, the values above never move); None: the solve's own 0 V.
+    reference: Optional[TreeReference] = None
 
     def group_of(self, net: str) -> Optional[str]:
         """The key of the group ``net`` was solved in, or None."""

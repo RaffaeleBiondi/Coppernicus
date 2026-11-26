@@ -12,6 +12,7 @@ sources; rails and grounds are iterated together. Field by field: ``docs/engine-
 from __future__ import annotations
 
 import dataclasses
+import fnmatch
 import heapq
 import math
 import re
@@ -50,6 +51,7 @@ from coppernicus.results import (
     RailResult,
     Segment,
     TerminalResult,
+    TreeReference,
     TreeResult,
     VrmReport,
     exclude_degenerate,
@@ -131,7 +133,8 @@ def _terminals(board: Board, fields):
         ref = board.pad(pads[0]).footprint if pads else ""
         out = TerminalResult(t.name, t.kind, ref, float(t.current), float(t.v_min), float(t.v_max),
                              pads, [tuple(board.pad(pid).position) for pid in pads],
-                             net=board.pad(pads[0]).net if pads else "")
+                             net=board.pad(pads[0]).net if pads else "",
+                             v_pads=[float(v) for v in np.asarray(t.v_pads, dtype=float)])
         (sources if t.kind == "source" else loads).append(out)
     return sources, loads
 
@@ -314,7 +317,9 @@ def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
             name=v.name, kind=v.kind, group=key_of.get(v.group, v.group), v_set_v=float(v.v_set),
             v_out_v=float(v.v_out), i_out_a=float(v.i_out), v_in_v=v.v_in, i_in_a=v.i_in,
             p_out_w=float(v.p_out), p_in_w=v.p_in, p_loss_w=v.p_loss, v_ground_v=v.v_ground,
-            v_sense_v=v.v_sense, v_ground_sense_v=v.v_ground_sense, regulation=v.regulation))
+            v_sense_v=v.v_sense, v_ground_sense_v=v.v_ground_sense, regulation=v.regulation,
+            # across its own pins: from its own ground, not its ground sense (S2)
+            v_out_across_v=float(v.v_out) - float(v.v_ground or 0.0)))
     sources = {name: project.rail(net).sources[i]
                for (what, net, i), name in names.items() if what == "source"}
     for v in out.vrms:
@@ -339,6 +344,7 @@ def convert_tree(board: Board, project: Project, setup, kt, seconds: float,
             v_low_v=_volts(ld.v_low), v_high_v=_volts(ld.v_high)))
     split_tree(board, setup, kt, key_of, out, node_net)
     apply_limits(out, project)
+    out.reference = tree_reference(board, out, None)      # the solve's own 0 V, nothing shifted
     return out
 
 
@@ -753,3 +759,156 @@ def _segments(board: Board, nominal: float, drop: float, driver: Optional[VrmRep
     if not (math.isfinite(rebuilt) and abs(rebuilt - drop) <= 1e-9):
         return []                                # not the potentials the drop was taken from
     return segs
+
+
+# ---------------------------------------------------------------------- the 0 V reference view (S2)
+#
+# A display shift only. KiPI holds 0 V at the ground pins of the sources (the solve's frame);
+# solving again with 0 V elsewhere would make those pads the current sink: wrong physics. So a
+# reference is a potential read off the solved tree, subtracted where an absolute voltage is
+# shown; every drop, rise, limit and verdict stays in the solve's frame.
+
+#: The suffixes of a ground group's terminals that are a part's own ground pins: a source's or
+#: regulator's (gnd), a load's (return). A sense terminal ("(gnd sense)") sits on another part.
+GROUND_TERMINALS = (" (gnd)", " (return)")
+
+
+def pad_centre_voltage(pad, layers, locator) -> Optional[Tuple[float, object, float, float]]:
+    """``(V, layer, x, y)`` of ``pad`` (a :class:`~coppernicus.engine.board.Pad`), interpolated
+    at its centre on the first of ``layers`` (``LayerField``) where it has copper, or at the
+    nearest meshed copper of the pad when its centre is a drilled hole; None when no layer has
+    connected, solved copper of it. ``locator(layer)``: a ``TriangleLocator`` of that layer."""
+    from shapely.geometry import Point, Polygon
+    from shapely.ops import unary_union
+    cx, cy = float(pad.position[0]), float(pad.position[1])
+    for lf in layers:
+        polys = (pad.shapes or {}).get(lf.layer_id)
+        if not polys:
+            continue
+        loc = locator(lf)
+        k, at = loc.locate(cx, cy), (cx, cy)
+        if k < 0:                       # a plated hole's drill: the nearest meshed copper of the pad
+            kn, _ = loc.nearest(cx, cy)
+            copper = unary_union([Polygon(s.outline, s.holes) for s in polys])
+            if kn < 0 or not copper.covers(Point(loc.centroids[kn])):
+                continue
+            k, at = kn, (float(loc.centroids[kn][0]), float(loc.centroids[kn][1]))
+        v = float(loc.weights(k, *at) @ lf.voltage[lf.tris[k]])
+        if math.isfinite(v):
+            return v, lf, at[0], at[1]
+    return None
+
+
+def _owner(name: str) -> str:
+    """The part a terminal of a ground group belongs to: "U2 (gnd)" -> "U2"."""
+    return next((name[:-len(s)] for s in GROUND_TERMINALS if name.endswith(s)), name)
+
+
+def _reference(board: Board, label: str, pads: Dict[str, float], given) -> TreeReference:
+    """A :class:`TreeReference` from pad id -> V (solve frame; NaN: not connected)."""
+    v = np.array([x for x in pads.values() if math.isfinite(x)], dtype=float)
+    return TreeReference(label=label, pads=_labels(board, list(pads)),
+                         offset_v=float(v.mean()) if len(v) else 0.0,
+                         spread_v=float(v.max() - v.min()) if len(v) else 0.0, given=given)
+
+
+def tree_reference(board: Board, tree: TreeResult, spec: Optional[Dict]) -> TreeReference:
+    """Where ``tree``'s voltages are shown from, read off the solved tree (nothing in it is
+    changed; S2, a display shift): ``spec`` as :func:`coppernicus.project.reference_spec`
+    gives it, or None for the solve's own 0 V (the sources' ground pins, offset 0).
+
+    ``{"ground_of": REF}``: the part's own ground pins (a source's or regulator's, a load's
+    return pins), their mean connected potential (KiPI's ``v_ground``) and spread; exact, each
+    being a terminal pad. ``{"pads": [REF.PAD, ...]}``: those pads (globs on the pad), one
+    global offset, their mean; a terminal pad's voltage is exact, any other pad's is
+    interpolated at its centre. Raises :class:`EngineError` saying what to give instead."""
+    from coppernicus.fields import TriangleLocator
+    from coppernicus.project import reference_spec
+    grounds = [(key, t) for key, res in tree.groups.items() if res.kind == "ground"
+               for t in res.sources + res.loads if t.name.endswith(GROUND_TERMINALS)]
+
+    def volts(ts) -> Dict[str, float]:
+        out: Dict[str, float] = {}
+        for t in ts:
+            for pid, v in zip(t.pad_ids, list(t.v_pads) or [math.nan] * len(t.pad_ids)):
+                out.setdefault(pid, float(v))
+        return out
+    if spec is None:
+        held = [t for _key, t in grounds if t.kind == "source"]
+        names = list(dict.fromkeys(_owner(t.name) for t in held))
+        label = (f"the ground pins of {', '.join(names)} (the solve's 0 V)" if names
+                 else "the solve's 0 V (no ground net solved: every ground pin at 0 V)")
+        ref = _reference(board, label, volts(held), None)
+        ref.offset_v, ref.spread_v = 0.0, 0.0       # held at 0 V exactly
+        return ref
+    try:
+        spec = reference_spec(spec, "reference")
+    except ValueError as e:
+        raise EngineError(str(e)) from None
+    if "ground_of" in spec:
+        part = spec["ground_of"]
+        mine = [t for _key, t in grounds if _owner(t.name) == part or t.ref == part]
+        pads = volts(mine) or {pid: v for pid, v in volts(t for _k, t in grounds).items()
+                               if board.pad(pid).footprint == part}
+        if not pads:
+            if part in board.nets():
+                raise EngineError(f"reference: {part} is a net, not a part: a net is not one potential "
+                                  "(its copper has many voltages); give a part (ground_of: U1) or pads "
+                                  "on it (pads: [U1.3])")
+            if not board.part_nets(part):
+                raise EngineError(f"reference: no part {part} on the board (ground_of takes a part "
+                                  "reference, e.g. U1)")
+            if not grounds:
+                raise EngineError(f"reference: no ground net is solved in this power tree, so {part}'s "
+                                  "ground pins have no voltage of their own; give pads on a solved net "
+                                  "(pads: [REF.PAD])")
+            have = list(dict.fromkeys(_owner(t.name) for _k, t in grounds))
+            raise EngineError(f"reference: {part} has no ground pins in this power tree: ground_of takes "
+                              f"a source, regulator or load whose ground pins are solved ({', '.join(have)})")
+        if not any(math.isfinite(v) for v in pads.values()):
+            raise EngineError(f"reference: {part}'s ground pins are not connected to the solved ground "
+                              "copper: they have no voltage")
+        return _reference(board, f"{part}'s ground pins", pads, spec)
+    exact = {pid: v for res in tree.groups.values() for t in res.sources + res.loads
+             for pid, v in zip(t.pad_ids, t.v_pads) if math.isfinite(v)}
+    found: Dict[str, float] = {}
+    locators: Dict[Tuple[str, str], object] = {}
+    for entry in spec["pads"]:
+        ref, _, pattern = entry.partition(".")
+        nets = board.part_nets(ref)
+        if not nets:
+            raise EngineError(f"reference: no part {ref} with pads on a net (pads: [REF.PAD], e.g. U1.3)")
+        pads = [p for p in board.pads(nets, ref) if fnmatch.fnmatchcase(p.number, pattern)]
+        if not pads:
+            numbers = sorted({p.number for p in board.pads(nets, ref)}, key=lambda s: (len(s), s))
+            raise EngineError(f"reference: {ref} has no pad {pattern!r} "
+                              f"(pads of {ref}: {', '.join(numbers)})")
+        glob, kept = any(c in pattern for c in "*?["), 0
+        for p in pads:
+            key = tree.group_of(p.net)
+            if key is None:
+                if glob:
+                    continue
+                raise EngineError(f"reference: pad {entry} is on {p.net}, which this power tree does not "
+                                  "solve: give a pad on a solved net")
+            v = exact.get(p.id)
+            if v is None:
+                res = tree.groups[key]
+
+                def locator(lf, key=key):
+                    if (key, lf.name) not in locators:
+                        locators[key, lf.name] = TriangleLocator(lf.points, lf.tris)
+                    return locators[key, lf.name]
+                at = pad_centre_voltage(p, res.layers, locator)
+                v = at[0] if at is not None else None
+            if v is None or not math.isfinite(v):
+                if glob:
+                    continue
+                raise EngineError(f"reference: pad {entry} is on no connected, solved copper of {p.net}: "
+                                  "it has no voltage; give a connected pad")
+            found.setdefault(p.id, v)
+            kept += 1
+        if not kept:
+            raise EngineError(f"reference: no pad of {entry} is on connected, solved copper of this power "
+                              "tree")
+    return _reference(board, _text(_labels(board, list(found))), found, spec)

@@ -449,6 +449,80 @@ def _tolerance_out(options: ToleranceOptions) -> Dict[str, Any]:
     return {k: v for k, v in vars(options).items() if v != getattr(default, k)}
 
 
+# ---------------------------------------------------------------------- the power tree's 0 V view
+
+REFERENCE_FORM = ("a reference is {ground_of: REF} (that part's ground pins, e.g. U1) or "
+                  "{pads: [REF.PAD, ...]} (e.g. [R12.2, NT1.*]; the pad may be a glob)")
+
+
+def reference_spec(value: Any, where: str = "tree: reference") -> Optional[Dict[str, Any]]:
+    """Where a power tree's voltages are shown from (S2, a display shift only), checked and
+    normalised: ``{"ground_of": "U1"}`` or ``{"pads": ["R12.2", "NT1.*"]}``; None for None
+    (the solve's own 0 V). Raises ValueError naming ``where``: unknown keys, both or neither
+    given, an empty part, a pad that is not REF.PAD (a bare net is refused: its copper is not
+    one potential). Whether the part or pads exist is checked against the solved tree
+    (:func:`coppernicus.engine.tree.tree_reference`)."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{where} must be a mapping, not {value!r}: {REFERENCE_FORM}")
+    unknown = [str(k) for k in value if k not in ("ground_of", "pads")]
+    if unknown:
+        raise ValueError(f"{where}: unknown key {', '.join(unknown)}: {REFERENCE_FORM}")
+    given = [k for k in ("ground_of", "pads") if value.get(k) not in (None, "", [])]
+    if len(given) != 1:
+        raise ValueError(f"{where}: give {'one of ' if given else ''}ground_of or pads"
+                         f"{', not both' if given else ''}: {REFERENCE_FORM}")
+    if given == ["ground_of"]:
+        ref = value["ground_of"]
+        if not isinstance(ref, str) or not ref.strip() or "." in ref.strip():
+            raise ValueError(f"{where}: ground_of is a part reference (e.g. U1), not {ref!r}; a pad "
+                             "is given as pads: [REF.PAD]")
+        return {"ground_of": ref.strip()}
+    pads = value["pads"]
+    pads = [pads] if isinstance(pads, str) else pads
+    if not isinstance(pads, list):
+        raise ValueError(f"{where}: pads is a list of REF.PAD entries (e.g. [R12.2, NT1.*]), not {pads!r}")
+    out = []
+    for e in pads:
+        head, dot, pad = str(e).strip().partition(".")
+        if not (head and dot and pad):
+            raise ValueError(f"{where}: pads entry {e!r} is not REF.PAD (e.g. R12.2, or NT1.* for every "
+                             "pad of NT1): a net is not one potential, its copper has many voltages; "
+                             "give a pad on it, or ground_of: a part")
+        out.append(f"{head}.{pad}")
+    return {"pads": list(dict.fromkeys(out))}
+
+
+def reference_from_text(text: str) -> Dict[str, Any]:
+    """``--reference`` as a :func:`reference_spec`: a part reference ("U1": its ground pins),
+    or pads as REF.PAD separated by commas ("R12.2,NT1.*"); "ground_of=U1" and
+    "pads=R12.2,NT1.*" are accepted too. Raises ValueError saying the form."""
+    text = str(text or "").strip()
+    key, eq, rest = text.partition("=")
+    if eq and key.strip() in ("ground_of", "pads"):
+        key, text = key.strip(), rest.strip()
+    else:
+        key = "pads" if "." in text or "," in text else "ground_of"
+    if not text:
+        raise ValueError("--reference needs a part (U1: its ground pins) or pads (R12.2,NT1.*)")
+    value = [p.strip() for p in text.split(",") if p.strip()] if key == "pads" else text
+    return reference_spec({key: value}, "--reference")
+
+
+def _tree_in(data: Any) -> Optional[Dict[str, Any]]:
+    """The ``tree:`` block (the power tree's options): ``reference`` only, so far; unknown
+    keys raise."""
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        raise ValueError(f"tree must be a mapping (tree: {{reference: ...}}), not {data!r}")
+    unknown = [str(k) for k in data if k != "reference"]
+    if unknown:
+        raise ValueError(f"tree: unknown option {', '.join(unknown)} (known: reference)")
+    return reference_spec(data.get("reference"))
+
+
 # The owner's bound: a thicker value is surely µm or oz written as mm.
 MAX_COPPER_MM = 1.0
 
@@ -1181,6 +1255,9 @@ class Project:
     # Capacitors whose KiCad fields give no model (partial: PI_ESR missing...), ref -> why, set
     # by the fields merge (coppernicus.board_fields) for the AC and noise reasons. Not saved.
     capacitor_gaps: Dict[str, str] = field(default_factory=dict)
+    # Where the power tree's voltages are shown from (``tree: {reference: ...}``; S2, a
+    # display shift only: reference_spec). None: the solve's own 0 V. Saved only when set.
+    tree_reference: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------ queries
     def board_path(self) -> Path:
@@ -1267,6 +1344,9 @@ class Project:
             out["use_board_fields"] = False
         out.update(_noise_out(self))
         out.update({"tolerance": t} if (t := _tolerance_out(self.tolerance)) else {})
+        if self.tree_reference:
+            out["tree"] = {"reference": {k: (list(v) if isinstance(v, list) else v)
+                                         for k, v in self.tree_reference.items()}}
         return out
 
     @classmethod
@@ -1297,11 +1377,13 @@ class Project:
             use_fields = _flag(data, "use_board_fields", True)
             noise = _noise_in(data)
             tolerance = _tolerance_in(data.get("tolerance"))
+            tree_reference = _tree_in(data.get("tree"))
         except (KeyError, TypeError, ValueError) as e:
             raise ProjectError(f"invalid project file: {e}") from e
         return cls(board=str(data.get("board", "")), rails=rails, settings=settings, path=path,
                    marked_rails=[str(n) for n in marked], links=links, engine_options=dict(options),
-                   use_board_fields=use_fields, thermal=thermal, tolerance=tolerance, **ac, **noise)
+                   use_board_fields=use_fields, thermal=thermal, tolerance=tolerance,
+                   tree_reference=tree_reference, **ac, **noise)
 
     @classmethod
     def load(cls, path) -> "Project":

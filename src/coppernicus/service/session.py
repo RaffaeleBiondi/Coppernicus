@@ -30,7 +30,7 @@ from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Seq
 
 import numpy as np
 import yaml
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString
 from shapely.ops import unary_union
 
 from coppernicus import board_fields as BF
@@ -41,7 +41,7 @@ from coppernicus.maps import FIELDS, render_layer_map, safe_name, save_layer_map
 from coppernicus.power_tree import EstimateError, estimated_draws
 from coppernicus.problems import Problem, find_problems
 from coppernicus.project import Limits, Project, ProjectError, Rail, Settings
-from coppernicus.results import LayerField, RailResult, TreeResult
+from coppernicus.results import LayerField, RailResult, TreeReference, TreeResult
 from coppernicus.service import convert as C
 from coppernicus.service import errors as E
 from coppernicus.service import fields as F
@@ -300,12 +300,15 @@ REPORT_SAMPLING = ("The maps are sampled on square cells; the page's readout giv
 
 
 def point_values(res: RailResult, lf: LayerField, locator: TriangleLocator, j_vectors: np.ndarray,
-                 k: int, x: float, y: float, group: bool = False) -> Dict[str, Any]:
+                 k: int, x: float, y: float, group: bool = False,
+                 reference: Optional[TreeReference] = None) -> Dict[str, Any]:
     """What a probe reads in triangle ``k`` (located at ``x``, ``y``) of ``lf``: voltage, drop,
     |J| and its vector. On a power-tree group (``group``) the drop is worded as the app's
     readout words it (``drop_word``, ``drop_unit``: on a ground below 0 V, the depth below it;
     :meth:`~coppernicus.results.RailResult.shown_drop_at`), with the net there when it is
-    known exactly (``net``). Plain values, not yet made JSON (:func:`convert.jsonable`)."""
+    known exactly (``net``) and, from the tree's ``reference`` (S2),
+    ``voltage_from_reference_v``: the voltage from the 0 V it is shown from (the drop stays in
+    the solve's frame). Plain values, not yet made JSON (:func:`convert.jsonable`)."""
     v = float(locator.weights(k, x, y) @ lf.voltage[lf.tris[k]])
     connected = math.isfinite(v)
     drop = float(res.shown_drop_at(v) if group else res.drop_at(v))   # toward 0 V on a negative rail
@@ -313,8 +316,10 @@ def point_values(res: RailResult, lf: LayerField, locator: TriangleLocator, j_ve
     if group:
         net = _net_at(res, lf, k)
         out.update({"net": net} if net is not None else {})
-    out.update({"on_copper": True, "connected": connected, "voltage_v": v, "drop_mv": drop * 1e3,
-                "drop_pct": 100.0 * drop / abs(res.v_ref) if res.v_ref else None})
+    out.update({"on_copper": True, "connected": connected, "voltage_v": v})
+    if group:
+        out["voltage_from_reference_v"] = reference.shown(v) if reference is not None and connected else v
+    out.update({"drop_mv": drop * 1e3, "drop_pct": 100.0 * drop / abs(res.v_ref) if res.v_ref else None})
     if group:
         out.update({"drop_word": res.drop_word(), "drop_unit": res.shown_drop_unit()})
     out.update({"j_a_mm2": float(lf.current_density[k]), "j_vector_a_mm2": j_vectors[k],
@@ -344,7 +349,8 @@ def probe_tree(tree: TreeResult, layer: str, x: float, y: float,
         loc, jv = query(key, lf)
         k = loc.locate(x, y)
         if k >= 0:
-            values = point_values(res, lf, loc, jv, k, x, y, group=True)
+            values = point_values(res, lf, loc, jv, k, x, y, group=True,
+                                  reference=getattr(tree, "reference", None))
             net = values.pop("net", None)
             return C.jsonable({"group": key, "kind": res.kind, **({"net": net} if net else {}),
                                **where, **values})
@@ -355,9 +361,10 @@ def probe_tree(tree: TreeResult, layer: str, x: float, y: float,
                                                        "at this point."]})
 
 
-def probe_text(p: Mapping[str, Any]) -> str:
+def probe_text(p: Mapping[str, Any], reference: Optional[Mapping[str, Any]] = None) -> str:
     """One line of ``coppernicus solve --tree --probe``: the point, the group there, its
-    voltage, its drop (or rise, or shift) as the app's readout words it, and |J|."""
+    voltage, its drop (or rise, or shift) as the app's readout words it, and |J|. With a
+    ``reference`` the user gave (the tree document's block, S2), the voltage from it too."""
     head = f"Probe {p['layer']} ({p['x_mm']:g}, {p['y_mm']:g}) mm: "
     if not p["on_copper"]:
         others = ", ".join(f"{h['group']} on {h['layer']}" for h in p["groups_with_copper_here"])
@@ -366,7 +373,10 @@ def probe_text(p: Mapping[str, Any]) -> str:
     head += f"{p['group']} ({p['kind']}{net})"
     if not p["connected"]:
         return head + " · not connected to a source"
-    return (head + f" · V = {p['voltage_v']:.5f} V · {p['drop_word']} = {p['drop_mv']:.3f} "
+    shown = ""
+    if reference and reference.get("given") and p.get("voltage_from_reference_v") is not None:
+        shown = f" ({p['voltage_from_reference_v']:.5f} V from 0 V at {reference['label']})"
+    return (head + f" · V = {p['voltage_v']:.5f} V{shown} · {p['drop_word']} = {p['drop_mv']:.3f} "
             f"{p['drop_unit']} · |J| = {p['j_a_mm2']:.2f} A/mm²")
 
 
@@ -1117,7 +1127,8 @@ class Session:
     def solve_tree(self, project_path, top: int = 5, progress: Progress = None,
                    cancelled: Cancel = None, use_board_fields: Optional[bool] = None,
                    thermal: Optional[bool] = None, thermal_options: Optional[Mapping[str, Any]] = None,
-                   confirm_large: bool = False) -> Dict[str, Any]:
+                   confirm_large: bool = False,
+                   reference: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         """Solve the project's whole power tree at once: every rail and ground group, with
         the regulators' input currents and the ground return computed exactly. Returns
         :func:`coppernicus.power_tree.tree_summary` (the document of
@@ -1132,12 +1143,24 @@ class Session:
         Before it, its cost is estimated
         (:func:`thermal_estimate`, in the document as ``thermal_estimate``); when that exceeds
         this machine's memory the solve is refused (``solve_too_large``) unless
-        ``confirm_large``: never a silent multi-GB solve."""
-        from coppernicus.engine.tree import solve_project_tree
+        ``confirm_large``: never a silent multi-GB solve.
+
+        ``reference`` ({ground_of: REF} or {pads: [REF.PAD, ...]}; S2): where the voltages are
+        shown from, for this solve only (not saved), in place of the project's
+        ``tree: reference``. A display shift: the document's values stay in the solve's frame,
+        with its ``reference`` block (``offset_v``) and an assumption line; probe adds
+        ``voltage_from_reference_v``. Every verdict is from the solve's 0 V."""
+        from coppernicus.engine.tree import solve_project_tree, tree_reference
         from coppernicus.power_tree import rating_origins, tree_summary
+        from coppernicus.project import REFERENCE_FORM, reference_spec
+        try:                                  # its form, before anything is solved
+            spec = reference_spec(reference, "reference") if reference is not None else None
+        except ValueError as e:
+            raise ServiceError(E.INVALID_INPUT, str(e), REFERENCE_FORM) from None
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
         project = merged.project
+        spec = spec if reference is not None else project.tree_reference
         if thermal_options and thermal is False:
             raise ServiceError(E.INVALID_INPUT, "thermal_options with thermal: false: the options "
                                "would not be used", "drop thermal: false to solve the board "
@@ -1167,6 +1190,13 @@ class Session:
                                    "then solve again") from None
         merged.annotate(tree)
         rating_origins(tree, merged)          # where each regulator's rating was written
+        if spec is not None:                  # where it is shown from: read off the solved tree
+            try:
+                tree.reference = tree_reference(entry.board, tree, spec)
+            except EngineError as e:
+                where = "reference" if reference is not None else "the project's tree: reference"
+                raise ServiceError(E.INVALID_INPUT, f"{path.name}: {e}", f"fix {where} "
+                                   f"({REFERENCE_FORM}); the tree solved, nothing was kept") from None
         doc = tree_summary(tree, top=max(1, int(top)))   # with each VRM's I max, the rating judged
         if estimate is not None:
             doc["thermal_estimate"] = estimate
@@ -1684,7 +1714,9 @@ class Session:
               relative_to: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
         """Voltage, drop and current density at a point of a layer. ``result_id`` may be a
         power-tree group's ("t1:GND"): the answer then has ``group``, ``kind``, the drop as
-        the app words it (``drop_word``, ``drop_unit``) and ``net`` where it is known exactly.
+        the app words it (``drop_word``, ``drop_unit``), ``net`` where it is known exactly and
+        ``voltage_from_reference_v``, the voltage from the 0 V the tree is shown from (its
+        ``reference``; the solve's own 0 V unless solve_tree was given one).
 
         ``relative_to`` = {result_id?, layer, x_mm, y_mm} (``x``/``y`` accepted) or
         {result_id?, pad: "REF.PAD"}: another point of the same solve (by default of the same
@@ -1712,7 +1744,8 @@ class Session:
                         "assumptions": [], "warnings": [f"No solved copper of {what} on {lf.name} "
                                                         "at this point."]})
             return C.jsonable(out)
-        values = point_values(res, lf, loc, jv, k, x, y, group)
+        values = point_values(res, lf, loc, jv, k, x, y, group,
+                              reference=getattr(live.rec.tree, "reference", None) if group else None)
         if group and "net" in values:                 # the net at the point, beside the group
             out["net"] = values.pop("net")
         out.update(values)
@@ -1801,23 +1834,12 @@ class Session:
             raise ServiceError(E.INVALID_INPUT, f"relative_to: pad {pad} is on {p.net}, not solved in "
                                f"{ref_live.id} ({', '.join(ref_live.res.nets)})",
                                "give relative_to the result_id of the result that solved its net")
-        cx, cy = float(p.position[0]), float(p.position[1])
-        for lf in ref_live.res.layers:
-            polys = (p.shapes or {}).get(lf.layer_id)
-            if not polys:
-                continue
-            loc = self._queries(ref_live, lf)["locator"]
-            k, at = loc.locate(cx, cy), (cx, cy)
-            if k < 0:                 # a plated hole's drill: the nearest meshed copper of the pad
-                kn, _ = loc.nearest(cx, cy)
-                copper = unary_union([Polygon(s.outline, s.holes) for s in polys])
-                if kn < 0 or not copper.covers(Point(loc.centroids[kn])):
-                    continue
-                k, at = kn, (float(loc.centroids[kn][0]), float(loc.centroids[kn][1]))
-            v = float(loc.weights(k, *at) @ lf.voltage[lf.tris[k]])
-            if math.isfinite(v):
-                return {"result_id": ref_live.id, "pad": f"{ref}.{number}", "net": p.net,
-                        "layer": lf.name, "x_mm": at[0], "y_mm": at[1], "voltage_v": v}
+        from coppernicus.engine.tree import pad_centre_voltage
+        at = pad_centre_voltage(p, ref_live.res.layers, lambda lf: self._queries(ref_live, lf)["locator"])
+        if at is not None:
+            v, lf, x, y = at
+            return {"result_id": ref_live.id, "pad": f"{ref}.{number}", "net": p.net,
+                    "layer": lf.name, "x_mm": x, "y_mm": y, "voltage_v": v}
         raise ServiceError(E.INVALID_INPUT, f"relative_to: pad {pad} is on no connected, solved copper "
                            f"of {ref_live.id}", "choose a pad on the solved copper, or a point")
 
