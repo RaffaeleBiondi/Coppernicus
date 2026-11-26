@@ -28,10 +28,14 @@ direct = so.direct                     # KiPI's kipi.core.solver.direct, as the 
 
 @pytest.fixture(autouse=True)
 def nothing_installed():
-    """Every test starts and ends with nothing installed."""
+    """Every test starts with nothing installed; the parts on before it (the engine's default,
+    or what COPPERNICUS_SUPERLU_ORDER says) are on again after it."""
+    before = so.enabled()
     so.uninstall()
     yield
     so.uninstall()
+    if before:
+        so.enable(*sorted(before))
 
 
 @pytest.fixture
@@ -133,9 +137,13 @@ def test_off_nothing_is_replaced(kipi_superlu, kipi_superlu_complex):
     assert direct._superlu is kipi_superlu and direct._superlu_complex is kipi_superlu_complex
 
 
-@pytest.mark.parametrize("value, installed", [(None, False), ("dc", True)])
-def test_importing_the_engine_installs_only_what_the_environment_names(value, installed):
-    """A fresh process: with the variable unset, importing coppernicus.engine replaces nothing."""
+@pytest.mark.parametrize("value, installed, parts", [
+    (None, True, "dc,thermal"),            # the default
+    ("off", False, "-"), ("OFF", False, "-"), ("", False, "-"), ("  ", False, "-"),   # KiPI's method
+    ("dc", True, "dc"), ("thermal,dc,ac", True, "ac,dc,thermal")])
+def test_importing_the_engine_installs_what_the_environment_says(value, installed, parts):
+    """A fresh process: unset, importing coppernicus.engine turns on thermal and dc; "off" or an
+    empty value replaces nothing (KiPI's method); a list turns on what it names."""
     env = {k: v for k, v in os.environ.items() if k != so.ENV}
     if value is not None:
         env[so.ENV] = value
@@ -145,7 +153,7 @@ def test_importing_the_engine_installs_only_what_the_environment_names(value, in
     out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True,
                          timeout=120)
     assert out.returncode == 0, out.stderr
-    assert out.stdout.split() == [str(installed)] * 3 + [value or "-"]
+    assert out.stdout.split() == [str(installed)] * 3 + [parts]
 
 
 @pytest.mark.parametrize("text, parts", [("", set()), ("thermal", {"thermal"}),
@@ -163,8 +171,14 @@ def test_configure_from_the_environment_enables_and_installs(kipi_superlu):
     assert so.configure_from_env({so.ENV: "thermal"}) == frozenset({"thermal"})
     assert direct._superlu is not kipi_superlu
     so.uninstall()
-    assert so.configure_from_env({}) == frozenset()
-    assert direct._superlu is kipi_superlu
+    assert so.configure_from_env({}) == frozenset(so.DEFAULT_PARTS) == frozenset({"thermal", "dc"})
+    assert direct._superlu is not kipi_superlu
+    for off in ("off", "Off", "", " "):                  # KiPI's method, said plainly: no warning
+        so.uninstall()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert so.configure_from_env({so.ENV: off}) == frozenset()
+        assert direct._superlu is kipi_superlu
 
 
 def test_install_is_idempotent_and_uninstall_restores_kipi(kipi_superlu):

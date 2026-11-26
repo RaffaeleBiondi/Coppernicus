@@ -9,7 +9,7 @@ from coppernicus.engine import superlu_order
 from coppernicus.engine.board import Board, EngineError, Layer, NetTie, PadHit, PartPins
 from coppernicus.engine.solve import Cancelled, solve_rail, tied_nets
 
-superlu_order.configure_from_env()       # opt-in: COPPERNICUS_SUPERLU_ORDER (off: KiPI's own path)
+superlu_order.configure_from_env()       # thermal, dc by default; COPPERNICUS_SUPERLU_ORDER=off: KiPI's
 
 __all__ = ["Board", "EngineError", "Layer", "NetTie", "PadHit", "PartPins", "Cancelled", "solve_rail",
            "tied_nets"]

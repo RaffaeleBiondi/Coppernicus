@@ -176,9 +176,10 @@ def test_thermal_follows_the_project_unless_forced(strip):
 # ---------------------------------------------------------------------- drift test
 
 @pytest.mark.parametrize("which", ["demo", "chain"])
-def test_our_loop_is_bit_identical_to_kipis(which, demo):
+def test_our_loop_is_bit_identical_to_kipis(which, demo, kipis_method):
     """With KiPI's regulator-heat placement our copy of the loop gives KiPI's own
-    solve_electrothermal to the last bit: temperatures, history and every load drop."""
+    solve_electrothermal to the last bit: temperatures, history and every load drop (both with
+    KiPI's own factorizations: ``kipis_method`` takes superlu_order's default out)."""
     if which == "demo":
         board, project = demo, demo_thermal_project()
     else:

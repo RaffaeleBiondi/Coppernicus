@@ -1,5 +1,6 @@
-"""SuperLU in its symmetric mode for KiPI's factorizations: an opt-in speed option, off by
-default.
+"""SuperLU in its symmetric mode for KiPI's factorizations: a speed option, on by default for the
+board temperature and the DC solves (``thermal`` and ``dc``); ``COPPERNICUS_SUPERLU_ORDER=off``
+restores KiPI's method exactly.
 
 KiPI factorizes with SciPy's SuperLU in the COLAMD column order (``kipi/core/solver/direct.py``,
 ``_superlu`` and ``_superlu_complex``), which ignores that its matrices are symmetric.
@@ -9,7 +10,7 @@ board (250,000 unknowns, 4 layers) 121 M → 61 M non-zeros in the factors, 3.2 
 3.6 → 2.0 s for the factorization, each later solve 2.4× faster (macOS arm64, a loaded
 machine).
 
-Parts, each off unless enabled:
+Parts (:data:`DEFAULT_PARTS` on by default, ``ac`` only when named):
 
 * ``thermal``: the board temperature's heat model (KiPI ``BoardThermalModel``, symmetric
   positive definite), factorized without pivoting, which is stable for such a matrix. Only the
@@ -29,10 +30,12 @@ Parts, each off unless enabled:
   pivoting. On the rails of a 100 mm synthetic board (103,000 and 169,000 unknowns): factors
   halved, factorization 0.28 → 0.20 s and 0.58 → 0.42 s, solves 2× faster.
 
-OPEN RISK (``dc`` and ``ac``): KiPI's own comment at ``direct._superlu`` says this order "takes
-minutes" on its meshes, whose merged pad, ring and port groups give dense rows; on synthetic
-meshes, dense pad rows included, it took 0.5 s. Neither is to be made a default before a run on
-a real board. The heat model's grid (at most 7 non-zeros a row) does not have such rows.
+KiPI's own comment at ``direct._superlu`` says this order "takes minutes" on its meshes, whose
+merged pad, ring and port groups give dense rows. On synthetic meshes, dense pad rows included,
+it took 0.5 s, and on a large private test board the DC factorizations took 0.73–0.91× KiPI's time
+(the base of the ``dc`` default; the electro-thermal solve took about half the time and memory).
+``ac`` stays opt-in until a real board's AC solve is checked. The heat model's grid (at most 7
+non-zeros a row) does not have such rows.
 
 Every factorization made here is checked as KiPI checks the ones it does not trust: a real one
 by its backward error for a right-hand side of ones against KiPI's ``direct.CHECK_TOL``, a
@@ -41,8 +44,9 @@ product with A). One that fails, or that SuperLU refuses, is warned of (once) an
 KiPI's own function. Where PARDISO loads (the optional ``pypardiso``, x86-64 Windows and Linux),
 KiPI reaches these functions only after PARDISO failed: KiPI's own then always run.
 
-Enabled by the environment variable ``COPPERNICUS_SUPERLU_ORDER`` (comma-separated parts, read
-when :mod:`coppernicus.engine` is imported) or by :func:`enable`.
+Set by the environment variable ``COPPERNICUS_SUPERLU_ORDER``, read when :mod:`coppernicus.engine`
+is imported: unset, the default parts (``thermal``, ``dc``); ``off`` or an empty value, none;
+otherwise the comma-separated parts it names (e.g. ``thermal,dc,ac``). Or by :func:`enable`.
 
 Off, nothing is replaced and KiPI's own path runs: bit-identical. On, a different order rounds
 differently, so results move by round-off only. The proof criteria for that (checks of
@@ -96,6 +100,10 @@ from scipy.sparse.linalg import splu
 
 ENV = "COPPERNICUS_SUPERLU_ORDER"
 PARTS = ("thermal", "ac", "dc")
+# On with the variable unset (the owner's decision); ac waits for a real-board check.
+DEFAULT_PARTS = ("thermal", "dc")
+# The variable's value that turns every part off (as does an empty value): KiPI's method.
+OFF = "off"
 KIPI_VERSION = "1.0.1"
 # SuperLU's symmetric mode: the column order and, for symmetric positive definite matrices,
 # the diagonal as pivot (threshold 0).
@@ -229,8 +237,15 @@ def uninstall() -> None:
 
 
 def configure_from_env(environ: Mapping[str, str] = os.environ) -> frozenset:
-    """Turn on the parts :data:`ENV` names (none when unset); the parts on afterwards."""
-    parts = parse(environ.get(ENV, ""), _stacklevel=3)
+    """Turn on the parts :data:`ENV` names: unset, :data:`DEFAULT_PARTS`; ``off`` or empty,
+    none (nothing installed: KiPI's method); else the parts listed. The parts on afterwards."""
+    value = environ.get(ENV)
+    if value is None:
+        parts = set(DEFAULT_PARTS)
+    elif value.strip().lower() in ("", OFF):
+        parts = set()
+    else:
+        parts = parse(value, _stacklevel=3)
     if parts:
         enable(*sorted(parts), _stacklevel=3)
     return enabled()

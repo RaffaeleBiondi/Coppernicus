@@ -764,8 +764,9 @@ def superlu_order_note(ram: RamEstimate) -> RamEstimate:
     if not superlu_order.active("ac"):
         return ram
     return dataclasses.replace(ram, text=ram.text + (
-        f" The factorizations run in SuperLU's symmetric order ({superlu_order.ENV}=ac), which takes "
-        "less memory than KiPI's order this estimate was measured with, so this overstates."))
+        " The factorizations run in SuperLU's symmetric order (the ac part of "
+        f"{superlu_order.ENV}), which takes less memory than KiPI's order this estimate was "
+        "measured with, so this overstates."))
 
 
 def _ram_estimate(unknowns: float, total_bytes: Optional[float],

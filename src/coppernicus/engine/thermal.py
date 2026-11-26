@@ -481,8 +481,9 @@ def thermal_ram_estimate(unknowns: float, layers: int, total_bytes: Optional[flo
     if not superlu_order.active("thermal"):
         return ram
     return dataclasses.replace(ram, text=ram.text + (
-        f" The factorization runs in SuperLU's symmetric order ({superlu_order.ENV}=thermal), which "
-        "takes less memory than KiPI's order this fit was measured with, so this overstates."))
+        " The factorization runs in SuperLU's symmetric order, which takes less memory than KiPI's "
+        "order this fit was measured with, so this overstates "
+        f"({superlu_order.ENV}={superlu_order.OFF} restores KiPI's order)."))
 
 
 def _thermal_ram(unknowns: float, layers: int, total_bytes: Optional[float]) -> ThermalRam:
