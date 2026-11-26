@@ -638,6 +638,7 @@ class AcPanel(QWidget):
         self._probe_rows: List[Probe] = []
         self._cap_rows: List[CapModel] = []         # the project's models: the editable rows
         self._field_rows: List[Tuple[CapModel, Any]] = []   # then the KiCad fields' (field_models)
+        self._field_signature: Any = None             # what the field rows shown were built from
         self.last_estimate = ""
         self._shown: Dict[str, str] = {}      # what each line edit shows: a commit of it unchanged is no edit
         self._pairs: Tuple[Any, Dict[str, Optional[str]]] = (None, {})   # (key, each load's probe)
@@ -902,16 +903,21 @@ class AcPanel(QWidget):
         from coppernicus.app.fields_view import cap_field_tip, cap_lost_tip
         merged, t, n = self._win.merged, self.caps, len(self._cap_rows)
         self._field_rows = field_models(merged)
-        t.blockSignals(True)
-        t.setRowCount(n + len(self._field_rows))
-        for i, (m, held) in enumerate(self._field_rows):
-            for c, (_h, key) in enumerate(CAP_COLUMNS):
-                item = QTableWidgetItem(cap_cell(m, key))
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                item.setBackground(QBrush(READ_ONLY_BG))
-                item.setToolTip(cap_field_tip(held, key))
-                t.setItem(n + i, c, item)
-        t.blockSignals(False)
+        # Rebuilt only when they changed: a board's library fields can give hundreds of them,
+        # and this runs after every merge.
+        signature = (n, [(m, held.fields, held.capacitance_from) for m, held in self._field_rows])
+        if signature != self._field_signature or t.rowCount() != n + len(self._field_rows):
+            self._field_signature = signature
+            t.blockSignals(True)
+            t.setRowCount(n + len(self._field_rows))
+            for i, (m, held) in enumerate(self._field_rows):
+                for c, (_h, key) in enumerate(CAP_COLUMNS):
+                    item = QTableWidgetItem(cap_cell(m, key))
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                    item.setBackground(QBrush(READ_ONLY_BG))
+                    item.setToolTip(cap_field_tip(held, key))
+                    t.setItem(n + i, c, item)
+            t.blockSignals(False)
         try:
             problems = usable_caps(self._cap_rows)[1]
         except ProjectError:
