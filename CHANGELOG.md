@@ -5,6 +5,21 @@ line, the MCP server or the GitHub Action. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Coppernicus is pre-alpha: check its
 results against your own judgement.
 
+## Unreleased
+
+### Fixed
+
+- A mesh triangle with an edge shorter than 1 nm no longer sets a peak current density. 1 nm
+  is the resolution of KiPI's geometry snap, so such a triangle comes from points the mesher
+  added, and its |J| is set by the last bits of the node voltages. It is left out of every
+  maximum or peak |J|: `j_point_max_a_mm2` of rails and groups, each current-crowding spot
+  (its peak and its members), the report cards, a cut's maximum, and the |J| colour scale of
+  the HTML report, the PNG maps and the app. It stays in the solution, the copper loss and the
+  areas. The warnings say how many were left out on each layer and the largest |J| among
+  them; the JSON has `degenerate_triangles`. Verdicts still judge a spot's area-weighted mean,
+  but a spot made only of such triangles is no longer listed. Boards without them give the
+  same results as before.
+
 ## 0.3.0 (2026-11-26)
 
 Three more of KiPI's analyses, each in the app, the command line, the MCP server and the

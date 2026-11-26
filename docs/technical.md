@@ -109,6 +109,23 @@ stays a fail, and its detail says it may be a mesh artefact at a via wall, how t
 (a smaller `min_edge_mm` and `grading`) and, if it stays, to widen the copper there or add a via. To see the slivers, or to check any small
 spot, refine the mesh near the holes and solve again (next paragraph).
 
+**Degenerate triangles, below the input's resolution.** KiPI snaps the board geometry to a
+1 nm grid before meshing (`NODING_GRID_MM` in `kipi/core/mesh/mesher.py`). A mesh triangle with
+an edge shorter than 1 nm therefore comes from points the mesher added, below the input's
+resolution, and its |J| is set by the last bits of the node voltages. On a real board, a
+triangle with edges of 0.48, 0.48 and 0.16 nm (3.8e-14 mm²) held a rail's point maximum, and a
+neutral reordering of the solve moved that value by 3e-7, relative. Such triangles are left
+out of every maximum or peak |J|: the point maximum (`j_point_max_a_mm2`), each spot's peak, a
+cut's `max_abs_j_a_mm2`, and the top of the |J| colour scale in the HTML report, the PNG maps
+and the app. They are neither seeds nor members of a spot, so one cannot make a spot of its own
+or count toward the 3 elements above. This is the resolution of the input, not a physical
+threshold. They stay in the solution, the copper loss and the areas; their area is negligible,
+so a spot's area-weighted mean, which every limit and the default judge, is unchanged. The one
+difference in verdicts: a spot made only of degenerate triangles is no longer listed, so it no
+longer fails against a `max_current_density` either. When any were left out, the result's
+warnings say so once, with each layer's count and the largest |J| among them, and the JSON has
+`degenerate_triangles`. The examples have none: their shortest mesh edge is 2 µm.
+
 **Refining the mesh near holes.** `max_edge_mm` sets the mesh on planes. Near plated holes
 KiPI grades it: elements start at `min_edge_mm` (0.02 mm) on the hole wall and grow by `grading`
 (0.2 mm per mm of distance) up to `max_edge_mm`. A smaller `max_edge_mm` leaves the elements at

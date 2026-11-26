@@ -796,6 +796,11 @@ What it adds up and what the user enters: [Tolerance stack-up](tolerance.md); ev
   - that loads split their current equally across their pins;
   - that a rail solve does not include the ground return;
   - that point maxima of |J| at sharp corners depend on the mesh;
+  - which degenerate mesh triangles (an edge shorter than 1 nm, the resolution of KiPI's
+    geometry snap) were left out of every maximum or peak |J|. A rail summary and a tree group
+    then also have `degenerate_triangles`, one `{layer, triangles, j_max_a_mm2}` per layer:
+    the largest |J| left out, a numerical artefact, never a real peak. The key is absent when
+    there are none ([technical.md](technical.md#current-density-default));
   - whether the board file changed on disk since it was opened.
 - **Progress.** `solve_rail` and `solve_project` send MCP progress notifications with the
   engine's messages. Cancelling the call stops the solve.
