@@ -112,9 +112,9 @@ spot, refine the mesh near the holes and solve again (next paragraph).
 **Degenerate triangles, below the input's resolution.** KiPI snaps the board geometry to a
 1 nm grid before meshing (`NODING_GRID_MM` in `kipi/core/mesh/mesher.py`). A mesh triangle with
 an edge shorter than 1 nm therefore comes from points the mesher added, below the input's
-resolution, and its |J| is set by the last bits of the node voltages. On a real board, a
-triangle with edges of 0.48, 0.48 and 0.16 nm (3.8e-14 mm²) held a rail's point maximum, and a
-neutral reordering of the solve moved that value by 3e-7, relative. Such triangles are left
+resolution, and its |J| is set by the last bits of the node voltages. One with edges of a few
+tenths of a nanometre (an area near 1e-14 mm²) can hold a rail's point maximum, and a neutral
+reordering of the solve then moves that value in its seventh digit. Such triangles are left
 out of every maximum or peak |J|: the point maximum (`j_point_max_a_mm2`), each spot's peak, a
 cut's `max_abs_j_a_mm2`, and the top of the |J| colour scale in the HTML report, the PNG maps
 and the app. They are neither seeds nor members of a spot, so one cannot make a spot of its own

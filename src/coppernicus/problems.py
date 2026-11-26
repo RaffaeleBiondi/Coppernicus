@@ -138,8 +138,7 @@ def _spots(layer: LayerField, threshold: float, grow: float = 1.0):
     Degenerate triangles (an edge shorter than the input's 1 nm resolution,
     :meth:`~coppernicus.results.LayerField.resolved`) are neither seeds nor members: one alone
     would be a spot of its own, and on a spot it would raise the peak and count toward
-    :data:`MIN_SPOT_ELEMENTS`. Its area (~1e-14 mm²) leaves the mean as it is, and spots are
-    joined through shared nodes, so leaving it out splits none."""
+    :data:`MIN_SPOT_ELEMENTS`. Its area (~1e-14 mm²) would not move the mean anyway."""
     j_all = layer.current_density
     cand = np.flatnonzero((j_all >= grow * threshold) & layer.resolved())
     if cand.size == 0:

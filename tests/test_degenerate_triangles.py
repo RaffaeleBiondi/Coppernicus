@@ -34,7 +34,7 @@ from coppernicus.results import (
     exclude_degenerate,
 )
 
-# The one found on a real board: edges 0.48 / 0.48 / 0.16 nm, area 3.8e-14 mm².
+# A degenerate triangle of Steiner points: edges 0.48 / 0.48 / 0.16 nm, area 3.8e-14 mm².
 APEX_MM, HALF_BASE_MM = 0.4733e-6, 0.08e-6
 DEGENERATE_AREA_MM2 = APEX_MM * HALF_BASE_MM          # 3.79e-14
 QUIET, IN_A, IN_CORE = 500, 21, 63                    # strip nodes: 1 A/mm², spot A, C's core
@@ -99,7 +99,7 @@ def test_the_resolution_is_kipis_geometry_snap():
 @pytest.mark.parametrize("x, y", [(0.007919, 0.015838), (123.456789, 87.654321), (239.999998, 89.999999)])
 def test_an_edge_of_one_grid_step_is_resolved_a_shorter_one_is_not(x, y):
     """Two grid vertices 1 nm apart compute a few 1e-15 mm under 1e-6 mm at board
-    coordinates: they stay resolved. The real board's 0.48 / 0.48 / 0.16 nm triangle is not."""
+    coordinates: they stay resolved. A 0.48 / 0.48 / 0.16 nm triangle is not."""
     step = [[x, y], [round(x + 1e-6, 6), y], [x, round(y + 1e-6, 6)]]
     tiny = [[x, y], [x + APEX_MM, y - HALF_BASE_MM], [x + APEX_MM, y + HALF_BASE_MM]]
     layer = LayerField(0, "F.Cu", np.array(step + tiny), np.array([[0, 1, 2], [3, 4, 5]]), np.zeros(6),
