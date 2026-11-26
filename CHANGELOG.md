@@ -5,7 +5,7 @@ line, the MCP server or the GitHub Action. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Coppernicus is pre-alpha: check its
 results against your own judgement.
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-11-26)
 
 Three more of KiPI's analyses, each in the app, the command line, the MCP server and the
 Action: the PDN impedance, the ripple and coupled noise of switching regulators, and the
