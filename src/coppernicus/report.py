@@ -49,6 +49,7 @@ MAX_FILE_MB = 30.0                 # the ceiling the owner set; write_report res
 MIN_CELL_MM = 0.005
 MAX_CELL_MM = 1.0
 MESH_OVERSAMPLING = 6.0            # cells per median mesh edge, at most
+CELL_CHUNK = 1 << 21               # (cell, triangle) tests or cells handled at once: bounds memory
 
 
 # ---------------------------------------------------------------------- sampling on a grid
@@ -82,7 +83,9 @@ def cell_triangles(points: np.ndarray, tris: np.ndarray, grid: Grid) -> np.ndarr
     """For every cell of ``grid`` (shape (ny, nx)), the index of a triangle that contains the
     cell's centre, or -1. Exact point-in-triangle tests: each triangle is tested against the
     cell centres inside its bounding box. Triangles are grouped by the shape of that box (in
-    cells), and each group is swept over its offsets, vectorised over the group."""
+    cells), and each group is swept over its offsets in blocks of rows, vectorised over the
+    rows, the offsets and the group (in that order, so a centre on a shared edge goes to the
+    same triangle as one offset at a time)."""
     out = np.full(grid.ny * grid.nx, -1, dtype=np.int64)
     if len(tris) == 0:
         return out.reshape(grid.ny, grid.nx)
@@ -115,16 +118,18 @@ def cell_triangles(points: np.ndarray, tris: np.ndarray, grid: Grid) -> np.ndarr
         gw, gh = int(wk[g[0]]), int(hk[g[0]])
         A, B, C, D = coef[g, 0], coef[g, 1], coef[g, 2], coef[g, 3]
         gx, gy, gi, gj, tri_ids = ox[g], oy[g], i0k[g], j0k[g], keep[g]
-        for dj in range(gh):
-            qy = gy + dj * grid.cell
-            by, dy = B * qy, D * qy
-            row = (gj + dj) * grid.nx + gi
-            for di in range(gw):
-                qx = gx + di * grid.cell
-                l0 = A * qx + by
-                l1 = C * qx + dy
-                inside = (l0 >= -tol) & (l1 >= -tol) & (l0 + l1 <= 1.0 + tol)
-                out[row[inside] + di] = tri_ids[inside]
+        di = np.arange(gw)
+        qx = gx + di[:, None] * grid.cell                       # (gw, n)
+        ax, cx = A * qx, C * qx
+        rows = max(1, CELL_CHUNK // (gw * len(g)))
+        for dj0 in range(0, gh, rows):
+            dj = np.arange(dj0, min(dj0 + rows, gh))
+            qy = gy + dj[:, None] * grid.cell                   # (r, n)
+            l0 = ax + (B * qy)[:, None, :]                      # (r, gw, n)
+            l1 = cx + (D * qy)[:, None, :]
+            inside = (l0 >= -tol) & (l1 >= -tol) & (l0 + l1 <= 1.0 + tol)
+            cell = ((gj + dj[:, None]) * grid.nx + gi)[:, None, :] + di[:, None]
+            out[cell[inside]] = np.broadcast_to(tri_ids, inside.shape)[inside]
     return out.reshape(grid.ny, grid.nx)
 
 
@@ -138,17 +143,21 @@ def sample_layer(layer: LayerField, grid: Grid) -> Tuple[np.ndarray, np.ndarray,
     j = np.zeros(tri.shape)
     k = tri[mask]
     if k.size:
-        p = layer.points[layer.tris[k]]
         cy, cx = np.nonzero(mask)
-        qx = grid.x0 + (cx + 0.5) * grid.cell - p[:, 2, 0]
-        qy = grid.y0 + (cy + 0.5) * grid.cell - p[:, 2, 1]
-        a, b = p[:, 0, 0] - p[:, 2, 0], p[:, 1, 0] - p[:, 2, 0]
-        c, d = p[:, 0, 1] - p[:, 2, 1], p[:, 1, 1] - p[:, 2, 1]
-        inv = 1.0 / (a * d - b * c)
-        l0 = (d * qx - b * qy) * inv
-        l1 = (a * qy - c * qx) * inv
-        nodes = layer.voltage[layer.tris[k]]
-        v[mask] = l0 * nodes[:, 0] + l1 * nodes[:, 1] + (1.0 - l0 - l1) * nodes[:, 2]
+        vk = np.empty(k.size)
+        for s in range(0, k.size, CELL_CHUNK):
+            ks, xs, ys = k[s:s + CELL_CHUNK], cx[s:s + CELL_CHUNK], cy[s:s + CELL_CHUNK]
+            p = layer.points[layer.tris[ks]]
+            qx = grid.x0 + (xs + 0.5) * grid.cell - p[:, 2, 0]
+            qy = grid.y0 + (ys + 0.5) * grid.cell - p[:, 2, 1]
+            a, b = p[:, 0, 0] - p[:, 2, 0], p[:, 1, 0] - p[:, 2, 0]
+            c, d = p[:, 0, 1] - p[:, 2, 1], p[:, 1, 1] - p[:, 2, 1]
+            inv = 1.0 / (a * d - b * c)
+            l0 = (d * qx - b * qy) * inv
+            l1 = (a * qy - c * qx) * inv
+            nodes = layer.voltage[layer.tris[ks]]
+            vk[s:s + CELL_CHUNK] = l0 * nodes[:, 0] + l1 * nodes[:, 1] + (1.0 - l0 - l1) * nodes[:, 2]
+        v[mask] = vk
         jk = layer.current_density[k]
         j[mask] = np.where(np.isfinite(jk), jk, 0.0)
     return mask, v, j
