@@ -1,17 +1,22 @@
-/* White text needs at least 4.5:1: --selected, --badge-fail, --badge-pass and
-   --badge-attention are kept dark enough for it (about 5.2, 5.6, 5.1 and 4.9 to 1) in both
-   themes. */
-:root { --bg:#ffffff; --fg:#1d2125; --muted:#5f6b76; --line:#d9dee3; --panel:#f5f7f9;
-  --map:#eef1f4; --accent:#2f6fb2; --fail:#c62828; --pass:#2e7d32; --warn:#9a6700;
+/* Dark by default; data-theme="light" on the html element (the header's button) switches to
+   light. White text needs at least 4.5:1: --selected, --badge-fail, --badge-pass and
+   --badge-attention are kept dark enough for it (about 5.2, 5.6, 5.1 and 4.9 to 1) and are the
+   same in both themes. */
+:root { color-scheme:dark; --bg:#16191c; --fg:#e6e9ec; --muted:#9aa5b0; --line:#2c3238;
+  --panel:#1e2226; --map:#202428; --accent:#6aa5e8; --fail:#ef6b6b; --pass:#6cc070;
+  --warn:#d9a545;
   --selected:#2f6fb2; --badge-fail:#c62828; --badge-pass:#2e7d32; --badge-attention:#9a6700; }
-@media (prefers-color-scheme: dark) { :root { --bg:#16191c; --fg:#e6e9ec; --muted:#9aa5b0;
-  --line:#2c3238; --panel:#1e2226; --map:#202428; --accent:#6aa5e8; --fail:#ef6b6b;
-  --pass:#6cc070; --warn:#d9a545; } }
+:root[data-theme="light"] { color-scheme:light; --bg:#ffffff; --fg:#1d2125; --muted:#5f6b76;
+  --line:#d9dee3; --panel:#f5f7f9; --map:#eef1f4; --accent:#2f6fb2; --fail:#c62828;
+  --pass:#2e7d32; --warn:#9a6700; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
   font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 header, main, footer, nav { max-width:1280px; margin:0 auto; padding:0 16px; }
-header { padding-top:18px; } h1 { font-size:20px; margin:0 0 2px; }
+header { padding-top:18px; display:flex; align-items:baseline; justify-content:space-between;
+  gap:12px; } h1 { font-size:20px; margin:0 0 2px; }
+#theme-toggle { flex:none; font:inherit; font-size:12.5px; padding:3px 9px; border:1px solid var(--line);
+  border-radius:6px; background:var(--panel); color:var(--fg); cursor:pointer; }
 h2 { font-size:15px; margin:18px 0 8px; }
 .muted { color:var(--muted); } .small { font-size:12.5px; }
 nav { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
@@ -64,5 +69,8 @@ footer { padding:18px 16px 28px; }
 @media (max-width:640px) { .mapwrap { flex-direction:column; } .bar { flex-direction:row; width:auto; }
   .bar canvas { height:18px; width:auto; flex:1; min-height:0; } }
 .thermalmaps { display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:12px; margin:12px 0; }
-.thermalmaps figure { margin:0; } .thermalmaps img { width:100%; height:auto; border:1px solid var(--line, #ccc); }
+.thermalmaps figure { margin:0; }
+/* The maps are PNGs on white, as written to --out: shown on a light panel in both themes. */
+.thermalmaps img { width:100%; height:auto; display:block; background:#fff; padding:6px;
+  border:1px solid var(--line); border-radius:8px; }
 .thermalmaps figcaption { font-size:12.5px; color:var(--muted); }

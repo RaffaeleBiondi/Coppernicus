@@ -31,6 +31,11 @@ so you can send it to someone who does not have Coppernicus, or attach it to a d
 
 Board files are only read; the report goes where you say, never next to a board elsewhere.
 
+Every page opens dark. The **☀ Light** button at the top right switches it to light and
+**☾ Dark** switches it back. The browser keeps the choice for the next page where it allows
+storage; some keep nothing for a page opened from disk. Plots and maps keep their own colours,
+on a white panel in both themes.
+
 ## What it holds
 
 For each rail, chosen at the top of the page:
