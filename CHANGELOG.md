@@ -5,15 +5,6 @@ line, the MCP server or the GitHub Action. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Coppernicus is pre-alpha: check its
 results against your own judgement.
 
-## Unreleased
-
-### Fixed
-
-- Boards opened at the same time (parallel `open_board` calls to the MCP server, or a board
-  opened while another one solves) no longer swap import warnings: each board lists only
-  the warnings of its own file. Before, every board opened together got the warnings of all
-  of them, such as unfilled zones or a default stackup that its file does not have.
-
 ## 0.3.1 (2026-11-26)
 
 ### Changed
@@ -26,6 +17,10 @@ results against your own judgement.
 
 ### Fixed
 
+- Boards opened at the same time (parallel `open_board` calls to the MCP server, or a board
+  opened while another one solves) no longer swap import warnings: each board lists only
+  the warnings of its own file. Before, every board opened together got the warnings of all
+  of them, such as unfilled zones or a default stackup that its file does not have.
 - A mesh triangle with an edge shorter than 1 nm no longer sets a peak current density. 1 nm
   is the resolution of KiPI's geometry snap, so such a triangle comes from points the mesher
   added, and its |J| is set by the last bits of the node voltages. It is left out of every

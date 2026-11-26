@@ -13,8 +13,9 @@ def test_windows_tests_are_required():
     assert not any("informative" in str(job.get("name", "")) for job in jobs.values())
     oses = [os for job in jobs.values() for os in job.get("strategy", {}).get("matrix", {}).get("os", [])]
     assert {"ubuntu-latest", "macos-latest", "windows-latest"} <= set(oses)
-    # A hung job must not hold a required check for GitHub's 6 h default.
-    assert all(job.get("timeout-minutes") == 20 for job in jobs.values())
+    # A hung job must not hold a required check for GitHub's 6 h default; the Windows runner
+    # needs about 20 minutes for the whole suite, so 40 leaves room for it to grow.
+    assert all(job.get("timeout-minutes") == 40 for job in jobs.values())
 
 
 ACTION = Path(__file__).resolve().parents[1] / "action.yml"
