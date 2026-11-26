@@ -21,8 +21,8 @@ Parts, each off unless enabled:
   KiPI's SciPy default is 1.0), since these systems are indefinite. Process-wide: KiPI solves
   the frequencies in its own threads. The factor keeps KiPI's name ``superlu`` and its true
   memory, which KiPI's thread count reads (``kipi/ac/solver/field.py`` ``threads``). On the
-  pdn example (``examples/pdn``; 19,783 unknowns, 111 field frequencies): factors 5.2 M → 3.3 M non-zeros, each
-  0.25 → 0.155 s and 208 → 135 MB.
+  pdn example (``examples/pdn``; 19,783 unknowns, 111 field frequencies): factors 5.2 M → 3.3 M
+  non-zeros, each 0.25 → 0.155 s and 208 → 135 MB.
 * ``dc``: every other real factorization, outside :func:`thermal_model`: the DC copper's
   direct solves (KiPI ``SpdSolver``, up to 200,000 unknowns with SuperLU), symmetric positive
   definite, without pivoting. On the rails of a 100 mm synthetic board (103,000 and 169,000
