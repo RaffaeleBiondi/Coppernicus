@@ -44,6 +44,21 @@ def test_tree_on_a_thermal_project_solves_the_board_temperature(demo, tmp_path, 
     assert all(f"Map: {out / name}" in text for name in pngs)
 
 
+def test_the_files_keep_the_project_files_name_as_ac_noise_and_tolerance(demo, tmp_path, capsys):
+    """<project> is the project file's name without .yml, its "-" kept (as safe_file_name, the
+    other commands' stem); "+" and "-" become P and N only in net names."""
+    out = tmp_path / "out"
+    main(["solve", str(demo / "demo-thermal.coppernicus.yml"), "--thermal", "--html", "--json",
+          "--out", str(out)])
+    doc = _json(capsys)
+    stem = "demo-thermal.coppernicus"
+    assert sorted(p.name for p in out.iterdir()) == [
+        f"{stem}_temperature_B.Cu.png", f"{stem}_temperature_F.Cu.png", f"{stem}_tree_report.html",
+        f"{stem}_tree_summary.json"]
+    assert Path(doc["summary_file"]).name == f"{stem}_tree_summary.json"
+    assert Path(doc["report_file"]).name == f"{stem}_tree_report.html"
+
+
 @pytest.mark.parametrize("flags", [["--thermal"], ["--thermal", "--tree"], ["--tree", "--thermal"]])
 def test_thermal_forces_the_board_temperature_in_any_order(demo, tmp_path, capsys, flags):
     """demo.coppernicus.yml does not enable thermal: --thermal does, with or without --tree."""

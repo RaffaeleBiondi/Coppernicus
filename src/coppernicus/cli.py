@@ -312,7 +312,7 @@ def _cmd_solve_tree(args) -> int:
     from coppernicus.engine import Board, EngineError
     from coppernicus.engine.kicad_fields import read_board_fields
     from coppernicus.engine.tree import solve_project_tree
-    from coppernicus.maps import safe_name
+    from coppernicus.maps import safe_file_name, safe_name
     from coppernicus.power_tree import rating_origins, tree_summary, tree_text
     from coppernicus.project import Project, ProjectError
     from coppernicus.service.session import FIELD_HINT
@@ -366,10 +366,10 @@ def _cmd_solve_tree(args) -> int:
         doc["thermal_estimate"] = estimate
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = out_dir / f"{safe_name(Path(args.project).stem)}_tree_summary.json"
+    stem = safe_file_name(Path(args.project).stem)   # as ac, noise, tolerance: "demo-thermal" kept
+    summary_path = out_dir / f"{stem}_tree_summary.json"
     maps = [] if tree.thermal is None or args.no_maps else tree.thermal.maps   # board temperature
-    pngs = [out_dir / f"{safe_name(Path(args.project).stem)}_temperature_{safe_name(m.layer_name)}.png"
-            for m in maps]
+    pngs = [out_dir / f"{stem}_temperature_{safe_name(m.layer_name)}.png" for m in maps]
     for m, png in zip(maps, pngs):
         from coppernicus.temperature import write_png
         write_png(tree.thermal, m.layer_name, png, board.outline())
@@ -378,7 +378,7 @@ def _cmd_solve_tree(args) -> int:
     if args.html is not None or args.open:     # one page: every group, the VRM and load tables
         from coppernicus.report import write_tree_report
         html_path = (Path(args.html) if args.html else
-                     out_dir / f"{safe_name(Path(args.project).stem)}_tree_report.html")
+                     out_dir / f"{stem}_tree_report.html")
         doc["report_file"] = write_tree_report(
             tree, doc, html_path, outline=board.outline(), board_name=board.name,
             project=Path(args.project).name, top=max(args.top, 10),

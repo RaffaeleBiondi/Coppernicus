@@ -135,6 +135,10 @@ documented current-density default flags crowded copper without ever giving a ve
 - Packaged app: removing the downloaded Triangle while its files are in use (on Windows, or
   with another Coppernicus window open) no longer fails: the folder is removed at the next
   start (`--remove-triangle` and the new Help menu item).
+- `coppernicus solve --tree` and `--thermal` name their files after the project file as the
+  other commands do, its `-` kept: `demo-thermal.coppernicus_tree_summary.json`, no longer
+  `demoNthermal.coppernicus_tree_summary.json` (the same for the temperature PNGs and the tree
+  report). `+` and `-` still become `P` and `N` in net names only (`+3V3` → `P3V3`).
 
 ## 0.2.0 (2026-11-25)
 
