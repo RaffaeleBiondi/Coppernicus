@@ -159,10 +159,10 @@ LIMITS_RULE = (
     "ground pin)), a return pin by its ground net. A limit not set on a net comes, field by "
     "field, from its group's driving net (a rail's: the net its source drives; a ground's: the "
     "first ground net the project names). The copper of a group (largest ground rise, current "
-    "crowding, vias) is judged against the strictest limit set on any of its nets, as the "
-    "solve does not keep which net each piece of copper belongs to. A link is not judged as a "
-    "point of its own: it joins its nets into one group, whose loads and regulator inputs are "
-    "judged.")
+    "crowding, vias) is judged against the strictest limit set on any of its nets; the per-net "
+    "split (each net's voltage range, drop or rise and losses) is shown, never judged. A link "
+    "is not judged as a point of its own: it joins its nets into one group, whose loads and "
+    "regulator inputs are judged.")
 
 
 def net_limits(tree, net: str, group: Optional[str] = None,
