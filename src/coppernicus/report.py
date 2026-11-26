@@ -225,6 +225,10 @@ class RailReport:
     # A power-tree group's loads as the tree judged them (:func:`tree_group_loads`): the
     # loads table and the worst card show these instead of the copper drop of the rail.
     tree_loads: Optional[Sequence[Mapping[str, Any]]] = None
+    # A power tree shown from another 0 V (S2; the tree document's ``reference`` block when
+    # the user gave one): the voltage map and its readout move by its offset_v, the drop map
+    # stays in the solve's frame. None: the solve's own 0 V.
+    reference: Optional[Mapping[str, Any]] = None
 
 
 def _median_edge_mm(result: RailResult) -> float:
@@ -297,11 +301,13 @@ class ReportBuilder:
                  problems: Optional[List[Problem]] = None, label: str = "",
                  notes: Sequence[str] = (), estimated: Optional[Sequence[str]] = None,
                  judged: Optional[Mapping[str, Any]] = None,
-                 tree_loads: Optional[Sequence[Mapping[str, Any]]] = None) -> None:
+                 tree_loads: Optional[Sequence[Mapping[str, Any]]] = None,
+                 reference: Optional[Mapping[str, Any]] = None) -> None:
         """Sample and add one solved rail. ``limits`` are the user's (judged only against
         them); ``problems`` default to :func:`find_problems` with those limits. ``estimated``
         names the loads that are estimated draws; without it, the engine's name suffix
-        ", estimated)" tells them (results from the app, which has no list)."""
+        ", estimated)" tells them (results from the app, which has no list). ``reference``: a
+        power tree's reference the user gave (S2), moving the voltage map's frame."""
         from coppernicus.service.convert import RAIL_CAVEATS, problem_dict, verdict
         t0 = time.perf_counter()
         limits = limits or Limits()
@@ -378,10 +384,16 @@ class ReportBuilder:
         degenerate = degenerate_triangles(result)
         worst_mv = shift * result.max_drop * 1e3
         worst_keys = ("name", "drop_mv", "drop_pct") + (("nominal_v",) if tree_loads is not None else ())
+        # S2: shown from another 0 V, the voltage keys move by its offset (the codes decode to
+        # V − offset_v); v_offset_v gives back the solve's frame, where the % and the words are
+        # decided. The drop (v_ref_v − V) does not move.
+        off = float(reference.get("offset_v") or 0.0) if reference and reference.get("given") else 0.0
+        frame = ({"v_offset_v": off, "reference": reference.get("label", "")} if reference
+                 and reference.get("given") else {})
         self.rails.append({
             "net": result.net, "label": label or result.net, "nets": list(result.nets),
             "tree": tree_loads is not None,
-            "v_ref_v": result.v_ref, "v_lo_v": v_lo, "v_hi_v": v_hi,
+            "v_ref_v": result.v_ref - off, "v_lo_v": v_lo - off, "v_hi_v": v_hi - off, **frame,
             # The drop as the app shows it (RailResult.shown_drop_at): drop = drop_sign · (v_ref
             # − V), toward 0 V on a negative rail, a rise above 0 V on a ground, and on a ground
             # below 0 V (a shift) its depth below 0 V. drop_word names it: drop, rise or shift.
@@ -512,7 +524,7 @@ def build_report(items: Sequence[RailReport], *, title: str = "", board_name: st
                           expected_layers=sum(len(i.result.layers) for i in items))
         for item in items:
             b.add_rail(item.result, item.limits, item.problems, item.label, item.notes,
-                       item.estimated, item.judged, item.tree_loads)
+                       item.estimated, item.judged, item.tree_loads, item.reference)
         b.tree = tree
         return b
 
@@ -541,6 +553,12 @@ def write_tree_report(tree, doc: Mapping[str, Any], path, *, outline: Sequence[n
     from coppernicus.power_tree import group_limits
     from coppernicus.problems import find_tree_problems
     groups = {g["group"]: g for g in doc.get("groups", [])}
+    # S2: a reference the user gave moves the voltage map and its readout (the document's
+    # values, and the tables, stay in the solve's frame); said in each group's notes.
+    reference = doc.get("reference") if (doc.get("reference") or {}).get("given") else None
+    notes = ([f"The voltage map and its readout are shown from 0 V at {reference['label']} "
+              f"({reference['offset_v'] * 1e3:+.3f} mV in the solve's frame); the drop or rise map, "
+              "the tables and every verdict stay from the solve's 0 V."] if reference else [])
     items = []
     for key, res in tree.groups.items():
         g = groups.get(key, {})
@@ -548,9 +566,11 @@ def write_tree_report(tree, doc: Mapping[str, Any], path, *, outline: Sequence[n
                   "failed": g.get("failed", 0), "not_judged": g.get("not_judged") or [],
                   "verdict_note": g.get("verdict_note", "")}
         items.append(RailReport(res, group_limits(tree, key)[0], find_tree_problems(tree, key, top=top),
-                                label=f"{key} ({res.kind} group)", judged=judged,
-                                tree_loads=tree_group_loads(tree, key)))
+                                label=f"{key} ({res.kind} group)", notes=notes, judged=judged,
+                                tree_loads=tree_group_loads(tree, key), reference=reference))
     meta = {k: doc.get(k) for k in ("verdict", "verdict_note", "not_judged", "vrms", "loads", "links")}
+    if reference:                       # where the voltage maps are shown from (S2)
+        meta["reference"] = dict(reference)
     if getattr(tree, "thermal", None) is not None and doc.get("thermal"):
         # The board temperature: its summary, and each copper layer's map inside the page.
         meta["thermal"] = {**doc["thermal"], "maps": thermal_map_images(tree.thermal, outline)}

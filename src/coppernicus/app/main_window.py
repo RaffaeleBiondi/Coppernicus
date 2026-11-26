@@ -369,6 +369,8 @@ class MainWindow(QMainWindow):
         self.layer_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.group_box.currentIndexChanged.connect(lambda *_: self._group_changed())
         self.tree_panel.group_requested.connect(self.show_group)
+        self.tree_panel.reference_requested.connect(self._tree_reference_requested)     # "0 V at"
+        self.tree_panel.pick_toggled.connect(self._reference_pick_toggled)
         self.field_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.show_vias.toggled.connect(lambda *_: self.refresh_view())
         self.show_isolines.toggled.connect(lambda *_: self.refresh_view())
@@ -1187,7 +1189,8 @@ class MainWindow(QMainWindow):
                                  pad_outlines=self._pad_outlines(rail, pads, lid),
                                  isolines=self.show_isolines.isChecked(),
                                  arrows=self.show_arrows.isChecked(),
-                                 difference_mv=diff_mv, difference_note=diff_note)
+                                 difference_mv=diff_mv, difference_note=diff_note,
+                                 **self._view_reference(group))
         else:
             rings = copper_rings(self.board.copper(self.net, lid)) if lid is not None else []
             src, lds = self._terminal_pads(rail)
@@ -1239,12 +1242,14 @@ class MainWindow(QMainWindow):
     def stop_clicking(self):
         """Esc: leave pick and measure modes."""
         self.rail_panel.set_pick("")
+        self.tree_panel.stop_pick()
         self.measure.setChecked(False)
         self.ac_panel.stop_pick()
 
     def _measure_toggled(self, on: bool):
         if on:
             self.rail_panel.set_pick("")                  # one click mode at a time
+            self.tree_panel.stop_pick()
             self.view.set_click_mode("measure")
             self.statusBar().showMessage("Click point A, then point B · Esc to stop")
         elif self.view.click_mode == "measure":
@@ -1252,6 +1257,7 @@ class MainWindow(QMainWindow):
 
     def _pick_mode_changed(self, kind: str):
         if kind:
+            self.tree_panel.stop_pick()
             self.measure.blockSignals(True)
             self.measure.setChecked(False)
             self.measure.blockSignals(False)
@@ -1265,6 +1271,8 @@ class MainWindow(QMainWindow):
         """Add the pad at board point (x, y) mm to the sources or loads being picked. A pad
         on the shown layer is preferred; one on another layer is used when none is there.
         Returns the status-bar message."""
+        if self.tree_panel.picking():             # "0 V at" a pad of the power tree (S2)
+            return self._pick_reference(x, y)
         kind = self.rail_panel.pick_kind
         if self.board is None or not self.net or not kind:
             return ""
@@ -1402,6 +1410,8 @@ class MainWindow(QMainWindow):
         self.tree = tree
         self.tree_i_max = tree_i_max(tree)
         self._tolerance_stale()
+        self._apply_tree_reference(self.tree_panel.reference_spec() if self.tree_panel.asked
+                                   else self.merged.project.tree_reference)
         self._show_tree()
         self.thermal_panel.set_tree(tree, self._thermal_verdict_html())
         self.group_box.blockSignals(True)
@@ -1442,6 +1452,73 @@ class MainWindow(QMainWindow):
     def _show_tree(self):
         """The Power tree tab: the tree, its verdict and its VRMs' I max."""
         self.tree_panel.set_tree(self.tree, self._tree_verdict(), self.tree_i_max)
+
+    # ------------------------------------------------------------------ "0 V at" (S2)
+    def _apply_tree_reference(self, spec) -> bool:
+        """Show the power tree from 0 V at ``spec`` (a ``reference_spec``; None: the solve's own
+        0 V): read off the tree (:func:`tree_reference`), which is not solved again and whose
+        values never move; only its ``reference`` (a display setting) is replaced. A spec that
+        does not resolve leaves the reference as it was and says why."""
+        from coppernicus.app.panels import reference_note
+        from coppernicus.engine.tree import reference_parts, tree_reference
+        if self.tree is None or self.board is None:
+            return False
+        try:
+            ref = tree_reference(self.board, self.tree, spec)
+        except EngineError as e:
+            self.tree_panel.show_reference(getattr(self.tree.reference, "given", None),
+                                           reference_parts(self.tree))
+            self.tree_panel.set_reference_note(str(e), error=True)
+            self.statusBar().showMessage(f"0 V at: {e}")
+            return False
+        self.tree.reference = ref
+        self.tree_panel.show_reference(ref.given, reference_parts(self.tree))
+        self.tree_panel.set_reference_note(reference_note(ref))
+        return True
+
+    def _tree_reference_requested(self, spec):
+        """"0 V at" chosen in the Power tree tab: the tables, the voltage map and the readouts
+        from it, with no re-solve."""
+        if self._apply_tree_reference(spec):
+            self._show_tree()
+            if self.group_box.currentData() is not None:
+                self.refresh_view()
+            self.statusBar().showMessage(f"Voltages shown from 0 V at {self.tree.reference.label}")
+
+    def _view_reference(self, group) -> dict:
+        """The view's voltage offset for a power-tree group shown from a reference the user
+        chose; nothing for a rail solved alone or the solve's own 0 V."""
+        ref = getattr(self.tree, "reference", None) if group and self.tree is not None else None
+        if ref is None or ref.given is None:
+            return {}
+        return {"v_offset": ref.offset_v, "v_offset_label": ref.label}
+
+    def _reference_pick_toggled(self, on: bool):
+        if on:
+            self.rail_panel.set_pick("")                  # one click mode at a time
+            self.measure.blockSignals(True)
+            self.measure.setChecked(False)
+            self.measure.blockSignals(False)
+            self.view.set_click_mode("pick")
+            self.statusBar().showMessage("Click a pad: the power tree shown from 0 V at it · Esc to stop")
+        elif self.view.click_mode == "pick" and not self.rail_panel.pick_kind:
+            self.view.set_click_mode(None)
+
+    def _pick_reference(self, x: float, y: float) -> str:
+        """The pad at board point (x, y) mm as "0 V at" (Pick in the Power tree tab)."""
+        lid = self.layer_box.currentData()
+        hit = None
+        if self.board is not None:
+            hit = (self.board.pad_at(x, y, lid) if lid is not None else None) or self.board.pad_at(x, y)
+        if self.tree is None:
+            msg = "Solve the power tree first (Ctrl+T)"
+        elif hit is None or not hit.ref:
+            msg = f"No pad of a part at ({x:.2f}, {y:.2f}) mm"
+        else:
+            self.tree_panel.picked(f"{hit.ref}.{hit.pin}")
+            return self.statusBar().currentMessage()
+        self.statusBar().showMessage(msg)
+        return msg
 
     def _tree_verdict(self) -> str:
         if self.tree is None:

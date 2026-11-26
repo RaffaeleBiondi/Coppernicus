@@ -11,6 +11,8 @@
     coppernicus solve PROJECT --thermal [--out DIR] [--top N] [--json]   power tree with board temperature
     coppernicus solve PROJECT --tree --probe LAYER@X,Y [--probe ...]     the group, voltage and drop
                                                 at points of the tree (mm, KiCad frame)
+    coppernicus solve PROJECT --tree --reference PART|REF.PAD[,...]      the voltages shown from 0 V
+                                                at a part's ground pins or at pads (verdicts unchanged)
     coppernicus fields BOARD [--json]          the KiCad footprint fields (PI_*) of a board
     coppernicus mcp [--out DIR]               MCP server for AI agents, over stdio
     coppernicus ac PROJECT [--rail NET ...] [--out DIR] [--json]   AC PDN impedance |Z|(f) (CSV + PNG)
@@ -222,6 +224,9 @@ def _cmd_solve(args) -> int:
     if getattr(args, "probe", None):
         return _fail(args, "invalid_input", "--probe reads the power tree: add --tree",
                      "coppernicus solve PROJECT --tree --probe LAYER@X,Y")
+    if getattr(args, "reference", None):
+        return _fail(args, "invalid_input", "--reference shows the power tree from another 0 V: add --tree",
+                     "coppernicus solve PROJECT --tree --reference U1")
     quiet = args.json
     stem = safe_file_name(Path(args.project).stem)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
@@ -329,10 +334,10 @@ def _cmd_solve_tree(args) -> int:
     from coppernicus import board_fields
     from coppernicus.engine import Board, EngineError
     from coppernicus.engine.kicad_fields import read_board_fields
-    from coppernicus.engine.tree import solve_project_tree
+    from coppernicus.engine.tree import solve_project_tree, tree_reference
     from coppernicus.maps import safe_file_name, safe_name
     from coppernicus.power_tree import rating_origins, tree_summary, tree_text
-    from coppernicus.project import Project, ProjectError
+    from coppernicus.project import REFERENCE_FORM, Project, ProjectError, reference_from_text
     from coppernicus.service.session import FIELD_HINT
 
     quiet = args.json
@@ -349,6 +354,11 @@ def _cmd_solve_tree(args) -> int:
         probes = [_probe_point(text) for text in getattr(args, "probe", None) or ()]
     except ValueError as e:
         return fail("invalid_input", str(e), "a point is LAYER@X,Y in mm, KiCad's frame: B.Cu@97.5,1.0")
+    try:                                  # --reference: its form, before anything is solved
+        spec = reference_from_text(args.reference) if getattr(args, "reference", None) else None
+    except ValueError as e:
+        return fail("invalid_input", str(e), "--reference U1 (U1's ground pins) or --reference "
+                    "R12.2,NT1.* (pads); in the project file: " + REFERENCE_FORM)
     if not Path(args.project).is_file():
         return fail("file_not_found", f"No such file: {args.project}")
     try:
@@ -388,6 +398,13 @@ def _cmd_solve_tree(args) -> int:
                     "PI_INPUT, PI_LINK...), then solve again")
     merged.annotate(tree)
     rating_origins(tree, merged)          # where each regulator's rating was written
+    spec = spec if spec is not None else project.tree_reference
+    if spec is not None:                  # where its voltages are shown from (S2): a display shift
+        try:
+            tree.reference = tree_reference(board, tree, spec)
+        except EngineError as e:
+            where = "--reference" if getattr(args, "reference", None) else "the project's tree: reference"
+            return fail("invalid_input", str(e), f"fix {where}: {REFERENCE_FORM}")
     doc = tree_summary(tree, top=args.top)        # with each VRM's I max, the rating judged
     if estimate is not None:
         doc["thermal_estimate"] = estimate
@@ -425,7 +442,7 @@ def _cmd_solve_tree(args) -> int:
         print("\n".join(tree_text(doc, split=getattr(args, "split", False))))
         if probes:
             from coppernicus.service.session import probe_text
-            print("\n".join(probe_text(p) for p in doc["probes"]))
+            print("\n".join(probe_text(p, doc.get("reference")) for p in doc["probes"]))
         print("".join(f"Map: {png}\n" for png in pngs) + f"Summary: {summary_path}")
         if "report_file" in doc:
             print(f"Report: {doc['report_file']}")
@@ -829,6 +846,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--probe", action="append", metavar="LAYER@X,Y",
                    help="with --tree: the group, voltage and drop (or ground rise) at this point, mm "
                         "in KiCad's frame, e.g. B.Cu@97.5,1.0 (repeatable; in the JSON as probes)")
+    p.add_argument("--reference", metavar="PART|REF.PAD[,...]",
+                   help="with --tree: show the voltages from 0 V at this part's ground pins (U1) or "
+                        "at these pads (R12.2,NT1.*); a display shift, every verdict stays from the "
+                        "solve's 0 V (replaces the project's tree: reference)")
     p.add_argument("--split", action="store_true",
                    help="with --tree: also print each drop segment by segment (regulation, each "
                         "net's copper, each link, the ground) and each net's range, entry and losses; "

@@ -553,6 +553,30 @@ def net_split_rows(res) -> List[Dict[str, Any]]:
             for n in getattr(res, "net_split", None) or ()]
 
 
+def reference_assumption(ref) -> Optional[str]:
+    """The assumption line a reference the user gave adds (``ref``: a
+    :class:`~coppernicus.results.TreeReference`; None for the solve's own 0 V): what moves,
+    and that every verdict, the ground rise's too, is taken from the solve's 0 V."""
+    if ref is None or ref.given is None:
+        return None
+    spread = f", spread {ref.spread_v * 1e3:.3f} mV over its pads" if ref.spread_v else ""
+    return (f"Voltages are shown from 0 V at {ref.label} ({_text(ref.pads)}; {ref.offset_v * 1e3:+.3f} mV "
+            f"in the solve's frame{spread}): a display shift, nothing is solved again. Only absolute "
+            "voltages move; every drop, rise, limit and verdict, the ground rise's too, is taken from "
+            "the solve's 0 V at the ground pins of the sources.")
+
+
+def reference_block(ref) -> Dict[str, Any]:
+    """A tree's ``reference`` (:class:`~coppernicus.results.TreeReference`, None: the solve's
+    own 0 V) as the document's block: ``label``, ``pads`` ("REF.PAD"), ``offset_v`` (their
+    potential in the solve's frame, subtracted where a voltage is shown), ``spread_v`` and
+    ``given`` (the reference as given, None for the solve's own 0 V)."""
+    if ref is None:
+        return {"label": "the solve's 0 V", "pads": [], "offset_v": 0.0, "spread_v": 0.0, "given": None}
+    return {"label": ref.label, "pads": list(ref.pads), "offset_v": float(ref.offset_v),
+            "spread_v": float(ref.spread_v), "given": copy.deepcopy(ref.given)}
+
+
 def segment_keys(segments) -> Dict[str, Any]:
     """A drop's segments (``LoadReport.segments``, ``VrmReport.segments``) as JSON keys:
     ``segments`` ({what, name, from, to, mv}) and ``segments_sum_mv`` (None without any)."""
@@ -610,7 +634,9 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         + tv.not_judged,
         "attention": sum(g["attention"] for g in groups),
         "vrms": [{"name": v.name, "kind": v.kind, "group": v.group, "v_set_v": v.v_set_v,
-                  "v_out_v": v.v_out_v, "i_out_a": v.i_out_a,
+                  "v_out_v": v.v_out_v,
+                  # V out across its own pins, from its own ground: the same from any 0 V
+                  "v_out_across_v": _num(getattr(v, "v_out_across_v", None)), "i_out_a": v.i_out_a,
                   **({"i_max_a": v.current_limit_a} if rated else {}), "v_in_v": _num(v.v_in_v),
                   "i_in_a": _num(v.i_in_a), "p_out_w": v.p_out_w, "p_in_w": _num(v.p_in_w),
                   "p_loss_w": _num(v.p_loss_w), "v_ground_v": _num(v.v_ground_v),
@@ -642,9 +668,16 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
         "links": [dict(k) for k in tree.links],
         "groups": groups,
     }
+    # Where the voltages are shown from (S2): every value above stays in the solve's frame; a
+    # reader subtracts offset_v from an absolute voltage it shows. The line saying so is added
+    # here, never to the tree (its groups copied its assumptions when it was solved).
+    ref = getattr(tree, "reference", None)
+    doc["reference"] = reference_block(ref)
     if getattr(tree, "thermal", None) is not None:      # the board temperature (Task 8)
         doc["thermal"] = thermal_summary(tree)
-    doc.update({"assumptions": list(tree.assumptions), "warnings": list(tree.warnings)})
+    note = reference_assumption(ref)
+    doc.update({"assumptions": list(tree.assumptions) + ([note] if note else []),
+                "warnings": list(tree.warnings)})
     return _clean(doc)
 
 
@@ -672,14 +705,42 @@ def _rating_text(v: Dict[str, Any]) -> str:
     return f"  rated current: {'FAIL' if exceeds else 'pass' if exceeds is False else 'not judged'}"
 
 
-def _group_worst(gr: Dict[str, Any]) -> str:
+def shown_offset(doc: Dict[str, Any]) -> float:
+    """What to subtract from an absolute voltage of tree document ``doc`` where it is shown:
+    its reference's ``offset_v`` when the user gave one (S2), else 0."""
+    ref = doc.get("reference") or {}
+    return float(ref.get("offset_v") or 0.0) if ref.get("given") else 0.0
+
+
+def _shift(x: Optional[float], off: float) -> Optional[float]:
+    """``x`` (solve frame) as shown, ``off`` subtracted; within 1 pV of 0 is 0 (no "-0.00")."""
+    if x is None or not off:
+        return x
+    out = x - off
+    return 0.0 if abs(out) < 1e-12 else out
+
+
+def reference_text(doc: Dict[str, Any]) -> List[str]:
+    """The header line naming the reference the voltages are shown from, when the user gave
+    one (none for the solve's own 0 V)."""
+    ref = doc.get("reference") or {}
+    if not ref.get("given"):
+        return []
+    spread = f", spread {ref['spread_v'] * 1e3:.3f} mV" if ref.get("spread_v") else ""
+    return [f"Shown from 0 V at {ref['label']} ({_text(ref['pads'])}), {ref['offset_v'] * 1e3:+.3f} mV in "
+            f"the solve's frame{spread}: V out, V in, supply, ground, V min and V max move by it; drops, "
+            "rises, across, limits and verdicts stay from the solve's 0 V (the sources' ground pins)."]
+
+
+def _group_worst(gr: Dict[str, Any], off: float = 0.0) -> str:
     """A group's worst copper for its :func:`tree_text` line, worded as
     :func:`coppernicus.problems.max_drop_text`: "max drop 12.345 mV (0.374 %) below 3.3 V",
     "max drop 12.345 mV (0.374 %) above -3.3 V (toward 0 V)", "max drop 1.234 mV below 0 V"
     (a rail at 0 V: no %), "max ground rise 5.678 mV above 0 V" or "max ground shift 5.678 mV
     below 0 V". The side comes from the summary alone, as the tree solves it: a ground is a
     rise, a rail below 0 V draws toward 0 V, any other rail (one at 0 V too) below its
-    nominal."""
+    nominal. ``off``: a reference's offset (S2), moving only the printed "X V" the drop is
+    from (the words are decided in the solve's frame)."""
     from coppernicus.problems import drop_words
 
     rise = gr["kind"] == "ground"
@@ -688,6 +749,9 @@ def _group_worst(gr: Dict[str, Any]) -> str:
         return f"max {'ground rise' if rise else 'drop'} —"
     v_ref = gr["v_ref_v"] or 0.0
     what, where = drop_words(mv, v_ref, -1.0 if rise or v_ref < 0 else 1.0, rise)
+    if off:
+        x = 0.0 if rise else v_ref                         # the "X V" drop_words wrote
+        where = where.replace(f"{x:g} V", f"{_shift(x, off):g} V", 1)
     pct = "" if gr["max_drop_pct"] is None else f" ({gr['max_drop_pct']:.3f} %)"
     return f"max {what} {abs(mv) if rise else mv:.3f} mV{pct} {where}"
 
@@ -736,14 +800,16 @@ def split_text(doc: Dict[str, Any]) -> List[str]:
               f"  {'net':<12} {'group':<10} {'V min':>10} {'V max':>10}  {'fed from':<20} "
               f"{'drop/rise':>16} {'copper':>10} {'vias':>9}"]
     notes = []
+    off = shown_offset(doc)                  # V min and V max as shown from the reference (S2)
     for gr in doc["groups"]:
         for n in gr.get("net_split") or ():
             entry = n.get("entry")
             fed = f"{entry['name']} ({_text(entry['pads'])})" if entry else "—"
             change = n.get("rise_mv", n.get("drop_mv"))
             word = "rise" if "rise_mv" in n else "drop"
-            lines.append(f"  {n['net']:<12} {gr['group']:<10} {_fmt(n['v_min_v'], 10, '.6f', '')} "
-                         f"{_fmt(n['v_max_v'], 10, '.6f', '')}  {fed:<20} "
+            lines.append(f"  {n['net']:<12} {gr['group']:<10} "
+                         f"{_fmt(_shift(n['v_min_v'], off), 10, '.6f', '')} "
+                         f"{_fmt(_shift(n['v_max_v'], off), 10, '.6f', '')}  {fed:<20} "
                          f"{(word + ' ' + _mv_text(change)) if change is not None else '—':>16} "
                          f"{_fmt(n['copper_loss_w'], 10, '.3g', ' mW', 1e3)} "
                          f"{_fmt(n['via_loss_w'], 9, '.3g', ' mW', 1e3)}")
@@ -765,14 +831,19 @@ def tree_text(doc: Dict[str, Any], split: bool = False) -> List[str]:
     # I max: a source's rated output current (PI_IMAX; judged: _rating_text); only when some VRM
     # has one, so the table is unchanged otherwise.
     rated = any(v.get("i_max_a") is not None for v in doc["vrms"])
-    lines = ["VRMs (sources and regulators)",
-             f"  {'name':<14} {'kind':<6} {'group':<10} {'V set':>8} {'V out':>9} {'I out':>9} "
-             + (f"{'I max':>9} " if rated else "") + f"{'V in':>9} {'I in':>9} {'P loss':>9}"]
+    # S2: absolute voltages shown from the reference the user gave (none: the solve's 0 V);
+    # differences (across, drops, rises) never move.
+    off = shown_offset(doc)
+    lines = reference_text(doc) + [
+        "VRMs (sources and regulators)",
+        f"  {'name':<14} {'kind':<6} {'group':<10} {'V set':>8} {'V out':>9} {'V across':>9} {'I out':>9} "
+        + (f"{'I max':>9} " if rated else "") + f"{'V in':>9} {'I in':>9} {'P loss':>9}"]
     for v in doc["vrms"]:
         lines.append(f"  {v['name']:<14} {v['kind']:<6} {v['group']:<10} {_fmt(v['v_set_v'], 8, '.4g', 'V')} "
-                     f"{_fmt(v['v_out_v'], 9, '.5f', 'V')} {_fmt(v['i_out_a'], 9, '.4f', 'A')} "
+                     f"{_fmt(_shift(v['v_out_v'], off), 9, '.5f', 'V')} "
+                     f"{_fmt(v.get('v_out_across_v'), 9, '.5f', 'V')} {_fmt(v['i_out_a'], 9, '.4f', 'A')} "
                      + (f"{_fmt(v.get('i_max_a'), 9, '.4f', 'A')} " if rated else "")
-                     + f"{_fmt(v['v_in_v'], 9, '.5f', 'V')} {_fmt(v['i_in_a'], 9, '.4f', 'A')} "
+                     + f"{_fmt(_shift(v['v_in_v'], off), 9, '.5f', 'V')} {_fmt(v['i_in_a'], 9, '.4f', 'A')} "
                      f"{_fmt(v['p_loss_w'], 9, '.1f', 'mW', 1e3)}"
                      + (f"  {v['regulation']}" if v["regulation"] else "") + _rating_text(v)
                      + _input_text(v))
@@ -785,14 +856,15 @@ def tree_text(doc: Dict[str, Any], split: bool = False) -> List[str]:
         drop = (f"{ld['drop_mv']:.2f} mV ({_fmt(ld['drop_pct'], 0, '.2f', ' %').strip()})"
                 if ld["drop_mv"] is not None else "—")
         lines.append(f"  {ld['name']:<14} {ld['group']:<10} {_fmt(ld['current_a'], 8, '.4g', 'A')} "
-                     f"{_fmt(ld['nominal_v'], 8, '.4g', 'V')} {_fmt(ld['v_supply_v'], 9, '.5f', 'V')} "
-                     f"{_fmt(ld['v_ground_v'], 9, '.2f', 'mV', 1e3)} "
+                     f"{_fmt(ld['nominal_v'], 8, '.4g', 'V')} "
+                     f"{_fmt(_shift(ld['v_supply_v'], off), 9, '.5f', 'V')} "
+                     f"{_fmt(_shift(ld['v_ground_v'], off), 9, '.2f', 'mV', 1e3)} "
                      f"{_fmt(ld['v_across_v'], 13, '.5f', 'V')} {_fmt(ld['v_worst_v'], 10, '.5f', 'V')} "
                      f"{drop:>14}  {ld['status'] or verdict}")
     if doc["loads"]:
         lines.append(f"  {ACROSS_NOTE}")
     lines.append("Groups")
-    worsts = [_group_worst(gr) + "," for gr in doc["groups"]]
+    worsts = [_group_worst(gr, off) + "," for gr in doc["groups"]]
     width = max(map(len, worsts), default=0)
     for gr, worst in zip(doc["groups"], worsts):
         lines.append(f"  {gr['group']:<10} {gr['kind']:<6} {' + '.join(gr['nets']):<22} {worst:<{width}} "

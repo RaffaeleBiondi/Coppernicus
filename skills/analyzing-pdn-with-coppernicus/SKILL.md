@@ -80,6 +80,12 @@ and why, and ask for what is missing.
    or `{pad: "U3.2"}`, `result_id` for another group of the same tree): `delta_v`, e.g. a
    chip's supply pad against its ground pad. `get_problems`, `copper_step`, `compare_results`
    and `propose_fields` refuse tree ids (the hint says what to use).
+   - Another 0 V: `solve_tree(project_path, reference={ground_of: "U1"})` (or `{pads: ["U3.2"]}`)
+     shows the tree from that part's ground pins: a display shift, not saved. The document's
+     values stay in the solve's frame; `reference.offset_v` is what to subtract from an
+     absolute voltage you quote, a probe adds `voltage_from_reference_v`, and every drop, rise
+     and verdict is unchanged. `vrms[].v_out_across_v` is a regulator's output across its own
+     pins, from any 0 V.
    - Board temperature: `solve_tree(project_path, thermal=true)` (or the project's
      `thermal.enabled`), with `thermal_options` for this solve. Read `thermal_estimate` first.
      If the call is refused with `solve_too_large`, tell the user the estimate and ask before

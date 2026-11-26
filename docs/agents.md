@@ -79,7 +79,7 @@ input.
 | `compare_revisions` | `result_a`, `result_b` | Two revisions of a board (different board files, or the same file edited and saved in KiCad, then opened again), whose meshes differ: per-load drop deltas matched by part, per-layer loss deltas, via currents matched by position and drill, where the drop grew or shrank most (B's drop mapped onto A's mesh, a PNG Δ map per layer), and what could not be matched. See [Comparing revisions](#comparing-revisions). |
 | `copper_step` | `result_id`, `layer`, `step` (`up`/`down`) | What-if: the result re-solved with one copper layer **one** standard weight up or down (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness (the project's `copper_thickness_mm`, else the board file's), with the comparison against that result and the new `result_id`. A project rail keeps its estimated draws. Bigger jumps, a non-standard start (more than 3 % off a standard weight) and a result that is already a what-if (any layer off the design's copper) are refused: real changes are made in KiCad. The assumptions carry the via-barrel note. |
 | `solve_project` | `project_path`, `rails`?, `top`?, `use_board_fields`? | Solves the rails of a `*.coppernicus.yml` project with its own sources, loads, limits and settings, and the rails of the board's KiCad footprint fields, which win over a project rail of the same net (see [KiCad footprint fields](#kicad-footprint-fields)). Returns one `solve_rail` summary per rail and an overall verdict. A rail that fails to solve is reported in place. Each rail also draws the regulator inputs and links it feeds, estimated at nominal voltages without copper losses, exactly as the desktop app solves it (see [Estimated draws](#estimated-draws)). A rail with no loads that feeds nothing is reported as `skipped`; that is not an error, and it is left out of the verdict. The board temperature is a power-tree solve: when the project sets `thermal.max_temp_c` or `max_rise_c`, each is a top-level `not_judged` entry (`rail: null`, `item: "board temperature"`, "solved with the power tree only…"), so the verdict is `not_judged` (CLI and CI exit 3) unless something fails; use `solve_tree` to judge it. |
-| `solve_tree` | `project_path`, `top`?, `use_board_fields`?, `thermal`?, `thermal_options`?, `confirm_large`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`), plus `tree_id` (`t1`) and each group's `result_id` (`t1:GND`) for `probe`, `render_map`, `cut_current` and `report`: see [Power tree](#power-tree). Limits come from the project file. With `thermal` (or the project's `thermal.enabled`) it also solves the board temperature: see [Board temperature](#board-temperature). |
+| `solve_tree` | `project_path`, `top`?, `use_board_fields`?, `thermal`?, `thermal_options`?, `confirm_large`?, `reference`? | Solves the project's whole power tree at once: every rail and ground group together, with the regulators' input currents and the ground return computed exactly (when a ground net is solved, every load and regulator needs its ground pins). Returns the same document as `coppernicus solve --tree --json` (without `summary_file`), plus `tree_id` (`t1`) and each group's `result_id` (`t1:GND`) for `probe`, `render_map`, `cut_current` and `report`: see [Power tree](#power-tree). Limits come from the project file. With `thermal` (or the project's `thermal.enabled`) it also solves the board temperature: see [Board temperature](#board-temperature). |
 | `solve_ac` | `project_path`, `rails`?, `confirm_large`?, `use_board_fields`? | The open-loop PDN impedance \|Z\|(f) at the project's probes, rail by rail: the document of `coppernicus ac --json`, with each rail's CSV and PNG of \|Z\|(f), sized first. See [AC impedance](#ac-impedance). |
 | `solve_noise` | `project_path`, `aggressors`?, `confirm_large`?, `use_board_fields`? | The DC-DC ripple and the noise each switching regulator (aggressor) couples into the victim nets: the document of `coppernicus noise --json`, with each aggressor's CSV, waveforms PNG and field-map PNGs, sized first. Judged only against the victims' noise margins; the ripple and the radiated estimate are never judged. See [Ripple and coupled noise](#ripple-and-coupled-noise). |
 | `solve_tolerance` | `project_path`, `skip_ac`?, `skip_noise`?, `confirm_large`?, `use_board_fields`? | Each load's tolerance stack-up (DC drop + accuracy, ripple + transient, their total): the document of `coppernicus tolerance --json`, with its CSV, every AC and noise solve it needs sized first. Judged only against the tolerances the user set, and only when every part is known; KiPI's transient estimate is shown, never judged. See [Tolerance stack-up](#tolerance-stack-up). |
@@ -526,8 +526,9 @@ ground net is solved, each regulator's and load's `ground` pins (see
   `"U2 (input)"`, a return pin, or the net itself for a net-level entry (a limit of the wrong
   kind, a net the tree does not solve, a group that did not converge, a `max_drop_pct` with
   nothing to judge), or a rated regulator (`"limit": "current_limit_a"`, see below);
-- `vrms`: each source and regulator, with `v_set_v`, `v_out_v`, `i_out_a`, `v_in_v`, `i_in_a`,
-  `p_loss_w` and `regulation` (why it cannot hold its voltage, if so). A regulator's input, as
+- `vrms`: each source and regulator, with `v_set_v`, `v_out_v`, `v_out_across_v` (V out across
+  its own pins: `v_out_v` minus its own ground, `v_ground_v`; the same from any 0 V), `i_out_a`,
+  `v_in_v`, `i_in_a`, `p_loss_w` and `regulation` (why it cannot hold its voltage, if so). A regulator's input, as
   a load of the rail that feeds it: `input_net`, `input_drop_mv`, `input_drop_pct`,
   `input_exceeds_drop_limit`, `input_status`. Its rating: `i_max_a` (the rated output current
   judged, `null` where none is given; the key is there only when some VRM has a rating),
@@ -575,7 +576,26 @@ ground net is solved, each regulator's and load's `ground` pins (see
     path: the split follows the highest-current path, and the note names the links;
   - `links[]` also have `v_a_v`, `v_b_v` (each side's voltage) and `across_mv` (side A − side
     B: I·R; 0 across a net tie, whose `current_a` is `null`);
+- `reference`: where the voltages are shown from (see
+  [Showing it from another 0 V](power-tree.md#showing-it-from-another-0-v)): `label`, `pads`
+  ("REF.PAD"), `offset_v` (their potential in the solve's frame), `spread_v` (their highest
+  minus their lowest) and `given` (`{ground_of}` or `{pads}` as given; `null` for the solve's
+  own 0 V, the sources' ground pins, `offset_v` 0). **Every value of the document stays in the
+  solve's frame**, the keys and numbers are the same with or without a reference: to show an
+  absolute voltage (`v_out_v`, `v_in_v`, `v_supply_v`, `v_ground_v`, `v_min_v`, `v_max_v`)
+  from the reference, subtract `offset_v`; a difference (drops, rises, across, segments) never
+  moves. Verdicts are always from the solve's 0 V, the ground rise's too; a reference that was
+  given adds one assumption line saying so;
 - `assumptions` and `warnings`.
+
+`reference` on `solve_tree` (`{ground_of: "U1"}`: that part's own ground pins, their mean; or
+`{pads: ["R12.2", "NT1.*"]}`: pads, globs on the pad, their mean, exact on a terminal pad and
+interpolated at the pad's centre otherwise) shows the tree from there for this solve only: it is
+not saved, and it replaces the project's `tree: reference`. It changes no value and no verdict;
+it fills the `reference` block, and a probe on a group then reads `voltage_from_reference_v`.
+A bare net (`{pads: ["GND"]}`), a part without solved ground pins, a pad on a net the tree does
+not solve or on disconnected copper are refused with `invalid_input` and a hint, before the
+solve when the form is wrong, after it otherwise.
 
 #### Regulator ratings in the power tree
 
@@ -613,7 +633,9 @@ the first colon, so a net name may hold one). A net of a group names that group 
   `coppernicus solve PROJECT --tree --html` does: every group's maps and problems, the tree's
   verdict and its VRM, load and link tables.
 - A probe on a group answers with `group`, `kind` (`rail` or `ground`), and `net`, the net at
-  the point, only where it is known exactly (a group of one net). Its `drop_mv` is worded as
+  the point, only where it is known exactly (a group of one net), and
+  `voltage_from_reference_v`: `voltage_v` from the 0 V the tree is shown from (its `reference`;
+  equal to `voltage_v` at the solve's own 0 V). Its `drop_mv` is worded as
   the app's readout words it: `drop_word` is `drop`, `rise` (a ground above 0 V) or `shift` (a
   ground under a negative rail), and `drop_unit` says what the number measures (`"mV above
   0 V (ground rise)"`; on a shift, `"mV below 0 V (ground shift)"`, the depth below 0 V). On

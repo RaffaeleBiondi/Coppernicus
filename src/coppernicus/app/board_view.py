@@ -345,6 +345,9 @@ class BoardView(QWidget):
         self._measure_result: Optional[RailResult] = None
         self._temperature = None            # (TemperatureMap, cell mm) while the temperature map is shown
         self._field: Optional[str] = None   # the map shown: a key of FIELDS, None before a solve
+        # A power tree shown from another 0 V (S2): subtracted from every voltage shown (the
+        # voltage map, readouts, ΔV's A and B), never from a drop; and what that 0 V is.
+        self._v_offset, self._v_offset_label = 0.0, ""
         # (result, its problem list), as the Problems panel shows them: the current map's label
         # reads its verdict there (set_problems).
         self._problems: Optional[tuple] = None    # (result, problems, limits)
@@ -396,15 +399,19 @@ class BoardView(QWidget):
                    outline: Sequence[np.ndarray], show_vias: bool = True, fit: bool = False,
                    pad_outlines: Sequence[Tuple[str, Sequence[np.ndarray]]] = (),
                    isolines: bool = False, arrows: bool = False,
-                   difference_mv: Optional[np.ndarray] = None, difference_note: str = ""):
+                   difference_mv: Optional[np.ndarray] = None, difference_note: str = "",
+                   v_offset: float = 0.0, v_offset_label: str = ""):
         """A colour map of ``field`` ('drop', 'voltage', 'current' or 'difference') on
         ``layer``, with drop isolines (the same levels on every layer) and current-flow arrows
         if asked. For 'difference', ``difference_mv`` holds the change of drop per node of
-        ``layer`` (current − baseline, mV) and ``difference_note`` how it was obtained."""
+        ``layer`` (current − baseline, mV) and ``difference_note`` how it was obtained.
+        ``v_offset``: a power tree shown from 0 V at ``v_offset_label`` (S2), subtracted from
+        the voltages shown (the voltage map, readouts), never from a drop."""
         self.clear()
         if result is not self._measure_result:          # a measurement belongs to one result
             self._measure, self._measure_result = [], result
         self._result, self._layer, self._field = result, layer, field
+        self._v_offset, self._v_offset_label = float(v_offset or 0.0), str(v_offset_label or "")
         self._difference_mv = np.asarray(difference_mv, float) if field == "difference" else None
         title, cmap = FIELDS[field]
         faces = np.column_stack([np.full(len(layer.tris), 3), layer.tris]).ravel()
@@ -421,7 +428,7 @@ class BoardView(QWidget):
             clim = [-max(top, 1e-9), max(top, 1e-9)]             # symmetric: white = no change
         else:
             v = layer.voltage
-            values = drop_mv(result, v) if field == "drop" else v
+            values = drop_mv(result, v) if field == "drop" else v - self._v_offset
             mesh.point_data[title] = values
             # Same scale on every layer: the rail's full range.
             all_v = np.concatenate([lf.voltage for lf in result.layers])
@@ -430,12 +437,14 @@ class BoardView(QWidget):
             if field == "drop":            # a boost (remote sense) shows below zero
                 d = drop_mv(result, np.array([lo, hi]))
                 clim = [min(0.0, float(d.min())), max(float(d.max()), 1e-9)]
-            else:
-                clim = [lo, hi]
+            else:                          # from the reference's 0 V, when one is given
+                clim = [lo - self._v_offset, hi - self._v_offset]
         self.plotter.add_mesh(mesh, scalars=title, cmap=cmap, clim=clim, nan_color="#dddddd",
                               show_edges=False, name="field", show_scalar_bar=False)
         units = {"drop": result.shown_drop_unit(), "voltage": "V", "current": "A/mm²",
                  "difference": "mV of drop, current − baseline (red: more)"}[field]
+        if field == "voltage" and self._v_offset_label:
+            units += f" from 0 V at {self._v_offset_label}"
         note = f"\ntop clipped at {J_CLIP_PERCENTILE:g}th pct" if field == "current" else ""
         if field == "difference" and difference_note:
             note += "\n" + difference_note
@@ -668,12 +677,13 @@ class BoardView(QWidget):
                 if len(self._measure) >= 2:
                     self._measure = []
                 self._measure.append((self._layer.name, p.x_mm, p.y_mm, p.voltage_v))
+                off = self._v_offset                  # A and B as shown; ΔV does not move
                 if len(self._measure) == 1:
-                    msg = (f"A: {p.voltage_v:.5f} V at ({x:.3f}, {y:.3f}) mm on {self._layer.name}"
+                    msg = (f"A: {p.voltage_v - off:.5f} V at ({x:.3f}, {y:.3f}) mm on {self._layer.name}"
                            " — click B")
                 else:
                     (_, _, _, va), (_, _, _, vb) = self._measure
-                    msg = f"ΔV A→B = {(va - vb) * 1e3:.3f} mV (A: {va:.5f} V, B: {vb:.5f} V)"
+                    msg = f"ΔV A→B = {(va - vb) * 1e3:.3f} mV (A: {va - off:.5f} V, B: {vb - off:.5f} V)"
                 self._add_measure()
                 self.plotter.render()
         self.probed.emit(msg)
@@ -731,7 +741,9 @@ class BoardView(QWidget):
                 d = self._difference_at(p.triangle, x, y)
                 delta = (f", Δ drop vs baseline = {d:+.3f} mV" if np.isfinite(d)
                          else ", Δ drop vs baseline: no baseline copper here")
-            msg = (f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: V = {p.voltage_v:.5f} V, "
+            frame = f" from 0 V at {self._v_offset_label}" if self._v_offset_label else ""
+            msg = (f"({x:.3f}, {y:.3f}) mm on {self._layer.name}: "
+                   f"V = {p.voltage_v - self._v_offset:.5f} V{frame}, "
                    f"{self._result.drop_word()} = {float(drop_mv(self._result, p.voltage_v)):.3f} mV, "
                    f"|J| = {p.current_density_a_mm2:.2f} A/mm²{delta}")
         self.probed.emit(msg)
@@ -759,8 +771,8 @@ class BoardView(QWidget):
             return HoverReadout()
         delta = (self._difference_at(p.triangle, x, y)
                  if self._difference_mv is not None and np.isfinite(p.voltage_v) else float("nan"))
-        return hover_readout(hover_values(self._result, self._layer.name, p, delta), self._hover_chosen,
-                             self._field)
+        return hover_readout(hover_values(self._result, self._layer.name, p, delta, self._v_offset),
+                             self._hover_chosen, self._field)
 
     def hover_at(self, x: float, y: float) -> str:
         """:meth:`hover_readout_at` as plain text, the map's value first in the double-click

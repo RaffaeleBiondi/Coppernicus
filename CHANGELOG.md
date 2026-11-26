@@ -9,6 +9,14 @@ results against your own judgement.
 
 ### Added
 
+- The power tree shown from another 0 V, with no re-solve: **0 V at** in the app's Power tree tab
+  (a part's ground pins, or a pad typed or picked on the map), `tree: {reference: {ground_of:
+  U1}}` (or `{pads: [R12.2, NT1.*]}`) in the project file, `--reference U1` on the command line
+  and `reference` on the MCP `solve_tree` (not saved). The tables, the voltage map and the
+  readouts move by the reference's potential; every drop, rise, limit and verdict stays from
+  the solve's 0 V, and the JSON keeps its keys and values with a `reference` block
+  (`offset_v`). Each regulator also shows its output across its own pins (`V across`,
+  `v_out_across_v`), and a probe on a tree group adds `voltage_from_reference_v`.
 - A source's ground terminal on several parts, as its output already could be: KiCad field
   `PI_GND_REF=BT4,BT8` on a source (`PI_GND_PINS` with `REF.PAD` entries or a pad for every
   listed part), project key `extra_ground_pins: [BT8.*]` beside `ground` (also in

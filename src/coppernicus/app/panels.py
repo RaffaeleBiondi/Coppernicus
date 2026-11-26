@@ -1197,13 +1197,39 @@ def _cell(x: Optional[float], spec: str, scale: float = 1.0) -> str:
     return "—" if x is None or x != x else f"{x * scale:{spec}}"
 
 
+def reference_note(ref) -> str:
+    """The line under "0 V at" for a tree's reference (:class:`~coppernicus.results.TreeReference`):
+    what the voltages are shown from, and that drops, across and verdicts do not move."""
+    if ref is None or ref.given is None:
+        return ("Voltages from the solve's 0 V, held at the sources' ground pins: every drop, rise and "
+                "verdict is taken there.")
+    pads = ", ".join(ref.pads[:4]) + (f" (+{len(ref.pads) - 4})" if len(ref.pads) > 4 else "")
+    spread = f", spread {ref.spread_v * 1e3:.3f} mV" if ref.spread_v else ""
+    return (f"Voltages shown from 0 V at {ref.label} ({pads}), {ref.offset_v * 1e3:+.3f} mV in the solve's "
+            f"frame{spread}: V out, V in, supply, ground, the voltage map and the readouts move by it. "
+            "Drops, across and every verdict (the ground rise too) stay from the solve's 0 V.")
+
+
+#: The "0 V at" choice that is the solve's own 0 V (the sources' ground pins), and a pad's.
+SOLVE_ZERO = "the sources' ground pins (the solve's 0 V)"
+A_PAD = "a pad (REF.PAD, or Pick)"
+
+
 class TreePanel(QWidget):
     """The Power tree tab: every source and regulator, every load with the voltage across its
-    supply and ground pins, and the links. Double-click a row to show its group."""
-    group_requested = Signal(str)
+    supply and ground pins, and the links. Double-click a row to show its group.
 
-    VRM_HEADERS = ["Name", "Kind", "Group", "V set", "V out", "I out (A)", "V in", "I in (A)",
-                   "P loss (mW)", "Ground (mV)", "Regulation"]
+    "0 V at" (S2): where the voltages are shown from, a display shift with no re-solve: the
+    solve's own 0 V, a part's ground pins, or a pad typed as REF.PAD or picked on the map.
+    It asks for it (:attr:`reference_requested`: a ``reference_spec``, None for the solve's);
+    the window reads it off the tree and shows the tables, the voltage map and the readouts
+    from it. Drops, across and verdicts never move."""
+    group_requested = Signal(str)
+    reference_requested = Signal(object)         # {"ground_of": REF} / {"pads": [...]} / None
+    pick_toggled = Signal(bool)                  # Pick a pad on the map as 0 V
+
+    VRM_HEADERS = ["Name", "Kind", "Group", "V set", "V out", "Across (V)", "I out (A)", "V in",
+                   "I in (A)", "P loss (mW)", "Ground (mV)", "Regulation"]
     LOAD_HEADERS = ["Name", "Group", "I (A)", "Nominal", "Supply (V)", "Ground (mV)", "Across, mean (V)",
                     "Worst pins (V)", "Drop (mV)", "Drop (%)", "Verdict"]
 
@@ -1212,6 +1238,22 @@ class TreePanel(QWidget):
         self.summary = QLabel("<i>Solve tree (Ctrl+T) solves every rail and ground "
                               "together</i>")
         self.summary.setWordWrap(True)
+        self.reference_box = FieldComboBox()
+        self.reference_box.setToolTip("Where the voltages are shown from: a display shift, nothing is "
+                                      "solved again. Drops, across and every verdict (the ground rise "
+                                      "too) stay from the solve's 0 V, at the sources' ground pins.")
+        self.reference_box.addItem(SOLVE_ZERO, None)
+        self.reference_box.activated.connect(self._reference_chosen)
+        self.reference_pad = QLineEdit()
+        self.reference_pad.setPlaceholderText("REF.PAD, e.g. U3.2 or R12.2, NT1.*")
+        self.reference_pad.returnPressed.connect(self._pad_entered)
+        self.reference_pick = QPushButton("Pick")
+        self.reference_pick.setCheckable(True)
+        self.reference_pick.setToolTip("Click a pad on the map: 0 V at it · Esc to stop")
+        self.reference_pick.toggled.connect(self.pick_toggled)
+        self.reference_note = QLabel()            # what 0 V is now, or why a choice was refused
+        self.reference_note.setWordWrap(True)
+        self.asked = False                        # "0 V at" chosen here (else the project's)
         self.vrms = self._table(self.VRM_HEADERS)
         self.loads = self._table(self.LOAD_HEADERS)
         self.links = QLabel()
@@ -1221,6 +1263,13 @@ class TreePanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.summary)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("0 V at:"))
+        row.addWidget(self.reference_box, 2)
+        row.addWidget(self.reference_pad, 2)
+        row.addWidget(self.reference_pick)
+        layout.addLayout(row)
+        layout.addWidget(self.reference_note)
         layout.addWidget(QLabel("<b>Sources and regulators</b>"))
         layout.addWidget(self.vrms, 2)
         layout.addWidget(QLabel("<b>Loads</b> (the voltage across their supply and ground pins)"))
@@ -1259,6 +1308,73 @@ class TreePanel(QWidget):
                     item.setForeground(QBrush(QColor("#c0392b")))
                 table.setItem(r, c, item)
 
+    # ------------------------------------------------------------------ "0 V at" (S2)
+    def _reference_chosen(self, index: int):
+        self.asked = True
+        data = self.reference_box.itemData(index)
+        if data == "pad":                        # a pad: typed (Enter) or picked
+            self.reference_pad.setFocus()
+            if self.reference_pad.text().strip():
+                self._pad_entered()
+            return
+        self.reference_requested.emit(None if data is None else {"ground_of": data})
+
+    def _pad_entered(self):
+        text = self.reference_pad.text().strip()
+        if not text:
+            return
+        self.asked = True
+        self._select_reference("pad")
+        self.reference_requested.emit({"pads": [p.strip() for p in text.split(",") if p.strip()]})
+
+    def _select_reference(self, data):
+        i = self.reference_box.findData(data)
+        self.reference_box.setCurrentIndex(max(0, i))
+
+    def picking(self) -> bool:
+        """Whether Pick is on: the next click on the map picks the pad that is 0 V."""
+        return self.reference_pick.isChecked()
+
+    def stop_pick(self):
+        self.reference_pick.setChecked(False)
+
+    def picked(self, pad: str):
+        """``pad`` ("REF.PAD") was picked on the map: ask for 0 V at it, and stop picking."""
+        self.reference_pad.setText(pad)
+        self.stop_pick()
+        self._pad_entered()
+
+    def reference_spec(self) -> Optional[Dict]:
+        """The choice shown now, as a ``reference_spec`` (None: the solve's own 0 V)."""
+        data = self.reference_box.currentData()
+        if data == "pad":
+            pads = [p.strip() for p in self.reference_pad.text().split(",") if p.strip()]
+            return {"pads": pads} if pads else None
+        return None if data is None else {"ground_of": data}
+
+    def show_reference(self, spec: Optional[Dict], parts: Iterable[str] = ()):
+        """List ``parts`` (each a part whose ground pins are solved) as choices and show
+        ``spec`` chosen (as the window applied it), without asking for it again."""
+        self.reference_box.blockSignals(True)
+        self.reference_box.clear()
+        self.reference_box.addItem(SOLVE_ZERO, None)
+        for ref in parts:
+            self.reference_box.addItem(f"{ref}'s ground pins", ref)
+        self.reference_box.addItem(A_PAD, "pad")
+        if spec and "pads" in spec:
+            self.reference_pad.setText(", ".join(spec["pads"]))
+            self._select_reference("pad")
+        elif spec and self.reference_box.findData(spec.get("ground_of")) < 0:
+            self.reference_box.addItem(f"{spec['ground_of']}'s ground pins", spec["ground_of"])
+            self._select_reference(spec["ground_of"])
+        else:
+            self._select_reference(spec.get("ground_of") if spec else None)
+        self.reference_box.blockSignals(False)
+
+    def set_reference_note(self, text: str, error: bool = False):
+        text = html.escape(text, quote=False)            # "U1's" stays readable in .text()
+        self.reference_note.setText(f"<span style='color:#c0392b'>{text}</span>" if error else text)
+
     def clear(self, text: str = ""):
         self.summary.setText(text or "<i>No power-tree result</i>")
         self.vrms.setColumnCount(len(self.VRM_HEADERS))       # no I max column left behind
@@ -1267,6 +1383,7 @@ class TreePanel(QWidget):
         self._fill(self.loads, [])
         self.links.clear()
         self.notes.clear()
+        self.reference_note.clear()
 
     def set_tree(self, tree, verdict_html: str = "", i_max: Optional[Mapping[str, Optional[float]]] = None):
         """Show ``tree``. ``i_max``: each VRM's rated output current by name (I max, see
@@ -1278,10 +1395,15 @@ class TreePanel(QWidget):
             headers.insert(headers.index("I out (A)") + 1, "I max (A)")
         self.vrms.setColumnCount(len(headers))
         self.vrms.setHorizontalHeaderLabels(headers)
-        vrms = [(v.name, v.kind, v.group, f"{v.v_set_v:g}", _cell(v.v_out_v, ".5f"), _cell(v.i_out_a, ".4f"))
+        # S2: absolute voltages from the reference chosen ("0 V at"); across, drops and
+        # verdicts never move. The solve's own 0 V shifts nothing.
+        ref = getattr(tree, "reference", None)
+        shown = ref.shown if ref is not None and ref.given is not None else (lambda v: v)
+        vrms = [(v.name, v.kind, v.group, f"{v.v_set_v:g}", _cell(shown(v.v_out_v), ".5f"),
+                 _cell(getattr(v, "v_out_across_v", None), ".5f"), _cell(v.i_out_a, ".4f"))
                 + ((_cell(i_max.get(v.name), ".4g"),) if rated else ())
-                + (_cell(v.v_in_v, ".5f"), _cell(v.i_in_a, ".4f"), _cell(v.p_loss_w, ".1f", 1e3),
-                   _cell(v.v_ground_v, ".2f", 1e3), v.regulation)
+                + (_cell(shown(v.v_in_v), ".5f"), _cell(v.i_in_a, ".4f"), _cell(v.p_loss_w, ".1f", 1e3),
+                   _cell(shown(v.v_ground_v), ".2f", 1e3), v.regulation)
                 for v in tree.vrms]
         over = {r for r, v in enumerate(tree.vrms) if v.current_passed is False}   # over its rating
         loads, fails = [], set()
@@ -1290,7 +1412,7 @@ class TreePanel(QWidget):
             if ld.passed is False:
                 fails.add(len(loads))
             loads.append((ld.name, ld.group, _cell(ld.current_a, ".4g"), f"{ld.nominal_v:g}",
-                          _cell(ld.v_supply_v, ".5f"), _cell(ld.v_ground_v, ".2f", 1e3),
+                          _cell(shown(ld.v_supply_v), ".5f"), _cell(shown(ld.v_ground_v), ".2f", 1e3),
                           _cell(ld.v_across_v, ".5f"), _cell(ld.v_worst_v, ".5f"),
                           _cell(ld.drop_v, ".2f", 1e3), _cell(ld.drop_pct, ".2f"), verdict))
         # A regulator's input is a load on the rail feeding it, judged as one.
@@ -1301,8 +1423,9 @@ class TreePanel(QWidget):
                 fails.add(len(loads))
             across = (v.v_in_v - (v.v_ground_v or 0.0)) if v.v_in_v is not None else None
             loads.append((f"{v.name} (input)", v.input_group, _cell(v.i_in_a, ".4g"),
-                          _cell(v.input_nominal_v, "g"), _cell(v.v_in_v, ".5f"),
-                          _cell(v.v_ground_v, ".2f", 1e3), _cell(across, ".5f"), _cell(v.v_in_worst_v, ".5f"),
+                          _cell(v.input_nominal_v, "g"), _cell(shown(v.v_in_v), ".5f"),
+                          _cell(shown(v.v_ground_v), ".2f", 1e3), _cell(across, ".5f"),
+                          _cell(v.v_in_worst_v, ".5f"),
                           _cell(v.input_drop_v, ".2f", 1e3), _cell(v.input_drop_pct, ".2f"), verdict))
         self._fill(self.vrms, vrms, over)
         self._fill(self.loads, loads, fails)

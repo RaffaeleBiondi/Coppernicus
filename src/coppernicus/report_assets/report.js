@@ -34,10 +34,13 @@ function hoverLabel(field, at, rail, layer) {
   if (!ok(at.V)) return { lead: "", secondary: "", lines: ["not connected", layer] };
   if (field === "voltage") return { lead: `${at.V.toFixed(5)} V`, secondary: "", lines: [layer] };
   if (field === "current") return { lead: `${at.J.toFixed(2)} A/mm²`, secondary: "", lines: [layer] };
-  const unit = rail.drop_unit || `mV below ${sig(rail.v_ref_v, 4)} V`, cut = unit.indexOf(" ");
+  // nom: the source voltage in the solve's frame (as vref; v_ref_v moves with an S2 reference,
+  // at.V with it, so their difference, the drop, does not).
+  const nom = rail.v_ref_v + (rail.v_offset_v || 0);
+  const unit = rail.drop_unit || `mV below ${sig(nom, 4)} V`, cut = unit.indexOf(" ");
   const drop = (rail.drop_sign === -1 ? -1 : 1) * (rail.v_ref_v - at.V) * 1e3;      // as dropSign
   return { lead: `${drop.toFixed(3)} ${unit.slice(0, cut)}`,
-    secondary: rail.v_ref_v ? `${(drop / (10 * Math.abs(rail.v_ref_v))).toFixed(2)} %` : "",
+    secondary: nom ? `${(drop / (10 * Math.abs(nom))).toFixed(2)} %` : "",
     lines: [`${rail.drop_word || "drop"} ${unit.slice(cut + 1)}`, layer] };
 }
 // Top-left corner of a label of size [w, h] beside the cursor, in a viewport [w, h] (px, y down):
@@ -223,8 +226,8 @@ async function readout(ev) {
   const J = (cj - 1) * jstep;
   let text;
   if (cv === 1) text = `${where}: copper with no path to a source (no voltage); |J| = 0.`;
-  else { const V = rail.v_lo_v + (cv - 2) * vstep, drop = dropSign(rail) * (rail.v_ref_v - V) * 1e3;
-    text = `${where}: V = ${volt(V, 7)} V · ${rail.drop_word || "drop"} = ${mv(drop)} mV (${rail.v_ref_v ? sig(100 * drop / 1e3 / Math.abs(rail.v_ref_v), 3) : "n/a"} %) · |J| = ${sig(J, 4)} A/mm²`; }
+  else { const V = rail.v_lo_v + (cv - 2) * vstep, drop = dropSign(rail) * (rail.v_ref_v - V) * 1e3, nom = vref(rail);
+    text = `${where}: V = ${volt(V, 7)} V${rail.reference ? ` from 0 V at ${rail.reference}` : ""} · ${rail.drop_word || "drop"} = ${mv(drop)} mV (${nom ? sig(100 * drop / 1e3 / Math.abs(nom), 3) : "n/a"} %) · |J| = ${sig(J, 4)} A/mm²`; }
   out.textContent = "";
   out.append(text, el("br"), el("span", { class: "muted small" },
     `Values at the centre of the ${sig(c, 3)} mm cell under the pointer, (${fix(g.x0 + (i + 0.5) * c, 3)}, ${fix(g.y0 + (j + 0.5) * c, 3)}) mm, ` +
@@ -237,6 +240,10 @@ async function readout(ev) {
 // one (toward 0 V) and on a ground above 0 V (a rise), +1 on a ground below 0 V (a shift: its
 // depth below 0 V); reports written before the field have +1. drop_word: drop, rise or shift.
 function dropSign(rail) { return rail.drop_sign === -1 ? -1 : 1; }
+// A power tree shown from another 0 V (reference, v_offset_v; S2): v_lo_v, v_hi_v and v_ref_v are
+// in that frame, so the voltage map and its readout are; the drop (v_ref_v − V) is not moved, and
+// the % and the words are decided on the solve's own v_ref, given back here.
+function vref(rail) { return rail.v_ref_v + (rail.v_offset_v || 0); }
 function dropTitle(rail) { return { rise: "ground rise", shift: "ground shift" }[rail.drop_word] || "drop"; }
 
 function bar() {
@@ -244,12 +251,13 @@ function bar() {
   const cm = S.field === "current" ? M.cmaps.magma : M.cmaps.viridis;
   for (let i = 0; i < 256; i++) { const rgb = cm[255 - i]; c2.fillStyle = `rgb(${rgb >> 16},${(rgb >> 8) & 255},${rgb & 255})`; c2.fillRect(0, i, 18, 1); }
   let top, bottom, unit, note;
-  if (S.field === "drop") { top = sig(rail.drop_max_mv, 4); bottom = "0"; unit = rail.drop_unit || `mV below ${sig(rail.v_ref_v, 4)} V`;
+  if (S.field === "drop") { top = sig(rail.drop_max_mv, 4); bottom = "0"; unit = rail.drop_unit || `mV below ${sig(vref(rail), 4)} V`;
     note = (rail.drop_word === "shift" ? "Shift below 0 V (a ground under a negative rail)."
-      : dropSign(rail) < 0 ? (rail.v_ref_v ? "Drop toward 0 V from the source voltage (a negative rail)." : "Rise above 0 V (a ground).")
+      : dropSign(rail) < 0 ? (vref(rail) ? "Drop toward 0 V from the source voltage (a negative rail)." : "Rise above 0 V (a ground).")
       : "Drop below the source voltage.") + " Same scale on every layer of the rail."; }
   else if (S.field === "voltage") { top = sig(rail.v_hi_v, 7); bottom = sig(rail.v_lo_v, 7); unit = "V";
-    note = "Same scale on every layer of the rail."; }
+    note = (rail.reference ? `From 0 V at ${rail.reference}: the solve's 0 V reads ${sig(-rail.v_offset_v * 1e3, 4)} mV here; ` +
+      "the drop map and every verdict stay from the solve's 0 V. " : "") + "Same scale on every layer of the rail."; }
   else { top = "≥ " + sig(lay.j_scale_a_mm2, 4); bottom = "0"; unit = "A/mm²";
     note = "Scale clipped at this layer's 99.5th percentile of |J|. " +
       `The point maximum on this layer, ${sig(lay.j_point_max_a_mm2, 4)} A/mm², sits at a sharp corner or a hole edge and is mesh-dependent: use the hotspot means.`; }
@@ -300,7 +308,7 @@ function panels() {
     ? `${pct(w.load.drop_pct)} % from ${sig(w.load.nominal_v, 4)} V nominal, across its supply and ground pins`
     : `${pct(w.load.drop_pct)} % ${dropSign(rail) < 0 ? "above" : "below"} ${sig(rail.v_ref_v, 4)} V`));
   cards.append(card(`Largest ${dropTitle(rail)} on the copper`, `${mv(w.max_drop_mv)} mV`,
-    rail.v_ref_v ? `${pct(w.max_drop_pct)} %` : rail.drop_unit));
+    vref(rail) ? `${pct(w.max_drop_pct)} %` : rail.drop_unit));
   cards.append(card("Copper loss", `${sig(w.power_loss_w * 1e3, 4)} mW`, w.busiest_layer ? `most on ${w.busiest_layer}` : null));
   if (w.hotspot) cards.append(card("Strongest current crowding", `${sig(w.hotspot.mean_j_a_mm2, 4)} A/mm² mean`,
     `${w.hotspot.layer} at ${xy(w.hotspot.x_mm, w.hotspot.y_mm)}, over ${sig(w.hotspot.area_mm2, 3)} mm²${w.hotspot.elements ? ` (${w.hotspot.elements} mesh elements)` : ""}; peak ${sig(w.hotspot.peak_j_a_mm2, 4)} A/mm² is mesh-dependent at sharp corners`));

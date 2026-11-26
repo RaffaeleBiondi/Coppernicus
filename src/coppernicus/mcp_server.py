@@ -104,6 +104,15 @@ class ThermalSpec(BaseModel):
     max_rise_c: Optional[float] = Field(None, description="Limit on its rise above the ambient, °C.")
 
 
+class TreeReferenceSpec(BaseModel):
+    """Where solve_tree shows the voltages from (a display shift; not saved): one of the two."""
+    model_config = ConfigDict(extra="forbid")
+    ground_of: Optional[str] = Field(None, description="A part's ground pins as 0 V (e.g. 'U1': a "
+                                     "source's, regulator's or load's own ground pins; their mean).")
+    pads: Optional[list[str]] = Field(None, description="Pads as 0 V, REF.PAD (glob on the pad: "
+                                      "'NT1.*'); their mean. A bare net is refused: not one potential.")
+
+
 class LimitsSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     max_drop_pct: Optional[float] = Field(None, gt=0, description="Largest allowed load drop, % "
@@ -453,6 +462,13 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                        description="Solve even when the estimate exceeds this machine's memory "
                                    "(otherwise refused with the estimate: solve_too_large). Ask "
                                    "the user first.")] = False,
+                   reference: Annotated[Optional[TreeReferenceSpec], Field(
+                       description="Show the voltages from 0 V at a part's ground pins "
+                                   "({ground_of: 'U1'}) or at pads ({pads: ['R12.2']}), for this "
+                                   "solve only (not saved; replaces the project's tree: reference). "
+                                   "A display shift: every value stays in the solve's frame, the "
+                                   "document adds reference.offset_v to subtract from an absolute "
+                                   "voltage; drops, rises and verdicts are from the solve's 0 V.")] = None,
                       ) -> dict[str, Any]:
         """Solve a project's whole power tree at once: every rail and ground group together,
         with the regulators' input currents and the ground return computed exactly (when a
@@ -466,14 +482,19 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         memory whole (solve again if a call says result_evicted). With the board temperature, the
         document has `thermal` (verdict, peak, per-layer rows, history, load drops at the
         ambient and electro-thermal) and `thermal_estimate` (grid, unknowns, memory against
-        this machine's), given before the solve starts."""
+        this machine's), given before the solve starts. Each VRM has v_out_across_v (V out
+        across its own pins); `reference` {label, pads, offset_v, spread_v, given} says where
+        the voltages are shown from (the solve's 0 V unless one is given); a probe on a group
+        adds voltage_from_reference_v."""
         bridge = _Bridge(ctx)
         return _call("solve_tree", session.solve_tree, project_path, top,
                      progress=bridge.progress, cancelled=bridge.cancelled,
                      use_board_fields=use_board_fields, thermal=thermal,
                      thermal_options=(thermal_options.model_dump(exclude_none=True)
                                       if thermal_options is not None else None),
-                     confirm_large=confirm_large)
+                     confirm_large=confirm_large,
+                     reference=(reference.model_dump(exclude_none=True)
+                                if reference is not None else None))
 
     @mcp.tool(annotations=WRITES_FILE)
     def solve_ac(project_path: Annotated[str, Field(description="Absolute path to a *.coppernicus.yml "

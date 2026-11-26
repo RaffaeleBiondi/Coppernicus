@@ -392,7 +392,8 @@ def test_the_document_only_adds_keys(chain_doc):
     assert added(chain_doc["groups"], OLD_GROUP_KEYS) == {"net_split"}
     assert added(chain_doc["links"], OLD_LINK_KEYS) == NEW_KEYS["links"]
     assert added(chain_doc["loads"], OLD_LOAD_KEYS) == NEW_KEYS["loads"]
-    assert added(chain_doc["vrms"], OLD_VRM_KEYS) == NEW_KEYS["vrms"]
+    # v_out_across_v: the 0 V reference view's (S2, tests/test_tree_reference.py), not the split's
+    assert added(chain_doc["vrms"], OLD_VRM_KEYS | {"v_out_across_v"}) == NEW_KEYS["vrms"]
     json.dumps(chain_doc, allow_nan=False)
 
 

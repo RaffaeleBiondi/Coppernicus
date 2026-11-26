@@ -26,6 +26,9 @@ OLD = {"v_ref_v": 5.0}                     # a report written before drop_unit a
 ABOVE = {"v_ref_v": 1.83847, "drop_sign": 1, "drop_unit": "mV below 1.83847 V", "drop_word": "drop"}
 NEGATIVE = {"v_ref_v": -3.3, "drop_sign": -1, "drop_unit": "mV above -3.3 V (toward 0 V)",
             "drop_word": "drop"}
+# A tree group shown from another 0 V (S2): v_ref_v moved with the voltages, v_offset_v brings
+# it back to the solve's frame; no drop_unit, so the label writes it from the source voltage.
+REFERENCED = {"v_ref_v": 2.3, "v_offset_v": 1.0, "drop_sign": 1, "drop_word": "drop"}
 HERE = {"V": 3.3 - 0.0072613, "J": 2.6512}
 CASES = [
     ["drop", HERE, RAIL, "B.Cu"],
@@ -43,6 +46,7 @@ CASES = [
     ["voltage", {"V": 0.001898496, "J": 11.0}, GROUND, "B.Cu"],
     ["current", {"V": 3.29, "J": 0.0031}, RAIL, "In2.Cu"],
     ["current", {"V": 3.29, "J": 187.65432}, RAIL, "In2.Cu"],
+    ["drop", {"V": 2.3 - 0.0072613, "J": 1.0}, REFERENCED, "B.Cu"],
 ]
 POSITIONS = [[[100, 100], [80, 40], [400, 300]], [[390, 100], [80, 40], [400, 300]],
              [[100, 290], [80, 40], [400, 300]], [[395, 295], [80, 40], [400, 300]],
@@ -100,6 +104,13 @@ def test_the_label_leads_with_the_value_of_the_map_shown(node_out):
     assert off is None                                                                  # hidden
 
 
+def test_the_label_takes_the_drop_percent_from_the_solves_frame_under_a_reference(node_out):
+    """A tree page shown from another 0 V: the drop and its % and the source voltage named are
+    the solve's, whatever the offset (the voltage map's frame moves, the drop does not)."""
+    assert node_out["labels"][-1] == {"lead": "7.261 mV", "secondary": "0.22 %",
+                                      "lines": ["drop below 3.3 V", "B.Cu"]}
+
+
 def test_the_label_reads_as_the_apps(node_out):
     """Every case against app/hover.py's hover_readout with the map's value and the layer (the
     app's default): the same lead, the same small figure, the same lines, to the character."""
@@ -107,10 +118,11 @@ def test_the_label_reads_as_the_apps(node_out):
         values = None
         if at is not None:
             v_ref, volts = rail["v_ref_v"], math.nan if at["V"] is None else at["V"]
+            nominal = v_ref + rail.get("v_offset_v", 0.0)          # the solve's frame (S2)
             drop_mv = (-1 if rail.get("drop_sign") == -1 else 1) * (v_ref - volts) * 1e3
             values = HoverValues(volts, drop_mv, rail.get("drop_word", "drop"),
-                                 rail.get("drop_unit", f"mV below {v_ref:g} V"), at["J"], layer, "NET",
-                                 drop_pct=drop_mv / (10.0 * abs(v_ref)) if v_ref else math.nan)
+                                 rail.get("drop_unit", f"mV below {nominal:g} V"), at["J"], layer, "NET",
+                                 drop_pct=drop_mv / (10.0 * abs(nominal)) if nominal else math.nan)
         app = hover_readout(values, ("shown", "layer"), field)
         want = {"lead": app.lead, "secondary": app.secondary, "lines": list(app.label_lines())}
         assert got == (want if app else None), (field, at, rail)
