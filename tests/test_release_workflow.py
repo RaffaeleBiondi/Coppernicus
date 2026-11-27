@@ -58,3 +58,16 @@ def test_the_build_scripts_bundle_coppermesh_and_check_it():
     assert '"coppermesh"' in spec and "coppermesh's extension is not in the bundle" in spec
     check = (ROOT / "packaging" / "check_bundle.py").read_text(encoding="utf-8")
     assert 'RUST = "coppermesh"' in check and "python3.dll" in check
+
+
+def test_both_release_jobs_install_rust_before_the_build():
+    """coppermesh is built from source in the build scripts: each job installs a stable Rust
+    toolchain (MSVC on Windows) with llvm-tools, for check_fma.py, before running its script."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    for job, toolchain in (("macos", "stable"), ("windows", "stable-x86_64-pc-windows-msvc")):
+        runs = [str(s.get("run", "")) for s in jobs[job]["steps"]]
+        rust = next(i for i, r in enumerate(runs) if "rustup toolchain install" in r)
+        build = next(i for i, r in enumerate(runs) if "build_macos.sh" in r or "build_windows.ps1" in r)
+        assert rust < build
+        assert f"rustup toolchain install {toolchain} " in runs[rust] and "llvm-tools" in runs[rust]
+        assert f"rustup default {toolchain}" in runs[rust]
