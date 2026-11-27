@@ -19,7 +19,10 @@ $ErrorActionPreference = "Stop"
 
 function Invoke-Checked {
     # Run a program; stop the build when it fails (PowerShell does not, for programs).
-    $program, $arguments = $args
+    # @(...): with one argument, destructuring $args would leave a string, and splatting a string
+    # passes its first character only.
+    $program = $args[0]
+    $arguments = @($args | Select-Object -Skip 1)
     & $program @arguments
     if ($LASTEXITCODE -ne 0) { throw "failed with exit code ${LASTEXITCODE}: $args" }
 }
