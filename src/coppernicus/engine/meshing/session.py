@@ -21,8 +21,8 @@ entering is put back: the name :func:`registry.installed` gave, installed again 
 this module installed it with (a mesher installed outside :func:`using` comes back with its
 default options).
 
-Where nothing chose the mesher and the rust mesher cannot run here (a plain ``uv sync`` without
-``--group rust``, a pip install from git), :func:`choose` gives :data:`FALLBACK` (Triangle) with
+Where nothing chose the mesher and the rust mesher cannot run here (coppermesh, a dependency
+installed from PyPI's wheel, was removed or left out), :func:`choose` gives :data:`FALLBACK` (Triangle) with
 :data:`FALLBACK_WARNING`, which the result carries: a default solve never fails for want of
 coppermesh. A mesher named anywhere (the call, the project, the app) is never replaced: one that
 cannot run is a :class:`MesherUnavailable`.
@@ -50,16 +50,17 @@ FALLBACK = KIPI_OWN
 RECORDED_BEFORE = KIPI_OWN
 #: The warning of a result meshed with :data:`FALLBACK` because :data:`DEFAULT` cannot run here.
 FALLBACK_WARNING = ("The rust mesher, the default, is not installed here; meshed with Triangle "
-                    "(KiPI's own mesher) instead. Install it (uv sync --group rust, or "
-                    "tools/mesher_rs/README.md) for the default, or choose the mesher: triangle "
-                    "to mesh with Triangle without this warning.")
+                    "(KiPI's own mesher) instead. Install it (uv sync, or pip install coppermesh: "
+                    "PyPI's wheel; tools/mesher_rs/README.md builds it from source) for the "
+                    "default, or choose the mesher: triangle to mesh with Triangle without this "
+                    "warning.")
 
 #: What to do to get a mesher that is not available here.
 HINTS = {
     "triangle": triangle_standin.HINT,
-    "rust": ("the rust mesher (coppermesh), the default, is not installed here: install it with "
-             "uv sync --group rust, or build it as tools/mesher_rs/README.md says (maturin develop "
-             "--release); or choose the mesher triangle"),
+    "rust": ("the rust mesher (coppermesh), the default, is not installed here: install PyPI's "
+             "wheel with uv sync (or pip install coppermesh), or build it from source as "
+             "tools/mesher_rs/README.md says; or choose the mesher triangle"),
 }
 #: The distribution that gives each backend's version.
 _DISTRIBUTIONS = {"triangle": "triangle", "rust": "coppermesh"}

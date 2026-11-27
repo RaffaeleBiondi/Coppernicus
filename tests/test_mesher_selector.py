@@ -171,7 +171,7 @@ def test_a_default_solve_falls_back_and_an_explicit_rust_one_fails(tmp_path, no_
         path = demo_project(tmp_path, "rust" if not kwargs else None, name="r")
         with pytest.raises(ServiceError) as e:
             session.solve_project(path, **kwargs)
-        assert e.value.code == "mesher_unavailable" and "uv sync --group rust" in e.value.hint
+        assert e.value.code == "mesher_unavailable" and "pip install coppermesh" in e.value.hint
     assert spy == []
 
 
