@@ -91,22 +91,36 @@ QUICK_FIELD_POINTS = 10
 KIPI_FIELD_POINTS = AcOptions().field_points_per_decade       # KiPI's default (AcOptions copies it)
 
 _SI = {"p": -12, "n": -9, "u": -6, "µ": -6, "μ": -6, "m": -3, "k": 3, "K": 3, "M": 6, "G": 9}
-_SI_RE = re.compile(r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*([pnuµμmkKMG]?)$")
+_NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
+# A unit as it may be typed after the prefix: Ω also as ohm (Ω is awkward on a keyboard).
+UNIT_SPELLINGS = {"Ω": ("Ω", "Ω", "ohm", "ohms", "Ohm", "Ohms"), "Hz": ("Hz", "hz"), "F": ("F",),
+                  "H": ("H",), "V": ("V",), "A": ("A",)}
+_ANY_UNIT = sorted({u for us in UNIT_SPELLINGS.values() for u in us}, key=len, reverse=True)
+_SI_RE = re.compile(rf"^({_NUMBER})\s*([pnuµμmkKMG]?)\s*({'|'.join(map(re.escape, _ANY_UNIT))})?$")
 _PREFIXES = ((1e9, "G"), (1e6, "M"), (1e3, "k"), (1.0, ""), (1e-3, "m"), (1e-6, "µ"), (1e-9, "n"),
              (1e-12, "p"))
-SI_TIP = "SI prefixes work: p n u (µ) m k M G, so 50m = 0.05 and 10M = 1e7 (m is milli, M is mega)"
+SI_TIP = ("With or without its unit, SI prefixes work: p n u (µ) m k M G, so 50 mΩ = 50m = 0.05 and "
+          "10 MHz = 10M = 1e7 (m is milli, M is mega; ohm for Ω)")
 
 
-def parse_si(text: Optional[str]) -> Optional[float]:
-    """A number typed in a cell: ``"50m"`` → 0.05, ``"10M"`` → 1e7, ``"3,3"`` → 3.3; ``None``
-    when empty. Raises ValueError for anything else."""
+def _unit_of(spelled: Optional[str]) -> Optional[str]:
+    return next((u for u, spellings in UNIT_SPELLINGS.items() if spelled in spellings), None)
+
+
+def parse_si(text: Optional[str], unit: str = "") -> Optional[float]:
+    """A number typed in a cell, with its unit or without: ``"50 mΩ"``, ``"50m"`` and
+    ``"0.05"`` are all 0.05 for a cell in ohm; ``"10 MHz"`` → 1e7, ``"3,3"`` → 3.3; ``None``
+    when empty. Raises ValueError for anything else, a unit that is not the cell's included."""
     t = (text or "").strip().replace(",", ".")
     if not t:
         return None
     m = _SI_RE.match(t)
     if not m:
         raise ValueError(f"{text.strip()!r} is not a number ({SI_TIP})")
-    number, prefix = m.groups()
+    number, prefix, spelled = m.groups()
+    if spelled is not None and _unit_of(spelled) != unit:
+        want = f"in {unit}" if unit else "a plain number"
+        raise ValueError(f"{text.strip()!r}: this cell is {want}, not in {_unit_of(spelled)}")
     if not prefix:
         return float(number)
     if "e" in number.lower():
@@ -114,35 +128,43 @@ def parse_si(text: Optional[str]) -> Optional[float]:
     return float(f"{number}e{_SI[prefix]}")          # "33m" is 0.033 exactly as typed
 
 
-def si_text(x: Optional[float]) -> str:
-    """A number as a cell shows it, 4 significant digits with an SI prefix ("" for None)."""
+def si_text(x: Optional[float], unit: str = "") -> str:
+    """A number as a cell shows it, 4 significant digits with an SI prefix and its unit
+    ("50 mΩ"; "50m" without a unit; "" for None)."""
     if x is None:
         return ""
     if x == 0:
-        return "0"
+        return f"0 {unit}" if unit else "0"
     scale, prefix = _PREFIXES[-1]
-    for s, p in _PREFIXES:
-        if abs(x) >= s * 0.9995:
-            scale, prefix = s, p
+    for sc, p in _PREFIXES:
+        if abs(x) >= sc * 0.9995:
+            scale, prefix = sc, p
             break
-    return f"{x / scale:.4g}{prefix}"
+    number = f"{x / scale:.4g}"
+    return f"{number} {prefix}{unit}" if unit else f"{number}{prefix}"
+
+
+_MASK_POINT = re.compile(rf"({_NUMBER}\s*[pnuµμmkKMG]?\s*(?:Hz|hz)?)\s+({_NUMBER}\s*[pnuµμmkKMG]?\s*"
+                         rf"(?:{'|'.join(map(re.escape, UNIT_SPELLINGS['Ω']))})?)$")
 
 
 def parse_mask(text: str) -> List[Tuple[float, float]]:
-    """A target mask typed as ``"Hz Ω; Hz Ω; …"`` (``"100k 50m; 10M 50m"``)."""
+    """A target mask typed as ``"Hz Ω; Hz Ω; …"``, with units or without
+    (``"100 kHz 50 mΩ; 10 MHz 50 mΩ"`` or ``"100k 50m; 10M 50m"``)."""
     out = []
     for part in (p.strip() for p in (text or "").split(";")):
         if not part:
             continue
-        words = part.split()
-        if len(words) != 2:
-            raise ValueError(f"a mask is Hz Ω pairs separated by ';' (100k 50m; 10M 50m), not {part!r}")
-        out.append((parse_si(words[0]), parse_si(words[1])))
+        m = _MASK_POINT.match(part)
+        if not m:
+            raise ValueError(f"a mask is Hz Ω pairs separated by ';' (100 kHz 50 mΩ; 10 MHz 50 mΩ), "
+                             f"not {part!r}")
+        out.append((parse_si(m.group(1), "Hz"), parse_si(m.group(2), "Ω")))
     return out
 
 
 def mask_text(points: Sequence[Tuple[float, float]]) -> str:
-    return "; ".join(f"{si_text(f)} {si_text(z)}" for f, z in points)
+    return "; ".join(f"{si_text(f, 'Hz')} {si_text(z, 'Ω')}" for f, z in points)
 
 
 # ---------------------------------------------------------------------- probe and model rows
@@ -168,6 +190,10 @@ PROBE_TIPS = {
 # through the table's own checks.
 PROBE_SHOWN = ("name", "ref", "pins", "target_ohm")
 _PROBE_TEXT = ("name", "ref", "net", "ground_ref", "ground_net")
+# The unit each number column shows and takes (slew in A/µs keeps its header's unit).
+UNITS = {"target_ohm": "Ω", "target_hz": "Hz", "ac_tolerance_v": "V", "step_a": "A",
+         "capacitance_f": "F", "esl_h": "H", "esr_ohm": "Ω", "rated_v": "V",
+         "f_start_hz": "Hz", "f_stop_hz": "Hz"}
 _PROBE_NUMBERS = ("target_ohm", "target_hz", "ac_tolerance_v", "step_a", "slew_a_per_us")
 
 CAP_COLUMNS = [("Name", "name"), ("C (F)", "capacitance_f"), ("ESL (H)", "esl_h"), ("ESR (Ω)", "esr_ohm"),
@@ -199,7 +225,7 @@ def probe_cell(p: Probe, key: str) -> str:
     if key == "target_points":
         return mask_text(v)
     if key in _PROBE_NUMBERS:
-        return si_text(v)
+        return si_text(v, UNITS.get(key, ""))
     return str(v)
 
 
@@ -223,7 +249,7 @@ def with_probe_cell(p: Probe, key: str, text: str) -> Probe:
         elif key == "target_points":
             value = parse_mask(text)
         else:
-            value = parse_si(text)
+            value = parse_si(text, UNITS.get(key, ""))
     except (ValueError, ProjectError) as e:
         raise ValueError(f"{_header(PROBE_COLUMNS, key)}: {e}") from None
     q = copy.deepcopy(p)
@@ -301,11 +327,11 @@ def cap_cell(m: CapModel, key: str) -> str:
     """What the capacitor model table shows in column ``key`` (0 = not entered: empty)."""
     v = getattr(m, key)
     if key in _CAP_VALUES:
-        return si_text(v) if v else ""
+        return si_text(v, UNITS.get(key, "")) if v else ""
     if key == "refs":
         return ", ".join(v)
     if key == "rated_v":
-        return si_text(v)
+        return si_text(v, "V")
     if key == "kept_at_rated_pct":
         return "" if v is None else f"{v:g}"
     return str(v)
@@ -320,9 +346,9 @@ def with_cap_cell(m: CapModel, key: str, text: str) -> CapModel:
         elif key == "refs":
             value = [r for r in re.split(r"[,\s]+", text.strip()) if r]
         elif key in _CAP_VALUES:
-            value = parse_si(text) or 0.0
+            value = parse_si(text, UNITS.get(key, "")) or 0.0
         else:
-            value = parse_si(text)
+            value = parse_si(text, UNITS.get(key, ""))
     except ValueError as e:
         raise ValueError(f"{_header(CAP_COLUMNS, key)}: {e}") from None
     q = copy.deepcopy(m)
@@ -995,7 +1021,7 @@ class AcPanel(QWidget):
                 w.setPlaceholderText(f"{ac_max_edge(a).mm:g} (default)")
                 self._shown[key] = ""
             else:
-                w.setText(si_text(getattr(a, key)) if key in ("f_start_hz", "f_stop_hz")
+                w.setText(si_text(getattr(a, key), "Hz") if key in ("f_start_hz", "f_stop_hz")
                           else f"{getattr(a, key):g}")
                 self._shown[key] = w.text()
             w.blockSignals(False)
@@ -1005,8 +1031,9 @@ class AcPanel(QWidget):
         self.links.setRowCount(0)
         for r, k in enumerate(self.merged_project.links):         # the KiCad fields' links too
             self.links.insertRow(r)
+            esl = si_text(link_esl_of(self.project.ac, k), "H")
             for c, text in enumerate((f"{k.name} ({k.ref})" if k.name != k.ref else k.ref,
-                                      f"{k.net_a} ↔ {k.net_b}", si_text(link_esl_of(self.project.ac, k)))):
+                                      f"{k.net_a} ↔ {k.net_b}", esl)):
                 item = QTableWidgetItem(text)
                 if c < 2:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
@@ -1341,7 +1368,7 @@ class AcPanel(QWidget):
         if not isinstance(w, QSpinBox) and w.text().strip() == self._shown.get(key):
             return                                # committed unchanged: the exact value stays
         try:
-            value: Any = w.value() if isinstance(w, QSpinBox) else parse_si(w.text())
+            value: Any = w.value() if isinstance(w, QSpinBox) else parse_si(w.text(), UNITS.get(key, ""))
             if value is None and key != "max_edge_mm":     # max_edge_mm emptied: not set again
                 raise ValueError("give a number")
             new = dataclasses.replace(self.project.ac, **{key: value})
@@ -1375,7 +1402,7 @@ class AcPanel(QWidget):
         if src is None or self._loading or self.bandwidth.text().strip() == self._shown.get("bandwidth"):
             return
         try:
-            hz = parse_si(self.bandwidth.text())
+            hz = parse_si(self.bandwidth.text(), "Hz")
             new = copy.deepcopy(self.project.ac)
             set_bandwidth(new, src, hz)
             check_ac([], [], new)
@@ -1400,7 +1427,7 @@ class AcPanel(QWidget):
             return
         k = links[r]
         try:
-            henry = parse_si(item.text())
+            henry = parse_si(item.text(), "H")
             new = copy.deepcopy(self.project.ac)
             set_link_esl(new, k, henry)
             check_ac([], [], new)
@@ -1442,7 +1469,7 @@ class AcPanel(QWidget):
         self.bandwidth.blockSignals(True)
         self.bandwidth.setEnabled(src is not None)
         hz = bandwidth_of(self.project.ac, src) if src is not None else None
-        self.bandwidth.setText(si_text(hz))
+        self.bandwidth.setText(si_text(hz, "Hz"))
         self._shown["bandwidth"] = self.bandwidth.text()
         self.bandwidth.blockSignals(False)
         if src is None:

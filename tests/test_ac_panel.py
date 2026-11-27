@@ -60,11 +60,28 @@ def test_si_text_and_parse_si_read_back_what_they_show():
             parse_si(bad)
 
 
+def test_a_cell_takes_its_unit_or_none_and_shows_it():
+    """D5: "50 mΩ", "50m", "0.05" and "50mohm" are the same 0.05 in a cell in ohm, shown
+    "50 mΩ"; a unit that is not the cell's is refused (m is milli, M is mega)."""
+    from coppernicus.app.ac_panel import parse_si, si_text
+    for text in ("50 mΩ", "50m", "0.05", "50mohm", "50 mOhm", "50 mΩ"):
+        assert parse_si(text, "Ω") == pytest.approx(0.05), text
+    assert si_text(0.05, "Ω") == "50 mΩ" and si_text(1e7, "Hz") == "10 MHz" and si_text(1e-5, "F") == "10 µF"
+    assert parse_si("10 MHz", "Hz") == 1e7 and parse_si("10 mHz", "Hz") == pytest.approx(0.01)
+    for value, unit in ((0.05, "Ω"), (1e5, "Hz"), (1.23456e-5, "F"), (5e-10, "H"), (6.3, "V")):
+        assert parse_si(si_text(value, unit), unit) == pytest.approx(value, rel=1e-3), (value, unit)
+    with pytest.raises(ValueError, match="in Hz, not in Ω"):
+        parse_si("50 mΩ", "Hz")
+    with pytest.raises(ValueError, match="plain number"):
+        parse_si("2 A")
+
+
 def test_a_mask_is_written_and_read_as_hz_ohm_pairs():
     from coppernicus.app.ac_panel import mask_text, parse_mask
     pts = [(1e5, 0.05), (1e7, 0.05), (1e8, 0.5)]
-    assert mask_text(pts) == "100k 50m; 10M 50m; 100M 500m"
+    assert mask_text(pts) == "100 kHz 50 mΩ; 10 MHz 50 mΩ; 100 MHz 500 mΩ"
     assert parse_mask(mask_text(pts)) == pts
+    assert parse_mask("100k 50m; 10M 50m; 100M 500m") == pts         # without units too
     assert parse_mask("") == [] and mask_text([]) == ""
     with pytest.raises(ValueError, match="pairs"):
         parse_mask("100k; 10M 50m")
@@ -149,7 +166,7 @@ def test_capacitor_cells_map_to_the_file_fields_and_keep_untouched_ones():
     from coppernicus.app.ac_panel import CAP_COLUMNS, cap_cell, usable_caps, with_cap_cell
     m = CapModel("10u", 1.23456e-5, 5e-10, 0.02, ["C1", "C2"])
     cells = [cap_cell(m, key) for _h, key in CAP_COLUMNS]
-    assert cells == ["10u", "12.35µ", "500p", "20m", "C1, C2", "", "", ""]
+    assert cells == ["10u", "12.35 µF", "500 pH", "20 mΩ", "C1, C2", "", "", ""]
     q = with_cap_cell(m, "rated_v", "6.3")
     assert q.rated_v == 6.3 and q.capacitance_f == 1.23456e-5
     q = with_cap_cell(q, "dielectric", "X7R")
@@ -315,8 +332,8 @@ def test_the_impedance_tab_follows_the_power_tree_and_opening_changes_nothing():
         window.results_tabs.setCurrentWidget(panel)
         app.processEvents()
         assert panel.probes.rowCount() == 1 and panel.caps.rowCount() == 1
-        assert panel.probes.item(0, 7).text() == "50m" and panel.caps.item(0, 4).text() == "C1"
-        assert panel.rail_box.currentText() == "+3V3" and panel.bandwidth.text() == "100k"
+        assert panel.probes.item(0, 7).text() == "50 mΩ" and panel.caps.item(0, 4).text() == "C1"
+        assert panel.rail_box.currentText() == "+3V3" and panel.bandwidth.text() == "100 kHz"
         panel.bandwidth.editingFinished.emit()          # committed unchanged: no edit
         for w in panel.opt.values():
             if hasattr(w, "editingFinished"):
@@ -947,7 +964,7 @@ def test_the_kicad_fields_models_are_shown_read_only_and_never_saved(tmp_path):
                 item = caps.item(r, c)
                 assert not item.flags() & QtCore.Qt.ItemIsEditable, (r, c)
                 assert item.background().color().name() == theme.color("cell-readonly"), (r, c)
-        assert caps.item(2, 1).text() == "100n" and caps.item(2, 5).text() == "16"
+        assert caps.item(2, 1).text() == "100 nF" and caps.item(2, 5).text() == "16 V"
         esr = caps.item(1, 3).toolTip()
         assert 'set in KiCad field PI_ESR "20mOhm" on C1' in esr and "override_board_fields" in esr, esr
         parts_tip = caps.item(0, 4).toolTip()
@@ -957,7 +974,7 @@ def test_the_kicad_fields_models_are_shown_read_only_and_never_saved(tmp_path):
         assert not panel.cap_note.isHidden() and "C1 (KiCad)" in note and "bulk" in note, note
 
         caps.item(1, 3).setText("1")                       # an edit of a field row: never applied
-        assert caps.item(1, 3).text() == "20m" and "Not applied" in panel.status.text()
+        assert caps.item(1, 3).text() == "20 mΩ" and "Not applied" in panel.status.text()
         assert "PI_ESR" in panel.status.text(), panel.status.text()
         assert [(m.name, m.refs, m.esr_ohm) for m in window.project.capacitors] == [
             ("bulk", ["C1", "C3"], 0.01)]

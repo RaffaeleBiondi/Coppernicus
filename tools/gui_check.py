@@ -2471,7 +2471,7 @@ def run_ac(window, check: Checks, args, out: Path):
     QApplication.processEvents()
     check("ac: the Impedance tab shows the example's probe, model, rail and bandwidth",
           panel.probes.rowCount() == 1 and panel.caps.item(0, 4).text() == "C1"
-          and panel.rail_box.currentText() == "+3V3" and panel.bandwidth.text() == "100k",
+          and panel.rail_box.currentText() == "+3V3" and panel.bandwidth.text() == "100 kHz",
           f"{panel.rail_box.currentText()} {panel.bandwidth.text()}")
     spin = panel.opt["field_points_per_decade"]
     check("ac: KiPI's 20 copper solves per decade until the quick preset is pressed",
@@ -2631,7 +2631,7 @@ def run_ac_fields(window, check: Checks, args, out: Path):
     locked = all(not caps.item(r, c).flags() & Qt.ItemIsEditable for r in (1, 2)
                  for c in range(caps.columnCount()))
     check("ac fields: C1's and C2's models from KiCad fields follow the project's bulk, read-only",
-          names == ["bulk", "C1 (KiCad)", "C2 (KiCad)"] and locked and caps.item(1, 3).text() == "20m"
+          names == ["bulk", "C1 (KiCad)", "C2 (KiCad)"] and locked and caps.item(1, 3).text() == "20 mΩ"
           and [m.name for m in window.project.capacitors] == ["bulk"], str(names))
     tip = caps.item(1, 3).toolTip()
     check("ac fields: ... each cell's tooltip names its field and how a project model takes its place",
@@ -2643,7 +2643,7 @@ def run_ac_fields(window, check: Checks, args, out: Path):
           f"{parts} | {panel.cap_note.text()}")
     caps.item(2, 1).setText("1u")                       # only a script can: refused, as typed back
     check("ac fields: an edit of a KiCad fields row is refused, its value back, the field named",
-          caps.item(2, 1).text() == "100n" and "Not applied" in panel.status.text()
+          caps.item(2, 1).text() == "100 nF" and "Not applied" in panel.status.text()
           and 'PI_C "100nF" on C2' in panel.status.text()
           and abs(window.merged.project.capacitors[2].capacitance_f - 1e-7) < 1e-15, panel.status.text())
     shot = folder / "ac_fields.png"
