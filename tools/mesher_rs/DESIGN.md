@@ -1,8 +1,8 @@
 # coppermesh: design note (M1)
 
-An experimental 2D quality mesher in Rust. It is a backend for KiPI's
-`kipi.core.mesh.mesher.mesh_polygon`: a constrained Delaunay triangulation (CDT) followed by
-Delaunay refinement. It is written from the papers listed at the end.
+A 2D quality mesher in Rust, Coppernicus's default ([the mesher](../../docs/mesher.md)). It is a
+backend for KiPI's `kipi.core.mesh.mesher.mesh_polygon`: a constrained Delaunay triangulation
+(CDT) followed by Delaunay refinement. It is written from the papers listed at the end.
 
 Clean room: no code, header or documentation of the program Triangle, and no port or
 translation of it, was opened. Triangle is only run, through KiPI, as a reference in the

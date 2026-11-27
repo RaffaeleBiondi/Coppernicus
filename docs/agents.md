@@ -837,6 +837,8 @@ What it adds up and what the user enters: [Tolerance stack-up](tolerance.md); ev
 
 ### Choosing the mesher
 
+The whole story, with how the two meshers compare: [the mesher](mesher.md).
+
 The mesher is **rust** by default, Coppernicus's own (`tools/mesher_rs`, coppermesh).
 `triangle` is KiPI's own meshing with Triangle: in a Python install it comes with KiPI; in the
 packaged app it is an optional download, fetched (with its licence note) when it is chosen.
