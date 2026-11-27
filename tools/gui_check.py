@@ -491,7 +491,7 @@ def run_flow_demo(window, check: Checks, args, out: Path):
           shown == [("U1", None), ("U2", None), ("U3", None)]
           and window._rail_draft is window.project.rail("+3V3"), str(shown))
     max_drop = window.rail_panel.max_drop.text()
-    check("... with its limits", max_drop == "0.25", max_drop)
+    check("... with its limits", max_drop == "0.25 %", max_drop)
     layers = [window.layer_box.itemText(i) for i in range(window.layer_box.count())]
     check("... and the new board's layers", layers == ["F.Cu", "B.Cu"], str(layers))
     if not args.window:       # + / − as in KiCad (real keys need the window active: offscreen only)
@@ -506,9 +506,12 @@ def run_flow_demo(window, check: Checks, args, out: Path):
             QTest.keyClick(widget, key)
             QApplication.processEvents()
             stepped.append(window.layer_box.currentText())
+        # The field took the − as typing (a number with its unit may still be under way): the
+        # layer did not step.
         check("+ and − step the layer, not while a text field has focus",
-              stepped == ["B.Cu", "F.Cu", "F.Cu"] and window.rail_panel.max_drop.text() == max_drop,
+              stepped == ["B.Cu", "F.Cu", "F.Cu"] and window.rail_panel.max_drop.text() == max_drop + "-",
               f"{stepped} {window.rail_panel.max_drop.text()!r}")
+        window.rail_panel.max_drop.setText(max_drop)
     # One number format whatever the system locale: dots, as in the limits and the problems.
     spin_texts = [window.rail_panel.max_edge.text(), window.rail_panel.temp.text(),
                   window.rail_panel.sources.table.cellWidget(0, 3).text(),
@@ -2925,8 +2928,8 @@ def run_tolerance(window, check: Checks, args, out: Path):
     row = [panel.loads.item(0, c).text() for c in range(panel.loads.columnCount())]
     check("tolerance: the tab follows Ripple & noise and shows U2's tolerances and U1's accuracy",
           tabs[tabs.index("Ripple & noise") + 1] == "Tolerance"
-          and row == ["U2", "VOUT", "6", "", "3", "", "", "50", "", "30"]
-          and panel.sources.item(1, 2).text() == "1", str(row))
+          and row == ["U2", "VOUT", "±6 %", "", "±3 %", "", "", "±50 mV", "", "±30 mV"]
+          and panel.sources.item(1, 2).text() == "±1 %", str(row))
 
     def cell(c):
         return panel.table.item(0, c).text() if panel.table.rowCount() else ""
@@ -3023,7 +3026,7 @@ def run_tolerance(window, check: Checks, args, out: Path):
     check("tolerance: saved and reopened, the tolerances are kept",
           load.tol_pct == (-3.0, 3.0) and load.dc_tol_pct == (-3.0, 3.0) and load.ac_tol_mv == (-50.0, 50.0)
           and load.transient_mv == (-30.0, 30.0) and window.project.rail("VOUT").sources[0].accuracy_pct
-          == (-1.0, 1.0) and panel.loads.item(0, 2).text() == "3" and not window.dirty, str(load))
+          == (-1.0, 1.0) and panel.loads.item(0, 2).text() == "±3 %" and not window.dirty, str(load))
     shot = out / "tolerance_panel.png"
     window.results_tabs.setCurrentWidget(panel)
     QApplication.processEvents()
@@ -3066,7 +3069,7 @@ def run_tolerance_fields(window, check: Checks, out: Path):
     held = [i for i in (acc, ac) if i is not None]
     check("tolerance: a cell a KiCad field holds is read-only, showing the field's value, the tooltip "
           "naming the field and the part",
-          len(held) == 2 and acc.text() == "1" and ac.text() == "20"
+          len(held) == 2 and acc.text() == "±1 %" and ac.text() == "±20 mV"
           and not any(i.flags() & Qt.ItemIsEditable for i in held)
           and all(i.background().color() == theme.qcolor("cell-readonly") for i in held)
           and 'KiCad field PI_ACC "1%" on J1; change it in KiCad' in acc.toolTip()
@@ -3075,7 +3078,7 @@ def run_tolerance_fields(window, check: Checks, out: Path):
     panel.set_cell("source", "J1", "accuracy_pct", "2")
     check("tolerance: typed anyway into a field's cell, refused: nothing written",
           panel.status.text().startswith("Not applied: from KiCad field PI_ACC")
-          and cell(panel.sources, SOURCE_COLUMNS, "accuracy_pct").text() == "1"
+          and cell(panel.sources, SOURCE_COLUMNS, "accuracy_pct").text() == "±1 %"
           and window.project.rails == [] and not window.dirty, panel.status.text()[:120])
     free = cell(panel.loads, LOAD_COLUMNS, "tol_pct")
     editable = free is not None and bool(free.flags() & Qt.ItemIsEditable)
