@@ -64,6 +64,10 @@ Where it is built and checked:
   on that wheel; pytest cannot run there, Triangle has no Intel macOS wheel for its pin.
 - The packaged app (`packaging/`, `release.yml`) bundles it; `packaging/check_bundle.py` fails
   without it, and `check_fma.py` runs on the bundled extension.
+- `.github/workflows/wheels.yml` builds the PyPI wheels (macOS arm64, Windows x86_64, Linux
+  x86_64 manylinux_2_28) and the sdist, installs each wheel, and a wheel pip builds from the
+  sdist, in a fresh venv and runs the import, `check_fma.py` and `check_digest.py` on it (see
+  "Publishing coppermesh").
 - `check_fma.py` counts x86_64 `vfmadd`/`vfmsub`/`vfnmadd`/`vfnmsub` and arm64
   `fmadd`/`fmsub`/`fnmadd`/`fnmsub` (and the vector `fmla`/`fmls`) in the disassembly
   (llvm-objdump from `rustup component add llvm-tools`, else objdump or otool). Measured on
@@ -108,5 +112,73 @@ Use from Python:
   `packaging/notices.py` appends it to `THIRD_PARTY_NOTICES.txt`, and `check_bundle.py` fails a
   bundle whose notices lack a crate. After any change to `Cargo.lock` or `Cargo.toml`, run
   `python tools/mesher_rs/crate_licences.py` (with cargo on `PATH`) and commit the file:
-  `tests/test_crate_licences.py` fails until then.
+  `tests/test_crate_licences.py` fails until then. It writes the same text to
+  `tools/mesher_rs/licenses/coppermesh-crates.txt`, the copy the PyPI wheel and sdist carry
+  (`license-files` in `pyproject.toml` may only name files inside the crate), beside
+  `tools/mesher_rs/LICENSE`, a copy of the repository's GPL text; the test checks both copies
+  byte for byte.
 - spade (MIT OR Apache-2.0) was evaluated and is not used (DESIGN.md §1).
+
+## Publishing coppermesh
+
+coppermesh 0.1.0 is published to PyPI as its own package by `.github/workflows/wheels.yml`, with
+PyPI's Trusted Publishing (OpenID Connect from GitHub Actions: no API token is stored anywhere).
+What reaches PyPI is what `README.pypi.md` and the `[project]` table of `pyproject.toml`
+describe. When the workflow runs:
+
+- A push to a branch never starts it.
+- A pushed tag `coppermesh-v*` builds, checks and uploads to TestPyPI only. The tag must name
+  the version in `pyproject.toml` (`coppermesh-v0.1.0`), or the sdist job fails.
+- A manual run (Actions → coppermesh wheels → Run workflow) builds and checks, then uploads
+  according to its `publish` input:
+  - `none` (the default): nothing is uploaded.
+  - `testpypi`: TestPyPI.
+  - `pypi`: PyPI, only from `main` or a `coppermesh-v*` tag. The upload also waits for the
+    GitHub environment `pypi`'s required reviewer to approve it.
+
+A file once uploaded can never be replaced, on either index. A fix is a new version: change
+`version` in both `Cargo.toml` and `pyproject.toml` (a test keeps them equal), then run
+`python tools/mesher_rs/crate_licences.py` (`Cargo.toml` changed) and commit. The TestPyPI job
+skips files that are already there.
+
+The owner's steps, once this workflow is on `main`:
+
+1. **Create the GitHub environments.** In the repository, go to Settings → Environments.
+   - Create `testpypi`.
+   - Create `pypi`. Under "Required reviewers", add yourself (RaffaeleBiondi) and leave
+     "Prevent self-review" unticked, so that you can approve your own run.
+   - Under "Deployment branches and tags", restrict `pypi` to the branch `main` and the tags
+     `coppermesh-v*`. The workflow already refuses other refs; this is a second lock.
+   - With the reviewer in place, a PyPI upload needs both `publish=pypi` and your approval.
+2. **Add a pending publisher on TestPyPI.** Sign in at https://test.pypi.org (a separate account
+   from PyPI's), open Account settings → Publishing → "Add a new pending publisher" →
+   GitHub, and enter:
+   - PyPI Project Name: `coppermesh`
+   - Owner: `RaffaeleBiondi`
+   - Repository name: `Coppernicus`
+   - Workflow name: `wheels.yml`
+   - Environment name: `testpypi`
+3. **Add a pending publisher on PyPI.** Do the same at https://pypi.org/manage/account/publishing/,
+   with Environment name `pypi`.
+
+   A pending publisher does not reserve the name. PyPI creates the project, and binds the name
+   to you, only at the first upload. Until then anyone can register `coppermesh` (it was free on
+   both indexes on 2026-11-27), so do steps 4 and 6 soon after these.
+4. **Publish to TestPyPI.** Run the workflow on `main` with `publish=testpypi`. Pushing the tag
+   `coppermesh-v0.1.0` does the same.
+5. **Check the TestPyPI release.** Install it in a fresh venv. numpy is taken from PyPI,
+   because TestPyPI holds only what people uploaded there for testing:
+
+       python3.12 -m venv /tmp/cm && /tmp/cm/bin/pip install -i https://test.pypi.org/simple/ \
+           --extra-index-url https://pypi.org/simple/ coppermesh==0.1.0
+       /tmp/cm/bin/python -I tools/mesher_rs/check_digest.py      # from a checkout: the recorded mesh
+
+   Also look at the project page, https://test.pypi.org/project/coppermesh/: the readme, the
+   licence, the links, three wheels and the sdist.
+6. **Publish to PyPI.** Run the workflow on `main` with `publish=pypi`, then approve the
+   `publish to PyPI` job when GitHub asks for the review. Afterwards, check that
+   `pip install coppermesh==0.1.0` works in a fresh venv.
+
+Coppernicus itself depends on the PyPI package only after 0.1.0 is there. Until then its
+`rust` dependency group builds coppermesh from this folder.
+
