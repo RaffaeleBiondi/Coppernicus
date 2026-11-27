@@ -5,6 +5,15 @@ line, the MCP server or the GitHub Action. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Coppernicus is pre-alpha: check its
 results against your own judgement.
 
+## Unreleased
+
+### Changed
+
+- The app's look follows the HTML report: dark by default with the report's colours, **☀ Light**
+  at the right end of the toolbar (also View menu, Ctrl+Shift+L) switches to light and back,
+  kept for the next start; the same look on macOS, Windows and Linux (Qt's Fusion style). The
+  plots stay on a light panel, as in the report.
+
 ## 0.4.0 (2026-11-27)
 
 ### Added
