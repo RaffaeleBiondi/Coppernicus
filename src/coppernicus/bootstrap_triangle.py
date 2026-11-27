@@ -1,18 +1,20 @@
-"""The Triangle mesher, fetched once by the packaged app.
+"""The Triangle mesher, fetched by the packaged app when it is chosen.
 
 KiPI meshes copper with Triangle, Jonathan Richard Shewchuk's mesher, through the ``triangle``
 Python package; ``kipi/core/mesh/mesher.py`` imports it when it loads. Triangle's licence
 forbids distributing it as part of a commercial system without the author's permission, so the
 packaged app (``packaging/``) does not contain it. The licence allows telling users how to get
-it free of charge, and that is what happens here, once, on the first start:
+it free of charge, and that is what happens here, once, when the triangle mesher is chosen
+(the default mesher, rust, needs no download; see :data:`ON_DEMAND` for fetching it on the
+first start instead):
 
 1. the build embeds the pin: the ``triangle`` version and every wheel's file name, URL and
    SHA-256 exactly as ``uv.lock`` lists them (:func:`pin_from_lock`, :func:`write_pin`);
 2. the app picks the wheel for its Python and platform (:func:`choose_wheel`), downloads it
    from PyPI to a temporary file, checks its SHA-256, unpacks it beside the target folder and
    moves it into place in one rename (:func:`install`): a failure leaves nothing behind;
-3. the folder goes on ``sys.path`` before anything imports KiPI (:func:`activate`); later starts
-   find it there and need no network.
+3. the folder goes on ``sys.path`` (:func:`activate`), and before anything imports KiPI at every
+   later start: they find it there and need no network.
 
 One copy only: every start checks the marker (version and wheel SHA-256) and the hash of every
 installed file against the wheel's ``RECORD`` (:func:`is_installed`, no network); the dialog and
@@ -22,14 +24,16 @@ beside the folder (a stale or partial copy, a download interrupted) is deleted (
 :func:`remove` deletes the download (``--remove-triangle`` in the packaged app, and Help →
 Remove downloaded mesher in the app). When it cannot now (a file in use: on Windows, the
 running app has it loaded), it leaves the folder whole, writes :data:`REMOVE_MARKER` and raises
-:class:`RemovalDeferred`; the next start deletes the folder before anything imports it, then
-downloads it again as usual.
+:class:`RemovalDeferred`; the next start deletes the folder before anything imports it (and
+downloads it again only when Triangle is chosen again, or on that start when fetching on the
+first start: :func:`again_text`).
 
 When to fetch is one switch, :data:`ON_DEMAND` (and :data:`ON_DEMAND_ENV`, :func:`on_demand`).
-Off (the default while Triangle is the default mesher): on the first start, as above. On: a
-start fetches nothing (:func:`at_start`) and Coppernicus's stand-in takes Triangle's place
-(:mod:`coppernicus.triangle_standin`); the dialog and the download happen when the user chooses
-the triangle mesher (:func:`fetch_for_mesher`), or with ``--fetch-triangle`` in the packaged app.
+On (the default, since rust is the default mesher): a start fetches nothing (:func:`at_start`)
+and Coppernicus's stand-in takes Triangle's place (:mod:`coppernicus.triangle_standin`); the
+licence note and the download happen when the user chooses the triangle mesher
+(:func:`fetch_for_mesher`; the command line's ``--mesher triangle``), or with
+``--fetch-triangle`` in the packaged app. Off: on the first start, before anything imports KiPI.
 
 The folder is per user:``~/Library/Application Support/Coppernicus/site-packages`` on macOS,
 ``%LOCALAPPDATA%\\Coppernicus\\site-packages`` on Windows (:func:`site_dir`). Two environment
@@ -86,9 +90,9 @@ STAGING_PREFIX = ".triangle-download-"
 #: the folder before anything imports it.
 REMOVE_MARKER = ".triangle-remove"
 #: Whether the packaged app fetches Triangle only when the triangle mesher is chosen, not on
-#: the first start (:func:`on_demand`). False while Triangle is the default mesher: the first
-#: start fetches it, as before.
-ON_DEMAND = False
+#: the first start (:func:`on_demand`). True: rust is the default mesher, Triangle an optional
+#: download.
+ON_DEMAND = True
 #: Environment variable: ``1`` fetches on demand, ``0`` on the first start (else :data:`ON_DEMAND`).
 ON_DEMAND_ENV = "COPPERNICUS_TRIANGLE_ON_DEMAND"
 #: Shewchuk's notice, copied into the bundle by the build.
@@ -411,14 +415,15 @@ def _loaded_from(site: Path) -> bool:
 
 def _defer(site: Path, why: str) -> None:
     (site.parent / REMOVE_MARKER).write_text(why + "\n", encoding="utf-8")
+    again = "downloads it again" if not on_demand() else "downloads it again when Triangle is chosen"
     raise RemovalDeferred("Triangle will be removed the next time Coppernicus starts "
                           f"({why})", "close every Coppernicus window: the next start deletes it "
-                          "before using it, then downloads it again")
+                          f"before using it, then {again}")
 
 
 def remove(site: Path) -> int:
     """Delete the downloaded Triangle: the folder ``site`` and any :func:`leftovers`. Returns
-    the bytes deleted (0: there was nothing). The next start downloads it again.
+    the bytes deleted (0: there was nothing). It is downloaded again as :func:`again_text` says.
 
     The folder is first moved aside in one rename, so a file in use leaves it whole: then, and
     on Windows when this process has it loaded (it could not delete it), the marker is written
@@ -668,12 +673,20 @@ def on_demand(env=None) -> bool:
     return ON_DEMAND if value not in ("0", "1") else value == "1"
 
 
+def again_text(env=None) -> str:
+    """When a removed download comes back, as the app and ``--remove-triangle`` say it."""
+    if on_demand(env):
+        return ("Coppernicus downloads it again only when the triangle mesher is chosen (or with "
+                "--fetch-triangle)")
+    return "Coppernicus downloads it again on its next start"
+
+
 def at_start(env=None) -> Optional[Plan]:
     """What a start of the frozen app must fetch before it imports KiPI, or ``None``.
 
     :func:`needed` runs in both modes: a deferred removal is done, an installed and verified
     copy is put on ``sys.path``, what lies around it is tidied. Fetching on the first start
-    (the default) returns its :class:`Plan` and raises its :class:`BootstrapError`. On demand
+    (:data:`ON_DEMAND` off) returns its :class:`Plan` and raises its :class:`BootstrapError`. On demand
     (:func:`on_demand`) nothing is fetched and nothing stops the start (no wheel for this
     platform, an incomplete bundle, a per-user folder that cannot be written): Coppernicus's
     stand-in takes Triangle's place (:mod:`coppernicus.triangle_standin`) until the triangle
@@ -721,7 +734,7 @@ def notice_text() -> str:
 
 def licence_note(plan: Plan) -> str:
     """Why the download happens, in plain text."""
-    return (f"Coppernicus meshes copper with Triangle, by Jonathan Richard Shewchuk, through the "
+    return (f"The triangle mesher is Triangle, by Jonathan Richard Shewchuk, through the "
             f"'{plan.pin.name}' Python package (version {plan.pin.version}, LGPL-3.0). Triangle's "
             f"licence does not allow it to be included in Coppernicus, but anyone may get it free "
             f"of charge: Coppernicus downloads it from PyPI once, checks its SHA-256 and keeps it "
@@ -791,7 +804,8 @@ def fetch_with_dialog(plan: Plan, install_fn: Callable = install) -> bool:
         def __init__(self):
             super().__init__()
             self.error: Optional[BootstrapError] = None
-            self.setWindowTitle("Coppernicus: first start")
+            self.setWindowTitle("Coppernicus: the Triangle mesher" if on_demand()
+                                else "Coppernicus: first start")
             self.setMinimumWidth(520)
             layout = QVBoxLayout(self)
             title = QLabel("<b>Downloading the Triangle mesher from PyPI (once)…</b>")

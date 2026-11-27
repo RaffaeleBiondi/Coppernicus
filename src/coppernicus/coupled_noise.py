@@ -192,7 +192,8 @@ def aggressor_summary(r: NoiseResult, csv_file: str = "",
                   "caps_missing": list(b.get("caps_missing", []))},
         "emi": _emi(r.emi), "stand_ins": list(r.stand_ins), "verdict": r.verdict,
         "verdict_note": r.verdict_note, "failed": list(r.failed), "not_judged": list(r.not_judged),
-        "csv_file": csv_file, "png_files": list(png_files), "assumptions": list(r.assumptions),
+        "csv_file": csv_file, "png_files": list(png_files), "ac": dict(r.ac_mesh),
+        "assumptions": list(r.assumptions),
         "warnings": list(r.warnings),
         "stats": {**{k: _num(r.stats.get(k)) for k in STAT_KEYS},
                   "memory_peak_raised": r.stats.get("memory_peak_raised")},
@@ -209,12 +210,14 @@ def noise_summary(results: Sequence[NoiseResult],
                   warnings: Sequence[str] = ()) -> Dict[str, Any]:
     """The ``<project>_noise_summary.json`` document: ``kind`` "noise", ``verdict``,
     ``verdict_note``, ``failed`` and ``not_judged`` (each entry with its ``aggressor``),
-    ``warnings`` (project level), then ``aggressors``. ``files``: aggressor -> (CSV path, PNG
+    ``warnings`` (project level), ``ac`` (the AC mesh's largest edge used and where it came
+    from), then ``aggressors``. ``files``: aggressor -> (CSV path, PNG
     paths)."""
     files = files or {}
     verdict, note, failed, not_judged = noise_verdict(results)
+    from coppernicus.impedance import ac_mesh_of
     return {"kind": "noise", "verdict": verdict, "verdict_note": note, "failed": failed,
-            "not_judged": not_judged, "warnings": list(warnings),
+            "not_judged": not_judged, "warnings": list(warnings), **ac_mesh_of(results),
             "aggressors": [aggressor_summary(r, *files.get(r.aggressor, ("", ()))) for r in results]}
 
 

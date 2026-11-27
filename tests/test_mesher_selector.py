@@ -1,7 +1,9 @@
-"""The mesher selector: the order a mesher is chosen in (call > project > session > Triangle), the
-default leaving KiPI's own meshing untouched, one clear error for a mesher that cannot run, the
-mesher recorded in every summary and compared, tools on a stored result never meshing again, and
-parallel calls with different meshers taking turns (the installed mesher is global)."""
+"""The mesher selector: the order a mesher is chosen in (call > project > session > rust, the
+default), the default installing rust and Triangle leaving KiPI's own meshing untouched, the
+fallback to Triangle with a warning where rust is not installed (only when nothing names a mesher),
+one clear error for a mesher that is named and cannot run, the mesher recorded in every summary and
+compared, tools on a stored result never meshing again, and parallel calls with different meshers
+taking turns (the installed mesher is global)."""
 
 import hashlib
 import json
@@ -75,27 +77,36 @@ def demo_project(folder, mesher=None, name="demo") -> Path:
 
 # ------------------------------------------------------------------ the order and the context
 
+@needs_rust
 def test_the_order_call_project_app_default():
-    assert meshing.resolve() == "triangle"
-    assert meshing.resolve(app="rust") == "rust"
+    assert meshing.DEFAULT == "rust" and meshing.choose() == ("rust", None)
+    assert meshing.resolve() == "rust"
+    assert meshing.resolve(app="triangle") == "triangle"
     assert meshing.resolve(project="rust", app="triangle") == "rust"
     assert meshing.resolve("Triangle ", project="rust", app="rust") == "triangle"
-    assert meshing.resolve("", project=None, app="") == "triangle"
+    assert meshing.resolve("", project=None, app="") == "rust"
 
 
-def test_the_default_leaves_the_registry_uninstalled(spy):
-    with meshing.using() as info:
+def test_triangle_leaves_the_registry_uninstalled(spy):
+    with meshing.using("triangle") as info:
         assert registry.installed() is None and meshing.current() == "triangle"
-        assert info["name"] == "triangle" and info["experimental"] is False
-    with meshing.using("triangle"):
-        assert registry.installed() is None
+        assert info["name"] == "triangle" and info["experimental"] is False and info["default"] is False
     assert spy == [] and meshing.current() is None
+
+
+@needs_rust
+def test_the_default_installs_rust(spy):
+    with meshing.using() as info:
+        assert registry.installed() == "rust" and meshing.current() == "rust"
+        assert info == {**info, "name": "rust", "experimental": False, "default": True}
+        assert "fallback_from" not in info
+    assert spy == ["rust"] and registry.installed() is None
 
 
 @needs_rust
 def test_using_installs_and_puts_back_what_it_found(spy):
     with meshing.using("rust") as info:
-        assert registry.installed() == "rust" and info["experimental"] is True
+        assert registry.installed() == "rust" and info["experimental"] is False
         with meshing.using("triangle"):              # nested, one thread: the lock is re-entrant
             assert registry.installed() is None
         assert registry.installed() == "rust"
@@ -114,6 +125,53 @@ def test_an_unavailable_mesher_is_one_error_with_a_hint(monkeypatch, spy):
     with pytest.raises(meshing.MesherUnavailable) as e:
         meshing.check("nope")
     assert "triangle" in e.value.hint
+    assert spy == []
+
+
+# ------------------------------------------------------------------ the fallback
+
+@pytest.fixture()
+def no_rust(monkeypatch):
+    """The rust mesher not available here, as in an install without coppermesh."""
+    from coppernicus.engine.meshing.rust_backend import RustBackend
+    monkeypatch.setattr(RustBackend, "available", lambda self: False)
+
+
+def test_the_default_falls_back_to_triangle_with_a_warning_only_when_nothing_names_a_mesher(no_rust, spy):
+    name, warning = meshing.choose()
+    assert name == "triangle" and warning == meshing.FALLBACK_WARNING
+    assert "rust mesher" in warning and "not installed" in warning and "Triangle" in warning
+    for named in ({"explicit": "rust"}, {"project": "rust"}, {"app": "rust"}):
+        assert meshing.choose(**named) == ("rust", None), named        # named: never replaced
+        with pytest.raises(meshing.MesherUnavailable):
+            meshing.check(meshing.resolve(**named))
+    assert meshing.choose("triangle") == ("triangle", None)              # chosen: no warning
+    with meshing.using() as info:                                        # the default: Triangle here
+        assert registry.installed() is None and info["name"] == "triangle"
+    assert spy == []
+    doc = meshing.stamp({"warnings": []}, *meshing.choose())
+    assert doc["mesher"] == {**doc["mesher"], "name": "triangle", "fallback_from": "rust"}
+    assert doc["warnings"] == [meshing.FALLBACK_WARNING] and "assumptions" not in doc
+
+
+def test_a_default_solve_falls_back_and_an_explicit_rust_one_fails(tmp_path, no_rust, spy):
+    session = Session(out_dir=tmp_path / "out")
+    doc = session.solve_project(demo_project(tmp_path))
+    [rail] = doc["rails"]
+    assert doc["mesher"]["name"] == rail["mesher"]["name"] == rail["settings"]["mesher"] == "triangle"
+    assert doc["mesher"]["fallback_from"] == rail["mesher"]["fallback_from"] == "rust"
+    assert meshing.FALLBACK_WARNING in doc["warnings"] and meshing.FALLBACK_WARNING in rail["warnings"]
+    assert not any(a.startswith("Meshed with") for a in rail["assumptions"])
+    step = session.copper_step(rail["result_id"], "B.Cu", "up")          # solved again: the same way
+    assert session._record(step["result_id"]).summary["mesher"]["fallback_from"] == "rust"
+    explicit = session.solve_project(demo_project(tmp_path, "triangle", name="tri"))
+    assert explicit["mesher"]["name"] == "triangle" and "fallback_from" not in explicit["mesher"]
+    assert meshing.FALLBACK_WARNING not in explicit["warnings"]
+    for kwargs in ({"mesher": "rust"}, {}):
+        path = demo_project(tmp_path, "rust" if not kwargs else None, name="r")
+        with pytest.raises(ServiceError) as e:
+            session.solve_project(path, **kwargs)
+        assert e.value.code == "mesher_unavailable" and "uv sync --group rust" in e.value.hint
     assert spy == []
 
 
@@ -142,13 +200,25 @@ def test_write_project_takes_the_mesher(tmp_path):
 
 # ------------------------------------------------------------------ the session
 
-def test_a_default_solve_records_triangle_and_installs_nothing(tmp_path, spy):
+@needs_rust
+def test_a_default_solve_records_rust_and_installs_it(tmp_path, spy):
     session = Session(out_dir=tmp_path / "out")
     doc = session.solve_project(demo_project(tmp_path))
     [rail] = doc["rails"]
+    assert spy == ["rust"]
+    assert doc["mesher"]["name"] == rail["mesher"]["name"] == rail["settings"]["mesher"] == "rust"
+    assert rail["mesher"]["default"] is True and "fallback_from" not in rail["mesher"]
+    assert not any(a.startswith("Meshed with") for a in rail["assumptions"])
+    assert meshing.FALLBACK_WARNING not in rail["warnings"]
+
+
+def test_an_explicit_triangle_solve_installs_nothing(tmp_path, spy):
+    session = Session(out_dir=tmp_path / "out")
+    doc = session.solve_project(demo_project(tmp_path, "triangle"))
+    [rail] = doc["rails"]
     assert spy == []
     assert doc["mesher"]["name"] == rail["mesher"]["name"] == rail["settings"]["mesher"] == "triangle"
-    assert not any("experimental" in a for a in rail["assumptions"])
+    assert any(a.startswith("Meshed with Triangle (KiPI's own mesher") for a in rail["assumptions"])
 
 
 def test_an_unavailable_mesher_fails_the_project_once(tmp_path, monkeypatch):
@@ -181,16 +251,17 @@ def test_call_wins_over_project_wins_over_session(tmp_path, spy):
 def test_compare_warns_on_different_meshers_and_copper_step_keeps_the_baselines(tmp_path):
     session = Session(out_dir=tmp_path / "out")
     bid = session.open_board(str(DEMO_BOARD))["board_id"]
-    a = session.solve_rail(bid, "+3V3", SOURCES, LOADS)
-    b = session.solve_rail(bid, "+3V3", SOURCES, LOADS, mesher="rust")
+    a = session.solve_rail(bid, "+3V3", SOURCES, LOADS, mesher="triangle")
+    b = session.solve_rail(bid, "+3V3", SOURCES, LOADS)                  # the default
     assert a["mesher"]["name"] == "triangle" and b["mesher"]["name"] == "rust"
-    assert any("experimental rust mesher" in x for x in b["assumptions"])
+    assert any("Triangle (KiPI's own mesher" in x for x in a["assumptions"])
+    assert not any(x.startswith("Meshed with") for x in b["assumptions"])
     cmp_ = session.compare_results(a["result_id"], b["result_id"])
     assert cmp_["settings_changed"]["mesher"] == {"a": "triangle", "b": "rust"}
     assert any(w.startswith("Different meshers") for w in cmp_["warnings"])
     rev = session.compare_revisions(a["result_id"], b["result_id"], out_dir=tmp_path / "rev")
     assert any(w.startswith("Different meshers") for w in rev["warnings"])
-    again = session.solve_rail(bid, "+3V3", SOURCES, LOADS)["result_id"]
+    again = session.solve_rail(bid, "+3V3", SOURCES, LOADS, mesher="triangle")["result_id"]
     same = session.compare_results(a["result_id"], again)
     assert not any(w.startswith("Different meshers") for w in same["warnings"])
     step = session.copper_step(b["result_id"], "B.Cu", "up")
@@ -201,7 +272,7 @@ def test_compare_warns_on_different_meshers_and_copper_step_keeps_the_baselines(
 def test_a_saved_summary_keeps_its_mesher_and_an_older_one_reads_as_triangle(tmp_path):
     session = Session(out_dir=tmp_path / "out")
     bid = session.open_board(str(DEMO_BOARD))["board_id"]
-    a = session.solve_rail(bid, "+3V3", SOURCES, LOADS)
+    a = session.solve_rail(bid, "+3V3", SOURCES, LOADS, mesher="triangle")
     saved = json.loads(json.dumps(a))                  # as written to *_summary.json and read back
     assert saved["mesher"]["name"] == "triangle"
     older = json.loads(json.dumps(a))
@@ -222,7 +293,7 @@ def test_tools_on_a_stored_result_never_mesh_again(tmp_path, monkeypatch):
     session = Session(out_dir=tmp_path / "out")
     info = session.open_board(str(DEMO_BOARD))
     bid = info["board_id"]
-    a = session.solve_rail(bid, "+3V3", SOURCES, LOADS)["result_id"]
+    a = session.solve_rail(bid, "+3V3", SOURCES, LOADS, mesher="triangle")["result_id"]
     b = session.solve_rail(bid, "+3V3", SOURCES, LOADS, mesher="rust")["result_id"]
 
     def no_meshing(*args, **kwargs):
@@ -342,6 +413,60 @@ def test_cli_unknown_mesher_is_one_error(tmp_path):
 @needs_rust
 def test_cli_tree_records_its_mesher(tmp_path):
     project = ROOT / "examples" / "power_chain" / "power_chain.coppernicus.yml"
-    code, doc, _ = _cli("solve", str(project), "--tree", "--json", "--out", str(tmp_path), "--mesher", "rust")
-    assert code in (0, 1, 3) and doc["mesher"]["name"] == "rust"
-    assert any("experimental rust mesher" in a for a in doc["assumptions"])
+    code, doc, _ = _cli("solve", str(project), "--tree", "--json", "--out", str(tmp_path))
+    assert code in (0, 1, 3) and doc["mesher"]["name"] == "rust" and doc["mesher"]["default"] is True
+    assert not any(a.startswith("Meshed with") for a in doc["assumptions"])
+    code, doc, _ = _cli("solve", str(project), "--tree", "--json", "--out", str(tmp_path / "t"),
+                        "--mesher", "triangle")
+    assert code in (0, 1, 3) and doc["mesher"]["name"] == "triangle"
+    assert any(a.startswith("Meshed with Triangle") for a in doc["assumptions"])
+
+
+@needs_rust
+def test_cli_default_is_rust(tmp_path):
+    code, doc, _ = _cli("solve", str(demo_project(tmp_path)), "--json", "--no-maps",
+                        "--out", str(tmp_path / "a"))
+    assert code in (0, 1) and doc["mesher"]["name"] == doc["rails"][0]["settings"]["mesher"] == "rust"
+    assert meshing.FALLBACK_WARNING not in doc["warnings"]
+
+
+# ------------------------------------------------------------------ the app and the packaged CLI
+
+def test_coppernicus_gui_installs_no_mesher_the_apps_solves_choose_theirs(monkeypatch):
+    """`coppernicus gui` installs nothing for the process: every app solve meshes inside
+    ``meshing.using`` with the Mesher box's choice (the default first)."""
+    import coppernicus.app as app
+    from coppernicus import cli
+    seen = []
+    monkeypatch.setattr(app, "run", lambda *a, **k: seen.append(registry.installed()) or 0)
+    assert cli.main(["gui"]) == 0 and seen == [None]
+
+
+def test_the_app_names_rust_and_triangle_without_experimental_and_a_registered_backend_with_it():
+    from coppernicus.app.mesher import shown
+    from coppernicus.engine.meshing.triangle_backend import TriangleBackend
+    assert shown("rust") == "Rust" and shown("triangle") == "Triangle"
+    registry.register("extra", TriangleBackend)
+    try:
+        assert shown("extra").endswith("(experimental)")
+    finally:
+        registry._factories.pop("extra", None)
+
+
+def test_the_packaged_cli_fetches_triangle_only_when_it_is_chosen(monkeypatch):
+    from coppernicus import bootstrap_triangle as bt
+    from coppernicus import cli
+    calls = []
+    monkeypatch.setattr(bt, "fetch_for_mesher",
+                        lambda name, gui, stream=None: calls.append((name, gui)) or True)
+    monkeypatch.setattr(bt, "frozen", lambda: False)
+    cli._fetch_triangle_if_chosen("triangle")                  # a Python install: KiPI's Triangle
+    monkeypatch.setattr(bt, "frozen", lambda: True)
+    cli._fetch_triangle_if_chosen("rust")                      # the default needs no download
+    cli._fetch_triangle_if_chosen("triangle")
+    assert calls == [("triangle", False)]
+
+    def offline(name, gui, stream=None):
+        raise bt.DownloadError("no network")
+    monkeypatch.setattr(bt, "fetch_for_mesher", offline)
+    cli._fetch_triangle_if_chosen("triangle")                  # a warning; the mesher check says the rest

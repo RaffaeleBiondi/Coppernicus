@@ -51,6 +51,34 @@ results against your own judgement.
   Solve noise), with Open ▾, Save ▾ and Export ▾ menus for the rest. Every page and rail net
   carries a badge: its verdict, or a dashed "not solved"; a group shows the worst of its solved
   pages; Problems counts its FAILs.
+- **The rust mesher is the default.** `solve`, `ac`, `noise`, `tolerance`, the MCP solve tools
+  and the app mesh with Coppernicus's own mesher (`rust`, `tools/mesher_rs`) unless a mesher is
+  named; `--mesher triangle` (the project's `settings.mesher`, the MCP `mesher`) meshes with
+  KiPI's Triangle. Results record `mesher.default`, and one meshed with Triangle by choice says so
+  in its assumptions; a saved summary that records no mesher still reads as Triangle. Where the
+  rust mesher is not installed (a plain `uv sync` without `--group rust`, a pip install), a solve
+  that names no mesher meshes with Triangle and says so in `warnings` (`mesher.fallback_from:
+  "rust"`); one that names rust stops with `mesher_unavailable`. Numbers move slightly (the mesh,
+  not the design); verdicts on the examples are unchanged.
+- **Triangle is optional.** In a Python install it comes with KiPI; the packaged app no longer
+  downloads it on the first start, only when the triangle mesher is chosen (`--mesher triangle`
+  or `--fetch-triangle`, with its licence note), and Help → Remove downloaded mesher says when it
+  comes back.
+- **The AC mesh edge follows the mesher.** `ac: max_edge_mm` is no longer 1.0 mm by default: when
+  the project does not set it, the AC, noise and tolerance solves (and their estimates) use the
+  mesher's own default, 0.5 mm with rust (finer than KiPI's 1.0 mm so that copper loops are
+  resolved as Triangle resolves them at 1.0 mm), 1.0 mm with Triangle. A value set in the project
+  wins for any mesher and is kept on save, even 1.0. The documents give `ac.max_edge_mm_used`
+  and `ac.max_edge_mm_from` ("rust default", "triangle default", "project") with an assumption
+  line; with rust, a set value coarser than 0.5 mm adds a warning (never a verdict): |Z| and the
+  noise can come out a few percent low; use 0.5 mm or leave it unset (0.25 mm for the highest
+  noise accuracy).
+- A result judged against a user's `max_current_density` (rail, project, power tree, board
+  temperature) says in its assumptions that a crowding spot's mean |J| depends on the mesh, with
+  either mesher: typically 1-2 % on detailed boards, up to about 6 %, and more on a spot of only
+  a few elements at a sharp copper corner, where neither mesher converges (15 % seen on a real
+  board). Read a spot within a few percent of the limit, or one of only a few elements, with
+  care. Not for the documented default (attention items only).
 
 ### Fixed
 

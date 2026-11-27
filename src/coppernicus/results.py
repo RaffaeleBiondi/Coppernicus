@@ -623,6 +623,9 @@ class ImpedanceResult:
     # Of ``warnings``, those of Task 11's Q9 (a load's AC tolerance against its probe's
     # ac_tolerance_v): a tolerance changes no |Z|, so the app shows them for the values now.
     ac_tolerance_warnings: List[str] = field(default_factory=list)
+    # The AC mesh's largest edge used and where it came from (``max_edge_mm_used``,
+    # ``max_edge_mm_from``: "project", "rust default", "triangle default").
+    ac_mesh: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def bandwidth_assumed(self) -> bool:
@@ -789,6 +792,8 @@ class NoiseResult:
     assumptions: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     stats: Dict[str, Any] = field(default_factory=dict)
+    # The AC mesh's largest edge used and where it came from (as ImpedanceResult.ac_mesh).
+    ac_mesh: Dict[str, Any] = field(default_factory=dict)
 
     def victim(self, name: str) -> Optional[VictimResult]:
         return next((v for v in self.victims if v.name == name), None)
@@ -885,6 +890,9 @@ class ToleranceResult:
     warnings: List[str] = field(default_factory=list)
     estimates: List[Dict[str, Any]] = field(default_factory=list)    # what each solve was to cost
     stats: Dict[str, Any] = field(default_factory=dict)
+    # The AC mesh's largest edge of its AC and noise solves (as ImpedanceResult.ac_mesh); empty
+    # when none ran.
+    ac_mesh: Dict[str, Any] = field(default_factory=dict)
 
     def row(self, load: str) -> Optional[ToleranceRow]:
         return next((r for r in self.rows if load in (r.load, r.name)), None)

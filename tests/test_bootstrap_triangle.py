@@ -476,11 +476,17 @@ def _frozen_main():
 
 
 def test_a_command_line_start_that_cannot_fetch_exits_2_with_the_error_document(monkeypatch, capsys):
+    """Fetching on the first start (on demand off): a start that cannot fetch exits 2. On demand
+    (the default) the same start goes on, with the stand-in."""
     frozen_main = _frozen_main()
 
     def offline(env=None):
         raise bt.DownloadError("cannot download triangle.whl: no network")
     monkeypatch.setattr(bt, "needed", offline)
+    monkeypatch.delenv(bt.ON_DEMAND_ENV, raising=False)
+    assert frozen_main.ensure_triangle(["nets", "board.kicad_pcb", "--json"]) == 0
+    assert capsys.readouterr().out == ""
+    monkeypatch.setenv(bt.ON_DEMAND_ENV, "0")
     assert frozen_main.ensure_triangle(["nets", "board.kicad_pcb", "--json"]) == 2
     out, err = capsys.readouterr()
     assert json.loads(out)["error"]["code"] == "triangle_unavailable"
@@ -530,14 +536,16 @@ def test_the_dialog_fetches_and_reports_a_failure(tmp_path):
 
 
 # --------------------------------------------------------------------------- on demand
-def test_the_switch_is_off_by_default_and_the_environment_overrides_it(monkeypatch):
-    assert bt.ON_DEMAND is False                                     # as before: the first start fetches
+def test_the_switch_is_on_by_default_and_the_environment_overrides_it(monkeypatch):
+    assert bt.ON_DEMAND is True                                      # rust the default: Triangle when chosen
     assert bt.on_demand({}) is bt.ON_DEMAND
     assert bt.on_demand({bt.ON_DEMAND_ENV: "1"}) is True
     assert bt.on_demand({bt.ON_DEMAND_ENV: "0"}) is False
     assert bt.on_demand({bt.ON_DEMAND_ENV: "yes"}) is bt.ON_DEMAND   # anything else: the default
-    monkeypatch.setattr(bt, "ON_DEMAND", True)
-    assert bt.on_demand({}) is True and bt.on_demand({bt.ON_DEMAND_ENV: "0"}) is False
+    assert "only when the triangle mesher is chosen" in bt.again_text({})
+    assert "on its next start" in bt.again_text({bt.ON_DEMAND_ENV: "0"})
+    monkeypatch.setattr(bt, "ON_DEMAND", False)
+    assert bt.on_demand({}) is False and bt.on_demand({bt.ON_DEMAND_ENV: "1"}) is True
 
 
 def test_on_demand_a_start_fetches_nothing_but_uses_a_copy_already_there(monkeypatch, tmp_path):
@@ -546,8 +554,8 @@ def test_on_demand_a_start_fetches_nothing_but_uses_a_copy_already_there(monkeyp
     before = list(sys.path)
     try:
         assert bt.at_start() is None and not site.exists()          # nothing fetched
-        monkeypatch.delenv(bt.ON_DEMAND_ENV)
-        plan = bt.at_start()                                         # the default: a Plan, as needed()
+        monkeypatch.setenv(bt.ON_DEMAND_ENV, "0")
+        plan = bt.at_start()                                         # on the first start: a Plan, as needed()
         assert plan is not None and plan.site == site
         bt.install(plan.pin, site, wheel=plan.wheel, url=plan.url)
         (site / "stray.txt").write_text("x")

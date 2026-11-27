@@ -114,17 +114,32 @@ def test_kipis_own_mesher_stops_with_the_clear_error():
 
 
 def test_the_cli_says_triangle_is_not_installed(tmp_path):
+    """The triangle mesher chosen is checked before anything is solved (the selector), with the
+    stand-in's hint; the default, rust, needs no Triangle."""
     out = _run(f'''
         from coppernicus.cli import main
-        code = main(["solve", {str(DEMO)!r}, "--json", "--out", {str(tmp_path)!r}])
+        code = main(["solve", {str(DEMO)!r}, "--json", "--out", {str(tmp_path / "t")!r},
+                     "--mesher", "triangle"])
         print("exit", code)
     ''')
     lines = out.strip().splitlines()
     assert lines[-1] == "exit 2"
     doc = json.loads(_last_json(lines[:-1]))
-    # The default mesher is checked before anything is solved (the selector), with the stand-in's hint.
     assert doc["error"]["code"] == "mesher_unavailable"
     assert "'triangle'" in doc["error"]["message"] and "rust mesher" in doc["error"]["hint"]
+
+
+@pytest.mark.skipif(not HAS_RUST, reason="coppermesh is not built (tools/mesher_rs)")
+def test_the_cli_default_solves_without_triangle(tmp_path):
+    out = _run(f'''
+        from coppernicus.cli import main
+        code = main(["solve", {str(DEMO)!r}, "--json", "--no-maps", "--out", {str(tmp_path)!r}])
+        print("exit", code)
+    ''')
+    lines = out.strip().splitlines()
+    assert lines[-1] in ("exit 0", "exit 1")
+    doc = json.loads(_last_json(lines[:-1]))
+    assert doc["mesher"]["name"] == "rust" and not any("not installed" in w for w in doc["warnings"])
 
 
 def _last_json(lines):

@@ -412,7 +412,7 @@ class Session:
                  max_result_mb: float = DEFAULT_MAX_RESULT_MB, max_boards: int = DEFAULT_MAX_BOARDS,
                  mesher: Optional[str] = None):
         # The mesher when neither the call nor the project names one (the app's setting); None:
-        # the default, Triangle. See _mesher for the order.
+        # the default, rust (Triangle with a warning where rust is not installed). See _choose.
         self.mesher = mesher
         self._out_dir = Path(out_dir).expanduser().resolve() if out_dir else None
         self.max_results = max(1, int(max_results))
@@ -591,14 +591,15 @@ class Session:
         weight at most one step from the design's thickness (:meth:`_check_copper_what_if`);
         project files and the CLI keep the free value.
 
-        ``mesher`` (default: ``settings``' mesher, else the session's, else Triangle) is the
-        mesher (:meth:`_mesher`)."""
+        ``mesher`` (default: ``settings``' mesher, else the session's, else the default, rust)
+        is the mesher (:meth:`_choose`)."""
         entry = self._entry(board_id)
         if not isinstance(sources, (list, tuple)) or not isinstance(loads, (list, tuple)):
             raise ServiceError(E.INVALID_INPUT, "sources and loads must be lists of objects")
         rail = C.rail_from_dicts(net, sources, loads, limits, follow_net_ties, base=base_rail)
         solve_settings, _ = C.settings_from_dict(settings, base=base_settings)
-        solve_settings = dataclasses.replace(solve_settings, mesher=self._mesher(mesher, solve_settings))
+        name, fallback = self._choose(mesher, solve_settings)
+        solve_settings = dataclasses.replace(solve_settings, mesher=None if fallback else name)
         given = (settings or {}).get("copper_thickness_mm") or {}
         self._check_copper_what_if(entry.board, solve_settings, given,
                                    base_settings.copper_thickness_mm if base_settings else {})
@@ -641,16 +642,22 @@ class Session:
                                    "agent's copper what-if is one standard step from the design's "
                                    f"{COPPER_STEPS_OZ[at]} ({design:g} mm) at most: {near} mm", hint)
 
-    def _mesher(self, explicit: Optional[str], settings: Optional[Settings] = None) -> str:
-        """The mesher of a solve, checked: ``explicit`` (the call's), else ``settings.mesher``
-        (a project's), else the session's (the app's setting), else Triangle. One that cannot
-        run here is a ``mesher_unavailable`` error, before anything is solved."""
-        name = meshing.resolve(explicit, settings.mesher if settings is not None else None, self.mesher)
+    def _choose(self, explicit: Optional[str],
+                settings: Optional[Settings] = None) -> Tuple[str, Optional[str]]:
+        """The mesher of a solve, checked, and the fallback warning its result carries
+        (:func:`coppernicus.engine.meshing.session.choose`): ``explicit`` (the call's), else
+        ``settings.mesher`` (a project's), else the session's (the app's setting), else the
+        default, rust; Triangle with the warning when none is set and rust cannot run here. A
+        mesher that is named and cannot run here is a ``mesher_unavailable`` error, before
+        anything is solved. The settings of a fallback solve keep their mesher unset (None), so
+        that a solve made again from them (copper_step) falls back, and warns, the same way."""
+        name, fallback = meshing.choose(explicit, settings.mesher if settings is not None else None,
+                                        self.mesher)
         try:
             meshing.check(name)
         except meshing.MesherUnavailable as e:
             raise ServiceError(E.MESHER_UNAVAILABLE, e.message, e.hint) from None
-        return name
+        return name, fallback
 
     @staticmethod
     @contextmanager
@@ -700,8 +707,8 @@ class Session:
         thickness = dict(settings.copper_thickness_mm)
         board = entry.variant(thickness)
         self._validate_rail(board, rail, project)
-        mesher = self._mesher(None, settings)     # recorded in the settings: copper_step keeps it
-        settings = dataclasses.replace(settings, mesher=mesher)
+        mesher, fallback = self._choose(None, settings)     # in the settings: copper_step keeps it
+        settings = dataclasses.replace(settings, mesher=None if fallback else mesher)
         with self._solve_lock, self._meshing(mesher):
             if progress is not None:
                 progress(f"solving {rail.net}")
@@ -716,8 +723,9 @@ class Session:
                                    "this net" + (", and the regulators and links it feeds"
                                                  if project is not None else "")) from None
         res.assumptions.extend(notes)     # reaches the summary, the CLI text and the report
-        res.assumptions.extend(n for n in [meshing.note(mesher)] if n)
+        res.assumptions.extend(n for n in [None if fallback else meshing.note(mesher)] if n)
         res.warnings.extend(warnings)
+        res.warnings.extend(w for w in [fallback] if w and w not in res.warnings)
         layer_thickness = {lay.name: lay.thickness_mm for lay in board.layers()}
         problems = find_problems(res, rail.limits, top=max(1, int(top)))
         with self._lock:
@@ -728,7 +736,8 @@ class Session:
                                  pin_numbers=lambda pid: board.pad(pid).number,
                                  estimated=[t.name for t in res.loads[len(rail.loads):]])
         summary["warnings"] = entry.warnings() + summary["warnings"]
-        summary["mesher"] = meshing.describe(mesher)
+        summary["mesher"] = meshing.describe(mesher, fallback)
+        summary["settings"]["mesher"] = mesher        # what meshed it, a fallback's too
         summary.update({"from_board_fields": False, "overrides_board_fields": False,
                         "board_fields_warnings": [], **(fields_info or {})})
         rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
@@ -779,10 +788,10 @@ class Session:
         rails from the board's KiCad footprint fields (:mod:`coppernicus.board_fields`); a
         rail in the project file replaces the fields' rail of its net. Each summary says
         ``from_board_fields``, and its assumptions give every value with its field.
-        ``mesher`` wins over the project's ``settings.mesher`` (:meth:`_mesher`)."""
+        ``mesher`` wins over the project's ``settings.mesher`` (:meth:`_choose`)."""
         path, project, board_info, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
-        project = self._with_mesher(merged.project, mesher)    # checked once, before any rail
+        project, mesher_name, fallback = self._with_mesher(merged.project, mesher)   # once, before any rail
         wanted = list(rails or [])
         selected = [r for r in project.rails if not wanted or r.net in wanted]
         if not selected:
@@ -886,14 +895,17 @@ class Session:
             "verdict_note": note, "not_judged": unjudged, "board_fields_warnings": merged.warnings,
             # spots above the current-density default, over the rails: never part of the verdict
             "attention": sum(r.get("attention", 0) for r in out_rails),
-            "mesher": meshing.describe(project.settings.mesher),
-            "assumptions": [], "warnings": entry.warnings(),
+            "mesher": meshing.describe(mesher_name, fallback),
+            "assumptions": [], "warnings": entry.warnings() + [w for w in [fallback] if w],
         })
 
-    def _with_mesher(self, project: Project, explicit: Optional[str]) -> Project:
-        """``project`` with its mesher resolved and checked (:meth:`_mesher`) into its settings."""
-        name = self._mesher(explicit, project.settings)
-        return dataclasses.replace(project, settings=dataclasses.replace(project.settings, mesher=name))
+    def _with_mesher(self, project: Project, explicit: Optional[str]) -> Tuple[Project, str, Optional[str]]:
+        """``project`` with its mesher resolved and checked (:meth:`_choose`) into its settings
+        (left unset for a fallback, see :meth:`_choose`), the mesher's name and the fallback
+        warning."""
+        name, fallback = self._choose(explicit, project.settings)
+        settings = dataclasses.replace(project.settings, mesher=None if fallback else name)
+        return dataclasses.replace(project, settings=settings), name, fallback
 
     def _open_project(self, project_path):
         """Load a project file and open its board: (path, project, board info, entry). A
@@ -1205,7 +1217,7 @@ class Session:
             raise ServiceError(E.INVALID_INPUT, str(e), REFERENCE_FORM) from None
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
-        project = self._with_mesher(merged.project, mesher)
+        project, mesher_name, fallback = self._with_mesher(merged.project, mesher)
         spec = spec if reference is not None else project.tree_reference
         if thermal_options and thermal is False:
             raise ServiceError(E.INVALID_INPUT, "thermal_options with thermal: false: the options "
@@ -1221,7 +1233,7 @@ class Session:
                                "pass confirm_large: true to solve it anyway, or a coarser grid "
                                f"(thermal_options.grid_mm; now {estimate['cell_mm']:.3g} mm cells), or "
                                "thermal: false for the power tree without the temperature")
-        with self._solve_lock, self._meshing(project.settings.mesher):
+        with self._solve_lock, self._meshing(mesher_name):
             if progress is not None:
                 progress(f"solving the power tree of {path.name}")
             try:
@@ -1246,7 +1258,7 @@ class Session:
         doc = tree_summary(tree, top=max(1, int(top)))   # with each VRM's I max, the rating judged
         if estimate is not None:
             doc["thermal_estimate"] = estimate
-        meshing.stamp(doc, project.settings.mesher)
+        meshing.stamp(doc, mesher_name, fallback)
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
         doc = json.loads(json.dumps(doc, allow_nan=False))
         # Kept as one result, on the board as solved (the project's copper thickness).
@@ -1280,7 +1292,7 @@ class Session:
         from coppernicus.maps import safe_file_name, safe_name
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
-        project, board = self._with_mesher(merged.project, mesher), entry.board
+        (project, mesher_name, fallback), board = self._with_mesher(merged.project, mesher), entry.board
         hint = "fix the probes, capacitor models or ac: block of the project file, then solve again"
         if not project.probes:
             raise ServiceError(E.INVALID_INPUT, f"{path.name}: no probe in the project: nothing to solve",
@@ -1301,7 +1313,7 @@ class Session:
                 not_solved, warnings = unsolved_entries(project.probes, rails_of)
         except EngineError as e:
             raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}", hint) from None
-        with self._solve_lock, self._meshing(project.settings.mesher):
+        with self._solve_lock, self._meshing(mesher_name):
             try:
                 estimates = {net: ac_estimate(board, project, net, progress, cancelled) for net in nets}
                 big = [e for e in estimates.values() if e["exceeds_memory"]]
@@ -1326,7 +1338,7 @@ class Session:
                 raise ServiceError(E.CANCELLED, f"{path.name}: solve cancelled") from None
             except EngineError as e:
                 raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}", hint) from None
-        doc = meshing.stamp(ac_summary(results, files, not_solved, warnings), project.settings.mesher)
+        doc = meshing.stamp(ac_summary(results, files, not_solved, warnings), mesher_name, fallback)
         for r in doc["rails"]:
             r["estimate"] = estimates.get(r["rail"])
         summary_path = folder / f"{stem}_ac_summary.json"
@@ -1352,7 +1364,7 @@ class Session:
         from coppernicus.maps import safe_file_name, safe_name
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
-        project, board = self._with_mesher(merged.project, mesher), entry.board
+        (project, mesher_name, fallback), board = self._with_mesher(merged.project, mesher), entry.board
         hint = "fix the aggressors, victims or noise: block of the project file, then solve again"
         if not project.aggressors:
             raise ServiceError(E.INVALID_INPUT, f"{path.name}: no aggressor in the project: nothing "
@@ -1364,7 +1376,7 @@ class Session:
         if unknown:
             raise ServiceError(E.INVALID_INPUT, f"{path.name}: no aggressor named {', '.join(unknown)}",
                                f"the project's aggressors: {', '.join(known)}")
-        with self._solve_lock, self._meshing(project.settings.mesher):
+        with self._solve_lock, self._meshing(mesher_name):
             try:
                 estimates = {n: noise_estimate(board, project, n, progress, cancelled, merged.from_fields)
                              for n in names}
@@ -1391,7 +1403,7 @@ class Session:
                 raise ServiceError(E.CANCELLED, f"{path.name}: solve cancelled") from None
             except EngineError as e:
                 raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}", hint) from None
-        doc = meshing.stamp(noise_summary(results, files), project.settings.mesher)
+        doc = meshing.stamp(noise_summary(results, files), mesher_name, fallback)
         for a in doc["aggressors"]:
             a["estimate"] = estimates.get(a["aggressor"])
         summary_path = folder / f"{stem}_noise_summary.json"
@@ -1421,7 +1433,7 @@ class Session:
         started = time.perf_counter()
         path, loaded, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, loaded, entry, use_board_fields)
-        name = self._mesher(mesher, merged.project.settings)
+        name, fallback = self._choose(mesher, merged.project.settings)
         with self._solve_lock, self._meshing(name):
             try:
                 plan = run.plan(entry.board, path, loaded, merged, skip_ac=bool(skip_ac),
@@ -1441,7 +1453,7 @@ class Session:
         folder.mkdir(parents=True, exist_ok=True)
         stem = safe_file_name(path.stem)
         csv_path = write_csv(result, folder / f"{stem}_tolerance.csv")
-        doc = meshing.stamp(tolerance_summary(result, csv_path.resolve().as_posix()), name)
+        doc = meshing.stamp(tolerance_summary(result, csv_path.resolve().as_posix()), name, fallback)
         summary_path = folder / f"{stem}_tolerance_summary.json"
         doc["summary_file"] = summary_path.resolve().as_posix()
         text = json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False)
@@ -2084,8 +2096,8 @@ def mesher_of(summary: Mapping[str, Any]) -> Tuple[str, Optional[str]]:
     recorded was meshed by Triangle, version unknown."""
     m = summary.get("mesher")
     if isinstance(m, Mapping):
-        return str(m.get("name") or meshing.DEFAULT), m.get("version")
-    return str((summary.get("settings") or {}).get("mesher") or meshing.DEFAULT), None
+        return str(m.get("name") or meshing.RECORDED_BEFORE), m.get("version")
+    return str((summary.get("settings") or {}).get("mesher") or meshing.RECORDED_BEFORE), None
 
 
 def mesher_warning(summary_a: Mapping[str, Any], summary_b: Mapping[str, Any]) -> Optional[str]:

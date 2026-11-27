@@ -686,8 +686,8 @@ class MainWindow(QMainWindow):
             self.help_menu = self.menuBar().addMenu("&Help")
             remove = QAction(REMOVE_MESHER, self)
             remove.setMenuRole(QAction.NoRole)          # macOS: stays in Help
-            remove.setToolTip("Delete the Triangle mesher this app downloaded; it is downloaded "
-                              "again on the next start")
+            remove.setToolTip("Delete the Triangle mesher this app downloaded. "
+                              + bootstrap_triangle.again_text())
             remove.triggered.connect(self.remove_mesher)
             self.help_menu.addAction(remove)
         spacer = QWidget()
@@ -1127,11 +1127,12 @@ class MainWindow(QMainWindow):
 
     def remove_mesher(self):
         """Help → Remove downloaded mesher (Triangle)… (packaged app): after a confirmation,
-        delete the Triangle mesher the app downloaded; the next start downloads it again."""
+        delete the Triangle mesher the app downloaded (downloaded again as
+        ``bootstrap_triangle.again_text`` says)."""
         site = bootstrap_triangle.site_dir()
         answer = QMessageBox.question(self, "Remove downloaded mesher",
                                       f"Delete the Triangle mesher downloaded into {site}?\n"
-                                      "Coppernicus downloads it again on its next start.",
+                                      f"{bootstrap_triangle.again_text()}.",
                                       QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
         if answer != QMessageBox.Yes:
             return
@@ -1143,17 +1144,16 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("The mesher is in use: Coppernicus removes it at its next start")
             QMessageBox.information(self, "Remove downloaded mesher",
                                     f"The downloaded Triangle mesher in {site} is in use: Coppernicus "
-                                    "removes it at its next start, then downloads it again.")
+                                    f"removes it at its next start. {bootstrap_triangle.again_text()}.")
             return
         except bootstrap_triangle.BootstrapError as e:
             self.statusBar().showMessage("The downloaded mesher could not be removed")
             QMessageBox.warning(self, "Cannot remove the mesher", f"{e.message}\n{e.hint}")
             return
         if size:
-            text = (f"Removed the downloaded Triangle mesher from {site} ({size / 1e6:.1f} MB). "
-                    "Coppernicus downloads it again on its next start.")
-            self.statusBar().showMessage("Removed the downloaded mesher: Coppernicus downloads it again "
-                                         "on its next start")
+            again = bootstrap_triangle.again_text()
+            text = f"Removed the downloaded Triangle mesher from {site} ({size / 1e6:.1f} MB). {again}."
+            self.statusBar().showMessage(f"Removed the downloaded mesher. {again}")
         else:
             text = f"Nothing to remove: no downloaded Triangle mesher in {site}."
             self.statusBar().showMessage("Nothing to remove: no downloaded mesher")

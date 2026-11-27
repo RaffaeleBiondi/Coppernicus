@@ -43,8 +43,9 @@ All the pictures on this page come from the synthetic demo board in `examples/de
 ## Install
 
 **Packaged app (no Python needed):** a macOS `.dmg` (Apple silicon, macOS 14+) or a Windows `.zip`,
-see [docs/install.md](docs/install.md). On first start it downloads the Triangle mesher from PyPI
-once (its licence forbids bundling it), checks it against a known hash, and then works offline.
+see [docs/install.md](docs/install.md). It meshes with Coppernicus's own mesher (rust) and needs no
+download. The optional Triangle mesher (its licence forbids bundling it) is downloaded from PyPI
+only if you choose it, after its licence note, and checked against a known hash.
 
 **From source:** you need [uv](https://docs.astral.sh/uv/). It installs Python and everything else, solver
 included.
@@ -52,9 +53,14 @@ included.
 ```sh
 git clone https://github.com/RaffaeleBiondi/Coppernicus.git
 cd Coppernicus
-uv sync
-uv run coppernicus            # opens the app
+uv sync --group rust          # builds the default mesher, rust: needs a Rust toolchain (rustup.rs)
+uv run --group rust coppernicus   # opens the app
 ```
+
+Without a Rust toolchain, a plain `uv sync` works too: every solve then meshes with Triangle
+(installed with KiPI) and its result says so in a warning. With it, pass `--group rust` to every
+`uv sync` and `uv run` (as above): uv syncs exactly, so a `uv run coppernicus …` without the group
+removes the rust mesher again. The commands below are written without it.
 
 **On macOS you can get a double-clickable app.** Run `tools/make_mac_launcher.sh`. It builds
 `~/Applications/Coppernicus.app` with the project icon, ready for the Dock or Launchpad. The app
@@ -255,13 +261,23 @@ same document.
 limits, **1** when a limit is exceeded, **3** when a limit you set could not judge something
 (listed as NOT JUDGED) and **2** on an error. `ac`, `noise` and `tolerance` use the same codes.
 
-**Mesher.** `solve`, `ac`, `noise` and `tolerance` mesh with Triangle, KiPI's own mesher, by
-default. `--mesher rust` uses Coppernicus's own mesher instead; it is **experimental** and must
-be built first (see [tools/mesher_rs](tools/mesher_rs/README.md)). The flag wins over a
-project's `settings.mesher`. Every summary records the mesher in `mesher`. In the app, the
+**Mesher.** `solve`, `ac`, `noise` and `tolerance` mesh with Coppernicus's own mesher, `rust`
+([tools/mesher_rs](tools/mesher_rs/README.md)), by default. `--mesher triangle` uses Triangle,
+KiPI's own mesher, instead: in a Python install it comes with KiPI; in the packaged app it is an
+optional download, fetched with its licence note when you choose it. The flag wins over a
+project's `settings.mesher`. Every summary records the mesher in `mesher`. Where the rust mesher
+is not installed (a plain `uv sync`), a solve that names no mesher meshes with Triangle and says
+so in its warnings; one that names `rust` stops with `mesher_unavailable`. In the app, the
 **Mesher** box at the top of the setup panel chooses it for every solve and is kept for the next
 start; a project's `settings.mesher` wins (the box then shows it, locked). The status bar and the
 HTML report name the mesher each result was meshed with.
+
+**AC mesh edge.** Unless the project sets `ac: max_edge_mm`, the AC, noise and tolerance solves
+use the mesher's own default: 0.5 mm with rust (finer than KiPI's 1.0 mm, so that copper loops
+are resolved as Triangle resolves them at 1.0 mm), 1.0 mm with Triangle. A value you set wins
+for any mesher; with rust, one coarser than 0.5 mm gives a warning (|Z| and the noise can come
+out a few percent low; 0.25 mm gives the highest noise accuracy). The results give the edge used
+and where it came from (`ac.max_edge_mm_used`, `ac.max_edge_mm_from`).
 
 **HTML report.** Add `--html` to `solve` (and `--open` to open it straight away). Coppernicus
 writes one offline HTML file next to the summary. It holds every rail and copper layer as voltage
@@ -328,7 +344,7 @@ settings:
     B.Cu: 0.07                    # the board file is not changed; real changes are made in KiCad
   # min_edge_mm: 0.01             # advanced: smallest element at plated-hole walls (default 0.02)
   # grading: 0.1                  # advanced: element growth away from holes, 0-2 (default 0.2)
-  # mesher: rust                  # experimental; default triangle (KiPI's own); --mesher wins
+  # mesher: triangle              # default rust (Coppernicus's own); triangle is KiPI's; --mesher wins
 rails:
 - net: +3V3
   sources:
@@ -418,7 +434,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Current-density default: spots above 60 A/mm² at 1 oz, scaled ×√(35 µm / t) per layer (≈85 at 0.5 oz, ≈42 at 2 oz), are flagged ATTENTION, never a verdict; set `max_current_density` to judge them ([why and sources](docs/technical.md#current-density-default)) | ✅ |
 | Above every current-density colour bar, the layer's peak \|J\| (mesh-dependent, never judged) and its verdict as the problem list judges it; the colour scale stays at the layer's 99.5th percentile ([how](docs/technical.md#physics)) | ✅ app, PNG maps (CLI and MCP `render_map`), HTML report |
 | Tolerance stack-up per load: `coppernicus tolerance PROJECT`: the DC drop on the worst pins (power tree) plus the source's DC accuracy, the ripple from the noise solve (or your `ripple_mv`) and your `transient_mv` (KiPI's estimate shown, never judged), against your `tol` / `dc_tol` / `ac_tol`; judged only with every part known, never on a KiPI stand-in or a default 0. Example: `examples/tolerance` | ✅ CLI and app (Tolerance tab: built from the results the app holds; a stale one counts as missing) |
-| Packaged app: macOS `.dmg`, Windows `.zip`; Triangle fetched once on first start, checked against `uv.lock` ([install](docs/install.md)) | ✅ macOS built and tried; Windows built by CI, not yet tried; unsigned |
+| Packaged app: macOS `.dmg`, Windows `.zip`; the rust mesher built in; Triangle an optional download when chosen, checked against `uv.lock` ([install](docs/install.md)) | ✅ macOS built and tried; Windows built by CI, not yet tried; unsigned |
 | Speed: SuperLU's symmetric ordering for the board temperature and DC solves (about half the time and memory of the electro-thermal solve on a large board; `COPPERNICUS_SUPERLU_ORDER=off` restores KiPI's); a DC system above KiPI's 200,000-unknown direct limit factorized directly up to 400,000 unknowns instead of solved with AMG-CG (about half the time on large rails for about a quarter more memory, equal within 1e-9; `COPPERNICUS_DC_DIRECT_MAX=0` or empty restores KiPI's rule, any other value sets the ceiling); a faster bit-identical board opening (`COPPERNICUS_FAST_TRIM=0` restores KiPI's) ([details](docs/technical.md#physics)) | ✅ on by default, each factorization checked as KiPI checks its own |
 | Benchmark harness for every step (`tools/bench`): wall time, CPU, peak memory and a fingerprint of the result per step, compared before and after a change ([README](tools/bench/README.md)) | ✅ developer tooling |
 

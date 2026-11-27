@@ -55,6 +55,23 @@ SMALL_SPOT_CHECK = ("A spot this small may be a mesh artefact at a via wall: to 
                     "widen the copper there or add a via.")
 
 
+#: The assumption line of a result whose current crowding a user's max_current_density judges
+#: (:func:`density_mesh_note`): never with the default alone (attention items only).
+DENSITY_MESH_NOTE = ("Current crowding judged against max_current_density: a crowding spot's mean "
+                     "|J| depends on the mesh, with either mesher: typically 1-2 % on detailed "
+                     "boards, up to about 6 %. On a spot of only a few elements at a sharp copper "
+                     "corner neither mesher converges, and the two can differ by more (15 % seen on "
+                     "a real board). Read a spot within a few percent of the limit, or one of only "
+                     "a few elements, with care.")
+
+
+def density_mesh_note(limits: Iterable[Optional[Limits]]) -> Optional[str]:
+    """:data:`DENSITY_MESH_NOTE` when one of ``limits`` (a rail's, or a tree's by net) sets a
+    max_current_density, else None."""
+    return DENSITY_MESH_NOTE if any(x is not None and x.max_current_density is not None
+                                    for x in limits) else None
+
+
 def density_default(thickness_mm: float, outer: bool) -> float:
     """Coppernicus's current-density default for copper ``thickness_mm`` thick, A/mm²: the
     constant for outer or inner layers at 1 oz, × √(35 µm / t) (TI SLUA366: the current ×√2

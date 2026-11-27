@@ -85,7 +85,13 @@ for the layer shown:
      *limit 60 A/mm²: FAIL · worst spot 89.1 A/mm² over 3.02 mm²* (with *· 12 spots above* when
      there are more), or *limit 60 A/mm²: pass*. A spot is copper at or above the limit, so a
      peak above your limit always lies in a failed spot. When every failed spot on the layer is
-     under 3 mesh elements, the line adds *may be a mesh artefact* (the problem's own check);
+     under 3 mesh elements, the line adds *may be a mesh artefact* (the problem's own check).
+     The mean |J| of a crowding spot depends on the mesh, with either mesher (rust or
+     Triangle): typically 1-2 % on detailed boards, up to about 6 %; on a spot of only a few
+     elements at a sharp copper corner neither mesher converges, and the two can differ by more
+     (15 % seen on a real board). A result judged against your `max_current_density` says so in
+     an assumption line: read a spot within a few percent of the limit, or one of only a few
+     elements, with care;
    - without one, against the [current-density default](#current-density-default) for the
      layer's thickness: *default 60 A/mm² (attention): 3 spots above · worst ...*, or *below*.
      A peak above the default with no attention spot (only slivers of 1 or 2 elements, at a

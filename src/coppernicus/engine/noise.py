@@ -28,7 +28,6 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from kipi.ac.checks import ground_nets, rail_caps, rail_nets
-from kipi.ac.model import ACSettings
 from kipi.ac.solver.fem import ACError, mesh_rail_and_ground
 from kipi.core.mesh.mesher import MeshError
 from kipi.core.progress import Canceled
@@ -65,7 +64,6 @@ from kipi.tolerance.gather import (
 )
 
 from coppernicus.engine.ac import (
-    SWEEP_KEYS,
     CostEstimate,
     RamEstimate,
     _dielectric,
@@ -74,6 +72,7 @@ from coppernicus.engine.ac import (
     cost_estimate,
     peak_rss_bytes,
     superlu_order_note,
+    sweep_settings,
 )
 from coppernicus.engine.board import Board, EngineError
 from coppernicus.engine.pisetup import _numbers, _pads, terminal_names, to_pisetup
@@ -165,6 +164,7 @@ class _Context:
     notes: List[str] = field(default_factory=list)
     fsw_note: str = ""             # where fsw_hz came from, when not the aggressor's own
     setup_snapshot: Any = None     # the board the setup was built on
+    edge: Any = None               # the AC mesh's largest edge (engine.ac.AcEdge), for the mesher
 
 
 def _aggressor(project: Project, name: str) -> Aggressor:
@@ -280,9 +280,7 @@ def _context(board: Board, project: Project, name: str, fields_rails: Sequence[s
         value = esl.get(k.ref, esl.get(k.name))
         if value is not None:
             next(x for x in setup.links if x.name == names[("link", "", i)]).esl_h = float(value)
-    s = ACSettings()
-    for key in SWEEP_KEYS:
-        setattr(s, key, getattr(project.ac, key))
+    s, edge = sweep_settings(project.ac)
     if project.settings.copper_temp_c != REF_TEMP_C:
         s.temperature, s.temperature_c = "fixed", float(project.settings.copper_temp_c)
     setup.ac = s
@@ -290,7 +288,7 @@ def _context(board: Board, project: Project, name: str, fields_rails: Sequence[s
     setup.noise = NoiseSettings(aggressor=a.name, **{k: getattr(o, k) for k in OPTION_KEYS})
     setup.victims = [_kipi_victim(board, v) for v in project.victims]
     return _Context(setup, a, a.vrm, vin_net, vrm.output.net, gnd, rail, grounds, in_rail,
-                    list(project.victims), probes, notes, fsw_note, board.snapshot)
+                    list(project.victims), probes, notes, fsw_note, board.snapshot, edge)
 
 
 def noise_setup(board: Board, project: Project, name: str,
@@ -691,7 +689,9 @@ def _convert(board: Board, project: Project, c: _Context, res, stats: Dict[str, 
     have, missing = _caps(board, c, used)
     # A partial result comes before the board model has run: no stand-ins, no assumptions.
     common = [] if partial else _stand_ins(board, project, c, res, hot, capped, f_max, used, missing)
-    warnings = list(dict.fromkeys(c.notes + list(res.warnings) + ([] if partial else _unlisted(board, c))))
+    edge_warning = [w for w in [c.edge.warning()] if w and used]     # the AC mesh: the board model's
+    warnings = list(dict.fromkeys(c.notes + list(res.warnings) + ([] if partial else _unlisted(board, c))
+                                  + edge_warning))
     kv = {x.name: x for x in c.setup.victims}
     victims = [_victim(board, c, v, kv[v.label], vr, common, used, n, warnings)
                for v in c.victims for vr in res.victims if vr.name == v.label]
@@ -708,7 +708,7 @@ def _convert(board: Board, project: Project, c: _Context, res, stats: Dict[str, 
         hot_loops=hot, t_s=t, switch_node_v=[ph.switch_node.samples(n) for ph in wf.phases],
         inductor_a=[ph.inductor.samples(n) for ph in wf.phases], edges=[ph.edges for ph in wf.phases],
         ripple=ripple, victims=victims, board=board_info, emi=_near_field(res.emi), stand_ins=common,
-        partial=partial, warnings=warnings, stats=dict(stats))
+        partial=partial, warnings=warnings, stats=dict(stats), ac_mesh=c.edge.summary())
     if not partial:
         out.assumptions = _assumptions(board, project, c, out, have, missing)
     return out
@@ -764,6 +764,7 @@ def _assumptions(board: Board, project: Project, c: _Context, r: NoiseResult, ha
                    f"model, {u}{k}({o.field_per_decade} per decade); each phase's pulsed and inductor "
                    "currents enter at its pins and divide among the capacitors through the copper; "
                    "quasi-static, approximate above about 1 GHz.")
+        out.append(c.edge.assumption("; the board model's copper mesh"))
     else:
         why = _board_off(project, _Warnings(r.warnings))
         head = ("Board model off (noise.board_model)" if not o.board_model

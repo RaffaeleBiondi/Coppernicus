@@ -185,6 +185,12 @@ def solve(board, plan: Plan, progress: Progress = None, cancelled: Cancel = None
     result = compose(project, tree, impedance, noise, plan.pairs, ac_notes, noise_notes, warnings,
                      plan.dropped, plan.lost_accuracy)
     merged.annotate(result)               # the KiCad-field notes, as the other commands
+    if impedance or noise:                # the AC mesh they solved with, and why that edge
+        from coppernicus.engine.ac import ac_max_edge
+        edge = ac_max_edge(project.ac)
+        result.ac_mesh = edge.summary()
+        result.assumptions.append(edge.assumption("; the AC and noise solves' copper mesh"))
+        result.warnings.extend(w for w in [edge.warning()] if w and w not in result.warnings)
     result.estimates = [dict(e) for e in plan.estimates]
     peak = peak_rss_bytes()
     result.stats = {"seconds": time.perf_counter() - plan.started, "tree_seconds": tree.stats.get("seconds"),

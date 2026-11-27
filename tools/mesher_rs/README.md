@@ -1,9 +1,16 @@
-# coppermesh (experimental; in the packaged app, not the default mesher)
+# coppermesh (the default mesher, "rust"; in the packaged app)
 
 A 2D quality mesher written for Coppernicus: our own constrained Delaunay triangulation plus
 Delaunay refinement (Ruppert's algorithm in Shewchuk's "Terminator" form), in Rust, with a
 Python binding. It is meant to replace Triangle behind KiPI's `mesh_polygon`. DESIGN.md gives
 the algorithms, the determinism rules and every source used. No Triangle code was read.
+
+It is Coppernicus's default mesher: a solve that names no mesher meshes with it (the CLI's
+`--mesher`, the MCP `mesher`, the project's `settings.mesher` choose another; Triangle is
+`triangle`). Where it is not built (a plain `uv sync`), such a solve meshes with Triangle and its
+result says so in a warning; one that names `rust` stops with `mesher_unavailable`. Its AC mesh
+default is finer than Triangle's: `RUST_AC_MAX_EDGE_MM` (0.5 mm) in
+`src/coppernicus/engine/ac.py`, where the project does not set `ac: max_edge_mm`.
 
 - `src/`: the core.
   - `geom.rs`: predicates and the scalar helpers.
@@ -33,7 +40,7 @@ the algorithms, the determinism rules and every source used. No Triangle code wa
 coppermesh is uv's `rust` dependency group of Coppernicus (`pyproject.toml`, locked in
 `uv.lock` as a path dependency). The group is not a default one, because building it needs a Rust
 toolchain: a plain `uv sync`, the GitHub Action (`--no-dev`) and `uv tool install git+...` leave it
-out and need no Rust. With Rust (installed per user: add `~/.cargo/bin` to `PATH` for these
+out and need no Rust; they then mesh with Triangle, with the fallback warning in each result. With Rust (installed per user: add `~/.cargo/bin` to `PATH` for these
 commands; the build output can go anywhere, through `CARGO_TARGET_DIR`):
 
     uv sync --group rust                              # maturin builds and installs coppermesh
@@ -52,7 +59,8 @@ Where it is built and checked:
 - `.github/workflows/tests.yml`, on Linux x86_64, macOS arm64 and Windows x64: the cargo tests,
   `uv sync --group rust`, `check_fma.py`, `check_digest.py`, and the whole pytest suite with
   `COPPERNICUS_REQUIRE_RUST=1` (the rust cases then fail instead of skipping when the extension is
-  missing). On Intel macOS (macos-15-intel): the cargo tests, `maturin build`, and the two checks
+  missing), and one Ubuntu job without the group (`no-rust`: the fallback tests and a CLI solve
+  of the demo, coppermesh really missing). On Intel macOS (macos-15-intel): the cargo tests, `maturin build`, and the two checks
   on that wheel; pytest cannot run there, Triangle has no Intel macOS wheel for its pin.
 - The packaged app (`packaging/`, `release.yml`) bundles it; `packaging/check_bundle.py` fails
   without it, and `check_fma.py` runs on the bundled extension.

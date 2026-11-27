@@ -91,3 +91,58 @@ jobs:
           uv pip install --python "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP"/wheels/coppermesh-*.whl
           "$RUNNER_TEMP/venv/bin/python" tools/mesher_rs/check_fma.py
           "$RUNNER_TEMP/venv/bin/python" tools/mesher_rs/check_digest.py
+
+  # An install without the rust group (a plain `uv sync`, as `uv tool install git+...` and the
+  # Action): coppermesh really missing. A solve that names no mesher must mesh with Triangle and
+  # say so; one that names rust must stop with mesher_unavailable. Cheap: the selector and
+  # fallback tests and one CLI solve of the demo.
+  no-rust:
+    name: without the rust mesher (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40                 # every job's (tests/test_workflows.py); it takes minutes
+    env:
+      COPPERNICUS_REQUIRE_RUST: ""        # the rust cases skip here: coppermesh is not built
+    steps:
+      - uses: actions/checkout@v7
+      - name: System libraries for Qt and VTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install without the rust group
+        run: uv sync --frozen
+      - name: Guard (coppermesh absent)
+        run: |
+          .venv/bin/python - <<'PY'
+          import importlib.util
+          assert importlib.util.find_spec("coppermesh") is None, "coppermesh is installed"
+          from coppernicus.engine.meshing import session
+          assert session.choose() == ("triangle", session.FALLBACK_WARNING), session.choose()
+          print("coppermesh absent: the default falls back to Triangle")
+          PY
+      - name: Selector and fallback tests
+        run: .venv/bin/python -m pytest -q -rs tests/test_mesher_fallback.py tests/test_mesher_selector.py
+      - name: A CLI solve of the demo falls back with its warning; --mesher rust is an error
+        run: |
+          set +e
+          .venv/bin/coppernicus solve examples/demo/demo.coppernicus.yml --json --no-maps \
+            --out "$RUNNER_TEMP/demo" > "$RUNNER_TEMP/demo.json"
+          code=$?
+          .venv/bin/coppernicus solve examples/demo/demo.coppernicus.yml --json --no-maps \
+            --mesher rust --out "$RUNNER_TEMP/rust" > "$RUNNER_TEMP/rust.json"
+          rust=$?
+          set -e
+          test "$code" -le 1 && test "$rust" -eq 2
+          .venv/bin/python - "$RUNNER_TEMP/demo.json" "$RUNNER_TEMP/rust.json" <<'PY'
+          import json, sys
+          from coppernicus.engine.meshing.session import FALLBACK_WARNING
+          doc, err = (json.load(open(p, encoding="utf-8")) for p in sys.argv[1:])
+          assert doc["mesher"]["name"] == "triangle" and doc["mesher"]["fallback_from"] == "rust", doc["mesher"]
+          assert FALLBACK_WARNING in doc["warnings"], doc["warnings"]
+          assert err["error"]["code"] == "mesher_unavailable", err
+          print("fallback:", doc["mesher"], "| --mesher rust:", err["error"]["code"])
+          PY

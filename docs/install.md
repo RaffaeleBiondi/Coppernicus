@@ -3,10 +3,12 @@
 There are two ways to run Coppernicus:
 
 - **The packaged app.** A macOS disk image (`.dmg`, Apple silicon) or a Windows `.zip`. It
-  needs no Python and no uv. It contains everything except the Triangle mesher, which it
-  downloads once on its first start (see [Triangle](#the-triangle-mesher) below).
+  needs no Python and no uv. It contains everything it needs, with Coppernicus's own mesher
+  (rust), the default. The optional Triangle mesher is not included: it is downloaded only if
+  you choose it (see [Triangle](#the-triangle-mesher) below).
 - **From source, with uv.** See [Install](../README.md#install) in the README. Nothing below
-  applies to that: uv installs Triangle with everything else.
+  applies to that: uv installs Triangle with KiPI, and `uv sync --group rust` builds the rust
+  mesher (with a Rust toolchain; without it, solves mesh with Triangle and say so).
 
 The builds are not signed with an Apple or Microsoft certificate yet, so the first start asks
 you to confirm, as described below.
@@ -64,11 +66,14 @@ coppernicus-cli.exe mcp
 
 ## The Triangle mesher
 
-Coppernicus meshes copper with [Triangle](https://www.cs.cmu.edu/~quake/triangle.html), by
-Jonathan Richard Shewchuk, through the [`triangle`](https://pypi.org/project/triangle/)
-Python package. Triangle's licence does not allow it to be distributed as part of Coppernicus,
-but it allows telling you how to get it free of charge. So the packaged app does not contain
-it, and on its first start:
+Coppernicus meshes copper with its own mesher, rust, by default. It can also mesh with
+[Triangle](https://www.cs.cmu.edu/~quake/triangle.html), by Jonathan Richard Shewchuk, through
+the [`triangle`](https://pypi.org/project/triangle/) Python package, KiPI's own mesher, when you
+choose it (`--mesher triangle`, or `mesher: triangle` in a project's `settings`). Triangle's
+licence does not allow it to be distributed as part of Coppernicus, but it allows telling you how
+to get it free of charge. So the packaged app does not contain it, and nothing is downloaded on
+its start. When a command chooses the triangle mesher and Triangle is not there yet (or when you
+run it with `--fetch-triangle`):
 
 1. it shows "Downloading the Triangle mesher from PyPI (once)…" with a short licence note
    (the **Triangle's licence…** button shows the full terms);
@@ -81,8 +86,8 @@ it, and on its first start:
    - macOS: `~/Library/Application Support/Coppernicus/site-packages`
    - Windows: `%LOCALAPPDATA%\Coppernicus\site-packages`
 
-After that Coppernicus works offline. The command line does the same on its first use, with
-progress lines on the standard error stream.
+After that Triangle works offline. The command line prints the licence note and the progress
+on the standard error stream. The app itself has no mesher choice yet: it meshes with rust.
 
 **One copy, checked at every start.** Each start reads the marker file
 `.coppernicus-triangle.json` in that folder (the version installed and the SHA-256 of the wheel
@@ -133,7 +138,7 @@ coppernicus-cli.exe --remove-triangle
 
 It deletes the folder (and anything an interrupted download left) and says how much it freed.
 Deleting the `site-packages` folder by hand does the same. Coppernicus downloads Triangle again
-on its next start. To remove Coppernicus completely, delete the app (or the extracted folder),
+only when the triangle mesher is chosen again (or with `--fetch-triangle`). To remove Coppernicus completely, delete the app (or the extracted folder),
 that `Coppernicus` folder (it also holds matplotlib's font cache), and the app's settings (macOS:
 `~/Library/Preferences/com.coppernicus.Coppernicus.plist`; Windows: the registry key
 `HKEY_CURRENT_USER\Software\Coppernicus`).
@@ -142,8 +147,8 @@ that `Coppernicus` folder (it also holds matplotlib's font cache), and the app's
 loaded, and the running app has Triangle loaded. So when the folder cannot be deleted now
 (from the app's Help menu on Windows, or while another Coppernicus window is open), it is
 left whole and marked, and Coppernicus says *"Triangle will be removed the next time
-Coppernicus starts"*. The next start deletes it before anything uses it, then offers to
-download it again, as on a first start. To remove it for good, close every Coppernicus window
+Coppernicus starts"*. The next start deletes it before anything uses it; it is downloaded
+again only when the triangle mesher is chosen again. To remove it for good, close every Coppernicus window
 and run `--remove-triangle` from a terminal; with no window open, nothing holds the files.
 The mark is a file named `.triangle-remove` beside the folder.
 
@@ -166,8 +171,8 @@ From a clone of the repository, with [uv](https://docs.astral.sh/uv/):
   and `dist\Coppernicus-<version>-windows-x64.zip`.
 
 The builds also need a Rust toolchain ([rustup](https://rustup.rs); on Windows with the MSVC
-build tools): the app bundles coppermesh, the experimental rust mesher (Triangle stays the default
-one), which is built from `tools/mesher_rs`.
+build tools): the app bundles coppermesh, the rust mesher (the default one), which is built from
+`tools/mesher_rs`.
 
 Each script makes a build environment of its own under `build/` (the packages of `uv.lock`,
 without the dev tools and without `triangle`, with uv's `rust` group, on a uv-managed Python),
@@ -183,7 +188,7 @@ What is in `packaging/`:
 | File | What it does |
 |---|---|
 | `coppernicus.spec` | PyInstaller: what goes into the bundle, the Triangle pin, the notices |
-| `frozen_main.py` | The bundle's entry point: fetches Triangle if needed, then runs `coppernicus` |
+| `frozen_main.py` | The bundle's entry point: puts a downloaded Triangle on the path (or its stand-in), then runs `coppernicus` |
 | `notices.py` | Writes `THIRD_PARTY_NOTICES.txt` from what the bundle contains |
 | `check_bundle.py` | Proves `triangle` is not in the bundle (files and PYZ modules) and coppermesh is |
 | `build_macos.sh`, `build_windows.ps1` | The builds |

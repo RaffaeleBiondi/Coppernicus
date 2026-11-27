@@ -44,8 +44,16 @@ ac:
 - **Capacitors**: ESR + jω·ESL + 1/(jω·C) per model, on the parts listed. A capacitor between
   the rail and ground without a model moves the resonances: its probe is not judged.
 - **`ac:`**: the source's bandwidth, the sweep (`f_start_hz`, `f_stop_hz`, `points_per_decade`,
-  `field_points_per_decade`), the AC mesh (`max_edge_mm`), the dielectric loss and a link's
-  inductance. Without a bandwidth, 50 kHz is assumed and nothing is judged.
+  `field_points_per_decade`), the AC mesh (`max_edge_mm`, see below), the dielectric loss and a
+  link's inductance. Without a bandwidth, 50 kHz is assumed and nothing is judged.
+
+The AC mesh edge, `ac: max_edge_mm`, is the mesher's default when not set: 0.5 mm with the
+rust mesher (the default mesher; finer than KiPI's 1.0 mm so that copper loops are resolved
+as Triangle resolves them at 1.0 mm), 1.0 mm with Triangle. A value you set wins for any
+mesher. With rust, a value coarser than 0.5 mm gives a warning, never a verdict: |Z| and the
+noise can come out a few percent low; use 0.5 mm or leave it unset (0.25 mm gives the highest
+noise accuracy). The summary gives the edge used and where it came from (`ac:
+{max_edge_mm_used, max_edge_mm_from}`), and an assumption line says why.
 
 The full list of keys is in
 [engine-mapping.md](engine-mapping.md#task-9-ac-pdn-impedance-zf--kipiac-kipiacsolversweeppy-kipiacmodelpy).
@@ -73,7 +81,7 @@ It is heavy: minutes and gigabytes on a large board. Before each rail, Coppernic
 will cost, from the same estimate the app shows:
 
 ```text
-Impedance of +3V3: 20,587 triangles × 2 ports, the copper solved at 111 frequencies: no earlier solve on this computer to time it from. About 20,587 unknowns: one factorization, with the mesh and the model, needs up to 0.276 GB of this machine's ...
+Impedance of +3V3: 74,054 triangles × 2 ports, the copper solved at 111 frequencies: no earlier solve on this computer to time it from. About 74,054 unknowns: one factorization, with the mesh and the model, needs up to 1.24 GB of this machine's ...
 ```
 
 A coarser AC mesh (`ac: max_edge_mm`) lowers the memory and the time; fewer copper solves per
@@ -86,20 +94,20 @@ call that could exceed the memory is refused (`solve_too_large`) until confirmed
 
 ## Reading the results
 
-On the pdn example:
+On the pdn example (the rust mesher, the default, at its 0.5 mm AC mesh; Triangle at 1.0 mm gives 20,587 triangles in about 6 s and the same verdict):
 
 ```text
 Rail +3V3 against GND: source U1, bandwidth 100 kHz
-  solved in 8.7 s: 20,587 triangles, 19,784 unknowns, 2 ports (superlu); sweep 1 kHz to 300 MHz, 1370 points, copper solved at 111
+  solved in 58.8 s: 74,054 triangles, 73,228 unknowns, 2 ports (superlu); sweep 1 kHz to 300 MHz, 1370 points, copper solved at 111
   plane capacitance 0.4975 nF; capacitors modelled 1, without a model 0; links none
-  probe U1: |Z| 22.01 mΩ to 29.47 Ω; worst 159.8 mΩ at 100.1 kHz (3.2× target)  FAIL
+  probe U1: |Z| 22.03 mΩ to 30.07 Ω; worst 159.8 mΩ at 100.1 kHz (3.2× target)  FAIL
 Verdict: fail. Fail: U1 on +3V3 (target_ohm): |Z| 159.8 mΩ at 100.1 kHz, above the target 50 mΩ there (3.2× it)
 ```
 
 The worst point is where |Z| divided by the target is highest, where the target applies. Here
 it sits right at the bandwidth, 100 kHz: the one 10 µF capacitor does not bring |Z| under 50 mΩ
-until 338 kHz (from the CSV). Its minimum, 22 mΩ, is at 1.49 MHz; the resonance at 243 MHz
-(29.5 Ω) lies above the 10 MHz target, so it is not judged. The plot
+until 338 kHz (from the CSV). Its minimum, 22 mΩ, is at 1.47 MHz; the resonance at 243 MHz
+(30.1 Ω) lies above the 10 MHz target, so it is not judged. The plot
 greys the band below the bandwidth, and dashes the target where it applies.
 
 ## Verdicts

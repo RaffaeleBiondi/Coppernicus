@@ -156,10 +156,17 @@ follow the hint. `result_evicted` means you must solve again.
 - `--tree` solves the power tree (step 8; `--thermal` with the board temperature). Its JSON
   always holds the split; `--split` prints it in the text, and `--reference U1` (or pads,
   `R12.2,NT1.*`) shows the voltages from another 0 V, verdicts unchanged.
-- The mesher is Triangle by default. `mesher: "rust"` (the solve tools' argument, the project's
-  `settings.mesher`, the CLI's `--mesher rust`) is experimental: use it only when the user asks,
-  and say so when you report. Every result names its mesher in `mesher`; compare_results warns
-  when two results were meshed differently.
+- The mesher is rust (Coppernicus's own) by default. `mesher: "triangle"` (the solve tools'
+  argument, the project's `settings.mesher`, the CLI's `--mesher triangle`) meshes with KiPI's
+  Triangle: use it only when the user asks, and say so when you report. Where rust is not
+  installed, a solve that names no mesher meshes with Triangle and its `warnings` say so: tell
+  the user. Every result names its mesher in `mesher`; compare_results warns when two results
+  were meshed differently.
+- The AC mesh edge (`ac: max_edge_mm`), unset, is the mesher's default: 0.5 mm with rust, 1.0 mm
+  with Triangle; AC, noise and tolerance results give it in `ac` (`max_edge_mm_used`,
+  `max_edge_mm_from`). With rust, a set value coarser than 0.5 mm adds a warning (|Z| and noise
+  a few percent low): report it, and suggest 0.5 mm or unset (0.25 mm for the most accurate
+  noise).
 - Write the YAML and the outputs outside the board's folder.
 - Exit codes: 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit that was set
   could not judge something (report each `not_judged` item), 2 an error.
@@ -196,7 +203,10 @@ whose mean |J| is above 60 A/mm² at 1 oz, scaled ×√(35 µm / t) for its laye
 Report it as "above Coppernicus's current-density default, not a verdict", with the value,
 layer, default and thickness, and suggest the board temperature (`thermal: max_rise_c`) or a
 user limit to judge it. A `max_current_density` the user sets replaces it (a fail when
-exceeded, no attention items). Never pass the default as a limit.
+exceeded, no attention items). Never pass the default as a limit. Against a user's limit the
+result's assumptions say a crowding spot's mean |J| depends on the mesh, with either mesher
+(typically 1-2 %, up to about 6 %, more on a spot of a few elements at a sharp corner): report a
+spot within a few percent of the limit, or one of only a few elements, as one to read with care.
 
 | Rationalization | Reality |
 |---|---|
