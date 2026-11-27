@@ -1,4 +1,4 @@
-# coppermesh (experiment, not shipped)
+# coppermesh (experimental; in the packaged app, not the default mesher)
 
 A 2D quality mesher written for Coppernicus: our own constrained Delaunay triangulation plus
 Delaunay refinement (Ruppert's algorithm in Shewchuk's "Terminator" form), in Rust, with a
@@ -30,21 +30,39 @@ the algorithms, the determinism rules and every source used. No Triangle code wa
 
 ## Build
 
-Rust is installed per user. Add `~/.cargo/bin` to `PATH` only for these commands. The build
-output can go anywhere, through `CARGO_TARGET_DIR`.
+coppermesh is uv's `rust` dependency group of Coppernicus (`pyproject.toml`, locked in
+`uv.lock` as a path dependency). The group is not a default one, because building it needs a Rust
+toolchain: a plain `uv sync`, the GitHub Action (`--no-dev`) and `uv tool install git+...` leave it
+out and need no Rust. With Rust (installed per user: add `~/.cargo/bin` to `PATH` for these
+commands; the build output can go anywhere, through `CARGO_TARGET_DIR`):
 
-    cd tools/mesher_rs
-    cargo test --release                              # core tests, no Python needed
-    uv pip install --python ../../.venv/bin/python maturin
-    VIRTUAL_ENV=../../.venv ../../.venv/bin/maturin develop --release --uv
-    cd ../.. && .venv/bin/python -m pytest tests/test_mesher_rs.py tests/test_meshing_seam.py
+    uv sync --group rust                              # maturin builds and installs coppermesh
+    uv run --group rust pytest tests/test_mesher_rs.py tests/test_meshing_seam.py \
+        tests/test_meshing_default.py tests/test_mesher_sliver.py
+    uv run --group rust python tools/mesher_rs/check_fma.py      # 0 fused multiply-add, or it fails
+    uv run --group rust python tools/mesher_rs/check_digest.py   # the recorded mesh, bit for bit
+    cd tools/mesher_rs && cargo test --release        # core tests, no Python needed
 
-`maturin develop` installs `coppermesh` into the venv as one abi3 extension (CPython ≥ 3.12,
-so 3.12 and 3.13). For wheels, `maturin build --release` builds the current platform; for
-macOS arm64 and x86_64 and Windows x64, run maturin-action in CI.
-- Tried: `maturin build --release --target x86_64-apple-darwin` on macOS arm64. The x86_64 wheel
-  gives bit-identical meshes under Rosetta (measured).
-- Not tried: Windows, and CI.
+A later plain `uv sync` removes coppermesh again (uv syncs exactly); pass `--group rust` to it,
+and to `uv run`, while working on the mesher. uv rebuilds it when a Rust source, `Cargo.toml` or
+`Cargo.lock` changes (the crate's `cache-keys`). It is one abi3 extension (CPython ≥ 3.12, so
+3.12 and 3.13).
+
+Where it is built and checked:
+- `.github/workflows/tests.yml`, on Linux x86_64, macOS arm64 and Windows x64: the cargo tests,
+  `uv sync --group rust`, `check_fma.py`, `check_digest.py`, and the whole pytest suite with
+  `COPPERNICUS_REQUIRE_RUST=1` (the rust cases then fail instead of skipping when the extension is
+  missing). On Intel macOS (macos-15-intel): the cargo tests, `maturin build`, and the two checks
+  on that wheel; pytest cannot run there, Triangle has no Intel macOS wheel for its pin.
+- The packaged app (`packaging/`, `release.yml`) bundles it; `packaging/check_bundle.py` fails
+  without it, and `check_fma.py` runs on the bundled extension.
+- `check_fma.py` counts x86_64 `vfmadd`/`vfmsub`/`vfnmadd`/`vfnmsub` and arm64
+  `fmadd`/`fmsub`/`fnmadd`/`fnmsub` (and the vector `fmla`/`fmls`) in the disassembly
+  (llvm-objdump from `rustup component add llvm-tools`, else objdump or otool). Measured on
+  macOS: 0 in the arm64 build and in the x86_64 cross-build; SciPy's arm64 `_ckdtree`, the
+  positive control (`--expect-fma`), 112.
+- `check_digest.py`'s mesh was recorded on macOS arm64; the x86_64 cross-build
+  (`maturin build --release --target x86_64-apple-darwin`) gives the same bits under Rosetta.
 
 Use from Python:
 
