@@ -40,7 +40,7 @@ def save(*args, **kwargs):
 
 
 QFileDialog.getSaveFileName = staticmethod(save)
-QDesktopServices.openUrl = staticmethod(lambda url: OPENED.append(url.toLocalFile()) or True)
+QDesktopServices.openUrl = staticmethod(lambda url: OPENED.append(Path(url.toLocalFile())) or True)   # Qt: /
 QMessageBox.question = staticmethod(lambda *a, **k: ASKED.append(a[2]) or QMessageBox.Open)
 WARNED = []
 QMessageBox.warning = staticmethod(lambda *a, **k: WARNED.append(a[2]))
@@ -122,7 +122,7 @@ def test_export_report_writes_the_tree_page_alone_then_beside_the_rails(tmp_path
         start = Path(CHOSEN[-1])
         assert start == Path({str(project.parent)!r}) / "results" / "power_chain_tree_report.html", start
         settle(window.report_worker)
-        assert TARGET[0].is_file() and OPENED == [str(TARGET[0])], OPENED
+        assert TARGET[0].is_file() and OPENED == [TARGET[0]], OPENED
         assert "alone.html" in window.statusBar().currentMessage()
 
         window.nets.select("+3V3")                  # a rail too: its page, and the tree's beside it
@@ -136,7 +136,7 @@ def test_export_report_writes_the_tree_page_alone_then_beside_the_rails(tmp_path
         settle(window.report_worker)
         tree = TARGET[0].with_name("chain_tree_report.html")
         assert TARGET[0].is_file() and tree.is_file()
-        assert OPENED[1:] == [str(TARGET[0]), str(tree)], OPENED
+        assert OPENED[1:] == [TARGET[0], tree], OPENED
         status = window.statusBar().currentMessage()
         assert "chain_report.html" in status and "chain_tree_report.html" in status, status
         assert str(TARGET[0]) in ASKED[-1] and str(tree) in ASKED[-1], ASKED[-1]

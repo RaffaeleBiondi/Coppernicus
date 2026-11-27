@@ -331,7 +331,7 @@ def test_round_off_reads_as_zero_at_the_clis_decimals():
     probe = "console.log(JSON.stringify([mv(5.971e-10), mv(-0.004), mv(16.64), pct(3.32e-11), pct(0.504), " \
             "volt(1e-9), volt(1.8), volt(3.28336), mv(NaN)]));"
     run = subprocess.run(["node", "-e", "\n".join(helpers) + "\n" + probe], capture_output=True, text=True,
-                         timeout=60)
+                         encoding="utf-8", timeout=60)          # node writes UTF-8, not the Windows code page
     assert run.returncode == 0, run.stderr
     assert json.loads(run.stdout) == ["0.00", "0.00", "16.64", "0.00", "0.504", "0.00000", "1.8", "3.28336",
                                       "–"]
