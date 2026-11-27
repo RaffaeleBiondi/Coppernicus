@@ -168,7 +168,7 @@ inside the file. In CI, the Action's `noise` input writes it with the other resu
 is on.
 
 <p align="center">
-  <img src="images/report-noise.png" alt="The noise page of noise-tight: verdict fail, the ripple table marked never judged, the victims table with SIG_LOOP 655.4 mV against a 500 mV margin, 131 %, FAIL and its reason, the stand-ins (none) and the radiated estimate for scale" width="760">
+  <img src="images/report-noise.png" alt="The noise page of noise-tight: verdict fail, the ripple table marked never judged, the victims table with SIG_LOOP 648.4 mV against a 500 mV margin, 130 %, FAIL and its reason, the stand-ins (none) and the radiated estimate for scale" width="760">
 </p>
 
 ## The tolerance page
@@ -185,7 +185,7 @@ solve's estimate. In CI, the Action's `tolerance` input writes it with the other
 `html` is on.
 
 <p align="center">
-  <img src="images/report-tolerance.png" alt="The tolerance page of tolerance-tight: verdict fail, U2's four parts (DC drop 27.05 / 0 mV from the power tree, accuracy 18 / 18 mV, ripple 7.883 / 10.57 mV from the noise of U1, transient 30 / 30 mV entered), KiPI's estimate shown, never judged, and the checks: DC and AC pass, the total 82.94 / 58.57 mV against 54 / 54 mV fails" width="760">
+  <img src="images/report-tolerance.png" alt="The tolerance page of tolerance-tight: verdict fail, U2's four parts (DC drop 27.05 / 0 mV from the power tree, accuracy 18 / 18 mV, ripple 7.822 / 10.53 mV from the noise of U1, transient 30 / 30 mV entered), KiPI's estimate shown, never judged, and the checks: DC and AC pass, the total 82.88 / 58.53 mV against 54 / 54 mV fails" width="760">
 </p>
 
 ## Documentation

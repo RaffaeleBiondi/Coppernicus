@@ -77,7 +77,7 @@ The tab lists, for every load, its drop in the baseline and now, and the differe
 the demo, with B.Cu from 1 oz to 2 oz:
 
 <p align="center">
-  <img src="images/whatif-2-compare.png" alt="The Compare tab on the demo: U1's drop 9.600 mV in the baseline and 6.301 mV with B.Cu at 0.07 mm (−3.300 mV), U2 8.673 to 5.645 mV, U3 6.881 to 6.201 mV, and the changed setting copper_thickness_mm" width="820">
+  <img src="images/whatif-2-compare.png" alt="The Compare tab on the demo: U1's drop 9.600 mV in the baseline and 6.300 mV with B.Cu at 0.07 mm (−3.299 mV), U2 8.673 to 5.645 mV, U3 6.881 to 6.201 mV, and the changed setting copper_thickness_mm" width="820">
 </p>
 
 | Load | Baseline (mV) | B.Cu at 0.07 mm (mV) | Δ (mV) |

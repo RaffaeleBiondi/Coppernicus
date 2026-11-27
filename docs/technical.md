@@ -108,7 +108,7 @@ Verdicts are only against the user's limits. Coppernicus's one built-in default,
 current density, raises **attention** items and never a verdict.
 
 <p align="center">
-  <img src="images/results-attention.png" alt="The Results panel for the thermal demo's +3V3 solved alone, no limits set: eleven amber ATTENTION rows, current crowding above the 60 A/mm² default for 35 µm copper, each with its mean, area, mesh element count and peak, then the loads; nothing is judged" width="900">
+  <img src="images/results-attention.png" alt="The Rail · Problems page for the thermal demo's +3V3 solved alone, no limits set: twelve amber ATTENTION rows, current crowding above the 60 A/mm² default for 35 µm copper, each with its mean, area, mesh element count and peak, then the loads; nothing is judged" width="900">
 </p>
 
 **The rule.** On every rail solve and every power-tree group, without a

@@ -139,7 +139,7 @@ is refused (`solve_too_large`) until the user confirms, or until `skip_ac` / `sk
 leave the heavy solve out.
 
 <p align="center">
-  <img src="images/tolerance-1-window.png" alt="The app's Tolerance tab on tolerance-tight: U2's tolerances in the editor, the stack-up table with the verdict FAIL next to the load, its DC drop from the power tree, the source accuracy, the ripple from aggressor U1 and the entered transient, and the notes: total 82.94 mV below and 58.57 mV above nominal, over the 54 mV allowed" width="900">
+  <img src="images/tolerance-1-window.png" alt="The app's Tolerance page on tolerance-tight: the verdict FAIL with its cards (total 82.88 / 58.53 mV against 54 / 54 mV allowed, the DC and AC checks, KiPI's transient estimate, never judged), one row per load, U2's stack-up chart below and above nominal (DC drop from the power tree, the source accuracy, the ripple from aggressor U1, the entered transient) against the allowed line, its parts and where each came from, and U2's tolerances in the setup panel" width="900">
 </p>
 
 ## Reading the results
@@ -165,7 +165,7 @@ nominal only (U2 has one supply pin), while the ripple and the transient go both
 transient estimate, 26 mV, is printed beside the 30 mV entered, never judged.
 
 <p align="center">
-  <img src="images/report-tolerance.png" alt="The tolerance page of tolerance-tight (coppernicus tolerance --html): verdict fail, U2's four parts with where each came from, KiPI's transient estimate shown, never judged, and the checks: DC and AC pass, the total 82.94 / 58.57 mV against 54 / 54 mV fails" width="760">
+  <img src="images/report-tolerance.png" alt="The tolerance page of tolerance-tight (coppernicus tolerance --html): verdict fail, U2's four parts with where each came from, KiPI's transient estimate shown, never judged, and the checks: DC and AC pass, the total 82.88 / 58.53 mV against 54 / 54 mV fails" width="760">
 </p>
 
 ## Verdicts

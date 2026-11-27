@@ -110,7 +110,7 @@ an agent's call that could exceed the memory is refused (`solve_too_large`) unti
 confirms.
 
 <p align="center">
-  <img src="images/noise-1-window.png" alt="The app's Ripple & noise tab on noise-tight: Solve noise of the 12 V to 1.8 V buck U1 at 1 MHz in 2.7 s, its waveforms (switch node, inductor current, ripple at LOAD, the victims), the ripple table marked never judged and the victims FAIL: SIG_LOOP 655.4 mV against its 500 mV margin" width="900">
+  <img src="images/noise-1-window.png" alt="The app's Ripple & noise tab on noise-tight: Solve noise of the 12 V to 1.8 V buck U1 at 1 MHz, the verdict FAIL with its cards (worst victim, ripple at LOAD, hot loop, radiated estimate), its waveforms (switch node, inductor current, ripple at LOAD, the victims), the ripple table marked never judged and the victims FAIL: SIG_LOOP 648.4 mV against its 500 mV margin" width="900">
 </p>
 
 ## Reading the results
@@ -135,7 +135,7 @@ ground plane, and picks up 1.4 mV. The ripple and the radiated estimate are prin
 judged.
 
 <p align="center">
-  <img src="images/report-noise.png" alt="The noise page of noise-tight: verdict fail, the ripple table marked never judged (LOAD 11.73 mV p-p at 20 MHz), the victims table with SIG_LOOP 655.4 mV against a 500 mV margin, 131 %, FAIL and its reason, the stand-ins (none) and the radiated estimate for scale" width="760">
+  <img src="images/report-noise.png" alt="The noise page of noise-tight: verdict fail, the ripple table marked never judged (LOAD 11.73 mV p-p at 20 MHz), the victims table with SIG_LOOP 648.4 mV against a 500 mV margin, 130 %, FAIL and its reason, the stand-ins (none) and the radiated estimate for scale" width="760">
 </p>
 
 ## Verdicts

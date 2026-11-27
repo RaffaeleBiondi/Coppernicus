@@ -42,7 +42,7 @@ the app they are in the **Rail setup** panel: click a regulator under *Sources* 
 **Regulator** box; click a load under *Loads* to give its **Ground pins**.
 
 <p align="center">
-  <img src="images/tree-3-regulator.png" alt="The rail setup of +3V3: source U1 with its regulator box (switcher, efficiency 0.9, quiescent current 0.005 A, input VIN pin 1, ground GND pin 3), load U4 with its ground pins, the limits and the solve settings" width="380">
+  <img src="images/tree-3-regulator.png" alt="The rail setup of +3V3: source U1 with its regulator box (switcher, efficiency 0.9, quiescent current 5 mA, input VIN pin 1, ground GND pin 3), load U4 with its ground pins, the limits and the solve settings" width="380">
 </p>
 
 | What | Where in the project file | Meaning |
