@@ -110,7 +110,7 @@ an agent's call that could exceed the memory is refused (`solve_too_large`) unti
 confirms.
 
 <p align="center">
-  <img src="images/noise-1-window.png" alt="The app's Ripple & noise tab on noise-tight: Solve noise of the 12 V to 1.8 V buck U1 at 1 MHz in 2.7 s, its waveforms (switch node, inductor current, ripple at LOAD, the victims), the ripple table marked never judged and the victims FAIL: SIG_LOOP 655.4 mV against its 500 mV margin" width="900">
+  <img src="images/noise-1-window.png" alt="The app's Ripple & noise tab on noise-tight: Solve noise of the 12 V to 1.8 V buck U1 at 1 MHz, the verdict FAIL with its cards (worst victim, ripple at LOAD, hot loop, radiated estimate), its waveforms (switch node, inductor current, ripple at LOAD, the victims), the ripple table marked never judged and the victims FAIL: SIG_LOOP 648.4 mV against its 500 mV margin" width="900">
 </p>
 
 ## Reading the results
@@ -120,22 +120,22 @@ On `examples/noise/noise-tight.coppernicus.yml` (a 0.5 V margin on every victim)
 ```text
 Aggressor U1 (source U1, buck): 12 V → 1.8 V, 5 A, duty 0.15, 1 MHz, edges 2 / 2 ns
   phase 1: hot loop 2.07 nH, switch node 303.9 pF; rings at 200.5 MHz, ζ 0.05
-  ripple LOAD (probe, VOUT − GND): 11.73 mV p-p at 20 MHz (4.727 mV below, 7.006 mV above), full band 18.45 mV p-p; not judged
-  victim SIG_SW on SIG_SW: peak 32.67 mV (mostly inductive), margin 500 mV (6.53 %)  PASS
-  victim SIG_LOOP on SIG_LOOP: peak 655.4 mV (mostly inductive), margin 500 mV (131 %)  FAIL
-  victim SIG_BURIED on SIG_BURIED: peak 1.425 mV (mostly inductive), margin 500 mV (0.285 %)  PASS
+  ripple LOAD (probe, VOUT − GND): 11.73 mV p-p at 20 MHz (4.727 mV below, 7.001 mV above), full band 18.35 mV p-p; not judged
+  victim SIG_SW on SIG_SW: peak 32.54 mV (mostly inductive), margin 500 mV (6.51 %)  PASS
+  victim SIG_LOOP on SIG_LOOP: peak 648.4 mV (mostly inductive), margin 500 mV (130 %)  FAIL
+  victim SIG_BURIED on SIG_BURIED: peak 1.418 mV (mostly inductive), margin 500 mV (0.284 %)  PASS
   radiated estimate at 3 m: 22.2 dBµV/m at 202 MHz, CISPR 32 class B 40 dBµV/m (for scale, not judged)
-Verdict: fail. Fail: SIG_LOOP on SIG_LOOP (noise_margin_v (V)): peak 655.4 mV at U6[1], above its margin 500 mV (131 %; mostly inductive)
+Verdict: fail. Fail: SIG_LOOP on SIG_LOOP (noise_margin_v (V)): peak 648.4 mV at U6[1], above its margin 500 mV (130 %; mostly inductive)
 ```
 
-SIG_LOOP runs beside the hot loop's VIN track: its 655 mV is mostly inductive, and above the
+SIG_LOOP runs beside the hot loop's VIN track: its 648 mV is mostly inductive, and above the
 0.5 V margin. In `noise.coppernicus.yml` the same line has only `logic_v: 3.3`, whose JESD8
 margin is 0.8 V: 82 % of it, a pass. SIG_BURIED runs under it on an inner layer, behind the
 ground plane, and picks up 1.4 mV. The ripple and the radiated estimate are printed, never
 judged.
 
 <p align="center">
-  <img src="images/report-noise.png" alt="The noise page of noise-tight: verdict fail, the ripple table marked never judged (LOAD 11.73 mV p-p at 20 MHz), the victims table with SIG_LOOP 655.4 mV against a 500 mV margin, 131 %, FAIL and its reason, the stand-ins (none) and the radiated estimate for scale" width="760">
+  <img src="images/report-noise.png" alt="The noise page of noise-tight: verdict fail, the ripple table marked never judged (LOAD 11.73 mV p-p at 20 MHz), the victims table with SIG_LOOP 648.4 mV against a 500 mV margin, 130 %, FAIL and its reason, the stand-ins (none) and the radiated estimate for scale" width="760">
 </p>
 
 ## Verdicts

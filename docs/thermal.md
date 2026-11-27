@@ -92,14 +92,14 @@ On the thermal demo:
 ```text
 Board temperature (electro-thermal: 3 iterations, settled; ambient 25 °C, airflow 0 m/s; grid 250 × 167 cells of 0.24 mm)
   grid peak 42.31 °C (rise 17.31 °C) on F.Cu at (7.32, 21.24) mm, nearest pad J1.1 (0.00 mm): shown, not judged
-  history: 41.33 → 42.26 → 42.31 °C, last change 0.0514 °C
+  history: 41.33 → 42.26 → 42.31 °C, last change 0.0513 °C
   heat 0.591 W (copper 0.414 W, vias 0.177 W)
   layer         hottest       rise  at (x, y) mm       group      nearest pad          verdict
-  F.Cu         42.29 °C   17.29 °C  (7.34, 21.23)      +3V3       J1.1 0.00 mm         FAIL
-  B.Cu         41.77 °C   16.77 °C  (28.82, 31.66)     +3V3       R1.2 7.71 mm         FAIL
+  F.Cu         42.29 °C   17.29 °C  (7.34, 21.24)      +3V3       J1.1 0.00 mm         FAIL
+  B.Cu         41.77 °C   16.77 °C  (28.68, 32.31)     +3V3       R1.2 7.53 mm         FAIL
   load drops, copper at the ambient (iteration 1) → electro-thermal:
-    U1             +3V3       39.156 → 41.354 mV (+5.6 %)
-    U2             +3V3       35.375 → 37.399 mV (+5.7 %)
+    U1             +3V3       39.154 → 41.351 mV (+5.6 %)
+    U2             +3V3       35.372 → 37.396 mV (+5.7 %)
     U3             +3V3       28.065 → 29.780 mV (+6.1 %)
 ```
 

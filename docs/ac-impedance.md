@@ -89,7 +89,7 @@ decade (`field_points_per_decade`) lower the time. An agent's
 call that could exceed the memory is refused (`solve_too_large`) until confirmed.
 
 <p align="center">
-  <img src="images/ac-1-window.png" alt="The app's Impedance tab on the pdn example: Solve impedance on +3V3 in 14.3 s, |Z|(f) at probe U1 with the open-loop band below the 100 kHz bandwidth shaded and the 50 mΩ target dashed, the probe table and the verdict FAIL, worst |Z| 159.8 mΩ" width="900">
+  <img src="images/ac-1-window.png" alt="The app's Impedance tab on the pdn example: Solve impedance on +3V3 meshed with rust (the default), the verdict FAIL with its cards (worst |Z| 159.8 mΩ at 100.1 kHz, 3.2× the target), |Z|(f) at probe U1 with the open-loop band below the 100 kHz bandwidth shaded and the 50 mΩ target dashed, and the probe table" width="900">
 </p>
 
 ## Reading the results

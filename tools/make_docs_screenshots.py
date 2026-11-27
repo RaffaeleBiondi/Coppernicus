@@ -262,6 +262,13 @@ def main(argv=None) -> int:
         settle(10)
         return window.results.get(window.net) is not None
 
+    def page_height(window, px: int):
+        """The page under the map made ``px`` tall (the rest to the map, with its verdict and
+        cards above it): the guide's map images want the board large, the problems image rows."""
+        split = window.centre_split
+        split.setSizes([max(split.height() - px, 100), px])
+        settle()
+
     def guide() -> int:
         # 1. The bare board (no project yet): pick the source and a load by clicking pads.
         #    The pads are on F.Cu; candidate pads are outlined while picking.
@@ -305,6 +312,7 @@ def main(argv=None) -> int:
         window.field_box.setCurrentIndex(window.field_box.findData("drop"))
         window.show_isolines.setChecked(True)
         window.show_arrows.setChecked(True)
+        page_height(window, 250)
         window.view.reset_view()
         window.statusBar().showMessage("Solved: the colours show how many mV each point is below the source")
         save(window, "3-drop")
@@ -318,7 +326,9 @@ def main(argv=None) -> int:
         save(window, "4-current")
 
         # 5. The problems panel on its own.
+        page_height(window, 430)
         save(window.problems, "5-problems")
+        page_height(window, 250)
 
         # 6. ΔV between two points: the source pad and U1's pad, on F.Cu where the pads are.
         window.show_arrows.setChecked(False)

@@ -42,7 +42,7 @@ the app they are in the **Rail setup** panel: click a regulator under *Sources* 
 **Regulator** box; click a load under *Loads* to give its **Ground pins**.
 
 <p align="center">
-  <img src="images/tree-3-regulator.png" alt="The rail setup of +3V3: source U1 with its regulator box (switcher, efficiency 0.9, quiescent current 0.005 A, input VIN pin 1, ground GND pin 3), load U4 with its ground pins, the limits and the solve settings" width="380">
+  <img src="images/tree-3-regulator.png" alt="The rail setup of +3V3: source U1 with its regulator box (switcher, efficiency 0.9, quiescent current 5 mA, input VIN pin 1, ground GND pin 3), load U4 with its ground pins, the limits and the solve settings" width="380">
 </p>
 
 | What | Where in the project file | Meaning |
@@ -274,9 +274,10 @@ VRMs (sources and regulators)
   U1             smps   +3V3           3.3V  3.30000V  3.30000V   2.5020A 11.98900V   0.7702A   977.3mW  input drop on VIN 11.00 mV (0.09 %): not judged
   U2             ldo    +1V8           1.8V  1.83968V  1.81453V   2.0000A  3.17808V   2.0020A  2683.1mW  input drop on +3V3_F 147.06 mV (4.46 %): not judged
 Loads (the voltage across supply and ground pins)
-  name           group             I  nominal    supply    ground    across           drop  verdict
-  U4             +3V3           0.5A     3.3V  3.29199V    8.63mV  3.28336V 16.64 mV (0.50 %)  not judged
-  U3             +1V8             2A     1.8V  1.83278V   32.78mV  1.80000V 0.00 mV (0.00 %)  not judged
+  name           group             I  nominal    supply    ground across (mean) worst pins           drop  verdict
+  U4             +3V3           0.5A     3.3V  3.29199V    8.63mV      3.28336V   3.28336V 16.64 mV (0.50 %)  not judged
+  U3             +1V8             2A     1.8V  1.83278V   32.78mV      1.80000V   1.80000V 0.00 mV (0.00 %)  not judged
+  supply, ground and across are means over the part's pins; worst pins is the lowest supply pin minus the highest ground pin, which sets the drop (nominal − worst pins), so on a part with several pins the two can differ.
 Groups
   +1V8       rail   +1V8                   max drop 0.000 mV (0.000 %) below 1.83278 V,   copper loss 13.8 mW: not_judged
   +3V3       rail   +3V3 + +3V3_F          max drop 121.916 mV (3.688 %) below 3.3 V,     copper loss 248 mW: not_judged
@@ -330,10 +331,10 @@ For example, give the power chain a 1 % drop limit on +3V3 and on +1V8 and a 30 
 on GND (these numbers are only for the example; use your design's):
 
 ```text
-  U2             ldo    +1V8           1.8V  1.84537V   2.0000A  3.18377V   2.0020A  2683.1mW  input drop on +3V3_F 147.06 mV (4.46 %): FAIL
+  U2             ldo    +1V8           1.8V  1.84537V  1.81453V   2.0000A  3.18377V   2.0020A  2683.1mW  input drop on +3V3_F 147.06 mV (4.46 %): FAIL
   ...
-  U4             +3V3           0.5A     3.3V  3.29768V   14.32mV  3.28336V 16.64 mV (0.50 %)  pass
-  U3             +1V8             2A     1.8V  1.83847V   38.47mV  1.80000V 0.00 mV (0.00 %)  pass
+  U4             +3V3           0.5A     3.3V  3.29768V   14.32mV      3.28336V   3.28336V 16.64 mV (0.50 %)  pass
+  U3             +1V8             2A     1.8V  1.83847V   38.47mV      1.80000V   1.80000V 0.00 mV (0.00 %)  pass
 Groups
   +1V8       rail   +1V8                   max drop 0.000 mV (0.000 %) below 1.83847 V,   copper loss 13.8 mW: pass
   +3V3       rail   +3V3 + +3V3_F          max drop 121.916 mV (3.688 %) below 3.30569 V, copper loss 248 mW: fail
