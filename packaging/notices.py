@@ -25,6 +25,10 @@ from typing import Dict, Iterable, List, Optional, Set
 LICENSE_FILE = re.compile(r"^(LICEN[CS]E|COPYING|NOTICE)", re.IGNORECASE)
 #: The licences of the Rust crates compiled into coppermesh (tools/mesher_rs/crate_licences.py).
 RUST_CRATES = Path(__file__).resolve().parent / "licenses" / "coppermesh-crates.txt"
+#: The app's icons (Phosphor Icons, MIT), shipped as SVG files beside the app's code.
+PHOSPHOR = (Path(__file__).resolve().parents[1] / "src" / "coppernicus" / "app" / "resources" / "icons"
+            / "LICENSE-phosphor.txt")
+PHOSPHOR_LINE = "Phosphor Icons (the app's icons)"
 
 HEADER = """\
 Coppernicus {version}: third-party notices
@@ -134,6 +138,7 @@ def write(out: Path, names: Iterable[str], version: str, python_licence: Optiona
     lines.append(f"  {'Python':28s} {py:12s} PSF-2.0  https://www.python.org/")
     for d in dists:
         lines.append(f"  {d.metadata['Name']:28s} {d.version:12s} {licence_of(d)}  {_url(d)}")
+    lines.append(f"  {'Phosphor Icons':28s} {'2.1.1':12s} MIT  https://phosphoricons.com")
     lines += ["", ""]
     texts = []
     if python_licence and Path(python_licence).is_file():
@@ -146,6 +151,7 @@ def write(out: Path, names: Iterable[str], version: str, python_licence: Optiona
                           f"{licence_of(d)}: see {_url(d)}\n"))
         for path, text in files:
             texts.append((d.metadata["Name"], path, text))
+    texts.append((PHOSPHOR_LINE, "LICENSE-phosphor.txt", PHOSPHOR.read_text(encoding="utf-8")))
     for name, path, text in texts:
         head = f"{name}: {path}"
         lines += ["=" * 78, head, "=" * 78, "", text.rstrip(), "", ""]

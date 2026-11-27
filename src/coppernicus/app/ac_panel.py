@@ -1783,7 +1783,7 @@ class AcPanel(QWidget):
         solves its rail."""
         act = QAction("Solve impedance", self._win)
         act.setShortcut(QKeySequence("Ctrl+I"))
-        act.setToolTip("Solve the AC impedance of the Impedance tab's rail (Ctrl+I)")
+        act.setToolTip("Solve the AC impedance of the Impedance page's rail")   # the window adds the keys
         act.triggered.connect(self.solve_shown)
         toolbar.addAction(act)
         return act

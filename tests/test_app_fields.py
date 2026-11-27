@@ -718,7 +718,7 @@ def test_save_as_names_the_new_file_where_a_field_cannot_be_used(tmp_path):
 def test_use_kicad_fields_off_takes_every_rail_from_the_project_and_is_saved(tmp_path):
     run_in_window('''
         menus = [a.text() for a in window.menuBar().actions()]
-        assert menus == ["&File", "&Project", "View"], menus      # File first, View (hover) last
+        assert menus == ["&File", "&Project", "View", "&Help"], menus   # File first, Help last
         own = Rail("VCC", [Source("J1", 1.0)], [Load("U1", 3.0)])
         open_net(strip(TMP / "a", rails=[own]))
         action = window.use_fields_action

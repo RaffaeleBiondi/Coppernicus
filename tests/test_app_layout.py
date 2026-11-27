@@ -61,9 +61,12 @@ def test_the_setup_panel_follows_the_page_with_its_solve_at_the_foot():
 
 
 def test_the_map_is_full_small_or_absent_as_the_page_needs():
-    run_in_window('''
+    """With a board open (before one, the guided start takes the map's place on a first run)."""
+    run_in_window(f'''
         window.resize(1400, 900)
         window.show()
+        window.guide.dismiss_button.click()              # the guided start has tests of its own
+        window.open_project({DEMO!r})
         app.processEvents()
         pages = window.results_tabs
         for page, size in ((window.problems, "full"), (window.ac_panel, "small"),

@@ -162,6 +162,8 @@ def main(argv=None) -> int:
     # fresh folder: the same images on every machine, and the user's settings untouched.
     from coppernicus.app import SETTINGS_DIR_ENV
     settings = os.environ[SETTINGS_DIR_ENV] = tempfile.mkdtemp(prefix="coppernicus-shots-settings-")
+    from coppernicus.app import guide
+    guide.set_done()                       # the docs show the app after its first run
     # As gui_check --window: every window opens behind the others without activating, and here
     # it also lets clicks through (the run sends no real mouse input), so a click meant for
     # another application cannot land on it. Offscreen too, where audit() checks every window.

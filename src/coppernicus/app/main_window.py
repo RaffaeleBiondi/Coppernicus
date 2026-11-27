@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import html
 import os
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QLocale, Qt, QTimer, QUrl
+from PySide6.QtCore import QLocale, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -36,6 +37,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QTextEdit,
+    QToolBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -43,10 +45,14 @@ from PySide6.QtWidgets import (
 
 from coppernicus import __version__, bootstrap_triangle
 from coppernicus import board_fields as BF
-from coppernicus.app import fields_view, label_text, theme
+from coppernicus.app import fields_view, label_text, shown_label, theme
 from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
+from coppernicus.app.guide import GuideCard
+from coppernicus.app.guide import done as guide_done
+from coppernicus.app.guide import placed as guide_placed
+from coppernicus.app.guide import set_done as guide_set_done
 from coppernicus.app.mesher import MesherBox
 from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.noise_panel import NoisePanel
@@ -92,6 +98,14 @@ PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 USER_RESULTS = ("Documents", "Coppernicus", "results")     # under the home folder
 REMOVE_MESHER = "Remove downloaded mesher (Triangle)…"
 MAP_SHARE = {"full": 0.6, "small": 0.3}   # the map's share of the centre's height, by page
+SHORTCUTS_KEY = "F1"                   # Help -> Keyboard shortcuts
+# Icons (Phosphor, resources/icons): the toolbar's actions and menus, the navigator's groups.
+TOOLBAR_ICONS = {"solve_rail": "play", "solve_tree": "tree-structure", "solve_impedance": "wave-sine",
+                 "solve_noise": "waveform", "pin": "push-pin", "open_board": "folder-open",
+                 "open_project": "folder-open", "save": "floppy-disk", "save_as": "floppy-disk",
+                 "export_maps": "export", "export_report": "export"}
+MENU_ICONS = {"Open": "folder-open", "Save": "floppy-disk", "Export": "export"}
+NAV_ICONS = {"Rail": "lightning", "Power tree": "tree-structure", "AC": "wave-sine", "Tolerance": "target"}
 RESULTS_TITLE = "Results"              # above the navigator; "Results for +3V3" with a net shown
 THEME_KEY = "Ctrl+Shift+L"                              # dark <-> light (View menu, toolbar)
 # + / − step the Layer selector, as in KiCad: (key, modifiers, step); "=" is "+" without Shift.
@@ -226,6 +240,26 @@ def rail_header_html(res: RailResult, limits: Limits, problems) -> str:
     verdict = verdict_html(rail_verdict(res, limits, problems), fails, missing, set_any)
     return (f"<b>{res.net}</b>: {worst_txt}{max_drop_text(res)} · copper loss "
             f"{res.power_loss * 1e3:.3g} mW ({split}) · {verdict}{attention_html(problems)}")
+
+
+def shortcut_tip(action) -> str:
+    """An action's tooltip with its shortcut: "Solve rail (F5)"; its own tooltip when it already
+    names the shortcut."""
+    keys = action.shortcut().toString(QKeySequence.NativeText)
+    text = shown_label(action.text())
+    own = action.toolTip()
+    default = own.replace("…", "").strip() == text.replace("…", "").strip()   # Qt's: the text, no "…"
+    said = text if not own or default else own
+    if not keys or keys in said:
+        return said
+    return f"{said} ({keys})"
+
+
+def name_keys(action) -> str:
+    """"Open board… (⌘O)": an action's name and its shortcut, for a menu button's tooltip."""
+    keys = action.shortcut().toString(QKeySequence.NativeText)
+    text = shown_label(action.text())
+    return f"{text} ({keys})" if keys else text
 
 
 def saved_rail(rail: Rail) -> bool:
@@ -382,6 +416,14 @@ class MainWindow(QMainWindow):
         cc.setContentsMargins(0, 0, 0, 0)
         cc.setSpacing(0)
         cc.addWidget(self.problems.header)
+        self.guide = GuideCard()                          # the first run only, until the first solve
+        self.guide_row = guide_placed(self.guide)
+        self.guide_row.setVisible(not guide_done())
+        self.guide.open_board.connect(lambda: self.open_board_dialog())
+        self.guide.open_project.connect(lambda: self.open_project_dialog())
+        self.guide.dismissed.connect(self.guide_row.hide)
+        self.guide.dismissed.connect(lambda: self._page_shown(self.pages.currentIndex()))
+        cc.addWidget(self.guide_row)
         cc.addWidget(self.centre_split, 1)
         self.setCentralWidget(centre_column)
         self.results_title = QLabel(RESULTS_TITLE)
@@ -419,6 +461,7 @@ class MainWindow(QMainWindow):
                              id(self.noise_panel): ("noise", "Noise setup", "solve"),
                              id(self.tolerance_panel): ("tolerance", "Tolerance setup", "solve")}
         self._map_size = ""
+        self._map_reshare = False
         self.pages.currentChanged.connect(self._page_shown)
         self._badge_timer = QTimer(self)                  # the badges, once per burst of changes
         self._badge_timer.setSingleShot(True)
@@ -465,6 +508,8 @@ class MainWindow(QMainWindow):
         self.view_menu.addSeparator()
         self.view_menu.addAction(self.setup_dock.toggleViewAction())
         self.view_menu.addAction(self.theme_action)
+        self.menuBar().removeAction(self.help_menu.menuAction())   # Help last, as everywhere
+        self.menuBar().addMenu(self.help_menu)
         theme.signals.changed.connect(self._theme_changed)
         self.compare.pin_requested.connect(self.pin_baseline)
         self.compare.clear_requested.connect(self.clear_baseline)
@@ -500,9 +545,11 @@ class MainWindow(QMainWindow):
             self.setup_dock.show_setup(*self._page_setups[id(page)])
         size = "none" if page in (self.noise_panel, self.tolerance_panel) else \
             "small" if page is self.ac_panel else "full"
-        self.map_pane.setVisible(size != "none")
+        # Before a board, the guided start takes the map's place (there is nothing to map yet).
+        self.map_pane.setVisible(size != "none" and (self.board is not None or self.guide_row.isHidden()))
         self.problems.header.setVisible(page in (self.problems, self.losses, self.compare))
-        if size != "none" and size != self._map_size:
+        if size != "none" and (size != self._map_size or self._map_reshare):
+            self._map_reshare = False
             total = max(self.centre_split.height(), 400)
             share = MAP_SHARE[size]
             self.centre_split.setSizes([int(total * share), total - int(total * share)])
@@ -580,6 +627,25 @@ class MainWindow(QMainWindow):
         nav.set_badge(self.tolerance_panel, badge(v["tolerance"]))
         self.nets.set_badges(self.net_badges())
         nav.viewport().update()
+        self.update_guide()
+
+    def update_guide(self):
+        """Tick the guided start's steps; the first solve ends it for good."""
+        if self.guide_row.isHidden():
+            return
+        rail = self.merged.project.rail(self.net) if self.net else None
+        solved = bool(self.results) or self.tree is not None or bool(self.ac_panel.results) \
+            or bool(self.noise_panel.results)
+        ticks = [self.board is not None, bool(self.net),
+                 bool(rail is not None and rail.sources and rail.loads), solved]
+        if ticks == self.guide.progress() and not solved:
+            return
+        self.guide.set_progress(ticks)
+        if solved:
+            guide_set_done()
+            self.guide_row.hide()
+        self._map_reshare = True                             # the card changed height: share again
+        QTimer.singleShot(0, lambda: self._page_shown(self.pages.currentIndex()))   # after the layout
 
     def net_badges(self) -> Dict[str, tuple]:
         """Each rail net's DC badge: its rail solved alone, else its power-tree group, else
@@ -633,6 +699,8 @@ class MainWindow(QMainWindow):
         tb = self.addToolBar("Main")
         tb.setObjectName("Main")
         tb.setMovable(False)
+        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        tb.setIconSize(QSize(16, 16))
         acts = {}
         for key, text, shortcut, slot in (
                 ("open_board", "Open board…", QKeySequence.Open, self.open_board_dialog),
@@ -663,8 +731,9 @@ class MainWindow(QMainWindow):
         tb.addAction(acts["solve_rail"])
         tb.widgetForAction(acts["solve_rail"]).setObjectName("primary")      # the first solve
         tb.addAction(acts["solve_tree"])
-        self.ac_panel.add_solve_action(tb)            # "Solve impedance" (Ctrl+I), the Impedance page's
-        self.noise_panel.add_solve_action(tb)         # "Solve noise" (Ctrl+Shift+N), Ripple & noise
+        acts["solve_impedance"] = self.ac_panel.add_solve_action(tb)   # Ctrl+I, the Impedance page's
+        acts["solve_noise"] = self.noise_panel.add_solve_action(tb)    # Ctrl+Shift+N, Ripple & noise
+        self.addActions([acts["solve_impedance"], acts["solve_noise"]])  # listed in Keyboard shortcuts
         tb.addSeparator()
         tb.addAction(acts["pin"])
         self._menu_button(tb, "Export", [acts["export_maps"], acts["export_report"]])
@@ -682,8 +751,16 @@ class MainWindow(QMainWindow):
                                           "(use_board_fields in the project file)")
         self.use_fields_action.toggled.connect(self._use_fields_toggled)
         self.project_menu.addAction(self.use_fields_action)
+        self.help_menu = self.menuBar().addMenu("&Help")
+        self.shortcuts_action = QAction("Keyboard shortcuts", self)
+        self.shortcuts_action.setShortcut(QKeySequence(SHORTCUTS_KEY))
+        self.shortcuts_action.triggered.connect(self.show_shortcuts)
+        self.addAction(self.shortcuts_action)
+        self.help_menu.addAction(self.shortcuts_action)
+        for act in acts.values():                     # the shortcut in every tooltip
+            act.setToolTip(shortcut_tip(act))
+        self._apply_icons()
         if remove_mesher_shown():
-            self.help_menu = self.menuBar().addMenu("&Help")
             remove = QAction(REMOVE_MESHER, self)
             remove.setMenuRole(QAction.NoRole)          # macOS: stays in Help
             remove.setToolTip("Delete the Triangle mesher this app downloaded; it is downloaded "
@@ -698,6 +775,40 @@ class MainWindow(QMainWindow):
         self.theme_action.triggered.connect(self.toggle_theme)
         self._show_theme_action()
         tb.addAction(self.theme_action)               # at the right end, as the report's button
+        self.addAction(self.theme_action)
+
+    def _apply_icons(self):
+        """The toolbar's and the navigator's icons in the theme's colours (again after a switch)."""
+        bar = self.findChild(QToolBar, "Main")
+        for key, name in TOOLBAR_ICONS.items():
+            act = self.toolbar_actions.get(key)
+            if act is not None:
+                act.setIcon(theme.icon(name, "white" if key == "solve_rail" else "fg"))
+        for menu, name in MENU_ICONS.items():
+            if menu in self.toolbar_menus:
+                self.toolbar_menus[menu].setIcon(theme.icon(name))
+        self.reload_action.setIcon(theme.icon("arrows-clockwise"))
+        for group, name in NAV_ICONS.items():
+            item = self.navigator._groups.get(group) or self.navigator.item_of(
+                {"Tolerance": self.tolerance_panel}.get(group))
+            if item is not None:
+                item.setIcon(0, theme.icon(name, "muted", 16))
+        if bar is not None:
+            bar.update()
+
+    def shortcuts_rows(self) -> List[Tuple[str, str]]:
+        """(what, keys) of every shortcut of the window, as Help → Keyboard shortcuts lists them."""
+        rows = [("Dark / light theme" if a is self.theme_action else shown_label(a.text()),
+                 a.shortcut().toString(QKeySequence.NativeText))
+                for a in self.actions() if not a.shortcut().isEmpty()]
+        rows += [("Next / previous copper layer (as in KiCad)", "+ / −"),
+                 ("Stop picking pads or measuring", "Esc")]
+        return rows
+
+    def show_shortcuts(self):
+        rows = "".join(f"<tr><td>{html.escape(what)}</td><td>&nbsp;&nbsp;<b>{html.escape(keys)}</b></td></tr>"
+                       for what, keys in self.shortcuts_rows())
+        QMessageBox.information(self, "Keyboard shortcuts", f"<table>{rows}</table>")
 
     def _menu_button(self, tb, name: str, actions) -> QToolButton:
         """A toolbar button "``name`` ▾" that opens a menu of ``actions``."""
@@ -707,8 +818,10 @@ class MainWindow(QMainWindow):
         button.setText(name)
         button.setMenu(menu)
         button.setPopupMode(QToolButton.InstantPopup)
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        button.setIconSize(QSize(16, 16))
         button.setObjectName(f"menu{name}")
-        button.setToolTip(" · ".join(a.text() for a in actions))
+        button.setToolTip("\n".join(name_keys(a) for a in actions))
         tb.addWidget(button)
         self.toolbar_menus[name] = button
         return button
@@ -725,6 +838,7 @@ class MainWindow(QMainWindow):
         theme.recolor(self, self._theme, new)
         self._theme = new
         self._show_theme_action()
+        self._apply_icons()
 
     def _show_theme_action(self):
         light = theme.current() == "dark"            # what the button switches to
@@ -1376,6 +1490,7 @@ class MainWindow(QMainWindow):
         return (rail.sources[0].voltage == 0) if rail.sources else None
 
     def _rail_edited(self):
+        self._badge_timer.start()                     # the badges and the guide follow
         rail = self._adopt_draft()
         self.rail_panel.set_net_kind(self._net_at_0v(rail))
         self._setup_changed(rail.net)

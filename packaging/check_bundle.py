@@ -11,7 +11,8 @@ is not mistaken for it. coppermesh must be there twice: its extension on disk
 (``coppermesh/coppermesh*.so`` or ``.pyd``; on Windows with ``python3.dll``, which an abi3
 extension loads) and its package in a PYZ archive; and the bundle's THIRD_PARTY_NOTICES.txt must
 hold licenses/coppermesh-crates.txt whole, with every Rust crate it lists (the licences of the
-crates compiled into coppermesh, from its Cargo.lock). Prints the counts and the size; ``--list``
+crates compiled into coppermesh, from its Cargo.lock), and the licence of the app's icons
+(Phosphor Icons, MIT) whole. Prints the counts and the size; ``--list``
 writes the full listing (files, then modules). Exit code 1 if triangle is found or coppermesh is
 missing. Needs PyInstaller (its archive readers): run it with the build environment's Python.
 """
@@ -26,6 +27,18 @@ NAME = "triangle"
 RUST = "coppermesh"
 NOTICES = "THIRD_PARTY_NOTICES.txt"
 RUST_CRATES = Path(__file__).resolve().parent / "licenses" / "coppermesh-crates.txt"
+PHOSPHOR = (Path(__file__).resolve().parents[1] / "src" / "coppernicus" / "app" / "resources" / "icons"
+            / "LICENSE-phosphor.txt")
+
+
+def icon_notice_problems(notices_text, licence_text):
+    """Why the bundled notices do not cover the app's icons (Phosphor Icons, MIT; empty: they
+    do): ``licence_text`` (the committed LICENSE-phosphor.txt) must be in them whole."""
+    if notices_text is None:
+        return [f"no {NOTICES} in the bundle"]
+    if licence_text.strip() not in notices_text.replace("\r\n", "\n"):
+        return [f"{NOTICES} lacks the licence of the app's icons (Phosphor Icons, MIT)"]
+    return []
 
 
 def _is_triangle_path(rel: Path) -> bool:
@@ -136,10 +149,11 @@ def main(argv=None) -> int:
         print("error: no PYZ archive found: is this a PyInstaller bundle?", file=sys.stderr)
         return 1
     missing = rust_problems(files, modules)
+    found = [bundle / f for f in files if f.name == NOTICES and (bundle / f).is_file()]
+    notices_text = found[0].read_text(encoding="utf-8", errors="replace") if found else None
     if rust_extensions(files):
-        found = [bundle / f for f in files if f.name == NOTICES and (bundle / f).is_file()]
-        notices_text = found[0].read_text(encoding="utf-8", errors="replace") if found else None
         missing += crate_notice_problems(notices_text, RUST_CRATES.read_text(encoding="utf-8"))
+    missing += icon_notice_problems(notices_text, PHOSPHOR.read_text(encoding="utf-8"))
     if bad_files or bad_modules or missing:
         for f in bad_files:
             print(f"error: triangle in the bundle: {f.as_posix()}", file=sys.stderr)

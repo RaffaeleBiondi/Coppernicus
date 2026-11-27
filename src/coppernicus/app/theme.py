@@ -47,6 +47,7 @@ APP_TOKENS: Dict[str, Dict[str, str]] = {
 STATE_TOKENS = ("fail", "warn", "pass", "muted",
                 "cell-readonly", "cell-problem", "cell-error", "cell-missing")
 WHITE = "#ffffff"                 # text on the selected row and on the verdict badges, both themes
+ICONS = Path(__file__).resolve().parent / "resources" / "icons"   # Phosphor Icons (MIT), regular
 # The tick of a checked box (white, drawn on --selected), for the style sheet.
 CHECK_IMAGE = (Path(__file__).resolve().parent / "resources" / "check.png").as_posix()
 
@@ -99,6 +100,34 @@ def qcolor(token: str, theme: Optional[str] = None) -> QColor:
 
 def brush(token: str, theme: Optional[str] = None) -> QBrush:
     return QBrush(qcolor(token, theme))
+
+
+_icons: Dict[tuple, object] = {}       # (name, colour, size) -> QIcon
+
+
+def icon(name: str, token: str = "fg", size: int = 18):
+    """The icon ``name`` (``resources/icons/<name>.svg``) drawn in a token's colour of the theme
+    in use ("white" for white), at 1x and 2x. Icons follow a theme switch only when set again."""
+    from PySide6.QtCore import QByteArray
+    from PySide6.QtGui import QIcon, QPainter, QPixmap
+    from PySide6.QtSvg import QSvgRenderer
+
+    colour = WHITE if token == "white" else color(token)
+    key = (name, colour, size)
+    if key not in _icons:
+        svg = (ICONS / f"{name}.svg").read_text(encoding="utf-8")
+        renderer = QSvgRenderer(QByteArray(svg.replace('fill="currentColor"', f'fill="{colour}"').encode()))
+        made = QIcon()
+        for scale in (1, 2):
+            pixmap = QPixmap(size * scale, size * scale)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            renderer.render(painter)
+            painter.end()
+            pixmap.setDevicePixelRatio(scale)
+            made.addPixmap(pixmap)
+        _icons[key] = made
+    return _icons[key]
 
 
 def span(token: str, html: str) -> str:
@@ -221,6 +250,16 @@ QTreeWidget#navigator::item {{ padding: 3px 4px; border-radius: 4px; }}
 QTreeWidget#navigator::item:hover {{ background: {t['hover']}; }}
 QTreeWidget#navigator::item:selected {{ background: {t['selected']}; color: {WHITE}; }}
 QLabel[role="muted"] {{ color: {t['muted']}; }}
+QFrame#guide {{ background: {t['panel']}; border: 1px solid {t['line']}; border-radius: 10px; }}
+QFrame#guide QLabel {{ background: transparent; border: none; }}
+QLabel#guideTitle {{ color: {t['fg']}; font-size: 17px; font-weight: 600; }}
+QLabel#guideStep {{ border: 1px solid {t['outline']}; border-radius: 12px; color: {t['muted']};
+  font-weight: 600; }}
+QFrame#guide QLabel#guideStep[state="current"] {{ background: {t['selected']}; border-color: {t['selected']};
+  color: {WHITE}; }}
+QFrame#guide QLabel#guideStep[state="done"] {{ background: {t['badge-pass']}; border-color: {t['badge-pass']};
+  color: {WHITE}; }}
+QPushButton#guideOpen {{ background: {t['selected']}; border-color: {t['selected']}; color: {WHITE}; }}
 QLabel#badge {{ border-radius: 4px; padding: 1px 6px; font-weight: 600; }}
 QLabel#badge[badge="fail"] {{ background: {t['badge-fail']}; color: {WHITE}; }}
 QLabel#badge[badge="pass"] {{ background: {t['badge-pass']}; color: {WHITE}; }}

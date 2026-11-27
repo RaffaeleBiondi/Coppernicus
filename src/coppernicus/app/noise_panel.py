@@ -1934,8 +1934,7 @@ class NoisePanel(QWidget):
         solves its aggressor."""
         act = QAction("Solve noise", self._win)
         act.setShortcut(QKeySequence("Ctrl+Shift+N"))
-        act.setToolTip("Solve the ripple and coupled noise of the Ripple & noise tab's aggressor "
-                       "(Ctrl+Shift+N)")
+        act.setToolTip("Solve the ripple and coupled noise of the Ripple & noise page's aggressor")
         act.triggered.connect(self.solve_shown)
         toolbar.addAction(act)
         return act
