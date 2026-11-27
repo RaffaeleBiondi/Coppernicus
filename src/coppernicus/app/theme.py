@@ -156,6 +156,11 @@ QToolButton {{ color: {t['fg']}; background: transparent; border: 1px solid tran
 QToolButton:hover {{ background: {t['hover']}; }}
 QToolButton:pressed, QToolButton:checked {{ background: {t['line']}; }}
 QToolButton:disabled {{ color: {t['muted']}; }}
+QToolButton#primary {{ background: {t['selected']}; border-color: {t['selected']}; color: {WHITE};
+  font-weight: 600; }}
+QToolButton#primary:hover {{ border-color: {t['fg']}; }}
+QToolButton::menu-indicator {{ subcontrol-position: right center; right: 4px; }}
+QToolButton[popupMode="2"] {{ padding-right: 18px; }}
 QDockWidget {{ color: {t['muted']}; }}
 QDockWidget::title {{ background: {t['chrome']}; padding: 4px 8px; border-bottom: 1px solid {t['line']}; }}
 QMenuBar {{ background: {t['chrome']}; color: {t['fg']}; }}

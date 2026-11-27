@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from coppernicus.app import shown_label
+from coppernicus.app.verdict import BADGE_ROLE, BadgeDelegate
 
 PAGE_ROLE = Qt.UserRole          # on a navigator item: the page widget's id (None on a group)
 
@@ -50,6 +51,26 @@ class Navigator(QTreeWidget):
         self._items: Dict[int, QTreeWidgetItem] = {}       # id(page) -> its item
         self._pages: Dict[int, QWidget] = {}
         self.currentItemChanged.connect(self._current_changed)
+        self.setItemDelegate(BadgeDelegate(self))
+
+    def set_badge(self, page: QWidget, data) -> None:
+        """``page``'s badge, (kind, text) as :data:`BADGE_ROLE` holds it, or None for none."""
+        item = self._items.get(id(page))
+        if item is not None:
+            item.setData(0, BADGE_ROLE, data)
+
+    def set_group_badge(self, group: str, data) -> None:
+        item = self._groups.get(group)
+        if item is not None:
+            item.setData(0, BADGE_ROLE, data)
+
+    def badge_of(self, page: QWidget):
+        item = self._items.get(id(page))
+        return item.data(0, BADGE_ROLE) if item is not None else None
+
+    def group_badge(self, group: str):
+        item = self._groups.get(group)
+        return item.data(0, BADGE_ROLE) if item is not None else None
 
     def add(self, page: QWidget, label: str, group: Optional[str]) -> None:
         """``page`` under ``group`` (a top-level page of its own when ``group`` is None or the
