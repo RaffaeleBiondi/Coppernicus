@@ -7,10 +7,12 @@
 # plus Coppernicus-<version>-macos-arm64-contents.txt (every file and module of the bundle).
 #
 # Steps: a build environment of its own (build/venv-macos: uv.lock's packages, without the
-# dev tools and without triangle, on a uv-managed Python so that the app does not depend on
-# a Homebrew or system Python); PyInstaller (packaging/requirements-build.txt) runs
-# packaging/coppernicus.spec; packaging/check_bundle.py proves triangle is not in the bundle;
-# hdiutil makes the .dmg. The app is not signed with a Developer ID (ad-hoc signature only):
+# dev tools and without triangle, with coppermesh, the rust mesher, which maturin builds from
+# tools/mesher_rs (uv's "rust" group: this needs a Rust toolchain), on a uv-managed Python so
+# that the app does not depend on a Homebrew or system Python); PyInstaller (packaging/requirements-build.txt) runs
+# packaging/coppernicus.spec; packaging/check_bundle.py proves triangle is not in the bundle and
+# coppermesh is, and tools/mesher_rs/check_fma.py that the bundled coppermesh has no fused
+# multiply-add; hdiutil makes the .dmg. The app is not signed with a Developer ID (ad-hoc signature only):
 # see docs/install.md for the first start.
 set -euo pipefail
 
@@ -26,12 +28,14 @@ export UV_PYTHON_PREFERENCE=only-managed
 PY="$UV_PROJECT_ENVIRONMENT/bin/python"
 
 echo "== build environment ($UV_PROJECT_ENVIRONMENT)"
-uv sync --frozen --no-dev --no-install-package triangle --python 3.12
+command -v cargo >/dev/null || { echo "error: no Rust toolchain (cargo) on PATH: coppermesh is built from source" >&2; exit 1; }
+uv sync --frozen --no-dev --group rust --no-install-package triangle --python 3.12
 uv pip install --python "$PY" -r packaging/requirements-build.txt
 if "$PY" -c "import triangle" 2>/dev/null; then
   echo "error: triangle is installed in the build environment" >&2
   exit 1
 fi
+"$PY" -c "import coppermesh" || { echo "error: coppermesh is not importable in the build environment" >&2; exit 1; }
 
 echo "== PyInstaller"
 rm -rf dist/Coppernicus dist/Coppernicus.app
@@ -41,6 +45,7 @@ rm -rf dist/Coppernicus                      # the folder BUNDLE made the .app f
 
 echo "== bundle check"
 "$PY" packaging/check_bundle.py dist/Coppernicus.app --list "dist/${NAME}-contents.txt"
+"$PY" tools/mesher_rs/check_fma.py dist/Coppernicus.app/Contents/Frameworks/coppermesh/coppermesh*.so
 codesign --verify --deep --strict dist/Coppernicus.app
 echo "signature (ad-hoc) verified"
 

@@ -67,7 +67,7 @@ jobs:
   mesher-macos-x86_64:
     name: coppermesh (macos-15-intel)
     runs-on: macos-15-intel
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.4.0

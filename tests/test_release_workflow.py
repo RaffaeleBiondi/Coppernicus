@@ -45,3 +45,16 @@ def test_the_build_scripts_keep_triangle_out():
         assert "--no-install-package triangle" in text and "check_bundle.py" in text
     spec = (ROOT / "packaging" / "coppernicus.spec").read_text(encoding="utf-8")
     assert '"triangle",' in spec                                # in PyInstaller's excludes
+
+
+def test_the_build_scripts_bundle_coppermesh_and_check_it():
+    """The rust mesher is in the packaged app (not the default mesher): the build environment
+    syncs uv's "rust" group, the spec stops without its extension, check_bundle.py and the FMA
+    check run on the bundle."""
+    for script in ("build_macos.sh", "build_windows.ps1"):
+        text = (ROOT / "packaging" / script).read_text(encoding="utf-8")
+        assert "--no-dev --group rust" in text and "check_fma.py" in text
+    spec = (ROOT / "packaging" / "coppernicus.spec").read_text(encoding="utf-8")
+    assert '"coppermesh"' in spec and "coppermesh's extension is not in the bundle" in spec
+    check = (ROOT / "packaging" / "check_bundle.py").read_text(encoding="utf-8")
+    assert 'RUST = "coppermesh"' in check and "python3.dll" in check
