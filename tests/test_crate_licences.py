@@ -71,7 +71,10 @@ def test_bundled_notices_hold_every_crate_or_the_bundle_check_fails(tmp_path):
     without = full.replace("Rust crate: numpy 0.30.0", "Rust crate: (removed)")
     assert check_bundle.crate_notice_problems(without, crates) == [
         "THIRD_PARTY_NOTICES.txt lacks the licences of Rust crate: numpy 0.30.0"]
-    edited = full.replace("Permission is hereby granted", "Permission is granted", 1)
+    block = crates.rstrip()                 # edited inside the crates' own block: the notices
+    edited = full.replace(block, block.replace("Permission is hereby granted",   # hold other MIT
+                                               "Permission is granted", 1))       # texts (icons)
+    assert edited != full
     assert "a licence text differs" in check_bundle.crate_notice_problems(edited, crates)[0]
     assert check_bundle.crate_notice_problems(None, crates) == ["no THIRD_PARTY_NOTICES.txt in the bundle"]
 
