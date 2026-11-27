@@ -568,6 +568,12 @@ def test_on_demand_nothing_about_triangle_stops_a_start(monkeypatch, tmp_path):
     monkeypatch.setenv(bt.ON_DEMAND_ENV, "0")
     with pytest.raises(bt.BootstrapError, match="incomplete"):
         bt.at_start()
+    monkeypatch.setenv(bt.ON_DEMAND_ENV, "1")
+
+    def unwritable(env=None):
+        raise NotADirectoryError(20, "Not a directory", "/dev/null/x")
+    monkeypatch.setattr(bt, "needed", unwritable)
+    assert bt.at_start() is None
 
 
 def test_choosing_the_triangle_mesher_fetches_it_on_demand(monkeypatch, tmp_path):

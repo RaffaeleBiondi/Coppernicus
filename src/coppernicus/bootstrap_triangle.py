@@ -675,13 +675,14 @@ def at_start(env=None) -> Optional[Plan]:
     copy is put on ``sys.path``, what lies around it is tidied. Fetching on the first start
     (the default) returns its :class:`Plan` and raises its :class:`BootstrapError`. On demand
     (:func:`on_demand`) nothing is fetched and nothing stops the start (no wheel for this
-    platform, an incomplete bundle): Coppernicus's stand-in takes Triangle's place
-    (:mod:`coppernicus.triangle_standin`) until the triangle mesher is chosen."""
+    platform, an incomplete bundle, a per-user folder that cannot be written): Coppernicus's
+    stand-in takes Triangle's place (:mod:`coppernicus.triangle_standin`) until the triangle
+    mesher is chosen."""
     if not on_demand(env):
         return needed(env)
     try:
         needed(env)
-    except BootstrapError:
+    except (BootstrapError, OSError):         # the triangle mesher says why when it is chosen
         pass
     return None
 
@@ -692,8 +693,9 @@ def fetch_for_mesher(name: str, gui: bool, env=None, stream: Optional[TextIO] = 
     with lines on ``stream``): the download happens here, not at the start, when
     :func:`on_demand`. Returns whether Triangle is in use; any other mesher needs nothing (True).
     Call it with no seam backend installed (see
-    :func:`coppernicus.triangle_standin.use_real_triangle`). Raises :class:`BootstrapError` from a
-    console fetch; the dialog shows its own errors (False)."""
+    :func:`coppernicus.triangle_standin.use_real_triangle`). Raises :class:`BootstrapError` when
+    this build cannot fetch it (no wheel for this platform, an incomplete bundle) and from a
+    console fetch; the dialog shows the download's own errors (False)."""
     if name != PACKAGE:
         return True
     from coppernicus import triangle_standin
