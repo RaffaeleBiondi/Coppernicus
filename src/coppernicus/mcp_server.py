@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from coppernicus import __version__
 from coppernicus.service import ServiceError, Session
 from coppernicus.service import errors as E
+from coppernicus.triangle_standin import TriangleNotInstalled
 
 log = logging.getLogger("coppernicus.mcp")
 
@@ -259,6 +260,9 @@ def _call(name: str, fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
     except ServiceError as e:
+        log.info("%s: %s: %s", name, e.code, e.message)
+        return _error_result(e.to_dict())
+    except TriangleNotInstalled as e:           # KiPI's own mesher, and only the stand-in here
         log.info("%s: %s: %s", name, e.code, e.message)
         return _error_result(e.to_dict())
     except Exception as e:      # a bug: say so, keep the traceback in the log

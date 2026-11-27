@@ -2,6 +2,12 @@
 
 import pytest
 
+from coppernicus.triangle_standin import ensure_triangle_importable
+
+# As the engine package does, before any test module imports KiPI (whose mesher imports triangle):
+# without Triangle, the stand-in takes its place.
+ensure_triangle_importable()
+
 
 @pytest.fixture(scope="session")
 def kipi_factorizations():

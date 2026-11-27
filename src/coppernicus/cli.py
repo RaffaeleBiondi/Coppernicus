@@ -943,12 +943,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         _utf8_output()
     from coppernicus.engine import EngineError
     from coppernicus.project import ProjectError
+    from coppernicus.triangle_standin import TriangleNotInstalled
     try:
         return args.func(args)
     except (EngineError, ProjectError, FileNotFoundError) as e:
         code = ("invalid_project" if isinstance(e, ProjectError) else
                 "file_not_found" if isinstance(e, FileNotFoundError) else "solve_failed")
         return _fail(args, code, str(e))
+    except TriangleNotInstalled as e:            # KiPI's own mesher, and only the stand-in here
+        code = _fail(args, e.code, e.message, e.hint)
+        print(f"  {e.hint}", file=sys.stderr)
+        return code
     except Exception as e:
         # A bug. Never let it exit 1, which means "a limit was exceeded" (CI reads the code).
         if getattr(args, "verbose", False):

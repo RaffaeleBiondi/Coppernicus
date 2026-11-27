@@ -9,6 +9,8 @@ called through KiPI's functions.
 
 from __future__ import annotations
 
+import types
+
 import numpy as np
 
 from coppernicus.engine.meshing.protocol import (
@@ -20,6 +22,7 @@ from coppernicus.engine.meshing.protocol import (
     graded_cap,
     graded_limits,
 )
+from coppernicus.triangle_standin import HINT, is_standin
 
 _NONE = (np.zeros((0, 2)), np.zeros((0, 3), dtype=np.int64))
 
@@ -29,13 +32,20 @@ class TriangleBackend:
     strict_size = False          # the graded pass samples size_fn once, at the first pass's centroids
     settings = ()                # KiPI's switches only
 
+    def __init__(self):
+        if not self.available():
+            raise ImportError(HINT)       # the registry: "mesher 'triangle' is not installed here: ..."
+
     def available(self) -> bool:
+        """Whether KiPI's mesher holds the real Triangle: the module it bound when it loaded, not
+        Coppernicus's stand-in (:mod:`coppernicus.triangle_standin`) nor a seam backend's, which
+        ``sys.modules["triangle"]`` holds while that backend is installed."""
         try:
-            import kipi.core.mesh.mesher  # noqa: F401  (imports triangle at load)
-            import triangle  # noqa: F401
+            import kipi.core.mesh.mesher as M  # imports triangle at load
         except ImportError:
             return False
-        return True
+        bound = getattr(M, "triangle", None)
+        return isinstance(bound, types.ModuleType) and not is_standin(bound)
 
     def triangulate(self, points, segments, holes, max_area, min_angle, size_field, interior_points, *,
                     first_cap, carve=None) -> Triangulation:
