@@ -63,6 +63,8 @@ Where it is built and checked:
   positive control (`--expect-fma`), 112.
 - `check_digest.py`'s mesh was recorded on macOS arm64; the x86_64 cross-build
   (`maturin build --release --target x86_64-apple-darwin`) gives the same bits under Rosetta.
+- Not seen yet: any of these CI jobs green, so the Linux, Windows and Intel macOS builds, the
+  Windows disassembly and the digest on real x86_64 hardware are untried.
 
 Use from Python:
 
