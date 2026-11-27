@@ -4,7 +4,8 @@
 # on Windows. Run it through packaging/build_macos.sh or packaging/build_windows.ps1.
 #
 # The bundle holds everything except the Triangle mesher (the 'triangle' package): its
-# licence forbids bundling it. The build writes the pin uv.lock holds for it (version, wheel
+# licence forbids bundling it. It does hold coppermesh, the rust mesher (tools/mesher_rs, built
+# into the build environment by `uv sync --group rust`); Triangle stays the default mesher. The build writes the pin uv.lock holds for it (version, wheel
 # URLs, SHA-256) into the bundle; the app fetches it on its first start
 # (coppernicus.bootstrap_triangle). The build fails if triangle ends up in the bundle.
 
@@ -84,7 +85,8 @@ a = Analysis(
     # The CLI, the app and the engine import most modules inside functions.
     # PyInstaller's PySide6 hook adds PySide6.support.deprecated (Qt enum operators) only when
     # a "PySide6" distribution is installed; here it is PySide6_Essentials.
-    hiddenimports=[*MODULES, *VTK_MODULES, "PySide6.support.deprecated"],
+    # coppermesh: imported inside a function by the rust backend.
+    hiddenimports=[*MODULES, *VTK_MODULES, "PySide6.support.deprecated", "coppermesh"],
     excludes=[
         "triangle",                                  # fetched on first start, never bundled
         "vtk", "vtkmodules.all",                     # all of VTK: see _pyvista_vtk_modules
@@ -117,6 +119,14 @@ def _triangle(entry):
 leaks = [e[0] for e in (*a.pure, *a.binaries, *a.datas) if _triangle(e)]
 if leaks:
     raise SystemExit(f"coppernicus.spec: triangle must not be bundled: {leaks[:5]}")
+
+# coppermesh's extension must be in: a hidden import that cannot be found only warns.
+rust = [e[0] for e in a.binaries
+        if re.fullmatch(r"coppermesh[/\\]coppermesh(\.[^/\\]*)?\.(so|pyd)", e[0])]
+if not rust:
+    raise SystemExit("coppernicus.spec: coppermesh's extension is not in the bundle: build the "
+                     "environment with `uv sync --group rust` (it needs a Rust toolchain)")
+print(f"coppernicus.spec: coppermesh bundled as {rust[0]}")
 
 # THIRD_PARTY_NOTICES.txt from what was collected.
 python_licence = Path(sys.base_prefix) / ("LICENSE.txt" if WINDOWS else

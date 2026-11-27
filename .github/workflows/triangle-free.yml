@@ -1,0 +1,66 @@
+name: Triangle-free
+
+# Coppernicus without the triangle package: KiPI loads with Coppernicus's stand-in in its place
+# (coppernicus.triangle_standin) and the rust mesher (coppermesh, tools/mesher_rs) does the meshing.
+# The tests that need the real Triangle skip themselves; the guard step makes sure this job is not
+# green only because everything skipped.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: triangle-free-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  QT_QPA_PLATFORM: offscreen      # test_mesher_rs imports KiPI's 3D view (pyvista, VTK)
+
+jobs:
+  test:
+    name: pytest without Triangle (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: System libraries for Qt and VTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - name: Build coppermesh (the rust mesher) into the environment
+        working-directory: tools/mesher_rs
+        run: |
+          uv pip install --python ../../.venv/bin/python maturin
+          VIRTUAL_ENV=../../.venv ../../.venv/bin/maturin develop --release --uv
+      - name: Remove Triangle
+        run: uv pip uninstall --python .venv/bin/python triangle
+      # From here on, never `uv run` without --no-sync: a sync would install Triangle again.
+      - name: Guard (Triangle absent, the stand-in in place, rust the only mesher)
+        run: |
+          .venv/bin/python - <<'EOF'
+          import importlib.machinery
+          assert importlib.machinery.PathFinder.find_spec("triangle") is None, "triangle is installed"
+          from coppernicus import triangle_standin
+          from coppernicus.engine import meshing
+          assert triangle_standin.standin_in_use(), "the stand-in is not in place"
+          assert meshing.available() == ["rust"], meshing.available()
+          print("Triangle absent; meshers:", meshing.available())
+          EOF
+      - name: Tests that must pass without Triangle
+        run: >
+          .venv/bin/python -m pytest -q -rs
+          tests/test_triangle_standin.py
+          tests/test_meshing_seam.py
+          tests/test_meshing_pool.py
+          tests/test_mesher_rs.py
+          tests/test_mesher_sliver.py

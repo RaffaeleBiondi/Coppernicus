@@ -999,9 +999,12 @@ def _verdict_words(judged: Mapping[str, Any]) -> str:
 
 def _shown_settings(settings: Mapping[str, Any]) -> Dict[str, Any]:
     """The settings as the page lists them, one line each: a mapping (copper_thickness_mm)
-    as "B.Cu 0.07 mm, ...", left out when empty."""
+    as "B.Cu 0.07 mm, ...", left out when empty; a mesher not chosen as triangle (KiPI's own,
+    the default), as the summaries record it, whoever wrote the page (the CLI or the app)."""
     out = {}
     for key, value in settings.items():
+        if key == "mesher" and value is None:
+            value = "triangle"
         if isinstance(value, Mapping):
             if not value:
                 continue

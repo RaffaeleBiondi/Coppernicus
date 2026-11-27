@@ -3,7 +3,12 @@ name: Release builds
 # The packaged app: a macOS disk image (Apple silicon) and a Windows zip, kept as workflow
 # artifacts. Nothing is published: no GitHub release is created here. The bundles hold
 # everything except the Triangle mesher, which the app downloads on its first start
-# (docs/install.md); packaging/check_bundle.py fails the build if triangle got in.
+# (docs/install.md); packaging/check_bundle.py fails the build if triangle got in. They hold
+# coppermesh, the rust mesher (not the default one), built from tools/mesher_rs with the runner's
+# Rust toolchain; check_bundle.py fails the build without it or without the licences of the Rust
+# crates it is built from in THIRD_PARTY_NOTICES.txt, tools/mesher_rs/check_fma.py on a fused
+# multiply-add in it. A manual run (workflow_dispatch, on any branch) builds and uploads the same
+# artifacts, and publishes nothing either.
 
 on:
   push:
@@ -27,6 +32,13 @@ jobs:
       - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
+      # coppermesh is built from source (the build script syncs uv's "rust" group before
+      # PyInstaller); llvm-tools gives check_fma.py its llvm-objdump.
+      - name: Rust toolchain (stable, through the runner's rustup) with llvm-tools
+        run: |
+          rustup toolchain install stable --profile minimal --component llvm-tools
+          rustup default stable
+          rustc -vV
       - name: Build Coppernicus.app and the .dmg
         run: packaging/build_macos.sh
       - name: The packaged command line starts
@@ -105,6 +117,16 @@ jobs:
       - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
+      # coppermesh is built from source with the MSVC toolchain (the runner has the Visual Studio
+      # build tools); llvm-tools gives check_fma.py its llvm-objdump for the .pyd.
+      - name: Rust toolchain (stable, MSVC, through the runner's rustup) with llvm-tools
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal --component llvm-tools
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable-x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustc -vV
       - name: Build the Coppernicus folder and the .zip
         shell: pwsh
         run: packaging\build_windows.ps1

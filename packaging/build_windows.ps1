@@ -8,8 +8,11 @@
 # Coppernicus-<version>-windows-x64-contents.txt (every file and module of the bundle).
 #
 # Same steps as build_macos.sh: a build environment of its own (build\venv-windows: uv.lock's
-# packages without the dev tools and without triangle, on a uv-managed Python), PyInstaller,
-# packaging\check_bundle.py (fails if triangle is in the bundle), then the zip. Not signed.
+# packages without the dev tools and without triangle, with coppermesh, the rust mesher, built
+# by maturin from tools\mesher_rs: uv's "rust" group, it needs a Rust toolchain with MSVC; on a
+# uv-managed Python), PyInstaller, packaging\check_bundle.py (fails if triangle is in the bundle
+# or coppermesh is not), tools\mesher_rs\check_fma.py (fails on a fused multiply-add in the
+# bundled coppermesh), then the zip. Not signed.
 # UNTESTED on a Windows computer so far: it runs in .github\workflows\release.yml.
 $ErrorActionPreference = "Stop"
 
@@ -29,10 +32,12 @@ $env:UV_PYTHON_PREFERENCE = "only-managed"
 $Py = Join-Path $env:UV_PROJECT_ENVIRONMENT "Scripts\python.exe"
 
 Write-Host "== build environment ($env:UV_PROJECT_ENVIRONMENT)"
-Invoke-Checked uv sync --frozen --no-dev --no-install-package triangle --python 3.12
+if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { throw "no Rust toolchain (cargo) on PATH: coppermesh is built from source" }
+Invoke-Checked uv sync --frozen --no-dev --group rust --no-install-package triangle --python 3.12
 Invoke-Checked uv pip install --python $Py -r packaging\requirements-build.txt
 & $Py -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('triangle') is not None)"
 if ($LASTEXITCODE -ne 0) { throw "triangle is installed in the build environment" }
+Invoke-Checked $Py -c "import coppermesh"
 
 Write-Host "== PyInstaller"
 if (Test-Path dist\Coppernicus) { Remove-Item -Recurse -Force dist\Coppernicus }
@@ -40,6 +45,9 @@ Invoke-Checked $Py -m PyInstaller --noconfirm --clean --distpath dist --workpath
 
 Write-Host "== bundle check"
 Invoke-Checked $Py packaging\check_bundle.py dist\Coppernicus --list "dist\$Name-contents.txt"
+$Rust = @(Get-ChildItem -Recurse -Path dist\Coppernicus -Filter "coppermesh*.pyd" | Where-Object { $_.Directory.Name -eq "coppermesh" })
+if ($Rust.Count -ne 1) { throw "expected one coppermesh .pyd in the bundle, found $($Rust.Count)" }
+Invoke-Checked $Py tools\mesher_rs\check_fma.py $Rust[0].FullName
 
 Write-Host "== zip"
 Copy-Item -Recurse examples dist\Coppernicus\examples

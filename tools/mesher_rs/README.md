@@ -1,0 +1,104 @@
+# coppermesh (experimental; in the packaged app, not the default mesher)
+
+A 2D quality mesher written for Coppernicus: our own constrained Delaunay triangulation plus
+Delaunay refinement (Ruppert's algorithm in Shewchuk's "Terminator" form), in Rust, with a
+Python binding. It is meant to replace Triangle behind KiPI's `mesh_polygon`. DESIGN.md gives
+the algorithms, the determinism rules and every source used. No Triangle code was read.
+
+- `src/`: the core.
+  - `geom.rs`: predicates and the scalar helpers.
+  - `mesh.rs`: the CDT, the carving and the checks.
+  - `refine.rs`: refinement and the background size field.
+  - `size.rs`: KiPI's graded size field, evaluated natively.
+  - `python.rs`: the PyO3 binding, built only with the `python` feature.
+- `tests/mesh.rs`: cargo tests. They cover:
+  - the Delaunay property, conformity, the angle, area and edge bounds;
+  - holes, pad outlines, interior points;
+  - collinear points, duplicates and near-duplicates;
+  - the 0.01 mm stub, the 4° spike, the slit, wedges;
+  - determinism, the cap, the size field.
+- The Python side is the "rust" backend of the engine's mesher seam,
+  `src/coppernicus/engine/meshing/rust_backend.py` (`RustBackend`). The seam's pipeline keeps
+  KiPI's pre-processing and fallbacks for every backend.
+- Its `triangle_compat()` stands in for Triangle where KiPI calls it directly: the 3D view and
+  the noise cross-section.
+- Tests:
+  - `tests/test_mesher_rs.py`: the backend against the seam's protocol;
+  - `tests/test_meshing_seam.py`: KiPI's contract, through the seam, for every backend.
+
+  Both skip the rust cases when the extension is not built.
+
+## Build
+
+coppermesh is uv's `rust` dependency group of Coppernicus (`pyproject.toml`, locked in
+`uv.lock` as a path dependency). The group is not a default one, because building it needs a Rust
+toolchain: a plain `uv sync`, the GitHub Action (`--no-dev`) and `uv tool install git+...` leave it
+out and need no Rust. With Rust (installed per user: add `~/.cargo/bin` to `PATH` for these
+commands; the build output can go anywhere, through `CARGO_TARGET_DIR`):
+
+    uv sync --group rust                              # maturin builds and installs coppermesh
+    uv run --group rust pytest tests/test_mesher_rs.py tests/test_meshing_seam.py \
+        tests/test_meshing_default.py tests/test_mesher_sliver.py
+    uv run --group rust python tools/mesher_rs/check_fma.py      # 0 fused multiply-add, or it fails
+    uv run --group rust python tools/mesher_rs/check_digest.py   # the recorded mesh, bit for bit
+    cd tools/mesher_rs && cargo test --release        # core tests, no Python needed
+
+A later plain `uv sync` removes coppermesh again (uv syncs exactly); pass `--group rust` to it,
+and to `uv run`, while working on the mesher. uv rebuilds it when a Rust source, `Cargo.toml` or
+`Cargo.lock` changes (the crate's `cache-keys`). It is one abi3 extension (CPython ≥ 3.12, so
+3.12 and 3.13).
+
+Where it is built and checked:
+- `.github/workflows/tests.yml`, on Linux x86_64, macOS arm64 and Windows x64: the cargo tests,
+  `uv sync --group rust`, `check_fma.py`, `check_digest.py`, and the whole pytest suite with
+  `COPPERNICUS_REQUIRE_RUST=1` (the rust cases then fail instead of skipping when the extension is
+  missing). On Intel macOS (macos-15-intel): the cargo tests, `maturin build`, and the two checks
+  on that wheel; pytest cannot run there, Triangle has no Intel macOS wheel for its pin.
+- The packaged app (`packaging/`, `release.yml`) bundles it; `packaging/check_bundle.py` fails
+  without it, and `check_fma.py` runs on the bundled extension.
+- `check_fma.py` counts x86_64 `vfmadd`/`vfmsub`/`vfnmadd`/`vfnmsub` and arm64
+  `fmadd`/`fmsub`/`fnmadd`/`fnmsub` (and the vector `fmla`/`fmls`) in the disassembly
+  (llvm-objdump from `rustup component add llvm-tools`, else objdump or otool). Measured on
+  macOS: 0 in the arm64 build and in the x86_64 cross-build; SciPy's arm64 `_ckdtree`, the
+  positive control (`--expect-fma`), 112.
+- `check_digest.py`'s mesh was recorded on macOS arm64; the x86_64 cross-build
+  (`maturin build --release --target x86_64-apple-darwin`) gives the same bits under Rosetta.
+- Not seen yet: any of these CI jobs green, so the Linux, Windows and Intel macOS builds, the
+  Windows disassembly and the digest on real x86_64 hardware are untried.
+
+Use from Python:
+
+    from coppernicus.engine import meshing
+    meshing.install("rust")        # KiPI's mesh_polygon goes through the seam with coppermesh
+    meshing.uninstall()
+
+## Licences
+
+- coppermesh is GPL-3.0-or-later, like Coppernicus.
+- The core links only:
+  - `robust` 1.2.0, MIT OR Apache-2.0. It is a port of Shewchuk's public-domain
+    `predicates.c`.
+- With the `python` feature it also links:
+
+  | Crate | Licence |
+  |---|---|
+  | `pyo3` 0.30, with `pyo3-ffi`, `-macros`, `-build-config` | MIT OR Apache-2.0 |
+  | `numpy` 0.30 (rust-numpy) | BSD-2-Clause |
+  | `ndarray` 0.17 | MIT OR Apache-2.0 |
+  | `num-traits`, `num-integer`, `num-complex` | MIT OR Apache-2.0 |
+  | `matrixmultiply`, `rawpointer` | MIT/Apache-2.0 |
+  | `libc`, `once_cell`, `portable-atomic`(`-util`), `rustc-hash` | MIT OR Apache-2.0 |
+  | build only: `heck`, `proc-macro2`, `quote`, `syn`, `autocfg` | MIT OR Apache-2.0 |
+  | build only: `unicode-ident` | (MIT OR Apache-2.0) AND Unicode-3.0 |
+  | build only: `target-lexicon` | Apache-2.0 WITH LLVM-exception |
+
+  All of these may be combined with GPL-3.0 code. That is my reading, not legal advice.
+  (`portable-atomic` is locked but not built for the platforms we ship.)
+- The packaged app carries their licence texts: `crate_licences.py` writes
+  `packaging/licenses/coppermesh-crates.txt` from `Cargo.lock` (every crate built for the
+  `python` feature on macOS, Windows and Linux, each licence file it ships, identical texts once),
+  `packaging/notices.py` appends it to `THIRD_PARTY_NOTICES.txt`, and `check_bundle.py` fails a
+  bundle whose notices lack a crate. After any change to `Cargo.lock` or `Cargo.toml`, run
+  `python tools/mesher_rs/crate_licences.py` (with cargo on `PATH`) and commit the file:
+  `tests/test_crate_licences.py` fails until then.
+- spade (MIT OR Apache-2.0) was evaluated and is not used (DESIGN.md §1).

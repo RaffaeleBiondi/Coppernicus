@@ -41,6 +41,13 @@ coppernicus = "coppernicus.__main__:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
+# The "rust" mesher backend (coppermesh, tools/mesher_rs), built from source by maturin: it needs a
+# Rust toolchain, so it is not a default group. Triangle stays the default mesher. CI and the
+# packaged app sync it with --group rust; a plain `uv sync` (and the Action, --no-dev) leaves it out.
+rust = ["coppermesh"]
+
+[tool.uv.sources]
+coppermesh = { path = "tools/mesher_rs" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

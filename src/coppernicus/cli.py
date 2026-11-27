@@ -20,6 +20,10 @@
     coppernicus tolerance PROJECT [--skip-ac] [--skip-noise] [--out DIR] [--json] [--html [PATH]]
                                                 each load's tolerance stack-up
 
+``solve``, ``ac``, ``noise`` and ``tolerance`` take ``--mesher NAME``: ``triangle`` (the default,
+KiPI's own meshing) or ``rust`` (experimental). It wins over the project's ``settings.mesher``;
+every summary records the mesher in ``mesher``.
+
 ``solve`` exits with 0 when every rail solved and no user limit was exceeded (or none was
 set), 1 when a limit was exceeded, 3 when a limit that was set could not judge something (a
 % limit on a 0 V net, a limit of the wrong kind, a rail not solved), 2 on an error (missing
@@ -45,6 +49,8 @@ from typing import List, Optional
 from coppernicus import __version__
 
 EXIT_OK, EXIT_LIMIT, EXIT_ERROR, EXIT_NOT_JUDGED = 0, 1, 2, 3
+MESHER_HELP = ("the mesher: triangle (the default, KiPI's own) or rust (experimental); wins over "
+               "the project's settings.mesher")
 EXIT_CODES = ("exit codes: 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit that "
               "was set could not judge something (listed as NOT JUDGED), 2 an error; "
               "precedence 2, 1, 3, 0")
@@ -273,7 +279,8 @@ def _cmd_solve(args) -> int:
                                     maps_dir=None if args.no_maps else out_dir, stop_on_error=True,
                                     progress=progress if args.verbose else None,
                                     on_rail=on_rail, on_board=on_board,
-                                    use_board_fields=False if args.no_board_fields else None)
+                                    use_board_fields=False if args.no_board_fields else None,
+                                    mesher=args.mesher_name)
     except ServiceError as e:
         if quiet:
             _print_json({"error": e.to_dict()})
@@ -334,6 +341,7 @@ def _cmd_solve_tree(args) -> int:
     from coppernicus import board_fields
     from coppernicus.engine import Board, EngineError
     from coppernicus.engine.kicad_fields import read_board_fields
+    from coppernicus.engine.meshing.session import stamp
     from coppernicus.engine.tree import solve_project_tree, tree_reference
     from coppernicus.maps import safe_file_name, safe_name
     from coppernicus.power_tree import rating_origins, tree_summary, tree_text
@@ -408,6 +416,7 @@ def _cmd_solve_tree(args) -> int:
     doc = tree_summary(tree, top=args.top)        # with each VRM's I max, the rating judged
     if estimate is not None:
         doc["thermal_estimate"] = estimate
+    stamp(doc, args.mesher_name)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = safe_file_name(Path(args.project).stem)   # as ac, noise, tolerance: "demo-thermal" kept
@@ -430,7 +439,7 @@ def _cmd_solve_tree(args) -> int:
         doc["report_file"] = write_tree_report(
             tree, doc, html_path, outline=board.outline(), board_name=board.name,
             project=Path(args.project).name, top=max(args.top, 10),
-            settings=dict(vars(project.settings))).as_posix()
+            settings={**vars(project.settings), "mesher": args.mesher_name}).as_posix()
     doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
     summary_path.write_text(json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False),
                             encoding="utf-8")
@@ -461,6 +470,7 @@ def _cmd_ac(args) -> int:
     from coppernicus.engine import Board, EngineError
     from coppernicus.engine.ac import probe_rails, resolve_rail, solve_ac_rail
     from coppernicus.engine.kicad_fields import read_board_fields
+    from coppernicus.engine.meshing.session import stamp
     from coppernicus.impedance import ac_summary, ac_text, unsolved_entries, write_csv, write_png
     from coppernicus.maps import safe_file_name, safe_name
     from coppernicus.project import Project, ProjectError
@@ -536,7 +546,7 @@ def _cmd_ac(args) -> int:
         png_path = csv_path.with_suffix(".png")
         files[res.rail] = (write_csv(res, csv_path).as_posix(), write_png(res, png_path).as_posix())
         results.append(res)
-    doc = ac_summary(results, files, not_solved, warnings)
+    doc = stamp(ac_summary(results, files, not_solved, warnings), args.mesher_name)
     summary_path = out_dir / f"{stem}_ac_summary.json"
     doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
     if args.html is not None:                  # one offline page: each rail's |Z|(f) and probes
@@ -566,6 +576,7 @@ def _cmd_noise(args) -> int:
     from coppernicus.coupled_noise import noise_summary, noise_text, write_files
     from coppernicus.engine import Board, EngineError
     from coppernicus.engine.kicad_fields import read_board_fields
+    from coppernicus.engine.meshing.session import stamp
     from coppernicus.engine.noise import solve_aggressor
     from coppernicus.maps import safe_file_name, safe_name
     from coppernicus.project import Project, ProjectError
@@ -630,7 +641,7 @@ def _cmd_noise(args) -> int:
         merged.annotate(res)
         files[name] = write_files(res, out_dir / f"{stem}_{safe_name(name)}_noise", outline)
         results.append(res)
-    doc = noise_summary(results, files)
+    doc = stamp(noise_summary(results, files), args.mesher_name)
     for a in doc["aggressors"]:
         a["estimate"] = estimates.get(a["aggressor"])
     summary_path = out_dir / f"{stem}_noise_summary.json"
@@ -668,6 +679,7 @@ def _cmd_tolerance(args) -> int:
     from coppernicus import board_fields
     from coppernicus.engine import Board, EngineError
     from coppernicus.engine.kicad_fields import read_board_fields
+    from coppernicus.engine.meshing.session import stamp
     from coppernicus.maps import safe_file_name
     from coppernicus.project import Project, ProjectError
     from coppernicus.service import tolerance as run
@@ -721,7 +733,7 @@ def _cmd_tolerance(args) -> int:
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = write_csv(result, out_dir / f"{stem}_tolerance.csv")
-    doc = tolerance_summary(result, csv_path.as_posix())
+    doc = stamp(tolerance_summary(result, csv_path.as_posix()), args.mesher_name)
     summary_path = out_dir / f"{stem}_tolerance_summary.json"
     doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
     if args.html is not None:            # one offline page: each load's parts and checks
@@ -835,6 +847,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-board-fields", action="store_true",
                    help="ignore the board's KiCad footprint fields (PI_RAIL, PI_SOURCE, PI_LOAD, ...), "
                         "as use_board_fields: false in the project file does")
+    p.add_argument("--mesher", metavar="{triangle,rust}",
+                   help=MESHER_HELP)
     p.set_defaults(func=_cmd_solve)
     # Power tree (Task 7): every rail and ground solved together; replaces the command run.
     p.add_argument("--tree", action="store_const", dest="func", const=_cmd_solve_tree,
@@ -882,6 +896,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--html", nargs="?", const="", default=None, metavar="PATH",
                    help="also write an offline HTML page of the impedance (default path: "
                         "<out>/<project>_ac_report.html)")
+    p.add_argument("--mesher", metavar="{triangle,rust}",
+                   help=MESHER_HELP)
     p.set_defaults(func=_cmd_ac)
 
     p = sub.add_parser("noise", help="DC-DC ripple and coupled noise of the project's aggressors",
@@ -899,6 +915,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="show the engine's progress")
     p.add_argument("--json", action="store_true",
                    help="print a JSON summary on stdout (for scripts and agents)")
+    p.add_argument("--mesher", metavar="{triangle,rust}",
+                   help=MESHER_HELP)
     p.set_defaults(func=_cmd_noise)
 
     p = sub.add_parser("tolerance", help="each load's tolerance stack-up: DC drop and accuracy, ripple, "
@@ -918,6 +936,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true", help="show the engines' progress")
     p.add_argument("--json", action="store_true",
                    help="print a JSON summary on stdout (for scripts and agents)")
+    p.add_argument("--mesher", metavar="{triangle,rust}",
+                   help=MESHER_HELP)
     p.set_defaults(func=_cmd_tolerance)
     return ap
 
@@ -943,12 +963,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         _utf8_output()
     from coppernicus.engine import EngineError
     from coppernicus.project import ProjectError
+    from coppernicus.triangle_standin import TriangleNotInstalled
     try:
-        return args.func(args)
+        if not hasattr(args, "mesher"):
+            return args.func(args)
+        from coppernicus.engine.meshing import session as meshing
+        args.mesher_name = meshing.resolve(args.mesher, _project_mesher(args.project))
+        try:
+            with meshing.using(args.mesher_name):    # the whole command: its estimates and solves
+                return args.func(args)
+        except meshing.MesherUnavailable as e:
+            return _fail(args, "mesher_unavailable", e.message, e.hint)
     except (EngineError, ProjectError, FileNotFoundError) as e:
         code = ("invalid_project" if isinstance(e, ProjectError) else
                 "file_not_found" if isinstance(e, FileNotFoundError) else "solve_failed")
         return _fail(args, code, str(e))
+    except TriangleNotInstalled as e:            # KiPI's own mesher, and only the stand-in here
+        code = _fail(args, e.code, e.message, e.hint)
+        print(f"  {e.hint}", file=sys.stderr)
+        return code
     except Exception as e:
         # A bug. Never let it exit 1, which means "a limit was exceeded" (CI reads the code).
         if getattr(args, "verbose", False):
@@ -956,6 +989,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _fail(args, "internal_error", f"{type(e).__name__}: {e}",
                      "this is a bug in Coppernicus: please report it with the command you ran",
                      prefix="internal error: ")
+
+
+def _project_mesher(path) -> Optional[str]:
+    """The project file's ``settings.mesher``, or None (no file, or one the command itself will
+    refuse with its own error)."""
+    from coppernicus.project import Project
+    try:
+        return Project.load(path).settings.mesher
+    except Exception:                    # the command reports a bad project file itself
+        return None
 
 
 def _fail(args, code: str, message: str, hint: str = "", prefix: str = "") -> int:

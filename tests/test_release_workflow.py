@@ -45,3 +45,29 @@ def test_the_build_scripts_keep_triangle_out():
         assert "--no-install-package triangle" in text and "check_bundle.py" in text
     spec = (ROOT / "packaging" / "coppernicus.spec").read_text(encoding="utf-8")
     assert '"triangle",' in spec                                # in PyInstaller's excludes
+
+
+def test_the_build_scripts_bundle_coppermesh_and_check_it():
+    """The rust mesher is in the packaged app (not the default mesher): the build environment
+    syncs uv's "rust" group, the spec stops without its extension, check_bundle.py and the FMA
+    check run on the bundle."""
+    for script in ("build_macos.sh", "build_windows.ps1"):
+        text = (ROOT / "packaging" / script).read_text(encoding="utf-8")
+        assert "--no-dev --group rust" in text and "check_fma.py" in text
+    spec = (ROOT / "packaging" / "coppernicus.spec").read_text(encoding="utf-8")
+    assert '"coppermesh"' in spec and "coppermesh's extension is not in the bundle" in spec
+    check = (ROOT / "packaging" / "check_bundle.py").read_text(encoding="utf-8")
+    assert 'RUST = "coppermesh"' in check and "python3.dll" in check
+
+
+def test_both_release_jobs_install_rust_before_the_build():
+    """coppermesh is built from source in the build scripts: each job installs a stable Rust
+    toolchain (MSVC on Windows) with llvm-tools, for check_fma.py, before running its script."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    for job, toolchain in (("macos", "stable"), ("windows", "stable-x86_64-pc-windows-msvc")):
+        runs = [str(s.get("run", "")) for s in jobs[job]["steps"]]
+        rust = next(i for i, r in enumerate(runs) if "rustup toolchain install" in r)
+        build = next(i for i, r in enumerate(runs) if "build_macos.sh" in r or "build_windows.ps1" in r)
+        assert rust < build
+        assert f"rustup toolchain install {toolchain} " in runs[rust] and "llvm-tools" in runs[rust]
+        assert f"rustup default {toolchain}" in runs[rust]

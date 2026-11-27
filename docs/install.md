@@ -151,7 +151,8 @@ The mark is a file named `.triangle-remove` beside the folder.
 
 The disk image and the zip hold `LICENSE.txt` (Coppernicus, GPL-3.0-or-later),
 `THIRD_PARTY_NOTICES.txt` (every library in the bundle with its version and licence, and their
-licence texts: Qt and PySide6 under LGPL-3.0, VTK, NumPy, SciPy, shapely, KiPI...), the
+licence texts: Qt and PySide6 under LGPL-3.0, VTK, NumPy, SciPy, shapely, KiPI..., and those of
+the Rust crates compiled into coppermesh, the rust mesher), the
 `licenses` folder (`TRIANGLE_NOTICE.txt`, Triangle's terms verbatim, and the LGPL-3.0 text) and
 `INSTALL.md`, this page. The licence files are also inside the app.
 
@@ -164,13 +165,18 @@ From a clone of the repository, with [uv](https://docs.astral.sh/uv/):
 - **Windows (x64, PowerShell):** `packaging\build_windows.ps1`. It writes `dist\Coppernicus\`
   and `dist\Coppernicus-<version>-windows-x64.zip`.
 
+The builds also need a Rust toolchain ([rustup](https://rustup.rs); on Windows with the MSVC
+build tools): the app bundles coppermesh, the experimental rust mesher (Triangle stays the default
+one), which is built from `tools/mesher_rs`.
+
 Each script makes a build environment of its own under `build/` (the packages of `uv.lock`,
-without the dev tools and without `triangle`, on a uv-managed Python), installs PyInstaller
-(`packaging/requirements-build.txt`), runs `packaging/coppernicus.spec`, and then
-`packaging/check_bundle.py`, which fails the build if any part of `triangle` is in the bundle
-and writes the bundle's full listing to `dist/*-contents.txt`. The workflow
-`.github/workflows/release.yml` runs both scripts on a `v*` tag or by hand and keeps the
-results as workflow artifacts; it does not publish a release.
+without the dev tools and without `triangle`, with uv's `rust` group, on a uv-managed Python),
+installs PyInstaller (`packaging/requirements-build.txt`), runs `packaging/coppernicus.spec`, and
+then `packaging/check_bundle.py`, which fails the build if any part of `triangle` is in the bundle
+or coppermesh is not, and writes the bundle's full listing to `dist/*-contents.txt`;
+`tools/mesher_rs/check_fma.py` then fails it on a fused multiply-add in the bundled coppermesh.
+The workflow `.github/workflows/release.yml` runs both scripts on a `v*` tag or by hand and keeps
+the results as workflow artifacts; it does not publish a release.
 
 What is in `packaging/`:
 
@@ -179,7 +185,7 @@ What is in `packaging/`:
 | `coppernicus.spec` | PyInstaller: what goes into the bundle, the Triangle pin, the notices |
 | `frozen_main.py` | The bundle's entry point: fetches Triangle if needed, then runs `coppernicus` |
 | `notices.py` | Writes `THIRD_PARTY_NOTICES.txt` from what the bundle contains |
-| `check_bundle.py` | Proves `triangle` is not in the bundle (files and PYZ modules) |
+| `check_bundle.py` | Proves `triangle` is not in the bundle (files and PYZ modules) and coppermesh is |
 | `build_macos.sh`, `build_windows.ps1` | The builds |
 | `licenses/` | Triangle's terms (verbatim) and the LGPL-3.0 text |
 

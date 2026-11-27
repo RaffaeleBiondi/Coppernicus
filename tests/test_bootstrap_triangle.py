@@ -523,7 +523,108 @@ def test_the_dialog_fetches_and_reports_a_failure(tmp_path):
         assert "no network" in boxes[0] and "start Coppernicus again" in boxes[0], boxes
         print("ok")
     """)
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8")
     out = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True,
-                         timeout=120)
+                         encoding="utf-8", timeout=120)
     assert out.returncode == 0 and "ok" in out.stdout, out.stdout + out.stderr
+
+
+# --------------------------------------------------------------------------- on demand
+def test_the_switch_is_off_by_default_and_the_environment_overrides_it(monkeypatch):
+    assert bt.ON_DEMAND is False                                     # as before: the first start fetches
+    assert bt.on_demand({}) is bt.ON_DEMAND
+    assert bt.on_demand({bt.ON_DEMAND_ENV: "1"}) is True
+    assert bt.on_demand({bt.ON_DEMAND_ENV: "0"}) is False
+    assert bt.on_demand({bt.ON_DEMAND_ENV: "yes"}) is bt.ON_DEMAND   # anything else: the default
+    monkeypatch.setattr(bt, "ON_DEMAND", True)
+    assert bt.on_demand({}) is True and bt.on_demand({bt.ON_DEMAND_ENV: "0"}) is False
+
+
+def test_on_demand_a_start_fetches_nothing_but_uses_a_copy_already_there(monkeypatch, tmp_path):
+    _bundle, site = _frozen_bundle(monkeypatch, tmp_path, "cpn_fake_demand")
+    monkeypatch.setenv(bt.ON_DEMAND_ENV, "1")
+    before = list(sys.path)
+    try:
+        assert bt.at_start() is None and not site.exists()          # nothing fetched
+        monkeypatch.delenv(bt.ON_DEMAND_ENV)
+        plan = bt.at_start()                                         # the default: a Plan, as needed()
+        assert plan is not None and plan.site == site
+        bt.install(plan.pin, site, wheel=plan.wheel, url=plan.url)
+        (site / "stray.txt").write_text("x")
+        monkeypatch.setenv(bt.ON_DEMAND_ENV, "1")
+        monkeypatch.setattr(bt, "install", never)
+        monkeypatch.setattr(bt, "_open", never)
+        assert bt.at_start() is None and str(site) in sys.path       # verified, tidied, activated
+        assert not (site / "stray.txt").exists()
+    finally:
+        sys.path[:] = before
+
+
+def test_on_demand_nothing_about_triangle_stops_a_start(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)   # no pin: incomplete
+    monkeypatch.setenv(bt.ON_DEMAND_ENV, "1")
+    assert bt.at_start() is None
+    monkeypatch.setenv(bt.ON_DEMAND_ENV, "0")
+    with pytest.raises(bt.BootstrapError, match="incomplete"):
+        bt.at_start()
+    monkeypatch.setenv(bt.ON_DEMAND_ENV, "1")
+
+    def unwritable(env=None):
+        raise NotADirectoryError(20, "Not a directory", "/dev/null/x")
+    monkeypatch.setattr(bt, "needed", unwritable)
+    assert bt.at_start() is None
+
+
+def test_choosing_the_triangle_mesher_fetches_it_on_demand(monkeypatch, tmp_path):
+    from coppernicus import triangle_standin as ts
+    _bundle, site = _frozen_bundle(monkeypatch, tmp_path, "cpn_fake_chosen")
+    with monkeypatch.context() as m:
+        m.setattr(bt, "needed", lambda env=None: never())
+        assert bt.fetch_for_mesher("rust", gui=False) is True        # another mesher: nothing to do
+        m.setattr(ts, "standin_in_use", lambda: False)
+        assert bt.fetch_for_mesher("triangle", gui=False) is True    # Triangle already here
+    swapped = []
+    monkeypatch.setattr(ts, "standin_in_use", lambda: True)
+    monkeypatch.setattr(ts, "use_real_triangle", lambda: swapped.append(1) or True)
+    before = list(sys.path)
+    try:
+        out = io.StringIO()
+        assert bt.fetch_for_mesher("triangle", gui=False, stream=out) is True
+        assert "Downloading the Triangle mesher" in out.getvalue() and str(site) in sys.path
+        assert importlib.import_module("cpn_fake_chosen").VALUE == 42 and swapped == [1]
+    finally:
+        sys.path[:] = before
+        sys.modules.pop("cpn_fake_chosen", None)
+
+
+def test_an_on_demand_start_puts_the_standin_in_place(monkeypatch):
+    from coppernicus import triangle_standin as ts
+    frozen_main = _frozen_main()
+
+    def offline(env=None):
+        raise bt.DownloadError("cannot download triangle.whl: no network")
+    called = []
+    monkeypatch.setattr(bt, "needed", offline)
+    monkeypatch.setattr(ts, "ensure_triangle_importable", lambda: called.append(1) or True)
+    monkeypatch.setenv(bt.ON_DEMAND_ENV, "1")
+    assert frozen_main.ensure_triangle(["solve", "p.coppernicus.yml", "--json"]) == 0 and called == [1]
+
+
+def test_fetch_triangle_in_the_packaged_app(monkeypatch, tmp_path, capsys):
+    _bundle, site = _frozen_bundle(monkeypatch, tmp_path, "cpn_fake_fetch")
+    monkeypatch.setenv(bt.ON_DEMAND_ENV, "1")
+    monkeypatch.setattr(sys, "argv", ["Coppernicus", "--fetch-triangle"])
+    before = list(sys.path)
+    try:
+        assert _frozen_main().main() == 0
+        assert "installed in" in capsys.readouterr().err and bt.is_installed(site, *_pin_and_wheel())
+        assert _frozen_main().main() == 0
+        assert "already installed" in capsys.readouterr().out
+    finally:
+        sys.path[:] = before
+
+
+def _pin_and_wheel():
+    pin = bt.read_pin(bt.bundle_dir() / bt.PIN_FILE)
+    return pin, bt.choose_wheel(pin)

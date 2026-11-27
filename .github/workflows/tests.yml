@@ -14,6 +14,10 @@ concurrency:
 
 env:
   QT_QPA_PLATFORM: offscreen      # the GUI tests import Qt and VTK; no display on runners
+  # The rust mesher (coppermesh, tools/mesher_rs) is built here from source (uv's "rust" group,
+  # maturin; every hosted runner has a Rust toolchain). Its tests skip where the extension is
+  # missing: this makes a missing or broken build fail them instead.
+  COPPERNICUS_REQUIRE_RUST: "1"
 
 jobs:
   test:
@@ -36,9 +40,54 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
+      - name: Rust toolchain (preinstalled) and its llvm-objdump
+        shell: bash
+        run: |
+          rustup show active-toolchain
+          rustc --version
+          rustup component add llvm-tools
+      - name: coppermesh core tests (cargo)
+        working-directory: tools/mesher_rs
+        run: cargo test --release
+      - name: Install, with coppermesh built by maturin (--group rust)
+        run: uv sync --frozen --group rust
+      - name: No fused multiply-add in the built extension, and the recorded mesh bit for bit
+        shell: bash               # stops at the first failing command on every runner (not so pwsh)
+        run: |
+          uv run --frozen --group rust python tools/mesher_rs/check_fma.py
+          uv run --frozen --group rust python tools/mesher_rs/check_digest.py
       - name: Lint
         if: runner.os == 'Linux'
-        run: uv run ruff check src tests examples tools
-      - name: Tests (the boards_local test skips by itself)
-        run: uv run pytest -q
+        run: uv run --frozen --group rust ruff check src tests examples tools
+      - name: Tests (the boards_local test skips by itself; the rust cases must not)
+        run: uv run --frozen --group rust pytest -q
+
+  # Intel macOS: Triangle publishes no x86_64 macOS wheel (and no sdist) for the version uv.lock
+  # pins, so the project cannot be installed here and pytest cannot run. What can: the core's
+  # cargo tests, the wheel maturin builds, and its FMA and mesh-digest checks.
+  mesher-macos-x86_64:
+    name: coppermesh (macos-15-intel)
+    runs-on: macos-15-intel
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Rust toolchain (preinstalled) and its llvm-objdump
+        run: |
+          rustc -vV
+          rustup component add llvm-tools
+      - name: coppermesh core tests (cargo)
+        working-directory: tools/mesher_rs
+        run: cargo test --release
+      - name: Build the abi3 wheel
+        working-directory: tools/mesher_rs
+        run: uvx --from 'maturin>=1.7,<2' maturin build --release --out "$RUNNER_TEMP/wheels"
+      - name: Install it; no fused multiply-add, and the recorded mesh bit for bit
+        run: |
+          uv venv "$RUNNER_TEMP/venv" --python 3.12
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP"/wheels/coppermesh-*.whl
+          "$RUNNER_TEMP/venv/bin/python" tools/mesher_rs/check_fma.py
+          "$RUNNER_TEMP/venv/bin/python" tools/mesher_rs/check_digest.py

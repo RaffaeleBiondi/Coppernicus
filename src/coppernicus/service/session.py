@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
@@ -36,6 +37,7 @@ from shapely.ops import unary_union
 from coppernicus import board_fields as BF
 from coppernicus.engine import Board, Cancelled, EngineError, solve_rail, tied_nets
 from coppernicus.engine.board import board_file_filter
+from coppernicus.engine.meshing import session as meshing
 from coppernicus.fields import TriangleLocator, current_vectors
 from coppernicus.maps import FIELDS, render_layer_map, safe_name, save_layer_maps
 from coppernicus.power_tree import EstimateError, estimated_draws
@@ -407,7 +409,11 @@ class Session:
     """Boards and results by id. Thread-safe; solves run one at a time."""
 
     def __init__(self, out_dir=None, max_results: int = DEFAULT_MAX_RESULTS,
-                 max_result_mb: float = DEFAULT_MAX_RESULT_MB, max_boards: int = DEFAULT_MAX_BOARDS):
+                 max_result_mb: float = DEFAULT_MAX_RESULT_MB, max_boards: int = DEFAULT_MAX_BOARDS,
+                 mesher: Optional[str] = None):
+        # The mesher when neither the call nor the project names one (the app's setting); None:
+        # the default, Triangle. See _mesher for the order.
+        self.mesher = mesher
         self._out_dir = Path(out_dir).expanduser().resolve() if out_dir else None
         self.max_results = max(1, int(max_results))
         self.max_result_bytes = int(max_result_mb * 1024 * 1024)
@@ -571,7 +577,8 @@ class Session:
                    settings: Optional[Mapping[str, Any]] = None, follow_net_ties: bool = True,
                    top: int = 5, progress: Progress = None, cancelled: Cancel = None,
                    base_rail: Optional[Rail] = None,
-                   base_settings: Optional[Settings] = None) -> Dict[str, Any]:
+                   base_settings: Optional[Settings] = None,
+                   mesher: Optional[str] = None) -> Dict[str, Any]:
         """Solve one rail: sources hold ``voltage_v`` on their pins, loads draw ``current_a``
         split equally across their pins. Returns a compact summary with a ``result_id``.
 
@@ -582,12 +589,16 @@ class Session:
 
         A ``copper_thickness_mm`` given here is an agent's what-if: on each layer, a standard
         weight at most one step from the design's thickness (:meth:`_check_copper_what_if`);
-        project files and the CLI keep the free value."""
+        project files and the CLI keep the free value.
+
+        ``mesher`` (default: ``settings``' mesher, else the session's, else Triangle) is the
+        mesher (:meth:`_mesher`)."""
         entry = self._entry(board_id)
         if not isinstance(sources, (list, tuple)) or not isinstance(loads, (list, tuple)):
             raise ServiceError(E.INVALID_INPUT, "sources and loads must be lists of objects")
         rail = C.rail_from_dicts(net, sources, loads, limits, follow_net_ties, base=base_rail)
         solve_settings, _ = C.settings_from_dict(settings, base=base_settings)
+        solve_settings = dataclasses.replace(solve_settings, mesher=self._mesher(mesher, solve_settings))
         given = (settings or {}).get("copper_thickness_mm") or {}
         self._check_copper_what_if(entry.board, solve_settings, given,
                                    base_settings.copper_thickness_mm if base_settings else {})
@@ -630,6 +641,28 @@ class Session:
                                    "agent's copper what-if is one standard step from the design's "
                                    f"{COPPER_STEPS_OZ[at]} ({design:g} mm) at most: {near} mm", hint)
 
+    def _mesher(self, explicit: Optional[str], settings: Optional[Settings] = None) -> str:
+        """The mesher of a solve, checked: ``explicit`` (the call's), else ``settings.mesher``
+        (a project's), else the session's (the app's setting), else Triangle. One that cannot
+        run here is a ``mesher_unavailable`` error, before anything is solved."""
+        name = meshing.resolve(explicit, settings.mesher if settings is not None else None, self.mesher)
+        try:
+            meshing.check(name)
+        except meshing.MesherUnavailable as e:
+            raise ServiceError(E.MESHER_UNAVAILABLE, e.message, e.hint) from None
+        return name
+
+    @staticmethod
+    @contextmanager
+    def _meshing(name: str):
+        """The block meshes with ``name`` (:func:`coppernicus.engine.meshing.session.using`:
+        one process-wide lock, so calls choosing different meshers take turns)."""
+        try:
+            with meshing.using(name) as info:
+                yield info
+        except meshing.MesherUnavailable as e:      # checked by _mesher already
+            raise ServiceError(E.MESHER_UNAVAILABLE, e.message, e.hint) from None
+
     def _validate_rail(self, board: Board, rail: Rail, project: Optional[Project] = None) -> None:
         self._check_net(board, rail.net)
         if not rail.sources:
@@ -667,7 +700,9 @@ class Session:
         thickness = dict(settings.copper_thickness_mm)
         board = entry.variant(thickness)
         self._validate_rail(board, rail, project)
-        with self._solve_lock:
+        mesher = self._mesher(None, settings)     # recorded in the settings: copper_step keeps it
+        settings = dataclasses.replace(settings, mesher=mesher)
+        with self._solve_lock, self._meshing(mesher):
             if progress is not None:
                 progress(f"solving {rail.net}")
             try:
@@ -681,6 +716,7 @@ class Session:
                                    "this net" + (", and the regulators and links it feeds"
                                                  if project is not None else "")) from None
         res.assumptions.extend(notes)     # reaches the summary, the CLI text and the report
+        res.assumptions.extend(n for n in [meshing.note(mesher)] if n)
         res.warnings.extend(warnings)
         layer_thickness = {lay.name: lay.thickness_mm for lay in board.layers()}
         problems = find_problems(res, rail.limits, top=max(1, int(top)))
@@ -692,6 +728,7 @@ class Session:
                                  pin_numbers=lambda pid: board.pad(pid).number,
                                  estimated=[t.name for t in res.loads[len(rail.loads):]])
         summary["warnings"] = entry.warnings() + summary["warnings"]
+        summary["mesher"] = meshing.describe(mesher)
         summary.update({"from_board_fields": False, "overrides_board_fields": False,
                         "board_fields_warnings": [], **(fields_info or {})})
         rec = _ResultRecord(rid, entry.id, board, entry.outline(), rail, settings, dict(thickness),
@@ -729,7 +766,8 @@ class Session:
                       cancelled: Cancel = None,
                       on_rail: Optional[Callable[[str, Dict[str, Any]], None]] = None,
                       on_board: Optional[Callable[[Dict[str, Any], int, int], None]] = None,
-                      use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
+                      use_board_fields: Optional[bool] = None,
+                      mesher: Optional[str] = None) -> Dict[str, Any]:
         """Solve the rails of a project file (all, or those named in ``rails``) with the
         project's settings and limits. With ``maps_dir``, write drop and current PNGs per
         layer there. A rail that fails to solve is reported in place unless
@@ -740,10 +778,11 @@ class Session:
         ``use_board_fields`` (default: the project file's ``use_board_fields``) also takes
         rails from the board's KiCad footprint fields (:mod:`coppernicus.board_fields`); a
         rail in the project file replaces the fields' rail of its net. Each summary says
-        ``from_board_fields``, and its assumptions give every value with its field."""
+        ``from_board_fields``, and its assumptions give every value with its field.
+        ``mesher`` wins over the project's ``settings.mesher`` (:meth:`_mesher`)."""
         path, project, board_info, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
-        project = merged.project
+        project = self._with_mesher(merged.project, mesher)    # checked once, before any rail
         wanted = list(rails or [])
         selected = [r for r in project.rails if not wanted or r.net in wanted]
         if not selected:
@@ -847,8 +886,14 @@ class Session:
             "verdict_note": note, "not_judged": unjudged, "board_fields_warnings": merged.warnings,
             # spots above the current-density default, over the rails: never part of the verdict
             "attention": sum(r.get("attention", 0) for r in out_rails),
+            "mesher": meshing.describe(project.settings.mesher),
             "assumptions": [], "warnings": entry.warnings(),
         })
+
+    def _with_mesher(self, project: Project, explicit: Optional[str]) -> Project:
+        """``project`` with its mesher resolved and checked (:meth:`_mesher`) into its settings."""
+        name = self._mesher(explicit, project.settings)
+        return dataclasses.replace(project, settings=dataclasses.replace(project.settings, mesher=name))
 
     def _open_project(self, project_path):
         """Load a project file and open its board: (path, project, board info, entry). A
@@ -1128,7 +1173,8 @@ class Session:
                    cancelled: Cancel = None, use_board_fields: Optional[bool] = None,
                    thermal: Optional[bool] = None, thermal_options: Optional[Mapping[str, Any]] = None,
                    confirm_large: bool = False,
-                   reference: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+                   reference: Optional[Mapping[str, Any]] = None,
+                   mesher: Optional[str] = None) -> Dict[str, Any]:
         """Solve the project's whole power tree at once: every rail and ground group, with
         the regulators' input currents and the ground return computed exactly. Returns
         :func:`coppernicus.power_tree.tree_summary` (the document of
@@ -1159,7 +1205,7 @@ class Session:
             raise ServiceError(E.INVALID_INPUT, str(e), REFERENCE_FORM) from None
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
-        project = merged.project
+        project = self._with_mesher(merged.project, mesher)
         spec = spec if reference is not None else project.tree_reference
         if thermal_options and thermal is False:
             raise ServiceError(E.INVALID_INPUT, "thermal_options with thermal: false: the options "
@@ -1175,7 +1221,7 @@ class Session:
                                "pass confirm_large: true to solve it anyway, or a coarser grid "
                                f"(thermal_options.grid_mm; now {estimate['cell_mm']:.3g} mm cells), or "
                                "thermal: false for the power tree without the temperature")
-        with self._solve_lock:
+        with self._solve_lock, self._meshing(project.settings.mesher):
             if progress is not None:
                 progress(f"solving the power tree of {path.name}")
             try:
@@ -1200,6 +1246,7 @@ class Session:
         doc = tree_summary(tree, top=max(1, int(top)))   # with each VRM's I max, the rating judged
         if estimate is not None:
             doc["thermal_estimate"] = estimate
+        meshing.stamp(doc, project.settings.mesher)
         # Through JSON as the CLI writes it: plain types, the same numbers to the last digit.
         doc = json.loads(json.dumps(doc, allow_nan=False))
         # Kept as one result, on the board as solved (the project's copper thickness).
@@ -1220,7 +1267,7 @@ class Session:
 
     def solve_ac(self, project_path, rails: Optional[Sequence[str]] = None, out_dir=None,
                  confirm_large: bool = False, progress: Progress = None, cancelled: Cancel = None,
-                 use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
+                 use_board_fields: Optional[bool] = None, mesher: Optional[str] = None) -> Dict[str, Any]:
         """The open-loop PDN impedance |Z|(f) at the project's probes, rail by rail (every rail
         a probe is on, or ``rails``), as ``coppernicus ac --json`` does: the
         ``<project>_ac_summary.json`` document, with each rail's CSV and PNG of |Z|(f) and the
@@ -1233,7 +1280,7 @@ class Session:
         from coppernicus.maps import safe_file_name, safe_name
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
-        project, board = merged.project, entry.board
+        project, board = self._with_mesher(merged.project, mesher), entry.board
         hint = "fix the probes, capacitor models or ac: block of the project file, then solve again"
         if not project.probes:
             raise ServiceError(E.INVALID_INPUT, f"{path.name}: no probe in the project: nothing to solve",
@@ -1254,7 +1301,7 @@ class Session:
                 not_solved, warnings = unsolved_entries(project.probes, rails_of)
         except EngineError as e:
             raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}", hint) from None
-        with self._solve_lock:
+        with self._solve_lock, self._meshing(project.settings.mesher):
             try:
                 estimates = {net: ac_estimate(board, project, net, progress, cancelled) for net in nets}
                 big = [e for e in estimates.values() if e["exceeds_memory"]]
@@ -1279,7 +1326,7 @@ class Session:
                 raise ServiceError(E.CANCELLED, f"{path.name}: solve cancelled") from None
             except EngineError as e:
                 raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}", hint) from None
-        doc = ac_summary(results, files, not_solved, warnings)
+        doc = meshing.stamp(ac_summary(results, files, not_solved, warnings), project.settings.mesher)
         for r in doc["rails"]:
             r["estimate"] = estimates.get(r["rail"])
         summary_path = folder / f"{stem}_ac_summary.json"
@@ -1290,7 +1337,7 @@ class Session:
 
     def solve_noise(self, project_path, aggressors: Optional[Sequence[str]] = None, out_dir=None,
                     confirm_large: bool = False, progress: Progress = None, cancelled: Cancel = None,
-                    use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
+                    use_board_fields: Optional[bool] = None, mesher: Optional[str] = None) -> Dict[str, Any]:
         """The DC-DC ripple and coupled noise of the project's aggressors (every one, or
         ``aggressors``), as ``coppernicus noise --json`` does: the
         ``<project>_noise_summary.json`` document (verdict only against the victims' noise
@@ -1305,7 +1352,7 @@ class Session:
         from coppernicus.maps import safe_file_name, safe_name
         path, project, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, project, entry, use_board_fields)
-        project, board = merged.project, entry.board
+        project, board = self._with_mesher(merged.project, mesher), entry.board
         hint = "fix the aggressors, victims or noise: block of the project file, then solve again"
         if not project.aggressors:
             raise ServiceError(E.INVALID_INPUT, f"{path.name}: no aggressor in the project: nothing "
@@ -1317,7 +1364,7 @@ class Session:
         if unknown:
             raise ServiceError(E.INVALID_INPUT, f"{path.name}: no aggressor named {', '.join(unknown)}",
                                f"the project's aggressors: {', '.join(known)}")
-        with self._solve_lock:
+        with self._solve_lock, self._meshing(project.settings.mesher):
             try:
                 estimates = {n: noise_estimate(board, project, n, progress, cancelled, merged.from_fields)
                              for n in names}
@@ -1344,7 +1391,7 @@ class Session:
                 raise ServiceError(E.CANCELLED, f"{path.name}: solve cancelled") from None
             except EngineError as e:
                 raise ServiceError(E.SOLVE_FAILED, f"{path.name}: {e}", hint) from None
-        doc = noise_summary(results, files)
+        doc = meshing.stamp(noise_summary(results, files), project.settings.mesher)
         for a in doc["aggressors"]:
             a["estimate"] = estimates.get(a["aggressor"])
         summary_path = folder / f"{stem}_noise_summary.json"
@@ -1355,7 +1402,8 @@ class Session:
 
     def solve_tolerance(self, project_path, skip_ac: bool = False, skip_noise: bool = False, out_dir=None,
                         confirm_large: bool = False, progress: Progress = None, cancelled: Cancel = None,
-                        use_board_fields: Optional[bool] = None) -> Dict[str, Any]:
+                        use_board_fields: Optional[bool] = None,
+                        mesher: Optional[str] = None) -> Dict[str, Any]:
         """Each load's tolerance stack-up, as ``coppernicus tolerance --json`` does, through the
         same run (:mod:`coppernicus.service.tolerance`: the KiCad fields merged, the project's
         tolerances carried by ref onto a fields rail, the misspelt keys): the
@@ -1373,7 +1421,8 @@ class Session:
         started = time.perf_counter()
         path, loaded, _, entry = self._open_project(project_path)
         merged = self._merge_board_fields(path, loaded, entry, use_board_fields)
-        with self._solve_lock:
+        name = self._mesher(mesher, merged.project.settings)
+        with self._solve_lock, self._meshing(name):
             try:
                 plan = run.plan(entry.board, path, loaded, merged, skip_ac=bool(skip_ac),
                                 skip_noise=bool(skip_noise), progress=progress, cancelled=cancelled,
@@ -1392,7 +1441,7 @@ class Session:
         folder.mkdir(parents=True, exist_ok=True)
         stem = safe_file_name(path.stem)
         csv_path = write_csv(result, folder / f"{stem}_tolerance.csv")
-        doc = tolerance_summary(result, csv_path.resolve().as_posix())
+        doc = meshing.stamp(tolerance_summary(result, csv_path.resolve().as_posix()), name)
         summary_path = folder / f"{stem}_tolerance_summary.json"
         doc["summary_file"] = summary_path.resolve().as_posix()
         text = json.dumps(doc, indent=1, ensure_ascii=False, allow_nan=False)
@@ -1982,6 +2031,7 @@ class Session:
         if base["settings_changed"]:
             warnings.append("The settings differ (" + ", ".join(base["settings_changed"]) + "): the "
                             "deltas mix the board change and the settings.")
+        warnings.extend(w for w in [mesher_warning(sa, sb)] if w)
         if la.rec.board_id == lb.rec.board_id:
             warnings.append("Both results are of the same board file: compare_results is the tool "
                             "for a what-if on one board.")
@@ -2029,6 +2079,27 @@ class Session:
             return self._out_dir
 
 
+def mesher_of(summary: Mapping[str, Any]) -> Tuple[str, Optional[str]]:
+    """The mesher a summary records (name, version); a summary from before the mesher was
+    recorded was meshed by Triangle, version unknown."""
+    m = summary.get("mesher")
+    if isinstance(m, Mapping):
+        return str(m.get("name") or meshing.DEFAULT), m.get("version")
+    return str((summary.get("settings") or {}).get("mesher") or meshing.DEFAULT), None
+
+
+def mesher_warning(summary_a: Mapping[str, Any], summary_b: Mapping[str, Any]) -> Optional[str]:
+    """A warning when two results were meshed by different meshers or mesher versions (a
+    version is compared only when both are known); None when they share one."""
+    (na, va), (nb, vb) = mesher_of(summary_a), mesher_of(summary_b)
+    if na == nb and (va is None or vb is None or va == vb):
+        return None
+    def said(n, v):
+        return f"{n} ({v})" if v else n
+    return (f"Different meshers: a was meshed with {said(na, va)}, b with {said(nb, vb)}. The meshes "
+            "differ, so small differences are discretisation, not design changes.")
+
+
 def compare_summaries(summary_a: Dict[str, Any], summary_b: Dict[str, Any]) -> Dict[str, Any]:
     """Per-load and per-layer deltas, b − a, of two rail summaries as built by
     :func:`coppernicus.service.convert.rail_summary` (what :meth:`Session.compare_results`
@@ -2068,9 +2139,12 @@ def compare_summaries(summary_a: Dict[str, Any], summary_b: Dict[str, Any]) -> D
     losses = [{"name": k, "power_w_a": pa.get(k), "power_w_b": pb.get(k),
                "delta_power_w": _delta(pb.get(k), pa.get(k))}
               for k in [*pa, *[k for k in pb if k not in pa]]]
-    changed = {k: {"a": sa["settings"].get(k), "b": sb["settings"].get(k)}
-               for k in sorted({*sa["settings"], *sb["settings"]})
-               if sa["settings"].get(k) != sb["settings"].get(k)}
+    # A summary recorded before the mesher was: Triangle's.
+    set_a, set_b = ({"mesher": mesher_of(x)[0], **x["settings"]} for x in (sa, sb))
+    changed = {k: {"a": set_a.get(k), "b": set_b.get(k)}
+               for k in sorted({*set_a, *set_b})
+               if set_a.get(k) != set_b.get(k)}
+    warnings.extend(w for w in [mesher_warning(sa, sb)] if w)
     return C.jsonable({
         "result_a": sa["result_id"], "result_b": sb["result_id"], "net_a": sa["net"], "net_b": sb["net"],
         "settings_changed": changed,
