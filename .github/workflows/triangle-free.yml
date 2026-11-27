@@ -1,7 +1,8 @@
 name: Triangle-free
 
 # Coppernicus without the triangle package: KiPI loads with Coppernicus's stand-in in its place
-# (coppernicus.triangle_standin) and the rust mesher (coppermesh, tools/mesher_rs) does the meshing.
+# (coppernicus.triangle_standin) and the rust mesher (coppermesh, built here from tools/mesher_rs,
+# not PyPI's wheel) does the meshing.
 # The tests that need the real Triangle skip themselves; the guard step makes sure this job is not
 # green only because everything skipped.
 
@@ -36,15 +37,16 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - run: uv sync --frozen
-      - name: Build coppermesh (the rust mesher) into the environment
-        working-directory: tools/mesher_rs
+      - name: Install, without PyPI's coppermesh
+        run: uv sync --frozen --no-install-package coppermesh
+      - name: Build coppermesh (the rust mesher) from tools/mesher_rs into the environment
         run: |
-          uv pip install --python ../../.venv/bin/python maturin
-          VIRTUAL_ENV=../../.venv ../../.venv/bin/maturin develop --release --uv
+          uv pip install --python .venv/bin/python ./tools/mesher_rs
+          .venv/bin/python tools/mesher_rs/check_source.py
       - name: Remove Triangle
         run: uv pip uninstall --python .venv/bin/python triangle
-      # From here on, never `uv run` without --no-sync: a sync would install Triangle again.
+      # From here on, never `uv run` without --no-sync: a sync would install Triangle and PyPI's
+      # coppermesh again.
       - name: Guard (Triangle absent, the stand-in in place, rust the only mesher)
         run: |
           .venv/bin/python - <<'EOF'

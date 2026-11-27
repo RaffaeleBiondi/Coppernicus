@@ -55,7 +55,7 @@ jobs:
           project: examples/demo/demo-relaxed.coppernicus.yml
           output-dir: results-relaxed
           artifact-name: selftest-relaxed
-      - name: Within the limit
+      - name: Within the limit, meshed with rust (the default; coppermesh from PyPI's wheel)
         shell: bash
         env:
           VERDICT: ${{ steps.check.outputs.verdict }}
@@ -64,6 +64,12 @@ jobs:
           echo "verdict=$VERDICT exit-code=$CODE"
           test "$VERDICT" = pass
           test "$CODE" = 0
+          python3 - results-relaxed/examples_demo_demo-relaxed.coppernicus/demo-relaxed.coppernicus_summary.json <<'PY'
+          import json, sys
+          mesher = json.load(open(sys.argv[1], encoding="utf-8"))["mesher"]
+          assert mesher["name"] == "rust" and "fallback_from" not in mesher, mesher
+          print("mesher:", mesher)
+          PY
 
   report-only:
     name: demo with fail-on-limit false, no HTML -> passes, verdict still fail
