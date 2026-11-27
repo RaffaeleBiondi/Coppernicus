@@ -46,7 +46,10 @@ folder for the run, so the estimates' "last solve" lines are the same on every m
 
 It never saves a project and takes no board argument: only the projects in ``examples/`` are
 used (the power tree page's limits go into a copy in the pages' folder), so no real board can
-end up in the docs. Message boxes are answered in code, so a scripted run never waits on one.
+end up in the docs. :func:`example_only` enforces it: every project or board a window opens,
+and every file a ``coppernicus`` command is given, must be in the repository's ``examples/``,
+and so must the board a project names; anything else stops the run before it is read.
+Message boxes are answered in code, so a scripted run never waits on one.
 
 Numbers are formatted with the C locale (dot decimals), whatever the machine's locale. Images
 are scaled down to at most ``--width`` pixels so the repository stays small. Regenerate them
@@ -77,10 +80,49 @@ PDN = ROOT / "examples" / "pdn" / "pdn.coppernicus.yml"
 NOISE_TIGHT = ROOT / "examples" / "noise" / "noise-tight.coppernicus.yml"
 TOLERANCE_TIGHT = ROOT / "examples" / "tolerance" / "tolerance-tight.coppernicus.yml"
 NET = "+3V3"
+EXAMPLES = ROOT / "examples"
+INPUTS = (DEMO, DEMO_BOARD, CHAIN, FIELDS, DEMO_THERMAL, PDN, NOISE_TIGHT, TOLERANCE_TIGHT)
+# Copies the run makes itself, from an example checked first (the power chain with the limits
+# of docs/power-tree.md): allowed beside the examples.
+RUN_COPIES: set = set()
+_FILE_SUFFIXES = (".yml", ".yaml", ".kicad_pcb", ".json.gz", ".json", ".xml", ".hyp", ".tgz", ".zip")
 
 
 class Unfinished(Exception):
     """A scenario did not reach the state its image is meant to show."""
+
+
+def example_only(path) -> Path:
+    """``path``, resolved, when it is in the repository's ``examples/`` and, for a project, so
+    is the board it names; :class:`Unfinished` otherwise. The docs' images are public: they come
+    from the synthetic examples only, never from a board kept anywhere else (a private folder
+    beside the repository, a user's own board)."""
+    p = Path(path).resolve()
+    if p in RUN_COPIES:
+        return p
+    if EXAMPLES.resolve() not in p.parents:
+        raise Unfinished(f"{p} is not in the repository's examples/: the docs' images come from the "
+                         "synthetic examples only")
+    if p.name.endswith((".coppernicus.yml", ".coppernicus.yaml")):
+        from coppernicus.project import Project
+        board = Project.load(p).board_path()
+        if board is None or EXAMPLES.resolve() not in Path(board).resolve().parents:
+            raise Unfinished(f"{p.name} names the board {board}, not in the repository's examples/: "
+                             "the docs' images come from the synthetic examples only")
+    return p
+
+
+def guard_window(window):
+    """``window`` with its open_project and open_board refusing anything but an example
+    (:func:`example_only`), so no scenario can show another board."""
+    for name in ("open_project", "open_board"):
+        real = getattr(window, name)
+        setattr(window, name, functools.partial(_opened, real))
+    return window
+
+
+def _opened(real, path, *args, **kwargs):
+    return real(example_only(path), *args, **kwargs)
 
 
 @functools.cache
@@ -111,6 +153,12 @@ def main(argv=None) -> int:
     ap.add_argument("--width", type=int, default=1600, help="largest image width, px")
     ap.add_argument("--timeout", type=float, default=900.0, help="hard limit for the whole run, s")
     args = ap.parse_args(argv)
+    try:
+        for path in INPUTS:
+            example_only(path)
+    except Unfinished as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
     if args.offscreen:
         os.environ["QT_QPA_PLATFORM"] = "offscreen"
     on_screen = os.environ.get("QT_QPA_PLATFORM") != "offscreen"
@@ -178,7 +226,7 @@ def main(argv=None) -> int:
             watch.step = text
 
     def new_window():
-        w = MainWindow()
+        w = guard_window(MainWindow())
         w.resize(1500, 920)
         step(f"window {len(windows) + 1}")
         w.show()
@@ -611,6 +659,9 @@ def coppernicus(args, out_dir: Path, timeout: float, watch_front: bool = False) 
     """``coppernicus ARGS --out OUT_DIR`` in a child process, as a user runs it (see
     :func:`run_child`). Exit codes 0, 1 (a limit exceeded) and 3 (not judged) are results;
     anything else stops the run. Returns the number of front samples read."""
+    for a in args:                     # every file it reads: an example, or the run's own copy
+        if isinstance(a, Path) or str(a).endswith(_FILE_SUFFIXES):
+            example_only(a)
     cmd = [sys.executable, "-m", "coppernicus", *map(str, args), "--out", str(out_dir)]
     code, _, stderr, read = run_child(cmd, timeout, watch_front)
     if code not in (0, 1, 3):
@@ -668,7 +719,7 @@ def chain_with_limits(folder: Path) -> Path:
     +3V3 and +1V8, 30 mV of ground rise on GND), saved in ``folder`` under the example's name,
     beside a copy of its board, so that the page names the example's files."""
     from coppernicus.project import Project
-    project = Project.load(CHAIN)
+    project = Project.load(example_only(CHAIN))
     project.rail("+3V3").limits.max_drop_pct = 1.0
     project.rail("+1V8").limits.max_drop_pct = 1.0
     project.ensure_rail("GND").limits.max_ground_rise_mv = 30.0
@@ -676,7 +727,9 @@ def chain_with_limits(folder: Path) -> Path:
     board = folder / project.board_path().name
     shutil.copyfile(project.board_path(), board)
     project.board = str(board)
-    return project.save(folder / CHAIN.name)
+    saved = project.save(folder / CHAIN.name)
+    RUN_COPIES.update({Path(saved).resolve(), board.resolve()})
+    return saved
 
 
 def reports(folder: Path, timeout: float, watch_front: bool = False) -> list:
