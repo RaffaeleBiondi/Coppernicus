@@ -50,11 +50,18 @@ def _restyle(widget: QWidget) -> None:
     widget.style().polish(widget)
 
 
-def set_badge(label: QLabel, verdict: Optional[str]) -> None:
-    """``label`` as the badge of ``verdict`` ("fail", "pass", "not_judged"; None: hidden)."""
+STALE_TIP = "The setup changed since this solve: solve again"
+
+
+def set_badge(label: QLabel, verdict: Optional[str], stale: bool = False) -> None:
+    """``label`` as the badge of ``verdict`` ("fail", "pass", "not_judged"; None: hidden).
+    ``stale``: the setup changed since the solve, the badge outlined dashed in the verdict's
+    colour instead of filled, and its tooltip says to solve again."""
     label.setVisible(verdict in BADGE_WORDS)
     label.setText(BADGE_WORDS.get(verdict, ""))
     label.setProperty("badge", verdict or "")
+    label.setProperty("stale", "true" if stale and verdict in BADGE_WORDS else "")
+    label.setToolTip(STALE_TIP if stale else "")
     _restyle(label)
 
 
@@ -75,12 +82,14 @@ class Card(QFrame):
             layout.addWidget(w)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
 
-    def show_data(self, data: CardData) -> None:
+    def show_data(self, data: CardData, stale: bool = False) -> None:
         self.key.setText(data.key)
         self.value.setText(data.value)
         self.detail.setText(data.detail)
         self.detail.setVisible(bool(data.detail))
         self.setProperty("state", data.state)
+        self.setProperty("stale", "true" if stale else "")
+        self.setToolTip(STALE_TIP if stale else "")
         _restyle(self)
 
 
@@ -112,12 +121,13 @@ class VerdictHeader(QWidget):
         layout.addLayout(row)
         self.show_verdict(None, [])
 
-    def show_verdict(self, verdict: Optional[str], cards: Sequence[CardData]) -> None:
-        """The badge of ``verdict`` (None: none) and up to four cards (the others hidden)."""
-        set_badge(self.badge, verdict)
+    def show_verdict(self, verdict: Optional[str], cards: Sequence[CardData], stale: bool = False) -> None:
+        """The badge of ``verdict`` (None: none) and up to four cards (the others hidden);
+        ``stale``: the result is from before a setup change (dashed badge, solve again)."""
+        set_badge(self.badge, verdict, stale)
         for i, card in enumerate(self.cards):
             if i < len(cards):
-                card.show_data(cards[i])
+                card.show_data(cards[i], stale)
                 card.show()
             else:
                 card.hide()
@@ -182,11 +192,13 @@ def worst(verdicts) -> Optional[str]:
     return max(known, key=RANK.get) if known else None
 
 
-def badge(verdict: Optional[str], text: Optional[str] = None):
-    """The (kind, text) of a verdict: "not solved" when None."""
+def badge(verdict: Optional[str], text: Optional[str] = None, stale: bool = False):
+    """The (kind, text[, stale]) of a verdict: "not solved" when None; ``stale`` adds the mark
+    of a result from before a setup change."""
     if verdict is None:
         return ("ns", "not solved")
-    return (VERDICT_KIND.get(verdict, "nj"), text or BADGE_WORDS.get(verdict, "not judged"))
+    out = (VERDICT_KIND.get(verdict, "nj"), text or BADGE_WORDS.get(verdict, "not judged"))
+    return out + (True,) if stale else out
 
 
 class BadgeDelegate(QStyledItemDelegate):
@@ -198,7 +210,8 @@ class BadgeDelegate(QStyledItemDelegate):
         if not data:
             super().paint(painter, option, index)
             return
-        kind, text = data
+        kind, text = data[0], data[1]
+        stale = len(data) > 2 and bool(data[2])
         font = QFont(option.font)
         font.setPointSizeF(max(font.pointSizeF() * 0.85, 7.0))
         font.setWeight(QFont.DemiBold if kind in ("fail", "pass", "attention") else QFont.Normal)
@@ -221,7 +234,16 @@ class BadgeDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setFont(font)
         white = QColor(WHITE)
-        if kind in ("fail", "pass", "attention"):
+        if stale and kind in ("fail", "pass", "attention", "nj"):
+            # A result from before a setup change: the verdict's colour, outlined dashed, never filled.
+            token = {"fail": "fail", "pass": "pass", "attention": "warn", "nj": "muted"}[kind]
+            pen = QPen(white if selected else theme.qcolor(token), 1)
+            pen.setStyle(Qt.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(pill.adjusted(0.5, 0.5, -0.5, -0.5), 4, 4)
+            painter.setPen(white if selected else theme.qcolor(token))
+        elif kind in ("fail", "pass", "attention"):
             painter.setPen(QPen(white, 1) if selected else Qt.NoPen)
             painter.setBrush(theme.qcolor(f"badge-{kind}"))
             painter.drawRoundedRect(pill, 4, 4)
@@ -245,3 +267,57 @@ class BadgeDelegate(QStyledItemDelegate):
             size.setHeight(max(size.height(), QFontMetrics(option.font).height() + 8))
         return size
 
+
+
+# ---------------------------------------------------------------------- the AC and noise cards
+
+def ac_cards(r) -> List[CardData]:
+    """The cards of an impedance result, of its worst probe (a failing one first, else the
+    largest |Z| over its target, else the first): its worst |Z| and where, its target, its
+    lowest and highest |Z|. Only a probe that fails its target gets a red border."""
+    from coppernicus.impedance import hz_text, ohm_text
+    if not r.probes:
+        return []
+    probes = list(r.probes)
+    p = next((q for q in probes if q.passed is False), None) or max(
+        probes, key=lambda q: q.worst_ratio if q.worst_ratio is not None else -1.0)
+    ratio = f", {p.worst_ratio:.3g}× the target" if p.worst_ratio is not None else ""
+    mag = p.mag_ohm
+    target = _ac_target(p)
+    return [CardData(f"Worst |Z|, {p.name}", ohm_text(p.worst_z_ohm), f"at {hz_text(p.worst_hz)}{ratio}",
+                     "fail" if p.passed is False else ""),
+            CardData(f"Target, {p.name}", target or "none", "" if target else "ranked, not judged"),
+            CardData("Lowest |Z|", ohm_text(float(mag.min()))),
+            CardData("Highest |Z|", ohm_text(float(mag.max())))]
+
+
+def _ac_target(p) -> str:
+    from coppernicus.app.ac_panel import _target_text
+    return _target_text(p)
+
+
+def noise_cards(r) -> List[CardData]:
+    """The cards of a noise result: the worst victim (the only one judged, against its margin),
+    the ripple, the first phase's hot loop and the radiated estimate (never judged: never a
+    coloured border)."""
+    from coppernicus.impedance import hz_text
+    cards: List[CardData] = []
+    if r.victims:
+        v = max(r.victims, key=lambda x: (x.ratio if x.ratio is not None else -1.0, x.peak_v))
+        detail = (f"{100 * v.ratio:.3g} % of its {v.margin_v * 1e3:.4g} mV margin" if v.ratio is not None
+                  else "no margin set: ranked")
+        cards.append(CardData("Worst victim", f"{v.name} {v.peak_v * 1e3:.4g} mV", detail,
+                              "fail" if v.passed is False else ""))
+    if r.ripple:
+        rp = r.ripple[0]
+        cards.append(CardData(f"Ripple at {rp.name}", f"{rp.pp_bw_v * 1e3:.4g} mV p-p",
+                              "through 20 MHz, never judged"))
+    if r.hot_loops:
+        h = r.hot_loops[0]
+        ring = f"rings at {hz_text(h.f_ring_hz)}" if h.f_ring_hz else "no ringing"
+        cards.append(CardData(f"Hot loop, phase {h.phase}", f"{h.loop_l_h * 1e9:.3g} nH", ring))
+    e = getattr(r, "emi", None)
+    if e is not None and getattr(e, "radiated_dbuv_m", None) is not None:
+        cards.append(CardData("Radiated estimate", f"{e.radiated_dbuv_m:.1f} dBµV/m",
+                              f"at {hz_text(e.radiated_hz)}, {e.distance_m:g} m: for scale, never judged"))
+    return cards[:VerdictHeader.MAX_CARDS]

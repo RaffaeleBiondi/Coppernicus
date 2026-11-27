@@ -75,6 +75,7 @@ from coppernicus.app.panels import (
     WheelWhenFocused,
     without_tolerances,
 )
+from coppernicus.app.verdict import VerdictHeader, noise_cards
 from coppernicus.engine.meshing import session as meshing
 from coppernicus.engine.pisetup import terminal_names  # engine names; fsw_default mirrors the engine
 from coppernicus.impedance import hz_text
@@ -1106,7 +1107,8 @@ class NoisePanel(QWidget):
         rl = QVBoxLayout(results)
         rl.setContentsMargins(4, 4, 4, 4)
         head = QHBoxLayout()
-        head.addWidget(self.header, 1)
+        self.verdict = VerdictHeader(self.header)       # the badge, this line and the cards, on top
+        head.addStretch(1)
         head.addWidget(self.export_button, 0, Qt.AlignTop)
         rl.addLayout(head)
         rl.addWidget(QLabel("<b>Ripple</b> (never judged here)"))
@@ -1129,9 +1131,11 @@ class NoisePanel(QWidget):
             split.setStretchFactor(i, stretch)
         split.setSizes([430, 520, 360])
         self.setup_area, self._split = scroll, split
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(split)
+        layout.setSpacing(0)
+        layout.addWidget(self.verdict)
+        layout.addWidget(split, 1)
 
         # Wiring.
         self.aggressor_box.currentIndexChanged.connect(lambda *_: self._aggressor_shown())
@@ -1830,10 +1834,13 @@ class NoisePanel(QWidget):
         entry = self.results.get(self._agg_rows[i].name) if i >= 0 else None
         if entry is None:
             self.header.setText("")
+            self.verdict.show_verdict(None, [])
             return
         r, solved = entry
         stale = project_key(self.merged_project) != solved
         self.header.setText(header_html(r, stale))
+        self.verdict.show_verdict(r.verdict if r.verdict in ("fail", "pass") else "not_judged",
+                                  noise_cards(r), stale=stale)
         col = VICTIM_HEADERS.index("Verdict")
         for k, row in enumerate(victim_rows(r, stale)):
             item = self.victim_table.item(k, col)

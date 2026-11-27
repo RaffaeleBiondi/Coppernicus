@@ -64,6 +64,7 @@ from coppernicus.app import theme
 from coppernicus.app.mesher import failure
 from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.panels import without_tolerances
+from coppernicus.app.verdict import VerdictHeader, ac_cards
 from coppernicus.engine.meshing import session as meshing
 from coppernicus.impedance import ac_summary, ac_text, draw_impedance, hz_text, ohm_text, rail_verdict
 from coppernicus.project import (
@@ -842,7 +843,8 @@ class AcPanel(QWidget):
         rl = QVBoxLayout(results)
         rl.setContentsMargins(4, 4, 4, 4)
         head = QHBoxLayout()
-        head.addWidget(self.header, 1)
+        self.verdict = VerdictHeader(self.header)       # the badge, this line and the cards, on top
+        head.addStretch(1)
         head.addWidget(self.export_button, 0, Qt.AlignTop)
         rl.addLayout(head)
         rl.addWidget(self.table, 1)
@@ -860,9 +862,11 @@ class AcPanel(QWidget):
             split.setStretchFactor(i, stretch)
         split.setSizes([430, 560, 300])           # the editor at its natural width, the plot widest
         self.setup_area, self._split = scroll, split
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(split)
+        layout.setSpacing(0)
+        layout.addWidget(self.verdict)
+        layout.addWidget(split, 1)
 
         # Wiring.
         self.rail_box.currentIndexChanged.connect(lambda *_: self._rail_shown())
@@ -1549,13 +1553,17 @@ class AcPanel(QWidget):
         entry = self.results.get(self.rail_box.currentText())
         if entry is None:
             self.header.setText("")
+            self.verdict.show_verdict(None, [])
             return
         r, solved = entry
+        word = rail_verdict(r)[0] or "not_judged"
         verdict = {"fail": theme.span("fail", "<b>FAIL</b>"), "pass": "<b>pass</b>",
-                   "not_judged": theme.span("warn", "<b>not judged</b>")}[rail_verdict(r)[0]]
+                   "not_judged": theme.span("warn", "<b>not judged</b>")}[word]
+        changed = _project_key(self.merged_project) != solved
         stale = ("<br>" + theme.span("warn", "<b>Setup changed since this solve</b>: solve again")
-                 if _project_key(self.merged_project) != solved else "")
+                 if changed else "")
         self.header.setText(f"<b>{r.rail}</b> against {r.ground}: {verdict}{stale}")
+        self.verdict.show_verdict(word, ac_cards(r), stale=changed)
 
     @property
     def stale(self) -> bool:

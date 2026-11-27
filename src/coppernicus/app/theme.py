@@ -309,9 +309,14 @@ QLabel#badge {{ border-radius: 4px; padding: 1px 6px; font-weight: 600; }}
 QLabel#badge[badge="fail"] {{ background: {t['badge-fail']}; color: {WHITE}; }}
 QLabel#badge[badge="pass"] {{ background: {t['badge-pass']}; color: {WHITE}; }}
 QLabel#badge[badge="not_judged"] {{ border: 1px solid {t['line']}; color: {t['muted']}; }}
+QLabel#badge[stale="true"] {{ background: transparent; }}
+QLabel#badge[badge="fail"][stale="true"] {{ border: 1px dashed {t['fail']}; color: {t['fail']}; }}
+QLabel#badge[badge="pass"][stale="true"] {{ border: 1px dashed {t['pass']}; color: {t['pass']}; }}
+QLabel#badge[badge="not_judged"][stale="true"] {{ border: 1px dashed {t['muted']}; color: {t['muted']}; }}
 QFrame#card {{ background: {t['panel']}; border: 1px solid {t['line']}; border-radius: 8px; }}
 QFrame#card[state="fail"] {{ border-color: {t['fail']}; }}
 QFrame#card[state="attention"] {{ border-color: {t['warn']}; }}
+QFrame#card[stale="true"] {{ border-style: dashed; }}
 QFrame#card QLabel {{ background: transparent; border: none; }}
 QLabel#cardValue {{ color: {t['fg']}; font-size: 17px; font-weight: 600; }}
 QLabel#detailStrip {{ background: {t['panel']}; border: 1px solid {t['line']}; border-radius: 4px;
