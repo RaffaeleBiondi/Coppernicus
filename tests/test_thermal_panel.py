@@ -132,7 +132,7 @@ def test_the_temperature_readout_is_one_text_for_the_double_click_and_the_hover(
 def test_the_temperature_tab_follows_loss_by_layer_and_the_map_is_offered():
     run_in_window('''
         tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
-        assert tabs[tabs.index("Loss by layer") + 1] == "Temperature", tabs
+        assert tabs[tabs.index("Tree") + 1] == "Temperature", tabs
         assert window.results_tabs.widget(tabs.index("Temperature")) is window.thermal_panel
         fields = [window.field_box.itemText(i) for i in range(window.field_box.count())]
         assert "Board temperature (°C)" in fields, fields

@@ -33,8 +33,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTabWidget,
+    QSplitter,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -46,6 +47,7 @@ from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.noise_panel import NoisePanel
+from coppernicus.app.pages import Navigator, PageStack, SetupDock
 from coppernicus.app.panels import (
     ComparePanel,
     LossChart,
@@ -57,6 +59,7 @@ from coppernicus.app.panels import (
 from coppernicus.app.picking import add_picked_pin, pick_nets
 from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel, record_solve
 from coppernicus.app.tolerance_panel import TolerancePanel, read_misspelt
+from coppernicus.app.verdict import dc_cards
 from coppernicus.app.worker import CANCELLED, ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
@@ -84,6 +87,8 @@ from coppernicus.temperature import apply_thermal_limits, thermal_verdict
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 USER_RESULTS = ("Documents", "Coppernicus", "results")     # under the home folder
 REMOVE_MESHER = "Remove downloaded mesher (Triangle)…"
+MAP_SHARE = {"full": 0.6, "small": 0.3}   # the map's share of the centre's height, by page
+RESULTS_TITLE = "Results"              # above the navigator; "Results for +3V3" with a net shown
 THEME_KEY = "Ctrl+Shift+L"                              # dark <-> light (View menu, toolbar)
 # + / − step the Layer selector, as in KiCad: (key, modifiers, step); "=" is "+" without Shift.
 LAYER_KEYS = ((Qt.Key_Plus, Qt.NoModifier, 1), (Qt.Key_Equal, Qt.NoModifier, 1),
@@ -190,6 +195,15 @@ def tree_header_html(key: str, res: RailResult, gv) -> str:
             f"· copper loss {res.power_loss * 1e3:.3g} mW · {verdict}{attention_html(gv.problems)}")
 
 
+def rail_verdict(res: RailResult, limits: Limits, problems) -> str:
+    """The verdict of a rail solved alone, as its header states it: "fail" when a problem
+    fails, "not_judged" when no limit is set or a set limit could not judge, else "pass"."""
+    fails = sum(p.severity == FAIL for p in problems)
+    missing = not_judged_items(res, limits)
+    set_any = any(v is not None for v in vars(limits).values())
+    return "fail" if fails else "not_judged" if missing or not set_any else "pass"
+
+
 def rail_header_html(res: RailResult, limits: Limits, problems) -> str:
     """The Problems header of a rail solved alone, judged against ``limits`` (``problems``:
     its find_problems list)."""
@@ -205,8 +219,7 @@ def rail_header_html(res: RailResult, limits: Limits, problems) -> str:
                  f"({res.drop(worst) * 1e3:.2f} mV{share}) · ") if worst else ""
     missing = not_judged_items(res, limits)      # the per-rail rule (service), one source
     set_any = any(v is not None for v in vars(limits).values())
-    verdict = verdict_html("fail" if fails else "not_judged" if missing or not set_any else "pass",
-                           fails, missing, set_any)
+    verdict = verdict_html(rail_verdict(res, limits, problems), fails, missing, set_any)
     return (f"<b>{res.net}</b>: {worst_txt}{max_drop_text(res)} · copper loss "
             f"{res.power_loss * 1e3:.3g} mW ({split}) · {verdict}{attention_html(problems)}")
 
@@ -319,7 +332,7 @@ class MainWindow(QMainWindow):
         cl.addLayout(bar)
         cl.addLayout(bar2)
         cl.addWidget(self.view, 1)
-        self.setCentralWidget(centre)
+        self.map_pane = centre                  # the map and its bars, above the page (layout C)
 
         # Docks.
         self.nets = NetPanel()
@@ -328,26 +341,51 @@ class MainWindow(QMainWindow):
         self.losses = LossChart()
         self.compare = ComparePanel()
         self.tree_panel = TreePanel()
-        self.results_tabs = QTabWidget()
-        self.results_tabs.addTab(self.problems, "Problems")
-        self.results_tabs.addTab(self.losses, "Loss by layer")
+        # The results pages, chosen in the navigator under the nets (layout C); results_tabs
+        # is the name the bottom tabs had, kept for the code and checks that ask for a page.
+        self.navigator = Navigator()
+        self.pages = self.results_tabs = PageStack(self.navigator)
         self.thermal_panel = ThermalPanel()               # the board temperature (power tree)
-        self.results_tabs.addTab(self.thermal_panel, "Temperature")
         self.thermal_panel.options_changed.connect(self._thermal_edited)
         self.thermal_panel.limits_changed.connect(self._thermal_limits_edited)
         self.thermal_panel.layer_requested.connect(self.show_temperature_at)
         self.thermal_panel.cancel_requested.connect(self.cancel_tree)
-        self.results_tabs.addTab(self.compare, "Compare")
-        self.results_tabs.addTab(self.tree_panel, "Power tree")
         self.ac_panel = AcPanel(self)
-        self.results_tabs.addTab(self.ac_panel, "Impedance")
         self.noise_panel = NoisePanel(self)              # DC-DC ripple and coupled noise
-        self.results_tabs.addTab(self.noise_panel, label_text("Ripple & noise"))   # "&&": not a mnemonic
         self.tolerance_panel = TolerancePanel(self)      # each load's stack-up, from the results held
-        self.results_tabs.addTab(self.tolerance_panel, "Tolerance")
+        for page, label, group in ((self.problems, "Problems", "Rail"),
+                                   (self.losses, "Loss by layer", "Rail"),
+                                   (self.compare, "Compare", "Rail"),
+                                   (self.tree_panel, "Tree", "Power tree"),
+                                   (self.thermal_panel, "Temperature", "Power tree"),
+                                   (self.ac_panel, "Impedance", "AC"),
+                                   (self.noise_panel, label_text("Ripple & noise"), "AC"),     # no mnemonic
+                                   (self.tolerance_panel, "Tolerance", None)):
+            self.pages.add_page(page, label, group)
         for panel in (self.ac_panel, self.noise_panel):
             panel.results_changed.connect(self.tolerance_panel.schedule_refresh)
-        self._dock("Nets", self.nets, Qt.LeftDockWidgetArea)
+        self.centre_split = QSplitter(Qt.Vertical)        # the map above the page
+        self.centre_split.setChildrenCollapsible(False)
+        self.centre_split.addWidget(self.map_pane)
+        self.centre_split.addWidget(self.pages)
+        self.centre_split.setStretchFactor(0, 3)
+        self.centre_split.setStretchFactor(1, 2)
+        centre_column = QWidget()                         # the verdict line and cards on top (DC pages)
+        cc = QVBoxLayout(centre_column)
+        cc.setContentsMargins(0, 0, 0, 0)
+        cc.setSpacing(0)
+        cc.addWidget(self.problems.header)
+        cc.addWidget(self.centre_split, 1)
+        self.setCentralWidget(centre_column)
+        self.results_title = QLabel(RESULTS_TITLE)
+        self.results_title.setProperty("role", "muted")
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(self.nets, 3)
+        ll.addWidget(self.results_title)
+        ll.addWidget(self.navigator, 2)
+        self._dock("Nets", left, Qt.LeftDockWidgetArea)
         rail_scroll = QScrollArea()             # the rail setup is taller than a laptop screen
         rail_scroll.setWidget(self.rail_panel)
         rail_scroll.setWidgetResizable(True)
@@ -355,9 +393,34 @@ class MainWindow(QMainWindow):
         rail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)     # scroll down only
         rail_scroll.setMinimumWidth(self.rail_panel.minimumSizeHint().width()
                                     + rail_scroll.verticalScrollBar().sizeHint().width())
-        self._dock("Rail setup", rail_scroll, Qt.RightDockWidgetArea)
-        problems_dock = self._dock("Results", self.results_tabs, Qt.BottomDockWidgetArea)
-        self.resizeDocks([problems_dock], [300], Qt.Vertical)
+        # The right panel: the setup of the page shown, its solve at the foot (layout C).
+        self.setup_dock = SetupDock(self)
+        self.setup_dock.add_setup("rail", rail_scroll, {"rail": self.rail_panel.solve,
+                                                        "tree": self._tree_button()})
+        self.setup_dock.add_setup("thermal", self.thermal_panel.take_setup(), {"tree": self._tree_button()})
+        for key, panel in (("impedance", self.ac_panel), ("noise", self.noise_panel),
+                           ("tolerance", self.tolerance_panel)):
+            self.setup_dock.add_setup(key, panel.take_setup(), {"solve": panel.solve_button})
+        self.addDockWidget(Qt.RightDockWidgetArea, self.setup_dock)
+        self._page_setups = {id(self.problems): ("rail", "Rail setup", "rail"),
+                             id(self.losses): ("rail", "Rail setup", "rail"),
+                             id(self.compare): ("rail", "Rail setup", "rail"),
+                             id(self.tree_panel): ("rail", "Rail setup", "tree"),
+                             id(self.thermal_panel): ("thermal", "Thermal setup", "tree"),
+                             id(self.ac_panel): ("impedance", "Impedance setup", "solve"),
+                             id(self.noise_panel): ("noise", "Noise setup", "solve"),
+                             id(self.tolerance_panel): ("tolerance", "Tolerance setup", "solve")}
+        self._map_size = ""
+        self.pages.currentChanged.connect(self._page_shown)
+        self._page_shown(self.pages.currentIndex())
+        self.setup_button = QToolButton()               # shows the hidden setup panel again
+        self.setup_button.setText("⇤ Setup")
+        self.setup_button.setToolTip("Show the setup panel")
+        self.setup_button.setAutoRaise(True)
+        self.setup_button.clicked.connect(self.setup_dock.show)
+        self.statusBar().addPermanentWidget(self.setup_button)
+        self.setup_button.hide()
+        self.setup_dock.toggleViewAction().toggled.connect(lambda on: self.setup_button.setVisible(not on))
 
         self._actions()
         self.statusBar().showMessage("Open a board (.kicad_pcb) or a project to start")
@@ -369,6 +432,7 @@ class MainWindow(QMainWindow):
         self.rail_panel.settings_changed.connect(self._settings_edited)
         self.rail_panel.solve_requested.connect(self.solve)
         self.problems.problem_activated.connect(self.go_to_problem)
+        self.problems.problem_selected.connect(self.view.mark_problem)
         self.layer_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.group_box.currentIndexChanged.connect(lambda *_: self._group_changed())
         self.tree_panel.group_requested.connect(self.show_group)
@@ -384,6 +448,7 @@ class MainWindow(QMainWindow):
         self.view_menu = self.menuBar().addMenu("View")
         self.view.add_hover_menu(self.view_menu)                       # View → Hover shows
         self.view_menu.addSeparator()
+        self.view_menu.addAction(self.setup_dock.toggleViewAction())
         self.view_menu.addAction(self.theme_action)
         theme.signals.changed.connect(self._theme_changed)
         self.compare.pin_requested.connect(self.pin_baseline)
@@ -395,6 +460,37 @@ class MainWindow(QMainWindow):
                                       activated=lambda s=step: self.step_layer(s))
                             for key, mods, step in LAYER_KEYS]
         QApplication.instance().focusChanged.connect(self._focus_changed)
+
+    def _tree_button(self) -> QPushButton:
+        """A "Solve tree" button for a setup panel's foot (the Tree and Temperature pages)."""
+        button = QPushButton("Solve tree  (Ctrl+T)")
+        button.setToolTip("Solve the whole power tree, ground return included")
+        button.clicked.connect(self.solve_tree)
+        return button
+
+    def _page_shown(self, index: int):
+        """The setup panel follows the page (its setup, title and solve button), and so does
+        the map: none on Ripple & noise (the plots need the height; the H and E fields have
+        their own tabs) and Tolerance (the stack-up replaces it), small on Impedance (where
+        the probes are), full on the rail and power-tree pages."""
+        page = self.pages.widget(index)
+        if page is None:
+            return
+        if id(page) in self._page_setups:
+            self.setup_dock.show_setup(*self._page_setups[id(page)])
+        size = "none" if page in (self.noise_panel, self.tolerance_panel) else \
+            "small" if page is self.ac_panel else "full"
+        self.map_pane.setVisible(size != "none")
+        self.problems.header.setVisible(page in (self.problems, self.losses, self.compare))
+        if size != "none" and size != self._map_size:
+            total = max(self.centre_split.height(), 400)
+            share = MAP_SHARE[size]
+            self.centre_split.setSizes([int(total * share), total - int(total * share)])
+        self._map_size = size
+
+    def map_size(self) -> str:
+        """How the shown page has the map: "full", "small" or "none"."""
+        return self._map_size
 
     def step_layer(self, step: int):
         """+ / − (as in KiCad): the next (``step`` 1) or previous (−1) copper layer in the Layer
@@ -937,6 +1033,7 @@ class MainWindow(QMainWindow):
             return
         self.rail_panel.set_pick("")
         self.net = net
+        self.results_title.setText(f"{RESULTS_TITLE} for {net}")
         self._set_group(None)                    # a net picked in the list: the rail solved alone
         rail = self._show_rail(net)
         self.rail_panel.set_net_kind(self._net_at_0v(rail))
@@ -1345,7 +1442,7 @@ class MainWindow(QMainWindow):
         rail = self._solved_rail(self.net)
         project = self.merged.project
         notes, warnings = self._rail_warnings(self.net)
-        self.rail_panel.solve.setEnabled(False)
+        self.rail_panel.set_solve_free(False)
         self.problems.clear(f"<b>{self.net}</b>: solving…")
         self.worker = SolveWorker(self.board, rail, project.settings, self, project=project,
                                   notes=notes, warnings=warnings)
@@ -1357,7 +1454,7 @@ class MainWindow(QMainWindow):
         self.worker.message.connect(lambda m: self.statusBar().showMessage(m))
         self.worker.succeeded.connect(self._solved)
         self.worker.failed.connect(self._solve_failed)
-        self.worker.finished.connect(lambda: self.rail_panel.solve.setEnabled(True))
+        self.worker.finished.connect(lambda: self.rail_panel.set_solve_free(True))
         self.worker.start()
 
     def _is_stale(self) -> bool:
@@ -1634,7 +1731,9 @@ class MainWindow(QMainWindow):
     def _show_tree_problems(self, key: str):
         res = self.tree.groups[key]
         gv = group_verdict(self.tree, key)
-        self.problems.set_result(tree_header_html(key, res, gv), gv.problems, res.warnings + res.assumptions)
+        limits = group_limits(self.tree, key)[0]
+        self.problems.set_result(tree_header_html(key, res, gv), gv.problems, res.warnings + res.assumptions,
+                                 gv.verdict, dc_cards(res, gv.problems, limits))
         self.view.set_problems(res, gv.problems,          # the current map's peak and verdict
                                group_limits(self.tree, key)[0])
 
@@ -1828,7 +1927,8 @@ class MainWindow(QMainWindow):
         rail = self._solved_rail(res.net)
         problems = find_problems(res, rail.limits)
         self.problems.set_result(rail_header_html(res, rail.limits, problems), problems,
-                                 res.warnings + res.assumptions)
+                                 res.warnings + res.assumptions, rail_verdict(res, rail.limits, problems),
+                                 dc_cards(res, problems, rail.limits))
         self.view.set_problems(res, problems)             # the current map's peak and verdict
 
     def go_to_problem(self, problem):

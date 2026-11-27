@@ -506,6 +506,12 @@ class TolerancePanel(QWidget):
         self._next: Optional[Tuple[str, str, str]] = None
         self._build()
 
+    def take_setup(self) -> QWidget:
+        """The editor, handed to the window's setup panel (layout C): the page keeps
+        the verdict, the table and the notes."""
+        self.setup_area.setParent(None)
+        return self.setup_area
+
     # ------------------------------------------------------------------ build
     def _build(self):
         self.loads = _table(("Load", "Rail") + tuple(h for _k, h in LOAD_COLUMNS),
@@ -578,6 +584,8 @@ class TolerancePanel(QWidget):
             scroll.setWidgetResizable(True)
             scroll.setFrameShape(QScrollArea.NoFrame)
             split.addWidget(scroll)
+            if w is editor:
+                self.setup_area = scroll
         split.setStretchFactor(0, 2)
         split.setStretchFactor(1, 3)
         split.setSizes([480, 720])
@@ -590,7 +598,9 @@ class TolerancePanel(QWidget):
         self.ripple_sum.currentIndexChanged.connect(lambda *_: self._option_edited())
         self.bw_limit.toggled.connect(lambda *_: self._option_edited())
         self.table.currentCellChanged.connect(lambda row, *_: self._row_selected(row))
-        self.table.cellClicked.connect(lambda row, _c: self.go_to_row(row))
+        self.table.cellDoubleClicked.connect(lambda row, _c: self.go_to_row(row))   # a click selects
+        self.table.setToolTip("Click a row to select its load; double-click: its load on the board "
+                              "(Rail · Problems, zoomed to its pads)")
         self.solve_button.clicked.connect(self.solve_next)
         self.export_button.clicked.connect(self._export_dialog)
 
@@ -831,7 +841,8 @@ class TolerancePanel(QWidget):
         return text
 
     def go_to_row(self, r: int) -> str:
-        """Show the row's load on the board: its rail, zoomed to its pads. Returns the status line."""
+        """Show the row's load on the board: its rail on the Rail · Problems page (the Tolerance
+        page has no map), zoomed to its pads. Returns the status line."""
         win = self._win
         if self.result is None or not 0 <= r < len(self.result.rows) or win.board is None:
             return ""
@@ -842,6 +853,7 @@ class TolerancePanel(QWidget):
         if found is None:
             return ""
         net, load = found
+        win.results_tabs.setCurrentWidget(win.problems)
         if win.net != net:
             win.nets.select(net)
         rail = win.merged.project.rail(net)

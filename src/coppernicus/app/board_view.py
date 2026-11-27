@@ -67,6 +67,10 @@ CLICK_SLOP_PX = 3                 # a press and release closer than this is a cl
 # Isolines: dark on the drop/voltage map (viridis), light on the current map (magma, dark).
 ISOLINE_COLOR = {"drop": "#111111", "voltage": "#111111", "current": "#e8e8e8", "difference": "#111111"}
 ARROW_COLOR, ARROW_HALO, MEASURE_COLOR = "#ffffff", "#111111", "#0b62d6"
+# The ring round the selected problem: a light stroke on a dark halo, as the arrows, so it reads
+# on every colour scale; its radius a share of the layer's larger side (a marker, not the
+# problem's extent).
+MARK_STROKE, MARK_HALO, MARK_SHARE = "#ffffff", "#111111", 0.03
 OUTSIDE_COLOR, HOTTEST_COLOR = "#bfbfbf", "#00bfff"   # temperature map: as temperature.write_png
 ISOLINE_COUNT = 10
 MAX_ARROWS = 2000
@@ -342,6 +346,7 @@ class BoardView(QWidget):
         self._measure: List[Tuple[str, float, float, float]] = []    # (layer, x, y, V): A, then B
         self._difference_mv: Optional[np.ndarray] = None             # per node, on the Δ map
         self._measure_result: Optional[RailResult] = None
+        self._mark = None              # (problem, result): the ring of the selected problem (mark_problem)
         self._temperature = None            # (TemperatureMap, cell mm) while the temperature map is shown
         self._field: Optional[str] = None   # the map shown: a key of FIELDS, None before a solve
         # A power tree shown from another 0 V (S2): subtracted from every voltage shown (the
@@ -370,6 +375,7 @@ class BoardView(QWidget):
         self.clear()
         self._measure, self._measure_result = [], None
         self._problems = None
+        self._mark = None
 
     def clear(self):
         # The label goes, the pointer stays: _finish reads the new scene under a still pointer.
@@ -463,7 +469,40 @@ class BoardView(QWidget):
                             [(t.name, t.positions) for t in result.loads])
         self._finder = TriangleLocator(layer.points, layer.tris)
         self._add_measure()
+        self._add_mark()
         self._finish(fit)
+
+    def mark_problem(self, problem) -> None:
+        """Ring ``problem`` (a Problem of the shown result; None: no ring) on the map: shown on
+        its layer (every layer when it names none) while the map shows the same result."""
+        self._mark = (problem, self._result) if problem is not None else None
+        self._add_mark()
+        self.plotter.render()
+
+    def marked(self):
+        """The problem ringed on the map now, or None."""
+        names = self.plotter.renderer.actors
+        return self._mark[0] if self._mark is not None and "mark" in names else None
+
+    def _add_mark(self):
+        for name in ("mark", "mark_halo"):
+            self.plotter.remove_actor(name, render=False)
+        if self._mark is None or self._layer is None:
+            return
+        problem, result = self._mark
+        if result is not self._result:                  # a ring belongs to one result
+            self._mark = None
+            return
+        if problem.layer and problem.layer != self._layer.name:
+            return
+        pts = np.asarray(self._layer.points, float)
+        span = float(np.ptp(pts, axis=0).max()) if len(pts) else 1.0
+        r = max(span * MARK_SHARE, 0.3)
+        t = np.linspace(0.0, 2 * np.pi, 73)
+        ring = np.column_stack([problem.x + r * np.cos(t), problem.y + r * np.sin(t)])
+        mesh = _polyline_mesh([ring], 0.05, closed=False)
+        self.plotter.add_mesh(mesh, color=MARK_HALO, line_width=4.5, name="mark_halo", reset_camera=False)
+        self.plotter.add_mesh(mesh.copy(), color=MARK_STROKE, line_width=2.0, name="mark", reset_camera=False)
 
     def set_problems(self, result: RailResult, problems: list, limits=None):
         """The problem list of ``result`` (a rail's or a tree group's, as judged against its

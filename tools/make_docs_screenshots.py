@@ -385,7 +385,6 @@ def main(argv=None) -> int:
         """A window per analysis tab, each solved on its example, and the Results panel with
         the current-density default's attention rows. Tabs are found by their names, and every
         step checks that it got where it should (Unfinished stops the run)."""
-        from PySide6.QtWidgets import QDockWidget
         gc = gui_check()
 
         def need(ok, what: str):
@@ -412,13 +411,12 @@ def main(argv=None) -> int:
             return tabs.currentWidget()
 
         def results_height(window, px: int):
-            """The Results dock made ``px`` tall: the tabs' plots and tables need more than the
-            app's default."""
-            dock = window.findChild(QDockWidget, "Results")
-            need(dock is not None, "no Results dock")
-            window.resizeDocks([dock], [px], Qt.Vertical)
+            """The results page made ``px`` tall, under the map: the pages' plots and tables
+            need more than the app's default."""
+            split = window.centre_split
+            split.setSizes([max(split.height() - px, 100), px])
             settle()
-            return dock
+            return split
 
         def closed(window):
             window.dirty = False

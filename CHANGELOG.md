@@ -29,6 +29,17 @@ results against your own judgement.
   at the right end of the toolbar (also View menu, Ctrl+Shift+L) switches to light and back,
   kept for the next start; the same look on macOS, Windows and Linux (Qt's Fusion style). The
   plots stay on a light panel, as in the report.
+- The app's layout follows the HTML report's pages: the results pages are chosen in a
+  navigator under the nets (Rail, Power tree, AC, Tolerance), the map sits above the page that
+  has one, and the right panel shows the setup of the page shown with its solve button at the
+  foot (hide it from its title bar; ⇤ Setup in the status bar or View → Setup panel shows it
+  again). Tolerance: double-click a row to see its load on the board. The probes table shows
+  Name, Part, Pins and Target; the selected probe's other fields are in a card under it.
+- The Rail pages open with the verdict (a FAIL / PASS / not judged badge beside the summary
+  line) and up to four cards: the worst load, the largest drop (or ground rise) on the copper,
+  the copper loss and where most of it goes, the strongest current crowding. Problems are one
+  line each; the selected one's detail shows in a strip under the list and a ring marks it on
+  the map.
 
 ### Fixed
 

@@ -299,7 +299,7 @@ PDN = os.path.join(os.path.dirname(__file__), "..", "examples", "pdn", "pdn.copp
 def test_the_impedance_tab_follows_the_power_tree_and_opening_changes_nothing():
     run_in_window(f'''
         tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
-        assert tabs[tabs.index("Power tree") + 1] == "Impedance", tabs
+        assert tabs[tabs.index("Temperature") + 1] == "Impedance", tabs       # after the power tree's pages
         bar = window.findChild(QtWidgets.QToolBar, "Main")
         act = next(a for a in bar.actions() if a.text() == "Solve impedance")
         assert act.shortcut().toString() == "Ctrl+I"
@@ -322,8 +322,11 @@ def test_the_impedance_tab_follows_the_power_tree_and_opening_changes_nothing():
             if hasattr(w, "editingFinished"):
                 w.editingFinished.emit()
         assert window.dirty is False and window.project.to_dict() == before_dict
+        window.results_tabs.setCurrentWidget(window.problems)   # the same page (and map) both times
+        app.processEvents()
         with_tab = window.minimumSizeHint()                  # the laptop fit: the tab grows nothing
         window.results_tabs.removeTab(window.results_tabs.indexOf(panel))
+        window.results_tabs.setCurrentWidget(window.problems)
         app.processEvents()
         without = window.minimumSizeHint()
         assert with_tab.height() <= without.height() and with_tab.width() <= without.width(), (
