@@ -40,6 +40,10 @@ results against your own judgement.
   the copper loss and where most of it goes, the strongest current crowding. Problems are one
   line each; the selected one's detail shows in a strip under the list and a ring marks it on
   the map.
+- The toolbar has the four solves by their verbs (Solve rail, Solve tree, Solve impedance,
+  Solve noise), with Open ▾, Save ▾ and Export ▾ menus for the rest. Every page and rail net
+  carries a badge: its verdict, or a dashed "not solved"; a group shows the worst of its solved
+  pages; Problems counts its FAILs.
 
 ### Fixed
 
