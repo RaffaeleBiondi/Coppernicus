@@ -835,6 +835,28 @@ What it adds up and what the user enters: [Tolerance stack-up](tolerance.md); ev
   stderr with `--json`), and `--html [PATH]` writes one offline page with each load's parts and
   checks. In CI, the Action's `tolerance: true` input runs it (see [CI](ci.md)).
 
+### Choosing the mesher
+
+The mesher is **Triangle** by default, KiPI's own meshing, and nothing changes unless a mesher
+is chosen. `rust` is Coppernicus's own mesher (`tools/mesher_rs`): **experimental**, built only
+when asked for. Use it only when the user asks.
+- `solve_rail`, `solve_project`, `solve_tree`, `solve_ac`, `solve_noise` and `solve_tolerance`
+  take an optional `mesher` (`"triangle"` or `"rust"`).
+- The order: the tool's `mesher`, else the project's `settings.mesher` (`write_project` sets
+  it), else the app's setting, else Triangle. On the command line, `--mesher NAME` on `solve`,
+  `ac`, `noise` and `tolerance` wins over the project's key.
+- A mesher that is unknown or not installed here is one error, `mesher_unavailable`, whose hint
+  says how to get it. Nothing is solved.
+- Every result records its mesher in `mesher` (`name`, `version`, `experimental`); a rail
+  summary also in `settings.mesher`. A result from a non-default mesher says so in its
+  assumptions. A saved summary without the key was meshed by Triangle.
+- `compare_results` and `compare_revisions` warn when two results were meshed by different
+  meshers or mesher versions: small differences are then the mesh, not the design.
+- `copper_step` re-solves with its baseline's mesher. `probe`, `render_map`, `cut_current`,
+  `get_problems`, `report` and the compares read the stored mesh and never mesh again.
+- Calls that choose different meshers run one after the other (the mesher is global to the
+  server's process), so a parallel call waits for the solve before it.
+
 ## Conventions
 
 - **Units are in every key name:** `_v`, `_mv`, `_a`, `_a_mm2`, `_mm`, `_mm2`, `_w`, `_pct`,

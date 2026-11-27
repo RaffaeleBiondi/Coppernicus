@@ -156,6 +156,10 @@ follow the hint. `result_evicted` means you must solve again.
 - `--tree` solves the power tree (step 8; `--thermal` with the board temperature). Its JSON
   always holds the split; `--split` prints it in the text, and `--reference U1` (or pads,
   `R12.2,NT1.*`) shows the voltages from another 0 V, verdicts unchanged.
+- The mesher is Triangle by default. `mesher: "rust"` (the solve tools' argument, the project's
+  `settings.mesher`, the CLI's `--mesher rust`) is experimental: use it only when the user asks,
+  and say so when you report. Every result names its mesher in `mesher`; compare_results warns
+  when two results were meshed differently.
 - Write the YAML and the outputs outside the board's folder.
 - Exit codes: 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit that was set
   could not judge something (report each `not_judged` item), 2 an error.

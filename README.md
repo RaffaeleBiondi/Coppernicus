@@ -255,6 +255,11 @@ same document.
 limits, **1** when a limit is exceeded, **3** when a limit you set could not judge something
 (listed as NOT JUDGED) and **2** on an error. `ac`, `noise` and `tolerance` use the same codes.
 
+**Mesher.** `solve`, `ac`, `noise` and `tolerance` mesh with Triangle, KiPI's own mesher, by
+default. `--mesher rust` uses Coppernicus's own mesher instead; it is **experimental** and must
+be built first (see [tools/mesher_rs](tools/mesher_rs/README.md)). The flag wins over a
+project's `settings.mesher`. Every summary records the mesher in `mesher`.
+
 **HTML report.** Add `--html` to `solve` (and `--open` to open it straight away). Coppernicus
 writes one offline HTML file next to the summary. It holds every rail and copper layer as voltage
 drop, voltage or current density, with zoom, pan, a label beside the pointer that leads with the
@@ -320,6 +325,7 @@ settings:
     B.Cu: 0.07                    # the board file is not changed; real changes are made in KiCad
   # min_edge_mm: 0.01             # advanced: smallest element at plated-hole walls (default 0.02)
   # grading: 0.1                  # advanced: element growth away from holes, 0-2 (default 0.2)
+  # mesher: rust                  # experimental; default triangle (KiPI's own); --mesher wins
 rails:
 - net: +3V3
   sources:
