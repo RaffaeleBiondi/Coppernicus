@@ -24,7 +24,8 @@ The sets, and the docs that show their images:
   (the thermal demo's power tree, F.Cu's board temperature and the Temperature tab;
   docs/thermal.md), ``ac-1-window.png`` (Solve impedance on examples/pdn; docs/ac-impedance.md),
   ``noise-1-window.png`` (Solve noise on noise-tight; docs/noise.md),
-  ``tolerance-1-window.png`` (the Tolerance tab's Solve on tolerance-tight; docs/tolerance.md)
+  ``tolerance-1-window.png`` (the Tolerance tab's Solve on tolerance-tight, U2's stack-up shown;
+  docs/tolerance.md)
   and ``results-attention.png`` (the Results panel: the thermal demo's +3V3 solved alone,
   amber ATTENTION rows; docs/technical.md#current-density-default and the README's step 6).
 - ``cli``: the command line's own PNGs, written by ``coppernicus`` into a temporary folder:
@@ -542,9 +543,14 @@ def main(argv=None) -> int:
              and not panel.solve_button.isEnabled(), f"the stack-up is not judged: {panel.header.text()}")
         loads = [panel.table.item(r, 0).text() for r in range(panel.table.rowCount())]
         need("U2" in loads, f"no U2 row in the stack-up: {loads}")
-        said = panel.go_to_row(loads.index("U2"))   # a click on the row: U2 on the board, its verdict
+        # A click on U2's row: its stack-up chart, parts and cards under the rows. (A double-click,
+        # go_to_row, shows U2 on the board in Rail · Problems: not this page.)
+        panel.table.setCurrentCell(loads.index("U2"), 0)
         settle()
-        need(said.startswith("U2 on VOUT"), f"the U2 row did not show U2: {said!r}")
+        title = panel.stack_figure.axes[0].get_title(loc="left") if panel.stack_figure.axes else ""
+        need(title.startswith("U2 on VOUT") and panel.parts.rowCount() > 0 and panel.verdict.shown_cards()
+             and window.results_tabs.currentWidget() is panel,
+             f"U2's stack-up is not shown: {title!r}, {panel.parts.rowCount()} part row(s)")
         from coppernicus.app.tolerance_panel import RESULT_HEADERS
         head, verdict = panel.table.horizontalHeader(), RESULT_HEADERS.index("Verdict")
         left = head.sectionViewportPosition(verdict)
