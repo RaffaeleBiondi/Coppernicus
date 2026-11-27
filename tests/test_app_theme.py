@@ -129,7 +129,8 @@ def test_a_switch_recolours_what_is_already_on_screen():
     """A FAIL row, a refused cell and a verdict line written in dark read in the light theme's
     colours after the switch, and back; nothing of the other theme stays behind."""
     run_in_window('''
-        from PySide6.QtWidgets import QLabel, QTableWidget, QTableWidgetItem
+        from PySide6.QtWidgets import QLabel, QTableWidget, QTableWidgetItem, QTreeWidget
+        from coppernicus.problems import FAIL, Problem
         window = MainWindow()
         window.dirty = False
         table = window.findChildren(QTableWidget)[0]
@@ -141,6 +142,10 @@ def test_a_switch_recolours_what_is_already_on_screen():
         table.setItem(0, 1, refused)
         label = QLabel(window)
         label.setText("+3V3: " + theme.span("fail", "<b>FAIL</b>") + " · " + theme.span("warn", "not judged"))
+        window.problems.set_result("+3V3", [Problem(severity=FAIL, kind="load", title="U1: 3.29 V",
+                                                    detail="limit 0.25 %", value=0.3, x=1.0, y=2.0)], [])
+        problem = window.problems.tree.topLevelItem(0)
+        assert problem.foreground(1).color().name() == theme.color("fail", "dark")
 
         def left_over(name):
             """State colours of theme ``name`` still on screen."""
@@ -155,6 +160,10 @@ def test_a_switch_recolours_what_is_already_on_screen():
                         if item is not None:
                             shown = {item.foreground().color().name(), item.background().color().name()}
                             found |= shown & hexes
+            for t in window.findChildren(QTreeWidget):
+                for r in range(t.topLevelItemCount()):
+                    item = t.topLevelItem(r)
+                    found |= {item.foreground(c).color().name() for c in range(t.columnCount())} & hexes
             return found
 
         assert left_over("dark")
@@ -163,6 +172,7 @@ def test_a_switch_recolours_what_is_already_on_screen():
         assert fail.foreground().color().name() == theme.color("fail", "light")
         assert refused.background().color().name() == theme.color("cell-error", "light")
         assert theme.color("fail", "light") in label.text() and theme.color("warn", "light") in label.text()
+        assert problem.foreground(1).color().name() == theme.color("fail", "light")
         assert not left_over("dark"), left_over("dark")
         window.toggle_theme()
         assert fail.foreground().color().name() == theme.color("fail", "dark")

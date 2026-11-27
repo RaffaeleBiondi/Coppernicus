@@ -223,8 +223,9 @@ def apply(theme: str, app=None) -> None:
     _current = theme
     app.setPalette(palette(theme))
     app.setStyleSheet(style_sheet(theme))
-    QGuiApplication.styleHints().setColorScheme(
-        Qt.ColorScheme.Dark if theme == "dark" else Qt.ColorScheme.Light)
+    hints = QGuiApplication.styleHints()
+    if hasattr(hints, "setColorScheme"):           # Qt 6.8 and later; PySide6 6.6 runs without it
+        hints.setColorScheme(Qt.ColorScheme.Dark if theme == "dark" else Qt.ColorScheme.Light)
     signals.changed.emit(theme)
 
 
