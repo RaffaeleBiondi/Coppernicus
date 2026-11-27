@@ -8,9 +8,9 @@ the algorithms, the determinism rules and every source used. No Triangle code wa
 It is Coppernicus's default mesher: a solve that names no mesher meshes with it (the CLI's
 `--mesher`, the MCP `mesher`, the project's `settings.mesher` choose another; Triangle is
 `triangle`). Where it is not installed (removed from the environment), such a solve meshes with
-Triangle and its result says so in a warning; one that names `rust` stops with `mesher_unavailable`. Its AC mesh
-default is finer than Triangle's: `RUST_AC_MAX_EDGE_MM` (0.5 mm) in
-`src/coppernicus/engine/ac.py`, where the project does not set `ac: max_edge_mm`.
+Triangle and its result says so in a warning; one that names `rust` stops with
+`mesher_unavailable`. Its AC mesh default is finer than Triangle's: `RUST_AC_MAX_EDGE_MM`
+(0.5 mm) in `src/coppernicus/engine/ac.py`, where the project does not set `ac: max_edge_mm`.
 
 - `src/`: the core.
   - `geom.rs`: predicates and the scalar helpers.
@@ -58,9 +58,9 @@ then keep uv from putting the wheel back. With Rust (installed per user: add `~/
 Pass `--no-sync` to every `uv run` (or `export UV_NO_SYNC=1`) while the source build is
 installed: `uv.lock` names PyPI's wheel, and a plain `uv run` or `uv sync` reinstalls it over the
 source build without a word (both are coppermesh 0.1.0; only `check_source.py` tells them apart).
-After a change here, run `uv pip install ./tools/mesher_rs` again: it rebuilds when a Rust source,
-`Cargo.toml` or `Cargo.lock` changed (the crate's `cache-keys`) and reinstalls uv's cached build
-otherwise. A plain `uv sync` goes back to the wheel.
+After a change here, run `uv pip install ./tools/mesher_rs` again: uv rebuilds it when a Rust
+source, `Cargo.toml` or `Cargo.lock` changed (the crate's `cache-keys`). A plain `uv sync` goes
+back to the wheel.
 
 Users get what is on PyPI, not this folder: a change here reaches them only with a new version
 published (see "Publishing coppermesh") and `uv.lock` updated to it
