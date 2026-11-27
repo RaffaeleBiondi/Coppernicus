@@ -150,7 +150,7 @@ def test_a_rail_solve_that_finishes_after_the_setup_changed_is_dropped():
     ''')
 
 
-def test_the_hover_label_leads_with_the_value_of_the_map_shown(tmp_path):
+def test_the_hover_label_leads_with_the_value_of_the_map_shown():
     """The pointer resting over the demo board's copper: switching Show changes the label's
     large number at once, with no new move (the drop, V, |J|, each at the readout's
     precision); the values under it follow View → Hover shows, which is kept in the settings."""
@@ -163,8 +163,6 @@ def test_the_hover_label_leads_with_the_value_of_the_map_shown(tmp_path):
         import coppernicus
         import coppernicus.app.main_window as mw
 
-        QtCore.QSettings.setDefaultFormat(QtCore.QSettings.IniFormat)       # never the user's
-        QtCore.QSettings.setPath(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, SETTINGS)
 
         class HeldWorker(mw.SolveWorker):
             """The real rail solve, run when the test says so."""
@@ -233,8 +231,8 @@ def test_the_hover_label_leads_with_the_value_of_the_map_shown(tmp_path):
         assert label.lead.text() == leads["current"], label.lead.text()
         assert label.rest.text().splitlines() == ["V " + view.hover_readout_at(bx, by).lines[0][4:], "F.Cu"]
         assert label.text().splitlines()[1].startswith("V = "), label.text()   # the readout's words
-        assert QtCore.QSettings(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, "Coppernicus",
-                                "Coppernicus").value("view/hover_label") == "shown,v,j,layer"
+        from coppernicus.app import settings          # the suite's own folder (tests/conftest.py)
+        assert settings().value("view/hover_label") == "shown,v,j,layer"
         view.hover_actions["shown"].setChecked(False)               # as before: no large number
         view._hover_tick()
         assert not label.lead.isVisible() and label.text().startswith("V = "), label.text()
@@ -243,4 +241,4 @@ def test_the_hover_label_leads_with_the_value_of_the_map_shown(tmp_path):
             act.setChecked(False)
         view._hover_tick()
         assert not label.isVisible()
-    '''.replace("SETTINGS", repr(str(tmp_path))))
+    ''')

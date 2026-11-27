@@ -65,13 +65,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app import settings as app_settings
 from coppernicus.app import theme
+from coppernicus.app.mesher import failure
+from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.panels import (
     FieldComboBox,
     OptionalDecimalValidator,
     WheelWhenFocused,
     without_tolerances,
 )
+from coppernicus.engine.meshing import session as meshing
 from coppernicus.engine.pisetup import terminal_names  # engine names; fsw_default mirrors the engine
 from coppernicus.impedance import hz_text
 from coppernicus.project import (
@@ -88,6 +92,7 @@ from coppernicus.project import (
     parse_pins,
     pins_text,
 )
+from coppernicus.triangle_standin import TriangleNotInstalled
 
 # ---------------------------------------------------------------------- numbers
 
@@ -746,8 +751,7 @@ _LAST_KEYS = ("seconds", "field_seconds", "triangles", "ports", "field_solves")
 
 
 def _settings() -> QSettings:
-    from coppernicus.app import APP_NAME
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
+    return app_settings()
 
 
 # ---------------------------------------------------------------------- worker
@@ -771,6 +775,7 @@ class NoiseWorker(QThread):
         self._board, self.merged, self.name, self.phase = board, merged, name, phase
         self._cancel = False
         self.generation = 0
+        self.mesher: Optional[str] = None       # the solve's mesher (None: the default); set by the panel
 
     def cancel(self):
         self._cancel = True
@@ -779,22 +784,26 @@ class NoiseWorker(QThread):
         from coppernicus.engine import Cancelled, EngineError
         from coppernicus.engine import noise as engine_noise
         try:
-            if self.phase == "size":
-                size = engine_noise.mesh_estimate(self._board, self.merged.project, self.name,
-                                                  progress=self.message.emit, cancelled=lambda: self._cancel,
-                                                  fields_rails=self.merged.from_fields)
-                if self._cancel:
-                    raise Cancelled("cancelled")
-                self.sized.emit(size)
-            else:
-                res = engine_noise.solve_aggressor(
-                    self._board, self.merged.project, self.name, progress=self.message.emit,
-                    cancelled=lambda: self._cancel, fraction=self.fraction.emit, partial=self.partial.emit,
-                    fields_rails=self.merged.from_fields)
-                self.merged.annotate(res)
-                self.succeeded.emit(res)
+            with meshing.using(self.mesher):     # the estimate meshes too
+                if self.phase == "size":
+                    size = engine_noise.mesh_estimate(self._board, self.merged.project, self.name,
+                                                      progress=self.message.emit,
+                                                      cancelled=lambda: self._cancel,
+                                                      fields_rails=self.merged.from_fields)
+                    if self._cancel:
+                        raise Cancelled("cancelled")
+                    self.sized.emit(size)
+                else:
+                    res = engine_noise.solve_aggressor(
+                        self._board, self.merged.project, self.name, progress=self.message.emit,
+                        cancelled=lambda: self._cancel, fraction=self.fraction.emit,
+                        partial=self.partial.emit, fields_rails=self.merged.from_fields)
+                    self.merged.annotate(res)
+                    self.succeeded.emit(res)
         except Cancelled:
             self.cancelled.emit()
+        except (TriangleNotInstalled, meshing.MesherUnavailable) as e:
+            self.failed.emit(failure(e))
         except EngineError as e:
             self.failed.emit(str(e))
         except Exception:                                   # noqa: BLE001 - shown to the user
@@ -1979,6 +1988,7 @@ class NoisePanel(QWidget):
 
     def _start(self, worker: NoiseWorker):
         worker.generation = self._generation
+        worker.mesher = self._mesher = self._win.mesher_name()    # the estimate's and the solve's
         worker.message.connect(self._message)
         worker.fraction.connect(self._fraction)
         worker.partial.connect(self._partial)
@@ -2084,7 +2094,8 @@ class NoisePanel(QWidget):
         self.show_result()
         verdict = {"fail": "FAIL", "pass": "PASS", "not_judged": "not judged"}.get(res.verdict, res.verdict)
         seconds = float(st.get("seconds") or 0.0)
-        self._report(f"{res.aggressor} noise solved in {seconds:.1f} s: victims {verdict}")
+        self._report(f"{res.aggressor} noise solved in {seconds:.1f} s: victims {verdict}"
+                     f" · meshed with {mesher_shown(self._mesher)}")
 
     def _failed(self, message: str):
         if not self._current():

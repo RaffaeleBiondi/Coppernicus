@@ -8,8 +8,11 @@ from typing import Optional, Sequence
 
 from PySide6.QtCore import QThread, Signal
 
+from coppernicus.app.mesher import failure
 from coppernicus.engine import Board, Cancelled, EngineError, solve_rail
+from coppernicus.engine.meshing import session as meshing
 from coppernicus.project import Project, Rail, Settings
+from coppernicus.triangle_standin import TriangleNotInstalled
 
 CANCELLED = "Solve cancelled"           # what a cancelled solve reports through ``failed``
 
@@ -31,16 +34,20 @@ class SolveWorker(QThread):
         # assumptions and warnings, as the service adds them.
         self._notes, self._warnings = list(notes), list(warnings)
         self._cancel = False
+        self.mesher: Optional[str] = None       # the solve's mesher (None: the default); set by the window
 
     def cancel(self):
         self._cancel = True
 
     def run(self):
         try:
-            result = solve_rail(self._board, self._rail, self._settings, progress=self.message.emit,
-                                cancelled=lambda: self._cancel, project=self._project)
+            with meshing.using(self.mesher):
+                result = solve_rail(self._board, self._rail, self._settings, progress=self.message.emit,
+                                    cancelled=lambda: self._cancel, project=self._project)
         except Cancelled:
             self.failed.emit("Solve cancelled")
+        except (TriangleNotInstalled, meshing.MesherUnavailable) as e:
+            self.failed.emit(failure(e))
         except EngineError as e:
             self.failed.emit(str(e))
         except Exception:                                   # noqa: BLE001 - shown to the user
@@ -61,6 +68,7 @@ class TreeWorker(QThread):
         super().__init__(parent)
         self._board, self._project = board, copy.deepcopy(project)
         self._cancel = False
+        self.mesher: Optional[str] = None       # the solve's mesher (None: the default); set by the window
 
     def cancel(self):
         self._cancel = True
@@ -73,10 +81,13 @@ class TreeWorker(QThread):
     def run(self):
         from coppernicus.engine.tree import solve_project_tree
         try:
-            result = solve_project_tree(self._board, self._project, progress=self.message.emit,
-                                        cancelled=lambda: self._cancel)
+            with meshing.using(self.mesher):
+                result = solve_project_tree(self._board, self._project, progress=self.message.emit,
+                                            cancelled=lambda: self._cancel)
         except Cancelled:
             self.failed.emit(CANCELLED)
+        except (TriangleNotInstalled, meshing.MesherUnavailable) as e:
+            self.failed.emit(failure(e))
         except EngineError as e:
             self.failed.emit(str(e))
         except Exception:                                   # noqa: BLE001 - shown to the user

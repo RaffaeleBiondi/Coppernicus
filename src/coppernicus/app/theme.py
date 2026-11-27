@@ -22,6 +22,8 @@ from typing import Dict, Optional
 from PySide6.QtCore import QObject, QSettings, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QPalette
 
+from coppernicus.app import settings as app_settings
+
 THEMES = ("dark", "light")
 DEFAULT = "dark"
 SETTING = "view/theme"            # QSettings key: "dark" or "light"
@@ -105,7 +107,7 @@ def span(token: str, html: str) -> str:
 
 
 def _settings() -> QSettings:
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
+    return app_settings()
 
 
 def saved() -> str:
@@ -154,6 +156,11 @@ QToolButton {{ color: {t['fg']}; background: transparent; border: 1px solid tran
 QToolButton:hover {{ background: {t['hover']}; }}
 QToolButton:pressed, QToolButton:checked {{ background: {t['line']}; }}
 QToolButton:disabled {{ color: {t['muted']}; }}
+QToolButton#primary {{ background: {t['selected']}; border-color: {t['selected']}; color: {WHITE};
+  font-weight: 600; }}
+QToolButton#primary:hover {{ border-color: {t['fg']}; }}
+QToolButton::menu-indicator {{ subcontrol-position: right center; right: 4px; }}
+QToolButton[popupMode="2"] {{ padding-right: 18px; }}
 QDockWidget {{ color: {t['muted']}; }}
 QDockWidget::title {{ background: {t['chrome']}; padding: 4px 8px; border-bottom: 1px solid {t['line']}; }}
 QMenuBar {{ background: {t['chrome']}; color: {t['fg']}; }}

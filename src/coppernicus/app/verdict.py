@@ -13,9 +13,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QVBoxLayout,
+    QWidget,
+)
 
+from coppernicus.app import theme
+from coppernicus.app.theme import WHITE
 from coppernicus.problems import ATTENTION, FAIL, drop_words
 
 BADGE_WORDS = {"fail": "FAIL", "pass": "PASS", "not_judged": "not judged"}
@@ -151,3 +165,83 @@ def dc_cards(res, problems: Sequence, limits=None) -> List[CardData]:
             f"at ({spot.x:.2f}, {spot.y:.2f}) mm"
         cards.append(CardData("Strongest current crowding", f"{spot.value:.3g} A/mm² mean", where, state))
     return cards
+
+
+# ---------------------------------------------------------------------- badges in lists
+
+BADGE_ROLE = Qt.UserRole + 7      # on a navigator or net-list item: (kind, text), or None
+# kind: "fail", "pass", "attention" (filled, white text), "nj" (not judged: outlined), "ns" (not
+# solved: dashed outline), "note" (plain muted words, such as "off" or "no baseline").
+VERDICT_KIND = {"fail": "fail", "pass": "pass", "not_judged": "nj"}
+RANK = {"fail": 3, "not_judged": 2, "pass": 1}
+
+
+def worst(verdicts) -> Optional[str]:
+    """FAIL > not judged > PASS over ``verdicts`` (None and "" left out); None when empty."""
+    known = [v for v in verdicts if v in RANK]
+    return max(known, key=RANK.get) if known else None
+
+
+def badge(verdict: Optional[str], text: Optional[str] = None):
+    """The (kind, text) of a verdict: "not solved" when None."""
+    if verdict is None:
+        return ("ns", "not solved")
+    return (VERDICT_KIND.get(verdict, "nj"), text or BADGE_WORDS.get(verdict, "not judged"))
+
+
+class BadgeDelegate(QStyledItemDelegate):
+    """Draws an item as usual, then its badge (BADGE_ROLE) at the right end of the row, in the
+    theme's colours at paint time (so a theme switch needs nothing more than a repaint)."""
+
+    def paint(self, painter: QPainter, option, index):
+        data = index.data(BADGE_ROLE)
+        if not data:
+            super().paint(painter, option, index)
+            return
+        kind, text = data
+        font = QFont(option.font)
+        font.setPointSizeF(max(font.pointSizeF() * 0.85, 7.0))
+        font.setWeight(QFont.DemiBold if kind in ("fail", "pass", "attention") else QFont.Normal)
+        fm = QFontMetrics(font)
+        w, h = fm.horizontalAdvance(text) + 12, fm.height() + 2
+        r = option.rect
+        pill = QRectF(r.right() - w - 6, r.center().y() - h / 2 + 0.5, w, h)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.rect = r.adjusted(0, 0, -int(w) - 10, 0)          # the item's text stops before the badge
+        widget = option.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        bg_opt = QStyleOptionViewItem(option)                    # the row's background, full width
+        self.initStyleOption(bg_opt, index)
+        bg_opt.text = ""
+        style.drawControl(QStyle.CE_ItemViewItem, bg_opt, painter, widget)
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, widget)    # text and icon
+        selected = bool(option.state & QStyle.State_Selected)
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setFont(font)
+        white = QColor(WHITE)
+        if kind in ("fail", "pass", "attention"):
+            painter.setPen(QPen(white, 1) if selected else Qt.NoPen)
+            painter.setBrush(theme.qcolor(f"badge-{kind}"))
+            painter.drawRoundedRect(pill, 4, 4)
+            painter.setPen(white)
+        elif kind in ("nj", "ns"):
+            pen = QPen(white if selected else theme.qcolor("outline" if kind == "ns" else "line"), 1)
+            if kind == "ns":
+                pen.setStyle(Qt.DashLine)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(pill.adjusted(0.5, 0.5, -0.5, -0.5), 4, 4)
+            painter.setPen(white if selected else theme.qcolor("muted"))
+        else:                                                    # a plain note
+            painter.setPen(white if selected else theme.qcolor("muted"))
+        painter.drawText(pill, Qt.AlignCenter, text)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        if index.data(BADGE_ROLE):
+            size.setHeight(max(size.height(), QFontMetrics(option.font).height() + 8))
+        return size
+

@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from coppernicus.app import theme
 from coppernicus.app.copper_thickness import CopperThicknessDialog, thickness_summary
 from coppernicus.app.fields_view import FieldsBanner
-from coppernicus.app.verdict import CardData, VerdictHeader
+from coppernicus.app.verdict import BADGE_ROLE, BadgeDelegate, CardData, VerdictHeader
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.power_tree import ACROSS_NOTE
 from coppernicus.problems import ATTENTION, FAIL, Problem
@@ -175,6 +175,8 @@ class NetPanel(QWidget):
                                    "as rails (right-click a net), and nets with sources or loads")
         self.power_only.setChecked(True)
         self.list = QListWidget()
+        self.list.setItemDelegate(BadgeDelegate(self.list))
+        self._badges: Dict[str, tuple] = {}           # net -> (kind, text): set_badges
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._context_menu)
         layout = QVBoxLayout(self)
@@ -233,6 +235,18 @@ class NetPanel(QWidget):
             self._kicad = dict(kicad)
         self._refill(keep=True)
 
+    def set_badges(self, badges: Mapping[str, tuple]) -> None:
+        """Each net's badge, (kind, text), kept through the list's refills; nets not named
+        carry none (a net that is not a rail)."""
+        self._badges = dict(badges)
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            item.setData(BADGE_ROLE, self._badges.get(item.data(Qt.UserRole)))
+
+    def badge_of(self, net: str):
+        item = self._find(net)
+        return item.data(BADGE_ROLE) if item is not None else None
+
     def _find(self, net: str) -> Optional[QListWidgetItem]:
         return next((self.list.item(i) for i in range(self.list.count())
                      if self.list.item(i).data(Qt.UserRole) == net), None)
@@ -261,6 +275,7 @@ class NetPanel(QWidget):
                 # Made with the list as its parent, so the list owns it.
                 item = QListWidgetItem(f"{n}  {KICAD_MARK}" if n in self._kicad else n, self.list)
                 item.setData(Qt.UserRole, n)
+                item.setData(BADGE_ROLE, self._badges.get(n))
                 f = item.font()
                 tips = [self._kicad[n]] if n in self._kicad else []
                 if n in self._configured and n not in self._kicad:

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -46,6 +47,8 @@ from coppernicus.app import fields_view, label_text, theme
 from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
+from coppernicus.app.mesher import MesherBox
+from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.noise_panel import NoisePanel
 from coppernicus.app.pages import Navigator, PageStack, SetupDock
 from coppernicus.app.panels import (
@@ -59,13 +62,14 @@ from coppernicus.app.panels import (
 from coppernicus.app.picking import add_picked_pin, pick_nets
 from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel, record_solve
 from coppernicus.app.tolerance_panel import TolerancePanel, read_misspelt
-from coppernicus.app.verdict import dc_cards
+from coppernicus.app.verdict import RANK, badge, dc_cards, worst
 from coppernicus.app.worker import CANCELLED, ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
 from coppernicus.engine.board import board_file_filter
 from coppernicus.engine.kicad_fields import read_board_fields
 from coppernicus.engine.pisetup import ground_nets
+from coppernicus.impedance import rail_verdict as ac_rail_verdict
 from coppernicus.power_tree import (
     apply_limits,
     group_limits,
@@ -276,6 +280,9 @@ class MainWindow(QMainWindow):
         self._tie_pairs: List[Tuple[str, str]] = []     # the board's net ties, for the merge
         self.fields_error: Optional[str] = None      # set: solves refuse, with this text
         self.merged = BF.Merged(self.project)
+        self.mesher_box = MesherBox()                     # the solves' mesher (setup panel, on top)
+        self.solved_mesher: Dict[str, str] = {}           # rail -> the mesher its result was meshed with
+        self.tree_mesher = ""
         self.last_remerge_s = 0.0
         self.last_fields_read_s = 0.0
         # The misspelt tolerance keys of the project file as loaded, (warning, not-judged entry)
@@ -401,6 +408,7 @@ class MainWindow(QMainWindow):
         for key, panel in (("impedance", self.ac_panel), ("noise", self.noise_panel),
                            ("tolerance", self.tolerance_panel)):
             self.setup_dock.add_setup(key, panel.take_setup(), {"solve": panel.solve_button})
+        self.setup_dock.set_header(self.mesher_box)
         self.addDockWidget(Qt.RightDockWidgetArea, self.setup_dock)
         self._page_setups = {id(self.problems): ("rail", "Rail setup", "rail"),
                              id(self.losses): ("rail", "Rail setup", "rail"),
@@ -412,6 +420,13 @@ class MainWindow(QMainWindow):
                              id(self.tolerance_panel): ("tolerance", "Tolerance setup", "solve")}
         self._map_size = ""
         self.pages.currentChanged.connect(self._page_shown)
+        self._badge_timer = QTimer(self)                  # the badges, once per burst of changes
+        self._badge_timer.setSingleShot(True)
+        self._badge_timer.setInterval(0)
+        self._badge_timer.timeout.connect(self.refresh_badges)
+        for signal in (self.pages.currentChanged, self.ac_panel.results_changed,
+                       self.noise_panel.results_changed, self.nets.net_selected):
+            signal.connect(lambda *_: self._badge_timer.start())
         self._page_shown(self.pages.currentIndex())
         self.setup_button = QToolButton()               # shows the hidden setup panel again
         self.setup_button.setText("⇤ Setup")
@@ -461,6 +476,11 @@ class MainWindow(QMainWindow):
                             for key, mods, step in LAYER_KEYS]
         QApplication.instance().focusChanged.connect(self._focus_changed)
 
+    def mesher_name(self) -> str:
+        """The mesher the next solve uses (the Mesher box: the project's, else the app's, else
+        the default)."""
+        return self.mesher_box.current()
+
     def _tree_button(self) -> QPushButton:
         """A "Solve tree" button for a setup panel's foot (the Tree and Temperature pages)."""
         button = QPushButton("Solve tree  (Ctrl+T)")
@@ -492,6 +512,97 @@ class MainWindow(QMainWindow):
         """How the shown page has the map: "full", "small" or "none"."""
         return self._map_size
 
+    def _dc_shown(self):
+        """The DC result the Rail pages show, its problems and its verdict: a power-tree group
+        when one is shown, else the net's rail solved alone; (None, [], None) when unsolved."""
+        key = self.group_box.currentData()
+        if key is not None and self.tree is not None and key in self.tree.groups:
+            gv = group_verdict(self.tree, key)
+            return self.tree.groups[key], gv.problems, gv.verdict
+        res = self.results.get(self.net) if self.net else None
+        if res is None:
+            return None, [], None
+        limits = self._solved_rail(res.net).limits
+        problems = find_problems(res, limits)
+        return res, problems, rail_verdict(res, limits, problems)
+
+    def page_verdicts(self) -> Dict[str, Optional[str]]:
+        """Each page's verdict ("fail", "pass", "not_judged"; None: not solved), as its badge
+        shows it, for the net shown."""
+        _res, _problems, rail = self._dc_shown()
+        out: Dict[str, Optional[str]] = {"rail": rail}
+        if self.tree is not None:
+            groups = [group_verdict(self.tree, k).verdict for k in self.tree.groups]
+            out["tree"] = worst(groups) or "not_judged"
+            out["temperature"] = thermal_verdict(self.tree).verdict if self.tree.thermal is not None else None
+        else:
+            out["tree"] = out["temperature"] = None
+        entry = self.ac_panel.results.get(self.net or "")
+        out["impedance"] = (ac_rail_verdict(entry[0])[0] or "not_judged") if entry else None
+        noise = self.noise_panel.results.get(self.noise_panel.aggressor_box.currentText())
+        out["noise"] = (noise[0].verdict if noise[0].verdict in RANK else "not_judged") if noise else None
+        tol = self.tolerance_panel.result
+        out["tolerance"] = (tol.verdict if tol.verdict in RANK else "not_judged") if tol is not None else None
+        return out
+
+    def refresh_badges(self):
+        """The navigator's and the net list's badges (the design's rule): a page shows its
+        verdict, or "not solved"; Problems shows its FAIL count, or its attention count when
+        nothing fails; a group shows the worst of its solved pages (FAIL > not judged > PASS),
+        "not solved" when none has a result; a rail net shows its DC verdict (its rail solved
+        alone, else its power-tree group). Attention never changes a verdict."""
+        nav = self.navigator
+        v = self.page_verdicts()
+        _res, problems, rail = self._dc_shown()
+        fails = sum(p.severity == FAIL for p in problems)
+        attention = sum(p.severity == ATTENTION for p in problems)
+        if rail is None:
+            nav.set_badge(self.problems, badge(None))
+        elif fails:
+            nav.set_badge(self.problems, ("fail", f"{fails} FAIL"))
+        elif attention:
+            nav.set_badge(self.problems, ("attention", f"{attention} attention"))
+        else:
+            nav.set_badge(self.problems, badge(rail))
+        nav.set_badge(self.losses, None)
+        nav.set_badge(self.compare, ("note", "no baseline") if self.baseline is None else None)
+        nav.set_group_badge("Rail", badge(rail))
+        nav.set_badge(self.tree_panel, badge(v["tree"]))
+        thermal_on = bool(self.merged.project.thermal.enabled)
+        nav.set_badge(self.thermal_panel, badge(v["temperature"]) if thermal_on or v["temperature"]
+                      else ("note", "off"))
+        solved = [v[k] for k in ("tree", "temperature") if v[k] is not None]
+        nav.set_group_badge("Power tree", badge(worst(solved)))
+        nav.set_badge(self.ac_panel, badge(v["impedance"]))
+        nav.set_badge(self.noise_panel, badge(v["noise"]))
+        solved = [v[k] for k in ("impedance", "noise") if v[k] is not None]
+        nav.set_group_badge("AC", badge(worst(solved)))
+        nav.set_badge(self.tolerance_panel, badge(v["tolerance"]))
+        self.nets.set_badges(self.net_badges())
+        nav.viewport().update()
+
+    def net_badges(self) -> Dict[str, tuple]:
+        """Each rail net's DC badge: its rail solved alone, else its power-tree group, else
+        "not solved"; nets that are not rails carry none."""
+        out = {}
+        tree_of = {}
+        if self.tree is not None:
+            for key, res in self.tree.groups.items():
+                for net in res.nets:
+                    tree_of.setdefault(net, key)
+        for rail in self.merged.project.rails:
+            if not rail.sources:
+                continue
+            res = self.results.get(rail.net)
+            if res is not None:
+                problems = find_problems(res, rail.limits)
+                out[rail.net] = badge(rail_verdict(res, rail.limits, problems))
+            elif rail.net in tree_of:
+                out[rail.net] = badge(group_verdict(self.tree, tree_of[rail.net]).verdict)
+            else:
+                out[rail.net] = badge(None)
+        return out
+
     def step_layer(self, step: int):
         """+ / − (as in KiCad): the next (``step`` 1) or previous (−1) copper layer in the Layer
         selector, round from the last to the first; nothing without layers."""
@@ -515,40 +626,53 @@ class MainWindow(QMainWindow):
         return dock
 
     def _actions(self):
+        """The toolbar, as the design has it: Open ▾ and Save ▾, the four solves by their verbs
+        (Solve rail first, the primary one), Pin baseline and Export ▾, the theme at the right
+        end. Every action is also the window's own, so its shortcut works whichever menu holds
+        it; File keeps the open and save actions as before."""
         tb = self.addToolBar("Main")
         tb.setObjectName("Main")
         tb.setMovable(False)
-        file_actions = []
-        for text, shortcut, slot in (("Open board…", QKeySequence.Open, self.open_board_dialog),
-                                     ("Open project…", "Ctrl+Shift+O", self.open_project_dialog),
-                                     ("Save project", QKeySequence.Save, self.save_project),
-                                     ("Save project as…", QKeySequence.SaveAs, self.save_project_as),
-                                     (None, None, None),
-                                     ("Solve rail", "F5", self.solve),
-                                     ("Solve tree", "Ctrl+T", self.solve_tree),
-                                     ("Pin baseline", "Ctrl+B", self.pin_baseline),
-                                     ("Export maps…", "Ctrl+E", self.export_maps),
-                                     ("Export report…", "Ctrl+R", self.export_report)):
-            if text is None:
-                tb.addSeparator()
-                continue
+        acts = {}
+        for key, text, shortcut, slot in (
+                ("open_board", "Open board…", QKeySequence.Open, self.open_board_dialog),
+                ("open_project", "Open project…", "Ctrl+Shift+O", self.open_project_dialog),
+                ("save", "Save project", QKeySequence.Save, self.save_project),
+                ("save_as", "Save project as…", QKeySequence.SaveAs, self.save_project_as),
+                ("solve_rail", "Solve rail", "F5", self.solve),
+                ("solve_tree", "Solve tree", "Ctrl+T", self.solve_tree),
+                ("pin", "Pin baseline", "Ctrl+B", self.pin_baseline),
+                ("export_maps", "Export maps…", "Ctrl+E", self.export_maps),
+                ("export_report", "Export report…", "Ctrl+R", self.export_report)):
             act = QAction(text, self)
             act.setShortcut(QKeySequence(shortcut))
             act.triggered.connect(slot)
-            tb.addAction(act)
-            if text.startswith(("Open", "Save")):
-                file_actions.append(act)
-        self.ac_panel.add_solve_action(tb)            # "Solve impedance" (Ctrl+I), the Impedance tab's
-        # Menus: the toolbar's file actions (the same actions, so one shortcut each), and the
-        # KiCad footprint fields.
-        self.file_menu = self.menuBar().addMenu("&File")
-        self.file_menu.addActions(file_actions)
-        self.file_menu.addSeparator()
+            self.addAction(act)
+            acts[key] = act
         self.reload_action = QAction("Reload board", self)
         self.reload_action.setShortcut(QKeySequence("Ctrl+Shift+R"))
         self.reload_action.setToolTip("Read the board file again (and its KiCad footprint fields), "
                                       "keeping the project; results are dropped")
         self.reload_action.triggered.connect(self.reload_board)
+        self.addAction(self.reload_action)
+        self.toolbar_actions = acts
+        self.toolbar_menus = {}
+        for name, keys in (("Open", ("open_board", "open_project", "reload")), ("Save", ("save", "save_as"))):
+            self._menu_button(tb, name, [self.reload_action if k == "reload" else acts[k] for k in keys])
+        tb.addSeparator()
+        tb.addAction(acts["solve_rail"])
+        tb.widgetForAction(acts["solve_rail"]).setObjectName("primary")      # the first solve
+        tb.addAction(acts["solve_tree"])
+        self.ac_panel.add_solve_action(tb)            # "Solve impedance" (Ctrl+I), the Impedance page's
+        self.noise_panel.add_solve_action(tb)         # "Solve noise" (Ctrl+Shift+N), Ripple & noise
+        tb.addSeparator()
+        tb.addAction(acts["pin"])
+        self._menu_button(tb, "Export", [acts["export_maps"], acts["export_report"]])
+        # Menus: the open and save actions (the same actions, so one shortcut each), and the
+        # KiCad footprint fields.
+        self.file_menu = self.menuBar().addMenu("&File")
+        self.file_menu.addActions([acts[k] for k in ("open_board", "open_project", "save", "save_as")])
+        self.file_menu.addSeparator()
         self.file_menu.addAction(self.reload_action)
         self.project_menu = self.menuBar().addMenu("&Project")
         self.use_fields_action = QAction("Use KiCad footprint fields", self)
@@ -566,7 +690,6 @@ class MainWindow(QMainWindow):
                               "again on the next start")
             remove.triggered.connect(self.remove_mesher)
             self.help_menu.addAction(remove)
-        self.noise_panel.add_solve_action(tb)         # "Solve noise" (Ctrl+Shift+N), the Ripple & noise tab's
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
@@ -575,6 +698,20 @@ class MainWindow(QMainWindow):
         self.theme_action.triggered.connect(self.toggle_theme)
         self._show_theme_action()
         tb.addAction(self.theme_action)               # at the right end, as the report's button
+
+    def _menu_button(self, tb, name: str, actions) -> QToolButton:
+        """A toolbar button "``name`` ▾" that opens a menu of ``actions``."""
+        menu = QMenu(name, self)
+        menu.addActions(actions)
+        button = QToolButton()
+        button.setText(name)
+        button.setMenu(menu)
+        button.setPopupMode(QToolButton.InstantPopup)
+        button.setObjectName(f"menu{name}")
+        button.setToolTip(" · ".join(a.text() for a in actions))
+        tb.addWidget(button)
+        self.toolbar_menus[name] = button
+        return button
 
     # ------------------------------------------------------------------ theme
     def toggle_theme(self):
@@ -778,6 +915,7 @@ class MainWindow(QMainWindow):
                 where = f"{self.project.path.name}: " if self.project.path else ""
                 self.fields_error = f"{where}{e} ({FIELD_HINT})"
         self.merged = merged
+        self.mesher_box.set_project(self.merged.project)     # a project's settings.mesher wins
         self.last_remerge_s = time.perf_counter() - t0
         self._tolerance_stale()
         self._impedance_stale()
@@ -939,9 +1077,12 @@ class MainWindow(QMainWindow):
                                        vrms=copy.deepcopy(self.tree.vrms))
             tree_job = (tree, tree_summary(tree), tree_report_path(path) if self.results else path,
                         Path(self.project.path).name if self.project.path else "",
-                        dict(vars(self.merged.project.settings)))
+                        {**vars(self.merged.project.settings), "mesher": self.tree_mesher or None})
             what.append("the power tree")
-        self.report_worker = ReportWorker(self.results.values(), copy.deepcopy(self.merged.project),
+        reported = copy.deepcopy(self.merged.project)     # its settings say how the rails were meshed
+        used = sorted({self.solved_mesher[n] for n in self.results if n in self.solved_mesher})
+        reported.settings.mesher = " and ".join(used) or reported.settings.mesher
+        self.report_worker = ReportWorker(self.results.values(), reported,
                                           path if self.results else None, self.board.outline(),
                                           self.board.name, self, tree=tree_job)
         self.report_worker.succeeded.connect(self._report_written)
@@ -1448,6 +1589,8 @@ class MainWindow(QMainWindow):
                                   notes=notes, warnings=warnings)
         self.worker.generation = self._generation
         self.worker.revision = self._revision
+        self.worker.mesher = mesher = self.mesher_name()
+        self.worker.succeeded.connect(lambda res, m=mesher: self.solved_mesher.__setitem__(res.net, m))
         # What produced the result, as it is now (the user may edit while it runs).
         self.worker.run_inputs = (copy.deepcopy(rail), copy.deepcopy(project.settings),
                                   self._board_stamp)
@@ -1488,9 +1631,11 @@ class MainWindow(QMainWindow):
                 self.layer_box.blockSignals(False)
             self.refresh_view(fit=True)
         reason = f" · {self._fallback_reason}" if res.net == self.net and self._fallback_reason else ""
+        meshed = self.solved_mesher.get(res.net)
+        meshed = f" · meshed with {mesher_shown(meshed)}" if meshed else ""
         self.statusBar().showMessage(
             f"{res.net} solved in {res.stats['seconds']:.1f} s · {int(res.stats['triangles']):,} triangles · "
-            f"drawn in {self.last_render_s:.2f} s{reason}")
+            f"drawn in {self.last_render_s:.2f} s{meshed}{reason}")
 
     # ------------------------------------------------------------------ power tree
     def solve_tree(self):
@@ -1509,6 +1654,8 @@ class MainWindow(QMainWindow):
         self.thermal_panel.clear("<b>Board temperature</b>: solving…" if thermal else "")
         self.results_tabs.setCurrentWidget(self.thermal_panel if thermal else self.tree_panel)
         self.tree_worker = TreeWorker(self.board, self.merged.project, self)
+        self.tree_worker.mesher = mesher = self.mesher_name()
+        self.tree_worker.succeeded.connect(lambda _tree, m=mesher: setattr(self, "tree_mesher", m))
         self.tree_worker.merged = self.merged          # its notes and warnings, for the result
         self.tree_worker.thermal = thermal
         self.tree_worker.generation = self._generation
@@ -1520,6 +1667,7 @@ class MainWindow(QMainWindow):
         self.tree_worker.start()
 
     def _tree_solved(self, tree: TreeResult):
+        self._badge_timer.start()                     # the badges follow
         self.thermal_panel.set_solving(False)
         if self._is_stale():
             return
@@ -1557,8 +1705,10 @@ class MainWindow(QMainWindow):
             reason = f" · {self._fallback_reason}" if self._fallback_reason else ""
         peak = (f" · board peak {tree.thermal.peak_c:.2f} °C (Temperature tab, Board temperature map)"
                 if tree.thermal is not None else "")
+        meshed = f" · meshed with {mesher_shown(self.tree_mesher)}" if self.tree_mesher else ""
         self.statusBar().showMessage(f"Power tree solved in {tree.stats['seconds']:.1f} s: "
-                                     f"{len(tree.groups)} groups · pick one in Group to see it{peak}{reason}")
+                                     f"{len(tree.groups)} groups · pick one in Group to see it"
+                                     f"{meshed}{peak}{reason}")
 
     def _tree_failed(self, message: str):
         self.thermal_panel.set_solving(False)
@@ -1736,6 +1886,7 @@ class MainWindow(QMainWindow):
                                  gv.verdict, dc_cards(res, gv.problems, limits))
         self.view.set_problems(res, gv.problems,          # the current map's peak and verdict
                                group_limits(self.tree, key)[0])
+        self._badge_timer.start()
 
     # ------------------------------------------------------------------ board temperature
     def _thermal_edited(self, key: str = ""):
@@ -1743,6 +1894,7 @@ class MainWindow(QMainWindow):
         Electro-thermal, or any option while it is ticked (or while the tree holds a board
         temperature), makes the power tree stale; with it off, the other options change no
         solve. The rails solved alone stay: Solve rail (F5) does not heat copper."""
+        self._badge_timer.start()                     # the badges follow
         self._remerge()                           # the merged project holds a copy of them
         self.dirty = True
         self._update_title()
@@ -1839,6 +1991,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ before / after
     def pin_baseline(self):
         """Keep the shown rail's latest result as the baseline ("before")."""
+        self._badge_timer.start()                     # the badges follow
         run = self.runs.get(self.net) if self.net else None
         if run is None:
             self.statusBar().showMessage("Solve the rail first, then pin its result as the baseline")
@@ -1851,6 +2004,7 @@ class MainWindow(QMainWindow):
                                      "to compare (Compare tab, 'Δ drop vs baseline' map)")
 
     def clear_baseline(self):
+        self._badge_timer.start()                     # the badges follow
         self.baseline = None
         self._diff_cache = None
         if self.field_box.currentData() == "difference":
@@ -1930,6 +2084,7 @@ class MainWindow(QMainWindow):
                                  res.warnings + res.assumptions, rail_verdict(res, rail.limits, problems),
                                  dc_cards(res, problems, rail.limits))
         self.view.set_problems(res, problems)             # the current map's peak and verdict
+        self._badge_timer.start()
 
     def go_to_problem(self, problem):
         if problem.layer:

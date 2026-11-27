@@ -147,7 +147,7 @@ def main(argv=None) -> int:
             print(f"{name}  ({docs})\n    {url}\n    {width} px wide: {what}")
         return 0
 
-    from PySide6.QtCore import QLocale, QSettings, Qt
+    from PySide6.QtCore import QLocale, Qt
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
 
@@ -160,9 +160,8 @@ def main(argv=None) -> int:
     app.setWindowIcon(QIcon(str(ICON)))
     # The app's settings (the last solve times the estimates quote, the hover choice) in a
     # fresh folder: the same images on every machine, and the user's settings untouched.
-    settings = tempfile.mkdtemp(prefix="coppernicus-shots-settings-")
-    QSettings.setDefaultFormat(QSettings.IniFormat)
-    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, settings)
+    from coppernicus.app import SETTINGS_DIR_ENV
+    settings = os.environ[SETTINGS_DIR_ENV] = tempfile.mkdtemp(prefix="coppernicus-shots-settings-")
     # As gui_check --window: every window opens behind the others without activating, and here
     # it also lets clicks through (the run sends no real mouse input), so a click meant for
     # another application cannot land on it. Offscreen too, where audit() checks every window.

@@ -22,6 +22,13 @@ results against your own judgement.
   (`tools/mesher_rs`, built only with `uv sync --group rust`), can be chosen with `--mesher rust`,
   the project's `settings.mesher` or the MCP solve tools' `mesher`; `compare_results` and
   `compare_revisions` warn when two results were meshed differently.
+- The app's **Mesher** box, at the top of the setup panel, chooses the mesher of every solve
+  (rail, tree and board temperature, impedance, noise, tolerance, and the estimates that mesh)
+  and is kept for the next start; a project's `settings.mesher` wins and locks it. While the
+  packaged app has not downloaded Triangle, the box offers **Triangle (download…)**, which shows
+  Triangle's licence and downloads it. A mesher that cannot run, or Triangle missing, is shown
+  with its message and what to do, not as an unexpected error. The status bar and the HTML
+  report name the mesher each result was meshed with.
 
 ### Changed
 
@@ -40,6 +47,10 @@ results against your own judgement.
   the copper loss and where most of it goes, the strongest current crowding. Problems are one
   line each; the selected one's detail shows in a strip under the list and a ring marks it on
   the map.
+- The toolbar has the four solves by their verbs (Solve rail, Solve tree, Solve impedance,
+  Solve noise), with Open ▾, Save ▾ and Export ▾ menus for the rest. Every page and rail net
+  carries a badge: its verdict, or a dashed "not solved"; a group shows the worst of its solved
+  pages; Problems counts its FAILs.
 
 ### Fixed
 

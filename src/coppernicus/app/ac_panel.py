@@ -59,8 +59,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app import settings as app_settings
 from coppernicus.app import theme
+from coppernicus.app.mesher import failure
+from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.panels import without_tolerances
+from coppernicus.engine.meshing import session as meshing
 from coppernicus.impedance import ac_summary, ac_text, draw_impedance, hz_text, ohm_text, rail_verdict
 from coppernicus.project import (
     AcOptions,
@@ -74,6 +78,7 @@ from coppernicus.project import (
     parse_pins,
     pins_text,
 )
+from coppernicus.triangle_standin import TriangleNotInstalled
 
 # ---------------------------------------------------------------------- numbers
 
@@ -529,8 +534,7 @@ LAST_SOLVE_SETTING = "ac/last_solve"     # the last AC solve's size and time (QS
 
 
 def _settings() -> QSettings:
-    from coppernicus.app import APP_NAME
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
+    return app_settings()
 
 
 def export_name(project_path, board_name: str, rail: str) -> str:
@@ -580,6 +584,7 @@ class AcWorker(QThread):
         self.transient = False               # KiPI's transient estimate too (the Tolerance tab asks)
         self._cancel = False
         self.generation = 0
+        self.mesher: Optional[str] = None       # the solve's mesher (None: the default); set by the panel
 
     def cancel(self):
         self._cancel = True
@@ -588,20 +593,23 @@ class AcWorker(QThread):
         from coppernicus.engine import Cancelled, EngineError
         from coppernicus.engine.ac import ac_size, solve_ac_rail
         try:
-            if self.phase == "size":
-                size = ac_size(self._board, self.merged.project, self.rail, progress=self.message.emit,
-                               cancelled=lambda: self._cancel)
-                if self._cancel:
-                    raise Cancelled("cancelled")
-                self.sized.emit(size)
-            else:
-                res = solve_ac_rail(self._board, self.merged.project, self.rail, progress=self.message.emit,
-                                    cancelled=lambda: self._cancel, fraction=self.fraction.emit,
-                                    transient=self.transient)
-                self.merged.annotate(res)
-                self.succeeded.emit(res)
+            with meshing.using(self.mesher):     # the estimate meshes too
+                if self.phase == "size":
+                    size = ac_size(self._board, self.merged.project, self.rail, progress=self.message.emit,
+                                   cancelled=lambda: self._cancel)
+                    if self._cancel:
+                        raise Cancelled("cancelled")
+                    self.sized.emit(size)
+                else:
+                    res = solve_ac_rail(self._board, self.merged.project, self.rail,
+                                        progress=self.message.emit, cancelled=lambda: self._cancel,
+                                        fraction=self.fraction.emit, transient=self.transient)
+                    self.merged.annotate(res)
+                    self.succeeded.emit(res)
         except Cancelled:
             self.cancelled.emit()
+        except (TriangleNotInstalled, meshing.MesherUnavailable) as e:
+            self.failed.emit(failure(e))
         except EngineError as e:
             self.failed.emit(str(e))
         except Exception:                                   # noqa: BLE001 - shown to the user
@@ -1786,6 +1794,7 @@ class AcPanel(QWidget):
 
     def _start(self, worker: AcWorker):
         worker.generation = self._generation
+        worker.mesher = self._mesher = self._win.mesher_name()    # the estimate's and the solve's
         worker.message.connect(self._message)
         worker.fraction.connect(self._fraction)
         worker.sized.connect(self._sized)
@@ -1877,7 +1886,8 @@ class AcPanel(QWidget):
         self.rail_box.setCurrentIndex(self.rail_box.findText(res.rail))
         self.show_result()
         verdict = {"fail": "FAIL", "pass": "pass", "not_judged": "not judged"}[rail_verdict(res)[0]]
-        self._report(f"{res.rail} impedance solved in {st.get('seconds', 0.0):.1f} s: {verdict}")
+        self._report(f"{res.rail} impedance solved in {st.get('seconds', 0.0):.1f} s: {verdict}"
+                     f" · meshed with {mesher_shown(self._mesher)}")
 
     def _failed(self, message: str):
         if not self._current():
