@@ -218,6 +218,17 @@ class SetupDock(QDockWidget):
         self._setups: Dict[str, Tuple[QWidget, Dict[str, QWidget]]] = {}
         self._key: Optional[str] = None
 
+    def set_header(self, widget: QWidget) -> None:
+        """``widget`` above every setup (the Mesher box: it applies to every solve)."""
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(widget)
+        layout.addWidget(self.stack, 1)
+        self.setWidget(box)
+        self.header = widget
+
     def add_setup(self, key: str, area: QWidget, foot: Dict[str, QWidget]) -> None:
         """``area`` (scrolls on its own) above ``foot``: the buttons by name, one shown at a time."""
         page = QWidget()

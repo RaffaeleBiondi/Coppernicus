@@ -258,7 +258,10 @@ limits, **1** when a limit is exceeded, **3** when a limit you set could not jud
 **Mesher.** `solve`, `ac`, `noise` and `tolerance` mesh with Triangle, KiPI's own mesher, by
 default. `--mesher rust` uses Coppernicus's own mesher instead; it is **experimental** and must
 be built first (see [tools/mesher_rs](tools/mesher_rs/README.md)). The flag wins over a
-project's `settings.mesher`. Every summary records the mesher in `mesher`.
+project's `settings.mesher`. Every summary records the mesher in `mesher`. In the app, the
+**Mesher** box at the top of the setup panel chooses it for every solve and is kept for the next
+start; a project's `settings.mesher` wins (the box then shows it, locked). The status bar and the
+HTML report name the mesher each result was meshed with.
 
 **HTML report.** Add `--html` to `solve` (and `--open` to open it straight away). Coppernicus
 writes one offline HTML file next to the summary. It holds every rail and copper layer as voltage

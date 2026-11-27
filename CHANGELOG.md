@@ -22,6 +22,13 @@ results against your own judgement.
   (`tools/mesher_rs`, built only with `uv sync --group rust`), can be chosen with `--mesher rust`,
   the project's `settings.mesher` or the MCP solve tools' `mesher`; `compare_results` and
   `compare_revisions` warn when two results were meshed differently.
+- The app's **Mesher** box, at the top of the setup panel, chooses the mesher of every solve
+  (rail, tree and board temperature, impedance, noise, tolerance, and the estimates that mesh)
+  and is kept for the next start; a project's `settings.mesher` wins and locks it. While the
+  packaged app has not downloaded Triangle, the box offers **Triangle (download…)**, which shows
+  Triangle's licence and downloads it. A mesher that cannot run, or Triangle missing, is shown
+  with its message and what to do, not as an unexpected error. The status bar and the HTML
+  report name the mesher each result was meshed with.
 
 ### Changed
 

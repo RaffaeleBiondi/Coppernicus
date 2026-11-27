@@ -47,6 +47,8 @@ from coppernicus.app import fields_view, label_text, theme
 from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
+from coppernicus.app.mesher import MesherBox
+from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.noise_panel import NoisePanel
 from coppernicus.app.pages import Navigator, PageStack, SetupDock
 from coppernicus.app.panels import (
@@ -278,6 +280,9 @@ class MainWindow(QMainWindow):
         self._tie_pairs: List[Tuple[str, str]] = []     # the board's net ties, for the merge
         self.fields_error: Optional[str] = None      # set: solves refuse, with this text
         self.merged = BF.Merged(self.project)
+        self.mesher_box = MesherBox()                     # the solves' mesher (setup panel, on top)
+        self.solved_mesher: Dict[str, str] = {}           # rail -> the mesher its result was meshed with
+        self.tree_mesher = ""
         self.last_remerge_s = 0.0
         self.last_fields_read_s = 0.0
         # The misspelt tolerance keys of the project file as loaded, (warning, not-judged entry)
@@ -403,6 +408,7 @@ class MainWindow(QMainWindow):
         for key, panel in (("impedance", self.ac_panel), ("noise", self.noise_panel),
                            ("tolerance", self.tolerance_panel)):
             self.setup_dock.add_setup(key, panel.take_setup(), {"solve": panel.solve_button})
+        self.setup_dock.set_header(self.mesher_box)
         self.addDockWidget(Qt.RightDockWidgetArea, self.setup_dock)
         self._page_setups = {id(self.problems): ("rail", "Rail setup", "rail"),
                              id(self.losses): ("rail", "Rail setup", "rail"),
@@ -469,6 +475,11 @@ class MainWindow(QMainWindow):
                                       activated=lambda s=step: self.step_layer(s))
                             for key, mods, step in LAYER_KEYS]
         QApplication.instance().focusChanged.connect(self._focus_changed)
+
+    def mesher_name(self) -> str:
+        """The mesher the next solve uses (the Mesher box: the project's, else the app's, else
+        the default)."""
+        return self.mesher_box.current()
 
     def _tree_button(self) -> QPushButton:
         """A "Solve tree" button for a setup panel's foot (the Tree and Temperature pages)."""
@@ -904,6 +915,7 @@ class MainWindow(QMainWindow):
                 where = f"{self.project.path.name}: " if self.project.path else ""
                 self.fields_error = f"{where}{e} ({FIELD_HINT})"
         self.merged = merged
+        self.mesher_box.set_project(self.merged.project)     # a project's settings.mesher wins
         self.last_remerge_s = time.perf_counter() - t0
         self._tolerance_stale()
         self._impedance_stale()
@@ -1065,9 +1077,12 @@ class MainWindow(QMainWindow):
                                        vrms=copy.deepcopy(self.tree.vrms))
             tree_job = (tree, tree_summary(tree), tree_report_path(path) if self.results else path,
                         Path(self.project.path).name if self.project.path else "",
-                        dict(vars(self.merged.project.settings)))
+                        {**vars(self.merged.project.settings), "mesher": self.tree_mesher or None})
             what.append("the power tree")
-        self.report_worker = ReportWorker(self.results.values(), copy.deepcopy(self.merged.project),
+        reported = copy.deepcopy(self.merged.project)     # its settings say how the rails were meshed
+        used = sorted({self.solved_mesher[n] for n in self.results if n in self.solved_mesher})
+        reported.settings.mesher = " and ".join(used) or reported.settings.mesher
+        self.report_worker = ReportWorker(self.results.values(), reported,
                                           path if self.results else None, self.board.outline(),
                                           self.board.name, self, tree=tree_job)
         self.report_worker.succeeded.connect(self._report_written)
@@ -1574,6 +1589,8 @@ class MainWindow(QMainWindow):
                                   notes=notes, warnings=warnings)
         self.worker.generation = self._generation
         self.worker.revision = self._revision
+        self.worker.mesher = mesher = self.mesher_name()
+        self.worker.succeeded.connect(lambda res, m=mesher: self.solved_mesher.__setitem__(res.net, m))
         # What produced the result, as it is now (the user may edit while it runs).
         self.worker.run_inputs = (copy.deepcopy(rail), copy.deepcopy(project.settings),
                                   self._board_stamp)
@@ -1614,9 +1631,11 @@ class MainWindow(QMainWindow):
                 self.layer_box.blockSignals(False)
             self.refresh_view(fit=True)
         reason = f" · {self._fallback_reason}" if res.net == self.net and self._fallback_reason else ""
+        meshed = self.solved_mesher.get(res.net)
+        meshed = f" · meshed with {mesher_shown(meshed)}" if meshed else ""
         self.statusBar().showMessage(
             f"{res.net} solved in {res.stats['seconds']:.1f} s · {int(res.stats['triangles']):,} triangles · "
-            f"drawn in {self.last_render_s:.2f} s{reason}")
+            f"drawn in {self.last_render_s:.2f} s{meshed}{reason}")
 
     # ------------------------------------------------------------------ power tree
     def solve_tree(self):
@@ -1635,6 +1654,8 @@ class MainWindow(QMainWindow):
         self.thermal_panel.clear("<b>Board temperature</b>: solving…" if thermal else "")
         self.results_tabs.setCurrentWidget(self.thermal_panel if thermal else self.tree_panel)
         self.tree_worker = TreeWorker(self.board, self.merged.project, self)
+        self.tree_worker.mesher = mesher = self.mesher_name()
+        self.tree_worker.succeeded.connect(lambda _tree, m=mesher: setattr(self, "tree_mesher", m))
         self.tree_worker.merged = self.merged          # its notes and warnings, for the result
         self.tree_worker.thermal = thermal
         self.tree_worker.generation = self._generation
@@ -1684,8 +1705,10 @@ class MainWindow(QMainWindow):
             reason = f" · {self._fallback_reason}" if self._fallback_reason else ""
         peak = (f" · board peak {tree.thermal.peak_c:.2f} °C (Temperature tab, Board temperature map)"
                 if tree.thermal is not None else "")
+        meshed = f" · meshed with {mesher_shown(self.tree_mesher)}" if self.tree_mesher else ""
         self.statusBar().showMessage(f"Power tree solved in {tree.stats['seconds']:.1f} s: "
-                                     f"{len(tree.groups)} groups · pick one in Group to see it{peak}{reason}")
+                                     f"{len(tree.groups)} groups · pick one in Group to see it"
+                                     f"{meshed}{peak}{reason}")
 
     def _tree_failed(self, message: str):
         self.thermal_panel.set_solving(False)
