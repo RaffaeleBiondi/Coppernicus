@@ -5,7 +5,7 @@ name: Release builds
 # everything except the Triangle mesher, which the app downloads only when it is chosen
 # (docs/install.md); packaging/check_bundle.py fails the build if triangle got in. They hold
 # coppermesh, the rust mesher (the default one), built from tools/mesher_rs with the runner's
-# Rust toolchain; check_bundle.py fails the build without it or without the licences of the Rust
+# Rust toolchain (not PyPI's wheel: the bundle holds this checkout's mesher); check_bundle.py fails the build without it or without the licences of the Rust
 # crates it is built from in THIRD_PARTY_NOTICES.txt, tools/mesher_rs/check_fma.py on a fused
 # multiply-add in it. A manual run (workflow_dispatch, on any branch) builds and uploads the same
 # artifacts, and publishes nothing either.
@@ -32,8 +32,8 @@ jobs:
       - uses: astral-sh/setup-uv@v10.4.0
         with:
           enable-cache: true
-      # coppermesh is built from source (the build script syncs uv's "rust" group before
-      # PyInstaller); llvm-tools gives check_fma.py its llvm-objdump.
+      # coppermesh is built from source (the build script installs tools/mesher_rs into its
+      # environment before PyInstaller); llvm-tools gives check_fma.py its llvm-objdump.
       - name: Rust toolchain (stable, through the runner's rustup) with llvm-tools
         run: |
           rustup toolchain install stable --profile minimal --component llvm-tools

@@ -8,9 +8,10 @@
 # Coppernicus-<version>-windows-x64-contents.txt (every file and module of the bundle).
 #
 # Same steps as build_macos.sh: a build environment of its own (build\venv-windows: uv.lock's
-# packages without the dev tools and without triangle, with coppermesh, the rust mesher, built
-# by maturin from tools\mesher_rs: uv's "rust" group, it needs a Rust toolchain with MSVC; on a
-# uv-managed Python), PyInstaller, packaging\check_bundle.py (fails if triangle is in the bundle
+# packages without the dev tools, without triangle and without PyPI's coppermesh wheel, on a
+# uv-managed Python), coppermesh, the rust mesher, built by maturin from this checkout's
+# tools\mesher_rs (it needs a Rust toolchain with MSVC) and proved by
+# tools\mesher_rs\check_source.py, PyInstaller, packaging\check_bundle.py (fails if triangle is in the bundle
 # or coppermesh is not), tools\mesher_rs\check_fma.py (fails on a fused multiply-add in the
 # bundled coppermesh), then the zip. Not signed.
 # UNTESTED on a Windows computer so far: it runs in .github\workflows\release.yml.
@@ -33,7 +34,9 @@ $Py = Join-Path $env:UV_PROJECT_ENVIRONMENT "Scripts\python.exe"
 
 Write-Host "== build environment ($env:UV_PROJECT_ENVIRONMENT)"
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) { throw "no Rust toolchain (cargo) on PATH: coppermesh is built from source" }
-Invoke-Checked uv sync --frozen --no-dev --group rust --no-install-package triangle --python 3.12
+Invoke-Checked uv sync --frozen --no-dev --no-install-package triangle --no-install-package coppermesh --python 3.12
+Invoke-Checked uv pip install --python $Py ./tools/mesher_rs      # this checkout's mesher, not PyPI's wheel
+Invoke-Checked $Py tools\mesher_rs\check_source.py
 Invoke-Checked uv pip install --python $Py -r packaging\requirements-build.txt
 & $Py -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('triangle') is not None)"
 if ($LASTEXITCODE -ne 0) { throw "triangle is installed in the build environment" }
