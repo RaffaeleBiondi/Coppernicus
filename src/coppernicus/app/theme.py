@@ -200,6 +200,10 @@ QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; color:
 QProgressBar {{ border: 1px solid {t['line']}; border-radius: 4px; background: {t['input']};
   color: {t['fg']}; text-align: center; }}
 QProgressBar::chunk {{ background: {t['accent']}; border-radius: 3px; }}
+QTreeWidget#navigator {{ background: {t['bg']}; border: none; }}
+QTreeWidget#navigator::item {{ padding: 3px 4px; border-radius: 4px; }}
+QTreeWidget#navigator::item:hover {{ background: {t['hover']}; }}
+QTreeWidget#navigator::item:selected {{ background: {t['selected']}; color: {WHITE}; }}
 QLabel[role="muted"] {{ color: {t['muted']}; }}
 QLabel[role="fail"] {{ color: {t['fail']}; }}
 QLabel[role="warning"] {{ color: {t['fg']}; background: {t['cell-missing']}; border: 1px solid {t['warn']};

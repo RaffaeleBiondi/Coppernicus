@@ -299,7 +299,7 @@ PDN = os.path.join(os.path.dirname(__file__), "..", "examples", "pdn", "pdn.copp
 def test_the_impedance_tab_follows_the_power_tree_and_opening_changes_nothing():
     run_in_window(f'''
         tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
-        assert tabs[tabs.index("Power tree") + 1] == "Impedance", tabs
+        assert tabs[tabs.index("Temperature") + 1] == "Impedance", tabs       # after the power tree's pages
         bar = window.findChild(QtWidgets.QToolBar, "Main")
         act = next(a for a in bar.actions() if a.text() == "Solve impedance")
         assert act.shortcut().toString() == "Ctrl+I"

@@ -511,7 +511,7 @@ def test_the_noise_tab_follows_the_impedance_tab_and_opening_changes_nothing(tmp
         from PySide6.QtGui import QKeySequence
         from coppernicus.app import shown_label
         tabs = [shown_label(window.results_tabs.tabText(i)) for i in range(window.results_tabs.count())]
-        assert tabs[tabs.index("Power tree") + 1] == "Impedance", tabs
+        assert tabs[tabs.index("Temperature") + 1] == "Impedance", tabs
         assert tabs[tabs.index("Impedance") + 1] == "Ripple & noise", tabs     # its "&" on screen
         label = window.results_tabs.tabText(tabs.index("Ripple & noise"))
         assert QKeySequence.mnemonic(label).isEmpty(), label                   # no Alt+Space mnemonic

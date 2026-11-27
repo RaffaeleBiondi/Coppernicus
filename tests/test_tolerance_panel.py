@@ -552,7 +552,7 @@ def test_a_rail_edit_turns_a_pass_not_judged_without_a_tab_switch():
 
 
 def test_the_verdict_is_in_view_at_the_docs_window_size():
-    """tools/make_docs_screenshots.py's window (1500 x 920, the Results dock 470 px tall): the
+    """tools/make_docs_screenshots.py's window (1500 x 920, the page 470 px tall under the map): the
     long part and check cells must not push Verdict off the table's right edge. Only the shown
     order moves: the cells keep their columns (RESULT_HEADERS), as the code reads them."""
     run_in_window(f'''
@@ -561,8 +561,8 @@ def test_the_verdict_is_in_view_at_the_docs_window_size():
         window.show()
         window.open_project({EXAMPLE!r})
         window.results_tabs.setCurrentWidget(panel)
-        dock = window.findChild(QtWidgets.QDockWidget, "Results")
-        window.resizeDocks([dock], [470], QtCore.Qt.Vertical)
+        top = window.centre_split.height() - 470                # the page 470 px tall, under the map
+        window.centre_split.setSizes([top, 470])
         app.processEvents()
         held()
         app.processEvents()

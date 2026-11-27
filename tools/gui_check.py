@@ -1447,8 +1447,8 @@ def run_thermal(window, check: Checks, args, out: Path):
     QApplication.processEvents()
     panel, view = window.thermal_panel, window.view
     tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
-    check("thermal: the Temperature tab follows Loss by layer",
-          tabs[tabs.index("Loss by layer") + 1] == "Temperature", str(tabs))
+    check("thermal: the Temperature page follows the power tree's Tree",
+          tabs[tabs.index("Tree") + 1] == "Temperature", str(tabs))
     check("... it shows the project's options: Electro-thermal ticked, max rise 15 °C",
           panel.enabled.isChecked() and panel.max_rise.text() == "15" and panel.max_temp.text() == ""
           and panel.grid.text() == "automatic", f"{panel.max_rise.text()!r} {panel.grid.text()!r}")

@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTabWidget,
+    QSplitter,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -46,6 +46,7 @@ from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.noise_panel import NoisePanel
+from coppernicus.app.pages import Navigator, PageStack
 from coppernicus.app.panels import (
     ComparePanel,
     LossChart,
@@ -84,6 +85,7 @@ from coppernicus.temperature import apply_thermal_limits, thermal_verdict
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 USER_RESULTS = ("Documents", "Coppernicus", "results")     # under the home folder
 REMOVE_MESHER = "Remove downloaded mesher (Triangle)…"
+RESULTS_TITLE = "Results"              # above the navigator; "Results for +3V3" with a net shown
 THEME_KEY = "Ctrl+Shift+L"                              # dark <-> light (View menu, toolbar)
 # + / − step the Layer selector, as in KiCad: (key, modifiers, step); "=" is "+" without Shift.
 LAYER_KEYS = ((Qt.Key_Plus, Qt.NoModifier, 1), (Qt.Key_Equal, Qt.NoModifier, 1),
@@ -319,7 +321,7 @@ class MainWindow(QMainWindow):
         cl.addLayout(bar)
         cl.addLayout(bar2)
         cl.addWidget(self.view, 1)
-        self.setCentralWidget(centre)
+        self.map_pane = centre                  # the map and its bars, above the page (layout C)
 
         # Docks.
         self.nets = NetPanel()
@@ -328,26 +330,45 @@ class MainWindow(QMainWindow):
         self.losses = LossChart()
         self.compare = ComparePanel()
         self.tree_panel = TreePanel()
-        self.results_tabs = QTabWidget()
-        self.results_tabs.addTab(self.problems, "Problems")
-        self.results_tabs.addTab(self.losses, "Loss by layer")
+        # The results pages, chosen in the navigator under the nets (layout C); results_tabs
+        # is the name the bottom tabs had, kept for the code and checks that ask for a page.
+        self.navigator = Navigator()
+        self.pages = self.results_tabs = PageStack(self.navigator)
         self.thermal_panel = ThermalPanel()               # the board temperature (power tree)
-        self.results_tabs.addTab(self.thermal_panel, "Temperature")
         self.thermal_panel.options_changed.connect(self._thermal_edited)
         self.thermal_panel.limits_changed.connect(self._thermal_limits_edited)
         self.thermal_panel.layer_requested.connect(self.show_temperature_at)
         self.thermal_panel.cancel_requested.connect(self.cancel_tree)
-        self.results_tabs.addTab(self.compare, "Compare")
-        self.results_tabs.addTab(self.tree_panel, "Power tree")
         self.ac_panel = AcPanel(self)
-        self.results_tabs.addTab(self.ac_panel, "Impedance")
         self.noise_panel = NoisePanel(self)              # DC-DC ripple and coupled noise
-        self.results_tabs.addTab(self.noise_panel, label_text("Ripple & noise"))   # "&&": not a mnemonic
         self.tolerance_panel = TolerancePanel(self)      # each load's stack-up, from the results held
-        self.results_tabs.addTab(self.tolerance_panel, "Tolerance")
+        for page, label, group in ((self.problems, "Problems", "Rail"),
+                                   (self.losses, "Loss by layer", "Rail"),
+                                   (self.compare, "Compare", "Rail"),
+                                   (self.tree_panel, "Tree", "Power tree"),
+                                   (self.thermal_panel, "Temperature", "Power tree"),
+                                   (self.ac_panel, "Impedance", "AC"),
+                                   (self.noise_panel, label_text("Ripple & noise"), "AC"),     # no mnemonic
+                                   (self.tolerance_panel, "Tolerance", None)):
+            self.pages.add_page(page, label, group)
         for panel in (self.ac_panel, self.noise_panel):
             panel.results_changed.connect(self.tolerance_panel.schedule_refresh)
-        self._dock("Nets", self.nets, Qt.LeftDockWidgetArea)
+        self.centre_split = QSplitter(Qt.Vertical)        # the map above the page
+        self.centre_split.setChildrenCollapsible(False)
+        self.centre_split.addWidget(self.map_pane)
+        self.centre_split.addWidget(self.pages)
+        self.centre_split.setStretchFactor(0, 3)
+        self.centre_split.setStretchFactor(1, 2)
+        self.setCentralWidget(self.centre_split)
+        self.results_title = QLabel(RESULTS_TITLE)
+        self.results_title.setProperty("role", "muted")
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.addWidget(self.nets, 3)
+        ll.addWidget(self.results_title)
+        ll.addWidget(self.navigator, 2)
+        self._dock("Nets", left, Qt.LeftDockWidgetArea)
         rail_scroll = QScrollArea()             # the rail setup is taller than a laptop screen
         rail_scroll.setWidget(self.rail_panel)
         rail_scroll.setWidgetResizable(True)
@@ -356,8 +377,6 @@ class MainWindow(QMainWindow):
         rail_scroll.setMinimumWidth(self.rail_panel.minimumSizeHint().width()
                                     + rail_scroll.verticalScrollBar().sizeHint().width())
         self._dock("Rail setup", rail_scroll, Qt.RightDockWidgetArea)
-        problems_dock = self._dock("Results", self.results_tabs, Qt.BottomDockWidgetArea)
-        self.resizeDocks([problems_dock], [300], Qt.Vertical)
 
         self._actions()
         self.statusBar().showMessage("Open a board (.kicad_pcb) or a project to start")
@@ -937,6 +956,7 @@ class MainWindow(QMainWindow):
             return
         self.rail_panel.set_pick("")
         self.net = net
+        self.results_title.setText(f"{RESULTS_TITLE} for {net}")
         self._set_group(None)                    # a net picked in the list: the rail solved alone
         rail = self._show_rail(net)
         self.rail_panel.set_net_kind(self._net_at_0v(rail))
