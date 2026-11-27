@@ -15,9 +15,6 @@ from typing import Any, List, Mapping, Optional
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
-ERROR_STYLE = "color: #c0392b;"
-WARNING_STYLE = ("color: #6e4a07; background: #fdf2e0; border: 1px solid #b9770e; "
-                 "border-radius: 3px; padding: 4px;")
 OVERRIDE, USE_FIELDS = "override", "use_fields"          # what the banner's button asks for
 USE_MINE, START_FROM_KICAD = "project", "kicad"          # the answers of ask_override
 
@@ -132,13 +129,13 @@ class FieldsBanner(QWidget):
         super().__init__(parent)
         self.error = QLabel()
         self.error.setWordWrap(True)
-        self.error.setStyleSheet(ERROR_STYLE)
+        self.error.setProperty("role", "fail")        # the theme's style sheet
         self.text = QLabel()
         self.text.setWordWrap(True)
         self.button = QPushButton()
         self.warnings = QLabel()
         self.warnings.setWordWrap(True)
-        self.warnings.setStyleSheet(WARNING_STYLE)
+        self.warnings.setProperty("role", "warning")
         self._action = ""
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)

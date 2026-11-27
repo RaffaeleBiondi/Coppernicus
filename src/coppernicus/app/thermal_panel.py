@@ -15,7 +15,6 @@ import math
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from PySide6.QtCore import QSettings, Qt, Signal
-from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -37,7 +36,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from coppernicus.app import APP_NAME
+from coppernicus.app import APP_NAME, theme
 from coppernicus.app.panels import DecimalSpinBox, FieldComboBox, OptionalDecimalValidator, WheelWhenFocused
 from coppernicus.engine.ac import total_memory_bytes
 from coppernicus.engine.thermal import thermal_cost_text, thermal_ram_estimate, thermal_size
@@ -48,7 +47,6 @@ LAYER_HEADERS = ["Layer", "Hottest copper (°C)", "Rise (°C)", "x (mm)", "y (mm
                  "Distance (mm)", "Verdict"]
 LOAD_HEADERS = ["Load", "Group", "Drop at ambient (mV)", "Electro-thermal (mV)", "Change (%)"]
 REGULATOR_HEAT_LABELS = (("output_pads", "output pads"), ("part_pads", "all the part's pads"))
-FAIL_COLOR = "#c0392b"
 CANCELLING = "Cancelling: stops at the next iteration"
 LAST_SOLVE_SETTING = "thermal/last_solve"   # the last electro-thermal solve's time and size (QSettings)
 NO_MAP = ("No board temperature: tick Electro-thermal in the Temperature tab and solve the power tree "
@@ -468,7 +466,7 @@ class ThermalPanel(QWidget):
                 if text[:1] in "-+0123456789" and c > 0:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if r in fails:
-                    item.setForeground(QBrush(QColor(FAIL_COLOR)))
+                    item.setForeground(theme.brush("fail"))
                 table.setItem(r, c, item)
 
     def _activated(self, row: int, _col: int = 0):

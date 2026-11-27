@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QSettings, Qt, QThread, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QFont, QKeySequence
+from PySide6.QtGui import QAction, QBrush, QFont, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -65,6 +65,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app import theme
 from coppernicus.app.panels import (
     FieldComboBox,
     OptionalDecimalValidator,
@@ -704,20 +705,16 @@ def radiated_text(r) -> str:
             f"{hz_text(e.radiated_hz)}{limit}: for scale, not judged")
 
 
-FAIL_COLOR, AMBER = "#c0392b", "#b9770e"
-
-
 def header_html(r, stale: bool) -> str:
     """The verdict line of a result: the victims' verdict (ripple and the radiated estimate
     are never judged), its note, and a flag when the setup changed since the solve."""
-    words = {"fail": f"<span style='color:{FAIL_COLOR}'><b>FAIL</b></span>", "pass": "<b>PASS</b>",
-             "not_judged": f"<span style='color:{AMBER}'><b>not judged</b></span>"}
+    words = {"fail": theme.span("fail", "<b>FAIL</b>"), "pass": "<b>PASS</b>",
+             "not_judged": theme.span("warn", "<b>not judged</b>")}
     head = (f"<b>{html.escape(r.aggressor)}</b> ({html.escape(r.vrm)}, {r.topology}: {r.vin_v:g} V → "
             f"{r.vout_v:g} V, {r.iout_a:.3g} A at {hz_text(r.fsw_hz)}): victims "
             f"{words.get(r.verdict, 'partial')}; ripple and the radiated estimate are never judged")
     note = f"<br><small>{html.escape(r.verdict_note)}</small>" if r.verdict_note else ""
-    flag = (f"<br><span style='color:{AMBER}'><b>Setup changed since this solve</b>: solve again</span>"
-            if stale else "")
+    flag = "<br>" + theme.span("warn", "<b>Setup changed since this solve</b>: solve again") if stale else ""
     return head + note + flag
 
 
@@ -833,8 +830,6 @@ def _set_item(table: QTableWidget, r: int, c: int, text: str) -> QTableWidgetIte
     return item
 
 
-PROBLEM_BG, DRAFT_BG, ERROR_BG = QColor("#fdecea"), QColor("#f0f0f0"), QColor("#f8c9c4")
-STAND_IN_BG = QColor("#fff3cd")     # a KiPI stand-in: not entered, so nothing is judged
 CHART_SURFACE = "#fcfcfb"
 PLOT_FONT = 7
 
@@ -842,7 +837,7 @@ PLOT_FONT = 7
 def _row_bg(why: str) -> QBrush:
     if not why:
         return QBrush()
-    return QBrush(DRAFT_BG if why.startswith(("draft", "not saved yet")) else PROBLEM_BG)
+    return theme.brush("cell-readonly" if why.startswith(("draft", "not saved yet")) else "cell-problem")
 
 
 class NoisePanel(QWidget):
@@ -906,7 +901,7 @@ class NoisePanel(QWidget):
         self.estimate = QLabel()                  # the pre-solve estimate, kept through the solve
         self.estimate.setWordWrap(True)
         self.estimate.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.estimate.setStyleSheet("color: #52514e")
+        self.estimate.setProperty("role", "muted")
 
         # Aggressor tab.
         self.field: Dict[str, QLineEdit] = {}
@@ -933,7 +928,7 @@ class NoisePanel(QWidget):
             if key == "fsw_hz":
                 self.fsw_hint = QLabel()
                 self.fsw_hint.setWordWrap(True)
-                self.fsw_hint.setStyleSheet("color: #52514e")
+                self.fsw_hint.setProperty("role", "muted")
                 form.addRow("", self.fsw_hint)
         for key, w in self.field.items():
             w.setToolTip(AGGRESSOR_TIPS[key])
@@ -1032,7 +1027,7 @@ class NoisePanel(QWidget):
         oform.addRow("", board_model)
         self.mesh_note = QLabel()
         self.mesh_note.setWordWrap(True)
-        self.mesh_note.setStyleSheet("color: #52514e")
+        self.mesh_note.setProperty("role", "muted")
         oform.addRow("", self.mesh_note)
         opt_tab = QWidget()
         ol = QVBoxLayout(opt_tab)
@@ -1273,7 +1268,7 @@ class NoisePanel(QWidget):
                     item.setData(Qt.UserRole, n)
                     item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
                     item.setCheckState(Qt.Checked)
-                    item.setForeground(QBrush(QColor(FAIL_COLOR)))
+                    item.setForeground(theme.brush("fail"))
                     self.probe_list.addItem(item)
         self.probe_list.blockSignals(False)
 
@@ -1387,7 +1382,7 @@ class NoisePanel(QWidget):
         for c, (_h, key) in enumerate(PHASE_COLUMNS):
             item = _set_item(self.phases, r, c, phase_cell(ph, key))
             if key in STAND_INS and getattr(ph, key) is None:
-                item.setBackground(QBrush(STAND_IN_BG))
+                item.setBackground(theme.brush("cell-missing"))
                 item.setToolTip(STAND_INS[key])
             else:
                 item.setBackground(_row_bg(why))
@@ -1426,7 +1421,7 @@ class NoisePanel(QWidget):
             q = edit_phase(self._agg_rows[i], r, key, item.text())
         except ValueError as e:
             self.phases.blockSignals(True)
-            item.setBackground(QBrush(ERROR_BG))
+            item.setBackground(theme.brush("cell-error"))
             item.setToolTip(f"Not applied: {e}")
             self.phases.blockSignals(False)
             self._say(f"Not applied: {e}")
@@ -1511,7 +1506,7 @@ class NoisePanel(QWidget):
             item.setFlags(flags)
             item.setFont(italic if end in guessed else QFont())
             if end in guessed:
-                item.setBackground(QBrush(STAND_IN_BG))
+                item.setBackground(theme.brush("cell-missing"))
                 item.setToolTip(GUESS_TIP)
             else:
                 item.setBackground(_row_bg(why))
@@ -1585,7 +1580,7 @@ class NoisePanel(QWidget):
                 raise ValueError(why)
         except ValueError as e:
             self.victims.blockSignals(True)
-            item.setBackground(QBrush(ERROR_BG))
+            item.setBackground(theme.brush("cell-error"))
             item.setToolTip(f"Not applied: {e}")
             self.victims.blockSignals(False)
             self._say(f"Not applied: {e}")
@@ -1775,9 +1770,9 @@ class NoisePanel(QWidget):
             for c, text in enumerate(row):
                 item = QTableWidgetItem(text)
                 if row[verdict_col] == "FAIL":
-                    item.setForeground(QBrush(QColor(FAIL_COLOR)))
+                    item.setForeground(theme.brush("fail"))
                 elif row[verdict_col] == "NOT JUDGED":
-                    item.setForeground(QBrush(QColor(AMBER)))
+                    item.setForeground(theme.brush("warn"))
                 table.setItem(i, c, item)
 
     def show_result(self):

@@ -92,7 +92,7 @@ class CopperThicknessDialog(QDialog):
         layout.addWidget(self.off_board_box)
         self.error = QLabel()
         self.error.setWordWrap(True)
-        self.error.setStyleSheet("color: #c0392b")
+        self.error.setProperty("role", "fail")        # the theme's style sheet
         self.error.hide()
         layout.addWidget(self.error)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)

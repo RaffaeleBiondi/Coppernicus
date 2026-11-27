@@ -7,15 +7,6 @@ results against your own judgement.
 
 ## Unreleased
 
-### Fixed
-
-- `regulator_heat: part_pads` puts a regulator's conversion loss on the pads of its own part,
-  the one with its input pins. For an external-inductor buck, whose output is held at the
-  inductor (KiCad field `PI_SOURCE_REF`), that is the IC: the loss no longer lands on the
-  inductor's two pads alone, which put the board's hot spot on the inductor. A regulator whose
-  input and output are on one part (an LDO) gives the same results as before; `output_pads`
-  (KiPI's placement, the default) is unchanged.
-
 ### Added
 
 - `output_part_heat_pct` in the `thermal:` block (and the MCP `thermal_options`): with
@@ -24,6 +15,22 @@ results against your own judgement.
   the rest stays on the IC. Only the share you enter, from the parts' data: none is assumed. A
   name that is not a regulator, or one whose output is on its own part, is refused. The
   board-temperature assumptions say where each regulator's loss went.
+
+### Changed
+
+- The app's look follows the HTML report: dark by default with the report's colours, **☀ Light**
+  at the right end of the toolbar (also View menu, Ctrl+Shift+L) switches to light and back,
+  kept for the next start; the same look on macOS, Windows and Linux (Qt's Fusion style). The
+  plots stay on a light panel, as in the report.
+
+### Fixed
+
+- `regulator_heat: part_pads` puts a regulator's conversion loss on the pads of its own part,
+  the one with its input pins. For an external-inductor buck, whose output is held at the
+  inductor (KiCad field `PI_SOURCE_REF`), that is the IC: the loss no longer lands on the
+  inductor's two pads alone, which put the board's hot spot on the inductor. A regulator whose
+  input and output are on one part (an LDO) gives the same results as before; `output_pads`
+  (KiPI's placement, the default) is unchanged.
 
 ## 0.4.0 (2026-11-27)
 

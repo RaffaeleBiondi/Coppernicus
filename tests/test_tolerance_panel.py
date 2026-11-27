@@ -748,7 +748,8 @@ def test_a_cell_a_kicad_field_holds_is_read_only_in_the_tab_and_its_neighbours_s
     tab's other read-only cells and a tooltip naming the field and the part; typed anyway, the
     value is refused and nothing is written. U1's tol_pct, held by no field, still edits."""
     run_in_window(FIELDS_PRELUDE + textwrap.dedent(f'''
-        from coppernicus.app.tolerance_panel import LOAD_COLUMNS, READ_ONLY_BG, SOURCE_COLUMNS
+        from coppernicus.app import theme
+        from coppernicus.app.tolerance_panel import LOAD_COLUMNS, SOURCE_COLUMNS
         tmp = Path({str(tmp_path)!r})
         held = {{"J1": {{**FIELDS["J1"], "PI_ACC": "1%"}}, "U1": {{**FIELDS["U1"], "PI_AC_TOL": "20mV"}}}}
         write_strip_board(tmp / "strip.kicad_pcb", held)
@@ -768,7 +769,7 @@ def test_a_cell_a_kicad_field_holds_is_read_only_in_the_tab_and_its_neighbours_s
                 (panel.loads, LOAD_COLUMNS, "ac_tol_pct", "", "PI_AC_TOL", "U1")):
             item = cell(table, columns, key)
             assert item.text() == text and not item.flags() & editable, (key, item.text())
-            assert item.background().color() == READ_ONLY_BG, key
+            assert item.background().color() == theme.qcolor("cell-readonly"), key
             tip = item.toolTip()
             assert f"from KiCad field {{field}}" in tip and f"on {{part}}; change it in KiCad" in tip, tip
         for key in ("tol_pct", "dc_tol_mv", "ripple_mv", "transient_mv"):

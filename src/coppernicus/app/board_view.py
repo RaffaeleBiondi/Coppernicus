@@ -23,11 +23,11 @@ import numpy as np  # noqa: E402
 import pyvista as pv  # noqa: E402
 from matplotlib import colormaps  # noqa: E402
 from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, Signal  # noqa: E402
-from PySide6.QtGui import QColor, QFont, QGuiApplication, QImage, QPainter, QPixmap  # noqa: E402
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget  # noqa: E402
 from pyvistaqt import QtInteractor  # noqa: E402
 
-from coppernicus.app import APP_NAME  # noqa: E402
+from coppernicus.app import APP_NAME, theme  # noqa: E402
 from coppernicus.app.hover import (  # noqa: E402
     HOVER_DEFAULT,
     HOVER_VALUES,
@@ -58,9 +58,9 @@ FIELDS = {
 }
 J_CLIP_PERCENTILE = 99.5
 COLORBAR_WIDTH = 120              # px: the scale, its title and the peak label above it
-# The verdict line above the |J| scale, on the colour bar's white: each at least 4.5:1 on it.
-VERDICT_COLORS = {"fail": "#c62828", "pass": "#2e7d32", "attention": "#9a6700"}
-SOURCE_COLOR, LOAD_COLOR, OUTLINE_COLOR, COPPER_COLOR = "#1a9850", "#d73027", "#555555", "#b87333"
+# The verdict line above the |J| scale: the theme's verdict colours, each at least 4.5:1 on its map.
+VERDICT_TOKENS = {"fail": "fail", "pass": "pass", "attention": "warn"}
+SOURCE_COLOR, LOAD_COLOR, COPPER_COLOR = "#1a9850", "#d73027", "#b87333"   # the board's outline: theme
 CANDIDATE_COLOR = "#7a4a1d"       # outlines of the pads that can be picked
 PAD_STYLE = {"source": (SOURCE_COLOR, 3.0), "load": (LOAD_COLOR, 3.0), "candidate": (CANDIDATE_COLOR, 1.0)}
 CLICK_SLOP_PX = 3                 # a press and release closer than this is a click, not a pan
@@ -91,12 +91,9 @@ def hover_style(scheme: str) -> str:
 
 
 def color_scheme() -> str:
-    """The app's look, "dark" or "light": the platform's colour scheme, or the palette's
-    window colour where the platform does not say."""
-    scheme = QGuiApplication.styleHints().colorScheme()
-    if scheme != Qt.ColorScheme.Unknown:
-        return "dark" if scheme == Qt.ColorScheme.Dark else "light"
-    return "dark" if QGuiApplication.palette().window().color().lightness() < 128 else "light"
+    """The app's look, "dark" or "light": its theme (:mod:`coppernicus.app.theme`), not the
+    platform's colour scheme."""
+    return theme.current()
 
 
 def _xyz(points: np.ndarray, z: float = 0.0) -> np.ndarray:
@@ -190,9 +187,10 @@ class ColorBar(QWidget):
         bold, small = QFont(self.font()), QFont(self.font())
         bold.setWeight(QFont.DemiBold)
         small.setPointSizeF(max(self.font().pointSizeF() * 0.85, 6.0))
-        parts = [(self._check.peak_text(), bold, "black"), (f"({PEAK_NOTE})", small, "#5f6368")]
+        parts = [(self._check.peak_text(), bold, theme.color("fg")),
+                 (f"({PEAK_NOTE})", small, theme.color("muted"))]
         if self._check.limit_kind:
-            colour = VERDICT_COLORS.get(self._check.verdict, "#5f6368")
+            colour = theme.color(VERDICT_TOKENS.get(self._check.verdict, "muted"))
             parts.append((self._check.verdict_text(), small, colour))
         # A value keeps its unit on its line when the narrow bar wraps the text.
         return [(text.replace(" A/mm²", " A⁠/⁠mm²").replace(" mm²", " mm²"), font, colour)
@@ -202,7 +200,7 @@ class ColorBar(QWidget):
         if self._cmap is None:
             return
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("white"))
+        p.fillRect(self.rect(), theme.qcolor("panel"))
         flags = Qt.AlignLeft | Qt.AlignBottom | Qt.TextWordWrap
         wrap = Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap
         y = 4
@@ -221,7 +219,7 @@ class ColorBar(QWidget):
         img = np.ascontiguousarray(np.repeat(rgba[:, None, :], w, axis=1))
         qimg = QImage(img.data, w, h, 3 * w, QImage.Format_RGB888)
         p.drawPixmap(x0, top, QPixmap.fromImage(qimg))
-        p.setPen(QColor("black"))
+        p.setPen(theme.qcolor("fg"))
         p.drawRect(x0, top, w, h)
         p.drawText(4, 4, self.width() - 6, top - 10, flags, self._title)
         for k in range(6):
@@ -285,7 +283,7 @@ class HoverLabel(QFrame):
         layout.addWidget(self.rest)
         self._readout = HoverReadout()
         self.restyle()
-        QGuiApplication.styleHints().colorSchemeChanged.connect(self.restyle)
+        theme.signals.changed.connect(self.restyle)
 
     def restyle(self, *_):
         """Follow the app's colour scheme (:func:`color_scheme`)."""
@@ -325,7 +323,8 @@ class BoardView(QWidget):
         layout.setSpacing(0)
         layout.addWidget(self.plotter.interactor, 1)
         layout.addWidget(self.colorbar)
-        self.plotter.set_background("white")
+        self.plotter.set_background(theme.color("map"))
+        theme.signals.changed.connect(self._theme_changed)
         self.plotter.enable_parallel_projection()
         self.plotter.enable_2d_style()
         # viewport=True: pyvista hands over the click's display position and runs no picker
@@ -551,10 +550,20 @@ class BoardView(QWidget):
             self.plotter.add_mesh(mesh, color=ARROW_HALO, line_width=3.4, name="arrows_halo")
             self.plotter.add_mesh(mesh.copy(), color=ARROW_COLOR, line_width=1.5, name="arrows")
 
+    def _theme_changed(self, *_):
+        """The map's background, the board outline and the colour bar in the new theme; the
+        maps' own colours (colour scales, pads, isolines, arrows) stay as they are."""
+        self.plotter.set_background(theme.color("map"))
+        outline = self.plotter.actors.get("outline")
+        if outline is not None:
+            outline.prop.color = theme.color("outline")
+        self.colorbar.update()
+        self.plotter.render()
+
     def _add_outline(self, outline):
         mesh = _polyline_mesh(outline, 0.01)
         if mesh is not None:
-            self.plotter.add_mesh(mesh, color=OUTLINE_COLOR, line_width=1.5, name="outline")
+            self.plotter.add_mesh(mesh, color=theme.color("outline"), line_width=1.5, name="outline")
 
     def _add_pad_outlines(self, pad_outlines):
         for role, rings in pad_outlines:

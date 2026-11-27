@@ -916,6 +916,7 @@ def test_the_kicad_fields_models_are_shown_read_only_and_never_saved(tmp_path):
         from pathlib import Path
         sys.path.insert(0, {tests!r})
         from kicad_fixture import write_board
+        from coppernicus.app import theme
         from coppernicus.project import CapModel, Project, Rail, Source
         folder = Path({str(tmp_path)!r})
         c1 = {{"PI_C": "10u", "PI_ESR": "20mOhm", "PI_ESL": "0.5nH", "PI_DIELECTRIC": "C0G"}}
@@ -942,7 +943,7 @@ def test_the_kicad_fields_models_are_shown_read_only_and_never_saved(tmp_path):
             for c in range(caps.columnCount()):
                 item = caps.item(r, c)
                 assert not item.flags() & QtCore.Qt.ItemIsEditable, (r, c)
-                assert item.background().color().name() == "#f0f0f0", (r, c)
+                assert item.background().color().name() == theme.color("cell-readonly"), (r, c)
         assert caps.item(2, 1).text() == "100n" and caps.item(2, 5).text() == "16"
         esr = caps.item(1, 3).toolTip()
         assert 'set in KiCad field PI_ESR "20mOhm" on C1' in esr and "override_board_fields" in esr, esr
