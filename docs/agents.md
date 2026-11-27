@@ -677,7 +677,10 @@ power-tree solve only: `solve_tree` with `thermal: true`, or the project's `ther
   are refused, `invalid_input`). For this solve only (the file is not changed), any of the project's
   `thermal:` keys: `ambient_c` (default 25), `iterations` (3), `airflow_m_s` (0), `grid_mm`
   (0 = automatic, about 250 cells across), `load_heat`, `regulator_heat` (`output_pads` or
-  `part_pads`), and the limits `max_temp_c` and `max_rise_c`. Unknown keys are refused.
+  `part_pads`: every pad of the regulator's own part, the one with its input pins, so an
+  external-inductor buck's IC), `output_part_heat_pct` (with `part_pads`: regulator name → the
+  % of its loss on the pads of its output part, the inductor, when that is another part; only
+  a share the user gives, never an estimate), and the limits `max_temp_c` and `max_rise_c`. Unknown keys are refused.
 - **Cost first.** Before the solve, `thermal_estimate` gives KiPI's grid (`grid_nx`,
   `grid_ny`, `cell_mm`, `cells`, `layers`, `unknowns`), the memory of its thermal model
   (`memory_bytes`) against this machine's (`machine_memory_bytes`, `exceeds_memory`) and a

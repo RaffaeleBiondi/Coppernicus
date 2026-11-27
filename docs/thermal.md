@@ -50,14 +50,25 @@ thermal:
   grid_mm: 0.0           # thermal cell size; 0 = automatic (about 250 cells across)
   load_heat: false       # also the loads' own power, at their pins
   regulator_heat: output_pads   # or part_pads: where a regulator's loss goes
+  output_part_heat_pct: {U5: 30} # part_pads only: % of U5's loss on its inductor (example)
   max_temp_c: 85.0       # a limit on the hottest copper, °C (example)
   max_rise_c: 15.0       # a limit on its rise above the ambient (example)
 ```
 
 What heats the board: each copper triangle's loss where it is, each via barrel's loss over the
 layers it spans, each link's loss at its pads, each regulator's conversion loss (input − output
-power) at its output pads (`output_pads`) or spread over all its pads (`part_pads`), and with
-`load_heat` the loads' own power. The board loses heat by convection from both faces, h = 10 +
+power) at its output pads (`output_pads`) or spread over all the pads of its own part
+(`part_pads`), and with `load_heat` the loads' own power.
+
+With `part_pads`, a regulator's own part is the one with its input pins. For an
+external-inductor buck, whose output is held at the inductor (KiCad field `PI_SOURCE_REF`),
+that is the IC, not the inductor. A buck's loss is really shared between the IC and the
+inductor, and how depends on the parts. So `output_part_heat_pct` takes the share you enter,
+from the parts' data, in % of the loss: it goes to the pads of the part the output is held
+at, and the rest stays on the IC. The keys are regulator names as the power tree shows them
+(a part with KiCad fields is named after itself). Nothing is assumed when you enter no share:
+all of the loss stays on the IC. A name that is not a regulator, or a regulator whose output
+is on its own part, is refused. The assumptions say where each regulator's loss went. The board loses heat by convection from both faces, h = 10 +
 3.8·v W/m²K (KiPI's; natural convection and radiation at 0 m/s).
 
 ## Cost first

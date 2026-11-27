@@ -177,12 +177,14 @@ def record_solve(tree) -> None:
 
 # ---------------------------------------------------------------------- the form (pure)
 
-FORM_KEYS = tuple(f.name for f in dataclasses.fields(ThermalOptions))
+# output_part_heat_pct is set in the project file only: the form edits the project's own
+# options object, so it is kept as it is.
+FORM_KEYS = tuple(f.name for f in dataclasses.fields(ThermalOptions) if f.name != "output_part_heat_pct")
 
 
 def form_values(options: ThermalOptions) -> Dict[str, Any]:
     """What the form shows for ``options``: the limits as text, empty when not checked."""
-    out = dict(vars(options))
+    out = {k: v for k, v in vars(options).items() if k in FORM_KEYS}
     for key in THERMAL_LIMITS:
         out[key] = "" if out[key] is None else f"{out[key]:g}"
     return out
@@ -254,7 +256,9 @@ class ThermalPanel(QWidget):
             self.regulator_heat.addItem(label, key)
         self.regulator_heat.setToolTip("Where a regulator's conversion loss (input − output power) goes: "
                                        "its output pads (KiPI's placement) or spread evenly over every pad "
-                                       "of its part")
+                                       "of its own part, the one with its input pins (an external-"
+                                       "inductor buck's IC); output_part_heat_pct in the project file "
+                                       "moves a share you enter to its inductor")
         self.max_temp = QLineEdit(placeholderText="empty = not checked")
         self.max_temp.setValidator(OptionalDecimalValidator(-273.15, 1e4, 3))
         self.max_temp.setToolTip("Fail when a layer's hottest solved copper is hotter")

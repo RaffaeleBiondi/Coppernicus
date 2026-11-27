@@ -5,6 +5,26 @@ line, the MCP server or the GitHub Action. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Coppernicus is pre-alpha: check its
 results against your own judgement.
 
+## Unreleased
+
+### Fixed
+
+- `regulator_heat: part_pads` puts a regulator's conversion loss on the pads of its own part,
+  the one with its input pins. For an external-inductor buck, whose output is held at the
+  inductor (KiCad field `PI_SOURCE_REF`), that is the IC: the loss no longer lands on the
+  inductor's two pads alone, which put the board's hot spot on the inductor. A regulator whose
+  input and output are on one part (an LDO) gives the same results as before; `output_pads`
+  (KiPI's placement, the default) is unchanged.
+
+### Added
+
+- `output_part_heat_pct` in the `thermal:` block (and the MCP `thermal_options`): with
+  `part_pads`, a regulator's name (as in the power tree) to the share of its loss, in %, that
+  goes to the pads of the part its output is held at when that is another part, the inductor;
+  the rest stays on the IC. Only the share you enter, from the parts' data: none is assumed. A
+  name that is not a regulator, or one whose output is on its own part, is refused. The
+  board-temperature assumptions say where each regulator's loss went.
+
 ## 0.4.0 (2026-11-27)
 
 ### Added
