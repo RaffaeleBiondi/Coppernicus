@@ -93,4 +93,12 @@ Use from Python:
   | build only: `target-lexicon` | Apache-2.0 WITH LLVM-exception |
 
   All of these may be combined with GPL-3.0 code. That is my reading, not legal advice.
+  (`portable-atomic` is locked but not built for the platforms we ship.)
+- The packaged app carries their licence texts: `crate_licences.py` writes
+  `packaging/licenses/coppermesh-crates.txt` from `Cargo.lock` (every crate built for the
+  `python` feature on macOS, Windows and Linux, each licence file it ships, identical texts once),
+  `packaging/notices.py` appends it to `THIRD_PARTY_NOTICES.txt`, and `check_bundle.py` fails a
+  bundle whose notices lack a crate. After any change to `Cargo.lock` or `Cargo.toml`, run
+  `python tools/mesher_rs/crate_licences.py` (with cargo on `PATH`) and commit the file:
+  `tests/test_crate_licences.py` fails until then.
 - spade (MIT OR Apache-2.0) was evaluated and is not used (DESIGN.md §1).

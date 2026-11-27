@@ -151,7 +151,8 @@ The mark is a file named `.triangle-remove` beside the folder.
 
 The disk image and the zip hold `LICENSE.txt` (Coppernicus, GPL-3.0-or-later),
 `THIRD_PARTY_NOTICES.txt` (every library in the bundle with its version and licence, and their
-licence texts: Qt and PySide6 under LGPL-3.0, VTK, NumPy, SciPy, shapely, KiPI...), the
+licence texts: Qt and PySide6 under LGPL-3.0, VTK, NumPy, SciPy, shapely, KiPI..., and those of
+the Rust crates compiled into coppermesh, the rust mesher), the
 `licenses` folder (`TRIANGLE_NOTICE.txt`, Triangle's terms verbatim, and the LGPL-3.0 text) and
 `INSTALL.md`, this page. The licence files are also inside the app.
 
