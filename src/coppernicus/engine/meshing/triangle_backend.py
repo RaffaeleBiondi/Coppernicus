@@ -27,6 +27,7 @@ _NONE = (np.zeros((0, 2)), np.zeros((0, 3), dtype=np.int64))
 class TriangleBackend:
     name = "triangle"
     strict_size = False          # the graded pass samples size_fn once, at the first pass's centroids
+    settings = ()                # KiPI's switches only
 
     def available(self) -> bool:
         try:

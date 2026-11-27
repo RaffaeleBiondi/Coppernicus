@@ -87,6 +87,7 @@ class RustBackend:
 
     name = "rust"
     strict_size = True           # KiPI's graded field is met at every triangle's own centroid
+    settings = ("size_rule", "min_edge_mm", "tiny_angle_deg")
     #: No point is added closer than this to a vertex (mm); None: KiPI's noding grid (1 nm), the
     #: resolution its input is snapped to.
     min_edge_mm = None

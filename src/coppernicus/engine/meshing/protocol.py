@@ -37,6 +37,11 @@ insertion: KiPI's ``graded_size`` arrives as its hole features (exact, for a nat
 any other ``size_fn`` (e.g. the AC far mode's ``zone_size``) is ``"sampled"``: a backend
 evaluates it once per pass, vectorised, at points of its choosing (its uniform mesh's nodes or
 centroids, as KiPI's own second pass evaluates it at the first pass's centroids).
+
+A backend's settings are the attributes it names in ``settings`` (a tuple of names, empty or
+absent for none), each a plain value (str, number, bool or None). KiPI's pool workers rebuild a
+backend of :data:`~.registry.KNOWN` with no arguments and set those attributes on it, so a mesh
+meshed in a worker is the one meshed here (:mod:`.pool`).
 """
 
 from __future__ import annotations
@@ -117,7 +122,8 @@ def graded_cap(area_over_limit_sum: float, n_nodes: int) -> int:
 
 @runtime_checkable
 class Backend(Protocol):
-    """A meshing backend (see the module docstring for the contract)."""
+    """A meshing backend (see the module docstring for the contract; ``settings``, optional, names
+    the attributes that configure it)."""
     name: str
 
     def available(self) -> bool:
