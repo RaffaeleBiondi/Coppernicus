@@ -13,3 +13,8 @@ dependencies = ["numpy"]
 [tool.maturin]
 features = ["python"]
 module-name = "coppermesh"
+
+# uv rebuilds a path dependency only when one of these files changes (by default only
+# pyproject.toml): the Rust sources too, so that `uv sync --group rust` never keeps a stale build.
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "Cargo.toml" }, { file = "Cargo.lock" }, { file = "src/**/*.rs" }]

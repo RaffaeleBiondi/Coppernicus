@@ -194,6 +194,17 @@ wheels = [
 ]
 
 [[package]]
+name = "coppermesh"
+version = "0.1.0"
+source = { directory = "tools/mesher_rs" }
+dependencies = [
+    { name = "numpy" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "numpy" }]
+
+[[package]]
 name = "coppernicus"
 version = "0.4.0"
 source = { editable = "." }
@@ -216,6 +227,9 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
+rust = [
+    { name = "coppermesh" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -237,6 +251,7 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },
 ]
+rust = [{ name = "coppermesh", directory = "tools/mesher_rs" }]
 
 [[package]]
 name = "cryptography"
