@@ -202,6 +202,7 @@ def test_what_a_worker_cannot_rebuild_stays_in_one_process(how, monkeypatch):
         before = (P.mesh_layers, W._start)
         meshing.install(name, **options)
         assert registry.serial_reason(name, options) and not registry.pooled()
+        assert meshing.seam_problem() is None
         assert os.environ["KIPI_SERIAL"] == "1" and P.mesh_layers(None) is None and W._start is before[1]
         meshing.uninstall()
         assert os.environ.get("KIPI_SERIAL") == value and (P.mesh_layers, W._start) == before

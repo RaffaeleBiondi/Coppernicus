@@ -32,7 +32,9 @@ from coppernicus.engine.meshing.protocol import (
     SizeField,
 )
 
-#: Per-polygon records of the last meshes (benchmarks read it; cleared by the caller).
+#: Per-polygon records of the last meshes (benchmarks read it; cleared by the caller). Only the
+#: polygons meshed in this process: those of KiPI's pool workers stay there (an ``options["stats"]``
+#: list keeps the pools in one process, see :mod:`.registry`).
 STATS: List[dict] = []
 
 

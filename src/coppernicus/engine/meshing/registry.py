@@ -27,7 +27,8 @@ mesher name that did not mesh them.
   - otherwise (a backend added by :func:`register`: a factory a spawned process cannot rebuild;
     a ``stats`` list in the options, which a worker's records would not reach; options that
     cannot be pickled): ``kipi.core.mesh.parallel.mesh_layers`` (to "no pool") and
-    ``KIPI_SERIAL=1``, as one process;
+    ``KIPI_SERIAL=1``, as one process. So with the pools on, :data:`.pipeline.STATS` records only
+    the polygons meshed in this process (each worker keeps its own); a ``stats`` list sees all;
 - for a backend that offers ``triangle_compat()``, the two KiPI callers that call Triangle
   directly instead of ``mesh_polygon``, through ``sys.modules["triangle"]``:
   ``kipi.noise.extract.xsection.mesh`` imports ``triangle`` when it runs ("pq28a..." then
@@ -127,15 +128,19 @@ def pooled() -> bool:
 
 
 def seam_problem() -> Optional[str]:
-    """Why the seam can't go into this KiPI, or None."""
+    """Why the seam can't go into this KiPI, or None. While a backend is installed, KiPI's own
+    functions are checked, not the ones install put in their place."""
     import kipi
     version = getattr(kipi, "__version__", None)
     if version != KIPI_VERSION:
         return f"written for KiPI {KIPI_VERSION}, this is KiPI {version}"
+    ours = _state.get("ours", {})
     for (module, name), params in _SEAMS.items():
         fn = importlib.import_module(module)
         for part in name.split("."):
             fn = getattr(fn, part, None)
+        if (module, name) in ours and fn is ours[module, name][0]:
+            fn = ours[module, name][1]
         if not callable(fn):
             return f"KiPI has no {module}.{name}"
         try:
@@ -221,12 +226,16 @@ def _patch(name: str, backend: Backend, options: dict, mode: str) -> None:
     saved = {"mesh_polygon": M.mesh_polygon, "triangle_module": sys.modules.get("triangle"),
              "viz": viz._triangle if viz is not None else None, "viz_loaded": viz is not None}
     M.mesh_polygon = partial(pipeline.mesh_polygon, backend, options)
+    ours = {("kipi.core.mesh.mesher", "mesh_polygon"): (M.mesh_polygon, saved["mesh_polygon"])}
     if mode == "serial":
         saved.update(mesh_layers=P.mesh_layers, serial=os.environ.get("KIPI_SERIAL"))
         P.mesh_layers = lambda *a, **k: None
         os.environ["KIPI_SERIAL"] = "1"
+        ours["kipi.core.mesh.parallel", "mesh_layers"] = (P.mesh_layers, saved["mesh_layers"])
     elif mode == "pool":
         saved["start"] = pool.hook(_worker_spec)
+        from kipi.core import workers
+        ours["kipi.core.workers", "_start"] = (workers._start, saved["start"])
     compat = getattr(backend, "triangle_compat", None)
     shim = compat() if compat is not None else None
     if shim is not None:
@@ -234,7 +243,7 @@ def _patch(name: str, backend: Backend, options: dict, mode: str) -> None:
         if viz is not None:
             viz._triangle = shim
     _state.update(name=name, options=dict(options), backend=backend, saved=saved, shim=shim,
-                  pool=mode == "pool")
+                  pool=mode == "pool", ours=ours)
 
 
 def uninstall() -> None:

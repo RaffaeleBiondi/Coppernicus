@@ -8,6 +8,11 @@ the standard library only. It is outside :mod:`coppernicus.engine`, whose packag
 and so Triangle. :func:`start` then installs the same mesher, with the same settings, before
 KiPI's own initializer runs.
 
+One thing runs before it: spawn re-imports the parent's main module (as ``__mp_main__``).
+``coppernicus.__main__`` (the ``coppernicus`` command) and ``coppernicus.ci`` import nothing of
+KiPI at module level, so Triangle is not loaded first there. A main module that imports
+:mod:`coppernicus.engine` at the top would load Triangle before :func:`start`.
+
 ``COPPERNICUS_MESH_WORKER_TRACE``: a file each worker appends one JSON line to when it starts.
 The line holds its pid, the mesher installed, the settings, and whether KiPI's mesher or
 Triangle had been imported before :func:`start` ran. It is for the tests and for diagnostics.

@@ -180,6 +180,7 @@ def test_install_and_uninstall_are_idempotent_and_restore_kipi(name):
     assert meshing.installed() == name and meshing.pooled()
     assert P.mesh_layers is orig[1] and os.environ.get("KIPI_SERIAL") == orig[2]     # KiPI's pool left on
     assert isinstance(W._start, pool.WorkerStart) and W._start.kipi_start is orig[5]   # KiPI's workers too
+    assert meshing.seam_problem() is None                       # KiPI's own functions checked, not ours
     other = [n for n in meshing.available() if n != name]
     if other:
         meshing.install(other[0])                                # another: replaces it
