@@ -5,7 +5,8 @@
 coppermesh's meshes are bit-identical across architectures only while no a*b+c is fused
 (DESIGN.md, determinism): Rust never contracts one unless ``mul_add`` is written, and this
 check proves it on the binary each platform actually ships. Without BINARY, the extension of
-the ``coppermesh`` package this Python finds is checked (``uv sync --group rust`` installs it).
+the ``coppermesh`` package this Python finds is checked (``uv sync`` installs PyPI's wheel,
+``uv pip install ./tools/mesher_rs`` this folder's build).
 
 Counted, per architecture (every operand form and width):
 - x86_64: vfmadd*, vfmsub*, vfnmadd*, vfnmsub* (with vfmaddsub*, vfmsubadd*; FMA3, FMA4, AVX-512);

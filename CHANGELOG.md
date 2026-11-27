@@ -5,6 +5,18 @@ line, the MCP server or the GitHub Action. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Coppernicus is pre-alpha: check its
 results against your own judgement.
 
+## Unreleased
+
+### Changed
+
+- **The rust mesher installs as a prebuilt wheel, no Rust toolchain needed.** Coppernicus
+  depends on coppermesh (0.1) from PyPI, with wheels for macOS on Apple silicon, Linux x86_64 and
+  Windows x64: `uv sync`, `uv tool install git+https://github.com/RaffaeleBiondi/Coppernicus` and
+  the GitHub Action mesh with rust out of the box. The `rust` dependency group is gone
+  (`uv sync --group rust` is now an error); building the mesher from source is for working on it
+  (`tools/mesher_rs`). A macOS launcher made by `tools/make_mac_launcher.sh` on a machine with
+  Rust runs `--group rust`: run the script again.
+
 ## 0.5.0 (2026-11-27)
 
 ### Added

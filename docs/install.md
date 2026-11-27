@@ -7,8 +7,8 @@ There are two ways to run Coppernicus:
   (rust), the default. The optional Triangle mesher is not included: it is downloaded only if
   you choose it (see [Triangle](#the-triangle-mesher) below).
 - **From source, with uv.** See [Install](../README.md#install) in the README. Nothing below
-  applies to that: uv installs Triangle with KiPI, and `uv sync --group rust` builds the rust
-  mesher (with a Rust toolchain; without it, solves mesh with Triangle and say so).
+  applies to that: uv installs Triangle with KiPI and the rust mesher (coppermesh) from its
+  prebuilt wheel on PyPI, so no Rust toolchain is needed.
 
 The builds are not signed with an Apple or Microsoft certificate yet, so the first start asks
 you to confirm, as described below.
@@ -171,13 +171,15 @@ From a clone of the repository, with [uv](https://docs.astral.sh/uv/):
   and `dist\Coppernicus-<version>-windows-x64.zip`.
 
 The builds also need a Rust toolchain ([rustup](https://rustup.rs); on Windows with the MSVC
-build tools): the app bundles coppermesh, the rust mesher (the default one), which is built from
-`tools/mesher_rs`.
+build tools): the app bundles coppermesh, the rust mesher (the default one), built from this
+checkout's `tools/mesher_rs`, not PyPI's wheel.
 
 Each script makes a build environment of its own under `build/` (the packages of `uv.lock`,
-without the dev tools and without `triangle`, with uv's `rust` group, on a uv-managed Python),
-installs PyInstaller (`packaging/requirements-build.txt`), runs `packaging/coppernicus.spec`, and
-then `packaging/check_bundle.py`, which fails the build if any part of `triangle` is in the bundle
+without the dev tools, without `triangle` and without PyPI's coppermesh, on a uv-managed Python),
+builds coppermesh into it from `tools/mesher_rs` (`uv pip install`;
+`tools/mesher_rs/check_source.py` proves it is that build), installs PyInstaller
+(`packaging/requirements-build.txt`), runs `packaging/coppernicus.spec`, and then
+`packaging/check_bundle.py`, which fails the build if any part of `triangle` is in the bundle
 or coppermesh is not, and writes the bundle's full listing to `dist/*-contents.txt`;
 `tools/mesher_rs/check_fma.py` then fails it on a fused multiply-add in the bundled coppermesh.
 The workflow `.github/workflows/release.yml` runs both scripts on a `v*` tag or by hand and keeps

@@ -53,14 +53,13 @@ included.
 ```sh
 git clone https://github.com/RaffaeleBiondi/Coppernicus.git
 cd Coppernicus
-uv sync --group rust          # builds the default mesher, rust: needs a Rust toolchain (rustup.rs)
-uv run --group rust coppernicus   # opens the app
+uv sync                 # everything, the default mesher (rust) included
+uv run coppernicus      # opens the app
 ```
 
-Without a Rust toolchain, a plain `uv sync` works too: every solve then meshes with Triangle
-(installed with KiPI) and its result says so in a warning. With it, pass `--group rust` to every
-`uv sync` and `uv run` (as above): uv syncs exactly, so a `uv run coppernicus …` without the group
-removes the rust mesher again. The commands below are written without it.
+No Rust toolchain is needed: the default mesher, coppermesh, comes as a prebuilt wheel from PyPI
+(macOS on Apple silicon, Linux x86_64, Windows x64). To work on the mesher itself, see
+[tools/mesher_rs](tools/mesher_rs/README.md#build-and-develop).
 
 **On macOS you can get a double-clickable app.** Run `tools/make_mac_launcher.sh`. It builds
 `~/Applications/Coppernicus.app` with the project icon, ready for the Dock or Launchpad. The app
@@ -268,8 +267,8 @@ limits, **1** when a limit is exceeded, **3** when a limit you set could not jud
 KiPI's own mesher, instead: in a Python install it comes with KiPI; in the packaged app it is an
 optional download, fetched with its licence note when you choose it. The flag wins over a
 project's `settings.mesher`. Every summary records the mesher in `mesher`. Where the rust mesher
-is not installed (a plain `uv sync`), a solve that names no mesher meshes with Triangle and says
-so in its warnings; one that names `rust` stops with `mesher_unavailable`. In the app, the
+is not installed (coppermesh removed from the environment), a solve that names no mesher meshes
+with Triangle and says so in its warnings; one that names `rust` stops with `mesher_unavailable`. In the app, the
 **Mesher** box at the top of the setup panel chooses it for every solve and is kept for the next
 start; a project's `settings.mesher` wins (the box then shows it, locked). The status bar and the
 HTML report name the mesher each result was meshed with. See [the mesher](docs/mesher.md).
