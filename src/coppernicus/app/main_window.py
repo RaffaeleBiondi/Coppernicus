@@ -1711,6 +1711,7 @@ class MainWindow(QMainWindow):
         self.worker.generation = self._generation
         self.worker.revision = self._revision
         self.worker.mesher = mesher = self.mesher_name()
+        self.worker.fallback = self.mesher_box.fallback()
         self.worker.succeeded.connect(lambda res, m=mesher: self.solved_mesher.__setitem__(res.net, m))
         # What produced the result, as it is now (the user may edit while it runs).
         self.worker.run_inputs = (copy.deepcopy(rail), copy.deepcopy(project.settings),
@@ -1776,6 +1777,7 @@ class MainWindow(QMainWindow):
         self.results_tabs.setCurrentWidget(self.thermal_panel if thermal else self.tree_panel)
         self.tree_worker = TreeWorker(self.board, self.merged.project, self)
         self.tree_worker.mesher = mesher = self.mesher_name()
+        self.tree_worker.fallback = self.mesher_box.fallback()
         self.tree_worker.succeeded.connect(lambda _tree, m=mesher: setattr(self, "tree_mesher", m))
         self.tree_worker.merged = self.merged          # its notes and warnings, for the result
         self.tree_worker.thermal = thermal

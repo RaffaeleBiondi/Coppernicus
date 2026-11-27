@@ -321,3 +321,28 @@ def noise_cards(r) -> List[CardData]:
         cards.append(CardData("Radiated estimate", f"{e.radiated_dbuv_m:.1f} dBµV/m",
                               f"at {hz_text(e.radiated_hz)}, {e.distance_m:g} m: for scale, never judged"))
     return cards[:VerdictHeader.MAX_CARDS]
+
+
+def tolerance_cards(row) -> List[CardData]:
+    """The cards of the selected load's stack-up: each check (total, DC, AC) as below / above
+    in mV against what it allows (red only when it fails), and KiPI's transient estimate (shown,
+    never judged)."""
+    names = {"total": "Total", "dc": "DC", "ac": "AC"}
+    cards: List[CardData] = []
+    for kind in ("total", "dc", "ac"):
+        c = row.checks.get(kind)
+        if c is None:
+            continue
+        value = f"{c.below_v * 1e3:.4g} / {c.above_v * 1e3:.4g} mV"
+        if c.limit and c.allowed_below_v is not None and c.allowed_above_v is not None:
+            detail = (f"{c.limit}: allowed {c.allowed_below_v * 1e3:.4g} / {c.allowed_above_v * 1e3:.4g} mV"
+                      + ("" if c.complete else ", parts missing"))
+        else:
+            detail = c.reason or (c.limit or "no tolerance set")
+        cards.append(CardData(f"{names[kind]}, {c.limit or 'no limit'}", value, detail,
+                              "fail" if c.passed is False else ""))
+    est = getattr(row, "transient_estimate_v", None)
+    if est:
+        cards.append(CardData("KiPI transient", f"{est[0] * 1e3:.4g} / {est[1] * 1e3:.4g} mV",
+                              "KiPI's estimate, never judged"))
+    return cards[:VerdictHeader.MAX_CARDS]

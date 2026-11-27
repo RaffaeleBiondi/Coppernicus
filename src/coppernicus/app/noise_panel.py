@@ -76,6 +76,7 @@ from coppernicus.app.panels import (
     without_tolerances,
 )
 from coppernicus.app.verdict import VerdictHeader, noise_cards
+from coppernicus.app.worker import add_fallback
 from coppernicus.engine.meshing import session as meshing
 from coppernicus.engine.pisetup import terminal_names  # engine names; fsw_default mirrors the engine
 from coppernicus.impedance import hz_text
@@ -777,6 +778,7 @@ class NoiseWorker(QThread):
         self._cancel = False
         self.generation = 0
         self.mesher: Optional[str] = None       # the solve's mesher (None: the default); set by the panel
+        self.fallback: Optional[str] = None     # its warning when the default could not run (set too)
 
     def cancel(self):
         self._cancel = True
@@ -800,6 +802,7 @@ class NoiseWorker(QThread):
                         cancelled=lambda: self._cancel, fraction=self.fraction.emit,
                         partial=self.partial.emit, fields_rails=self.merged.from_fields)
                     self.merged.annotate(res)
+                    add_fallback(res, self.fallback)
                     self.succeeded.emit(res)
         except Cancelled:
             self.cancelled.emit()
@@ -2004,6 +2007,7 @@ class NoisePanel(QWidget):
     def _start(self, worker: NoiseWorker):
         worker.generation = self._generation
         worker.mesher = self._mesher = self._win.mesher_name()    # the estimate's and the solve's
+        worker.fallback = self._win.mesher_box.fallback()
         worker.message.connect(self._message)
         worker.fraction.connect(self._fraction)
         worker.partial.connect(self._partial)

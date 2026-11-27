@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
 from coppernicus import board_fields as BF
 from coppernicus.app import label_text, theme
 from coppernicus.app.panels import FieldComboBox
+from coppernicus.app.verdict import VerdictHeader, tolerance_cards
 from coppernicus.project import (
     LOAD_PART_KEYS,
     LOAD_TOLERANCE_KEYS,
@@ -310,12 +311,16 @@ TREE_NOTE = ("the power tree is not solved, or the setup changed since its solve
 
 def compose_held(pairs: Dict[str, Optional[str]], own: Project, merged: BF.Merged, tree,
                  ac: Dict[str, Tuple[Any, Any]], noise: Dict[str, Tuple[Any, Any]], ac_now: Any,
-                 noise_now: Any, misspelt: Sequence[Tuple[str, Dict[str, Any]]] = ()):
+                 noise_now: Any, misspelt: Sequence[Tuple[str, Dict[str, Any]]] = (),
+                 mesher: Optional[str] = None, fallback: Optional[str] = None):
     """The stack-up of the merged project from what the app holds: ``tree`` (None: not solved
     or dropped), ``ac`` (rail -> (ImpedanceResult, the key it was solved at)), ``noise``
     (aggressor -> (NoiseResult, key)); a result whose key is not ``ac_now`` / ``noise_now`` is
     stale, so its part is missing, with what to do. ``own``: the user's project (what the KiCad
-    fields' rails could not take from it); ``misspelt``: the loaded file's (still standing)."""
+    fields' rails could not take from it); ``misspelt``: the loaded file's (still standing).
+    ``mesher``: what the app's solves mesh with, ``fallback`` its warning when the default
+    cannot run here: with impedance or noise held, the AC mesh's assumption and warning and the
+    fallback's warning are the result's, as `coppernicus tolerance` writes them."""
     from coppernicus.tolerance import compose, fields_losses
     project = merged.project
     fresh = [r for r, key in ac.values() if key == ac_now]
@@ -350,6 +355,14 @@ def compose_held(pairs: Dict[str, Optional[str]], own: Project, merged: BF.Merge
                      [dict(e) for _w, e in live] + dropped, lost_accuracy,
                      tree_note=TREE_NOTE if tree is None else "")
     merged.annotate(result)                  # where the rails came from, as the CLI says
+    if fresh or results:                     # the AC mesh they solved with (service/tolerance)
+        from coppernicus.engine.ac import ac_max_edge
+        edge = ac_max_edge(project.ac, mesher)
+        result.ac_mesh = edge.summary()
+        result.assumptions.append(edge.assumption("; the AC and noise solves' copper mesh"))
+        result.warnings.extend(w for w in [edge.warning()] if w and w not in result.warnings)
+    if fallback and fallback not in result.warnings:
+        result.warnings.append(fallback)
     return result
 
 
@@ -490,6 +503,68 @@ def _table(headers, tips=()) -> QTableWidget:
     return t
 
 
+# The stack-up of the selected load (D3): its parts, each side apart, against what is allowed.
+PART_LABELS = {"dc": "DC drop", "accuracy": "DC accuracy", "ripple": "ripple", "transient": "transient"}
+PART_SERIES = {"dc": "series-1", "accuracy": "series-3", "ripple": "series-2", "transient": "series-4"}
+SHOWN_COLUMNS = ("Load", "Net", "Verdict", "Total check")    # the rest: the selected load's parts
+
+
+def stackup_rows(row) -> List[Tuple[str, str, str, str]]:
+    """(part, mV below, mV above, where it came from) of a load: a missing part says so (with
+    what to do), never shown as zero."""
+    out = []
+    for kind in TOLERANCE_PARTS:
+        part = row.parts.get(kind)
+        if part is None:
+            out.append((PART_LABELS[kind], "missing", "missing", row.hints.get(kind, "")))
+        else:
+            out.append((PART_LABELS[kind], f"{part.below_v * 1e3:.4g}", f"{part.above_v * 1e3:.4g}",
+                        part.source))
+    return out
+
+
+def draw_stackup(fig, row) -> None:
+    """The load's stack-up as two horizontal bars (below and above nominal): the known parts
+    stacked, each in its series colour; at the end of each bar the sum the total check judged
+    (``checks["total"]``, which a ripple summed rss or a missing part's least value can make
+    differ from the bars); the allowed deviation as a dashed line. Nothing is drawn for a
+    missing part: it is named under the bars."""
+    from coppernicus.app import theme
+    t = theme.tokens(theme.current())
+    fig.clear()
+    ax = fig.add_subplot()
+    total = row.checks.get("total")
+    for y, side in ((1, "below"), (0, "above")):
+        left = 0.0
+        for kind in TOLERANCE_PARTS:
+            part = row.parts.get(kind)
+            if part is None:
+                continue
+            mv = getattr(part, f"{side}_v") * 1e3
+            if mv <= 0:
+                continue
+            ax.barh(y, mv, left=left, height=0.5, color=t[PART_SERIES[kind]],
+                    label=PART_LABELS[kind] if side == "below" else None)
+            left += mv
+        judged = getattr(total, f"{side}_v") * 1e3 if total is not None else left
+        ax.text(max(left, judged), y, f"  {judged:.4g} mV", va="center", fontsize=8, color=t["fg"])
+        allowed = getattr(total, f"allowed_{side}_v", None) if total is not None else None
+        if allowed is not None:
+            ax.plot([allowed * 1e3] * 2, [y - 0.35, y + 0.35], ls="--", lw=1.2, color=t["fail"])
+    if total is not None and (total.allowed_below_v is not None or total.allowed_above_v is not None):
+        ax.plot([], [], ls="--", lw=1.2, color=t["fail"], label="allowed")
+    ax.set_yticks([1, 0], ["Below nominal", "Above nominal"], fontsize=8)
+    ax.set_xlabel("mV", fontsize=8)
+    ax.tick_params(axis="x", labelsize=8)
+    missing = [PART_LABELS[k] for k in TOLERANCE_PARTS if row.parts.get(k) is None]
+    ax.set_title(f"{row.load} on {row.net}" + (f" · missing: {', '.join(missing)}" if missing else ""),
+                 loc="left", fontsize=9)
+    if ax.get_legend_handles_labels()[0]:              # under the plot, never over a bar
+        fig.legend(fontsize=7, loc="outside lower center", frameon=False, ncol=5)
+    xmax = ax.get_xlim()[1]
+    ax.set_xlim(0, xmax * 1.18)
+
+
 class TolerancePanel(QWidget):
     """The Tolerance results tab (see the module docstring)."""
 
@@ -570,12 +645,26 @@ class TolerancePanel(QWidget):
         rl = QVBoxLayout(results)
         rl.setContentsMargins(4, 4, 4, 4)
         head = QHBoxLayout()
-        head.addWidget(self.header, 1)
+        self.verdict = VerdictHeader(self.header)       # the badge, this line, the load's cards
+        head.addStretch(1)
         head.addWidget(self.solve_button, 0, Qt.AlignTop)
         head.addWidget(self.export_button, 0, Qt.AlignTop)
         rl.addLayout(head)
         rl.addWidget(self.table, 2)
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+        from matplotlib.figure import Figure
+        self.stack_figure = Figure(figsize=(6, 2.0), facecolor=theme.color("panel"), layout="constrained")
+        self.stack_canvas = FigureCanvasQTAgg(self.stack_figure)
+        self.stack_canvas.setMinimumHeight(140)
+        self.parts = _table(("Part", "Below (mV)", "Above (mV)", "From"))
+        self.parts.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.parts.setMaximumHeight(150)
+        rl.addWidget(self.stack_canvas, 2)
+        rl.addWidget(self.parts, 1)
         rl.addWidget(self.notes, 1)
+        for c, h in enumerate(RESULT_HEADERS):                 # one row per load, its verdict (D3)
+            self.table.setColumnHidden(c, h not in SHOWN_COLUMNS)
+        theme.signals.changed.connect(lambda *_: self.show_stackup(self.table.currentRow()))
 
         split = QSplitter(Qt.Horizontal)
         for w in (editor, results):
@@ -589,9 +678,11 @@ class TolerancePanel(QWidget):
         split.setStretchFactor(0, 2)
         split.setStretchFactor(1, 3)
         split.setSizes([480, 720])
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(split)
+        layout.setSpacing(0)
+        layout.addWidget(self.verdict)
+        layout.addWidget(split, 1)
 
         self.loads.itemChanged.connect(lambda item: self._item_changed("load", item))
         self.sources.itemChanged.connect(lambda item: self._item_changed("source", item))
@@ -657,7 +748,7 @@ class TolerancePanel(QWidget):
             return None, f"nothing is judged until the setup can be read: {e}"
         result = compose_held(pairs, win.project, merged, win.tree, win.ac_panel.results,
                               win.noise_panel.results, ac_key(merged.project), noise_key(merged.project),
-                              getattr(win, "misspelt", []))
+                              getattr(win, "misspelt", []), win.mesher_name(), win.mesher_box.fallback())
         return result, ""
 
     def refresh(self):
@@ -804,8 +895,34 @@ class TolerancePanel(QWidget):
         self.table.blockSignals(False)
         self._row_selected(self.table.currentRow())
 
+    def show_stackup(self, r: int):
+        """The chart, the parts and the cards of row ``r``'s load (none: empty)."""
+        row = self.result.rows[r] if self.result is not None and 0 <= r < len(self.result.rows) else None
+        self.parts.setRowCount(0)
+        verdict = self.result.verdict if self.result is not None else None
+        self.verdict.show_verdict(verdict if verdict in ("fail", "pass", "not_judged") else None,
+                                  tolerance_cards(row) if row is not None else [])
+        if row is None:
+            self.stack_figure.clear()
+            self.stack_figure.set_facecolor(theme.color("panel"))
+            self.stack_canvas.draw_idle()
+            return
+        with theme.plotting():
+            draw_stackup(self.stack_figure, row)
+        theme.restyle_figure(self.stack_figure)
+        self.stack_canvas.draw_idle()
+        for i, cells in enumerate(stackup_rows(row)):
+            self.parts.insertRow(i)
+            for c, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if text == "missing":
+                    item.setBackground(theme.brush("cell-missing"))
+                self.parts.setItem(i, c, item)
+
     def _row_selected(self, r: int):
-        """The Solve button offers the selected row's next missing solve."""
+        """The Solve button offers the selected row's next missing solve; the chart and the
+        parts show its load."""
+        self.show_stackup(r)
         win = self._win
         self._next = None
         if self.result is not None and 0 <= r < len(self.result.rows):

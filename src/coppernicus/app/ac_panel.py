@@ -65,6 +65,7 @@ from coppernicus.app.mesher import failure
 from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.panels import without_tolerances
 from coppernicus.app.verdict import VerdictHeader, ac_cards
+from coppernicus.app.worker import add_fallback
 from coppernicus.engine.meshing import session as meshing
 from coppernicus.impedance import ac_summary, ac_text, draw_impedance, hz_text, ohm_text, rail_verdict
 from coppernicus.project import (
@@ -612,6 +613,7 @@ class AcWorker(QThread):
         self._cancel = False
         self.generation = 0
         self.mesher: Optional[str] = None       # the solve's mesher (None: the default); set by the panel
+        self.fallback: Optional[str] = None     # its warning when the default could not run (set too)
 
     def cancel(self):
         self._cancel = True
@@ -632,6 +634,7 @@ class AcWorker(QThread):
                                         progress=self.message.emit, cancelled=lambda: self._cancel,
                                         fraction=self.fraction.emit, transient=self.transient)
                     self.merged.annotate(res)
+                    add_fallback(res, self.fallback)
                     self.succeeded.emit(res)
         except Cancelled:
             self.cancelled.emit()
@@ -1838,6 +1841,7 @@ class AcPanel(QWidget):
     def _start(self, worker: AcWorker):
         worker.generation = self._generation
         worker.mesher = self._mesher = self._win.mesher_name()    # the estimate's and the solve's
+        worker.fallback = self._win.mesher_box.fallback()
         worker.message.connect(self._message)
         worker.fraction.connect(self._fraction)
         worker.sized.connect(self._sized)
