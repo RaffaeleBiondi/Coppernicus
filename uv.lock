@@ -196,19 +196,23 @@ wheels = [
 [[package]]
 name = "coppermesh"
 version = "0.1.0"
-source = { directory = "tools/mesher_rs" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numpy" },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "numpy" }]
+sdist = { url = "https://files.pythonhosted.org/packages/68/a5/a3866f85202b1bf4ddce49587104859383510f570e87dd37c25e19e6ecb5/coppermesh-0.1.0.tar.gz", hash = "sha256:6baa8620008d2f75edc58f4c987ee9fc9cdb3cc214c4fd3ca2fcd7cc846a9ace", size = 77276, upload-time = "2026-11-27T14:46:35.892Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/39/57/af85f7d7240ab59f1d6a7fcb0aadd99264c6c81f96da8284aea16a01435c/coppermesh-0.1.0-cp312-abi3-macosx_11_0_arm64.whl", hash = "sha256:054b8b01061dcc69730fa4689312a0fe4d5c5ef90374313ae6ccf08ef748c58b", size = 350894, upload-time = "2026-11-27T14:46:31.098Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/9c/a4fdac26d52802869bded3d7e8c9d16f2ef581b15b19edc5002ee8e530a6/coppermesh-0.1.0-cp312-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:bc37c2757184eb01708d9ba1122c2b58ab3a4626e77bf6af2965200a59ecf8f7", size = 386415, upload-time = "2026-11-27T14:46:32.734Z" },
+    { url = "https://files.pythonhosted.org/packages/53/08/14b7839f86434c178dd30d966d0714f3ee1c2789bf835f7b4cc6a6420d0f/coppermesh-0.1.0-cp312-abi3-win_amd64.whl", hash = "sha256:e86fa54583f77b9e9d125d5c58f15714c3ca82a79ab419b6fac629e541e29013", size = 268435, upload-time = "2026-11-27T14:46:34.501Z" },
+]
 
 [[package]]
 name = "coppernicus"
 version = "0.5.0"
 source = { editable = "." }
 dependencies = [
+    { name = "coppermesh", marker = "platform_machine == 'arm64' or sys_platform != 'darwin'" },
     { name = "kipi" },
     { name = "matplotlib" },
     { name = "mcp" },
@@ -227,12 +231,10 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
-rust = [
-    { name = "coppermesh" },
-]
 
 [package.metadata]
 requires-dist = [
+    { name = "coppermesh", marker = "platform_machine == 'arm64' or sys_platform != 'darwin'", specifier = ">=0.1,<0.2" },
     { name = "kipi", git = "https://github.com/drewsum/KiPI?rev=3ffce16aa5a0248ccdbdda8603c3c484ac99f570" },
     { name = "matplotlib", specifier = ">=3.8" },
     { name = "mcp", specifier = ">=2.3.0,<3" },
@@ -251,7 +253,6 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },
 ]
-rust = [{ name = "coppermesh", directory = "tools/mesher_rs" }]
 
 [[package]]
 name = "cryptography"

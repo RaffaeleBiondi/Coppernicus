@@ -34,6 +34,10 @@ dependencies = [
     "pyvista>=0.44",
     "pyvistaqt>=0.11",
     "mcp>=2.3.0,<3",
+    # The rust mesher, the default one (tools/mesher_rs), from PyPI's wheels; none for Intel macOS.
+    # No path source: uv.lock takes the wheel. To test a change to tools/mesher_rs, install it over
+    # the wheel and run with --no-sync (tools/mesher_rs/README.md).
+    "coppermesh>=0.1,<0.2; sys_platform != 'darwin' or platform_machine == 'arm64'",
 ]
 
 [project.scripts]
@@ -41,14 +45,6 @@ coppernicus = "coppernicus.__main__:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.6"]
-# The "rust" mesher backend (coppermesh, tools/mesher_rs), built from source by maturin: it needs a
-# Rust toolchain, so it is not a default group. It is the default mesher: without it a solve that
-# names no mesher meshes with Triangle, with a warning. CI and the packaged app sync it with
-# --group rust; a plain `uv sync` (and the Action, --no-dev) leaves it out.
-rust = ["coppermesh"]
-
-[tool.uv.sources]
-coppermesh = { path = "tools/mesher_rs" }
 
 [tool.hatch.metadata]
 allow-direct-references = true

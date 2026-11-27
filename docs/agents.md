@@ -848,10 +848,10 @@ Change the mesher only when the user asks.
 - The order: the tool's `mesher`, else the project's `settings.mesher` (`write_project` sets
   it), else the app's setting, else rust. On the command line, `--mesher NAME` on `solve`,
   `ac`, `noise` and `tolerance` wins over the project's key.
-- Where rust is not installed (a plain `uv sync` without `--group rust`, a pip install), a
-  solve that names no mesher anywhere meshes with Triangle: its `mesher` says `name:
-  "triangle"`, `fallback_from: "rust"`, and its `warnings` say the rust mesher is not installed
-  here. Tell the user.
+- Where rust is not installed (coppermesh removed from the environment, or left out where it
+  has no wheel), a solve that names no mesher anywhere meshes with Triangle: its `mesher` says
+  `name: "triangle"`, `fallback_from: "rust"`, and its `warnings` say the rust mesher is not
+  installed here. Tell the user.
 - A mesher that is named (by the tool, the project or the app) and is unknown or not installed
   here is one error, `mesher_unavailable`, whose hint says how to get it. Nothing is solved.
 - Every result records its mesher in `mesher` (`name`, `version`, `experimental`, `default`);

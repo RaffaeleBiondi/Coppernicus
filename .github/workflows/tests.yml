@@ -14,9 +14,12 @@ concurrency:
 
 env:
   QT_QPA_PLATFORM: offscreen      # the GUI tests import Qt and VTK; no display on runners
-  # The rust mesher (coppermesh, tools/mesher_rs) is built here from source (uv's "rust" group,
-  # maturin; every hosted runner has a Rust toolchain). Its tests skip where the extension is
-  # missing: this makes a missing or broken build fail them instead.
+  # The rust mesher (coppermesh): uv.lock names PyPI's wheel, which users get (the job
+  # pypi-wheel tests it). The pytest jobs test this repository's tools/mesher_rs instead: the sync
+  # leaves PyPI's coppermesh out, maturin builds it from source (every hosted runner has a Rust
+  # toolchain), check_source.py proves which one is installed, and every later `uv run` is
+  # --no-sync (a sync would put the wheel back, silently: both are coppermesh 0.1.0). Its tests
+  # skip where the extension is missing: this makes a missing or broken build fail them instead.
   COPPERNICUS_REQUIRE_RUST: "1"
 
 jobs:
@@ -49,18 +52,23 @@ jobs:
       - name: coppermesh core tests (cargo)
         working-directory: tools/mesher_rs
         run: cargo test --release
-      - name: Install, with coppermesh built by maturin (--group rust)
-        run: uv sync --frozen --group rust
-      - name: No fused multiply-add in the built extension, and the recorded mesh bit for bit
+      - name: Install, without PyPI's coppermesh
+        run: uv sync --frozen --no-install-package coppermesh
+      - name: coppermesh built from tools/mesher_rs by maturin, and the proof that it is installed
         shell: bash               # stops at the first failing command on every runner (not so pwsh)
         run: |
-          uv run --frozen --group rust python tools/mesher_rs/check_fma.py
-          uv run --frozen --group rust python tools/mesher_rs/check_digest.py
+          uv pip install --python .venv ./tools/mesher_rs
+          uv run --no-sync python tools/mesher_rs/check_source.py
+      - name: No fused multiply-add in the built extension, and the recorded mesh bit for bit
+        shell: bash
+        run: |
+          uv run --no-sync python tools/mesher_rs/check_fma.py
+          uv run --no-sync python tools/mesher_rs/check_digest.py
       - name: Lint
         if: runner.os == 'Linux'
-        run: uv run --frozen --group rust ruff check src tests examples tools
+        run: uv run --no-sync ruff check src tests examples tools
       - name: Tests (the boards_local test skips by itself; the rust cases must not)
-        run: uv run --frozen --group rust pytest -q
+        run: uv run --no-sync pytest -q
 
   # Intel macOS: Triangle publishes no x86_64 macOS wheel (and no sdist) for the version uv.lock
   # pins, so the project cannot be installed here and pytest cannot run. What can: the core's
@@ -92,16 +100,14 @@ jobs:
           "$RUNNER_TEMP/venv/bin/python" tools/mesher_rs/check_fma.py
           "$RUNNER_TEMP/venv/bin/python" tools/mesher_rs/check_digest.py
 
-  # An install without the rust group (a plain `uv sync`, as `uv tool install git+...` and the
-  # Action): coppermesh really missing. A solve that names no mesher must mesh with Triangle and
-  # say so; one that names rust must stop with mesher_unavailable. Cheap: the selector and
-  # fallback tests and one CLI solve of the demo.
-  no-rust:
-    name: without the rust mesher (ubuntu)
+  # The install users get (a plain `uv sync`, as `uv tool install git+...` and the Action do):
+  # coppermesh from PyPI's wheel, with no Rust. --no-build-package makes uv refuse to build it
+  # (the runner has cargo), check_source.py --pypi proves the wheel is what is installed. Its
+  # FMA and digest checks, the mesher tests and a CLI solve of the demo with rust, the default.
+  pypi-wheel:
+    name: coppermesh from PyPI's wheel (ubuntu)
     runs-on: ubuntu-latest
     timeout-minutes: 40                 # every job's (tests/test_workflows.py); it takes minutes
-    env:
-      COPPERNICUS_REQUIRE_RUST: ""        # the rust cases skip here: coppermesh is not built
     steps:
       - uses: actions/checkout@v7
       - name: System libraries for Qt and VTK
@@ -113,8 +119,66 @@ jobs:
         with:
           python-version: "3.12"
           enable-cache: true
-      - name: Install without the rust group
-        run: uv sync --frozen
+      - name: Install as users do, coppermesh never built from source
+        run: uv sync --frozen --no-build-package coppermesh
+      - name: Guard (PyPI's wheel installed, rust the default mesher)
+        run: |
+          uv run --frozen python tools/mesher_rs/check_source.py --pypi
+          uv run --frozen python - <<'PY'
+          from coppernicus.engine.meshing import session
+          assert session.choose() == ("rust", None), session.choose()
+          print("the default mesher, rust, runs here")
+          PY
+      - name: No fused multiply-add in the wheel, and the recorded mesh bit for bit
+        run: |
+          uv run --frozen python tools/mesher_rs/check_fma.py
+          uv run --frozen python tools/mesher_rs/check_digest.py
+      - name: The mesher tests on the wheel
+        run: >
+          uv run --frozen pytest -q -rs
+          tests/test_meshing_seam.py
+          tests/test_mesher_rs.py
+          tests/test_meshing_default.py
+          tests/test_mesher_sliver.py
+          tests/test_mesher_selector.py
+      - name: A CLI solve of the demo meshes with rust
+        run: |
+          set +e
+          uv run --frozen coppernicus solve examples/demo/demo.coppernicus.yml --json --no-maps \
+            --out "$RUNNER_TEMP/demo" > "$RUNNER_TEMP/demo.json"
+          code=$?
+          set -e
+          test "$code" -le 1
+          uv run --frozen python - "$RUNNER_TEMP/demo.json" <<'PY'
+          import json, sys
+          doc = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert doc["mesher"]["name"] == "rust" and "fallback_from" not in doc["mesher"], doc["mesher"]
+          print("mesher:", doc["mesher"])
+          PY
+
+  # An install without coppermesh (removed from the environment, or a platform it has no wheel
+  # for): coppermesh really missing. A solve that names no mesher must mesh with Triangle and
+  # say so; one that names rust must stop with mesher_unavailable. Cheap: the selector and
+  # fallback tests and one CLI solve of the demo.
+  no-rust:
+    name: without the rust mesher (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40                 # every job's (tests/test_workflows.py); it takes minutes
+    env:
+      COPPERNICUS_REQUIRE_RUST: ""        # the rust cases skip here: coppermesh is left out
+    steps:
+      - uses: actions/checkout@v7
+      - name: System libraries for Qt and VTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libfontconfig1 libdbus-1-3
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install without coppermesh
+        run: uv sync --frozen --no-install-package coppermesh
       - name: Guard (coppermesh absent)
         run: |
           .venv/bin/python - <<'PY'

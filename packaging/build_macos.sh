@@ -7,9 +7,10 @@
 # plus Coppernicus-<version>-macos-arm64-contents.txt (every file and module of the bundle).
 #
 # Steps: a build environment of its own (build/venv-macos: uv.lock's packages, without the
-# dev tools and without triangle, with coppermesh, the rust mesher, which maturin builds from
-# tools/mesher_rs (uv's "rust" group: this needs a Rust toolchain), on a uv-managed Python so
-# that the app does not depend on a Homebrew or system Python); PyInstaller (packaging/requirements-build.txt) runs
+# dev tools, without triangle and without PyPI's coppermesh wheel, on a uv-managed Python so
+# that the app does not depend on a Homebrew or system Python); coppermesh, the rust mesher,
+# built by maturin from this checkout's tools/mesher_rs (this needs a Rust toolchain) and
+# tools/mesher_rs/check_source.py to prove it; PyInstaller (packaging/requirements-build.txt) runs
 # packaging/coppernicus.spec; packaging/check_bundle.py proves triangle is not in the bundle and
 # coppermesh is, and tools/mesher_rs/check_fma.py that the bundled coppermesh has no fused
 # multiply-add; hdiutil makes the .dmg. The app is not signed with a Developer ID (ad-hoc signature only):
@@ -29,7 +30,9 @@ PY="$UV_PROJECT_ENVIRONMENT/bin/python"
 
 echo "== build environment ($UV_PROJECT_ENVIRONMENT)"
 command -v cargo >/dev/null || { echo "error: no Rust toolchain (cargo) on PATH: coppermesh is built from source" >&2; exit 1; }
-uv sync --frozen --no-dev --group rust --no-install-package triangle --python 3.12
+uv sync --frozen --no-dev --no-install-package triangle --no-install-package coppermesh --python 3.12
+uv pip install --python "$PY" ./tools/mesher_rs          # this checkout's mesher, not PyPI's wheel
+"$PY" tools/mesher_rs/check_source.py
 uv pip install --python "$PY" -r packaging/requirements-build.txt
 if "$PY" -c "import triangle" 2>/dev/null; then
   echo "error: triangle is installed in the build environment" >&2

@@ -1,8 +1,8 @@
-"""An install without the rust mesher (a plain ``uv sync``, a pip install from git): ``import coppermesh``
+"""An install without the rust mesher (coppermesh removed or left out): ``import coppermesh``
 blocked in a fresh process. A command that names no mesher meshes with Triangle and says so in its
 warnings (the AC mesh edge then Triangle's default, 1.0 mm, with no warning about rust's); a command
-that names rust is one clear error, mesher_unavailable. CI also runs this file in a job without the
-rust group, where coppermesh is really missing."""
+that names rust is one clear error, mesher_unavailable. CI also runs this file in a job that leaves
+coppermesh out (uv sync --no-install-package coppermesh), where it is really missing."""
 
 import json
 import os
@@ -61,7 +61,7 @@ def test_without_coppermesh_the_default_falls_back_to_triangle_and_rust_is_an_er
     code, doc, err = _cli("solve", str(DEMO), "--json", "--no-maps", "--mesher", "rust",
                           "--out", str(tmp_path / "rust"))
     assert code == 2 and doc["error"]["code"] == "mesher_unavailable", err[-2000:]
-    assert "uv sync --group rust" in doc["error"]["hint"] and "Traceback" not in err
+    assert "pip install coppermesh" in doc["error"]["hint"] and "Traceback" not in err
 
 
 def test_without_coppermesh_the_ac_edge_is_triangles_default_with_no_rust_warning(tmp_path):

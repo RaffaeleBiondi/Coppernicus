@@ -119,9 +119,8 @@ For example, to post the verdict elsewhere, give the step an `id` and read
 ## What it does
 
 1. Installs uv and Python, then Coppernicus from the action's own checkout, with the locked
-   dependencies (`uv sync --frozen`). That install has no rust mesher (building it needs a Rust
-   toolchain), so the solves mesh with Triangle and each result says so in its warnings; a
-   project that names `mesher: rust` stops with `mesher_unavailable`.
+   dependencies (`uv sync --frozen`). They include the rust mesher, the default, as coppermesh's
+   prebuilt wheel from PyPI, so no Rust toolchain is needed.
 2. Runs `python -m coppernicus.ci solve` on the matching project files. This runs
    `coppernicus solve PROJECT --json --html` once per project, each in its own process. With
    the `tree`, `ac`, `noise` or `tolerance` input on, it then also runs `coppernicus solve

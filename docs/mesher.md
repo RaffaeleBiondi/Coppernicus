@@ -30,14 +30,15 @@ before the mesher was recorded reads as Triangle.
 
 ## Where the rust mesher is not installed
 
-The packaged app has it built in. A Python install builds it only with the `rust` dependency
-group, which needs a Rust toolchain ([rustup.rs](https://rustup.rs)):
+The packaged app has it built in. A Python install gets it as a dependency: coppermesh's
+prebuilt wheel from PyPI, for macOS on Apple silicon, Linux x86_64 and Windows x64. So `uv sync`,
+`uv tool install`, a `pip install` from git and the GitHub Action need no Rust toolchain. No wheel
+is published for Intel macOS, and there the dependency is left out.
 
-    uv sync --group rust
-
-Without it (a plain `uv sync`, a `pip install` from git, the GitHub Action), a solve that names no
-mesher meshes with Triangle and says so in its `warnings` (`mesher.fallback_from: "rust"`). A
-solve that names `rust` stops with the error `mesher_unavailable` and how to install it.
+Where coppermesh is not installed (left out, or removed with `uv pip uninstall coppermesh`), a
+solve that names no mesher meshes with Triangle and says so in its `warnings`
+(`mesher.fallback_from: "rust"`). A solve that names `rust` stops with the error
+`mesher_unavailable` and how to install it: `uv sync` (or `pip install coppermesh`) puts it back.
 
 ## Triangle
 

@@ -4,8 +4,9 @@
 #   tools/make_mac_launcher.sh [target folder]      (default: ~/Applications)
 #
 # The launcher holds no Python and no dependencies: it runs `uv run coppernicus gui` in this
-# repository, with uv's "rust" group (the default mesher, coppermesh) when a Rust toolchain is
-# found here (without it, the app meshes with Triangle). It therefore works only on the machine, and with the checkout, it was built on.
+# repository (the default mesher, coppermesh, comes with it as PyPI's wheel; that sync also puts
+# the wheel back over a coppermesh built from tools/mesher_rs). It therefore works only on the
+# machine, and with the checkout, it was built on.
 # It is not a distributable app (that is the packaging stage, see the README roadmap).
 # Rebuild it if you move the repository. Launch log: ~/Library/Logs/Coppernicus/launcher.log
 set -euo pipefail
@@ -24,11 +25,6 @@ if [ -z "$UV" ]; then
   echo "uv not found; install it from https://docs.astral.sh/uv/ and run this again" >&2
   exit 1
 fi
-
-# The rust mesher (uv's "rust" group) when cargo is here: a `uv run` without the group would
-# remove coppermesh from the environment.
-GROUP=""
-if command -v cargo >/dev/null 2>&1 || [ -x "$HOME/.cargo/bin/cargo" ]; then GROUP="--group rust"; fi
 
 VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$REPO/src/coppernicus/__init__.py")"
 LOGO="$REPO/Logo/Copper Circuit Orbit Logo NEW.png"
@@ -81,8 +77,7 @@ if [ ! -d "\$REPO" ]; then
   exit 1
 fi
 cd "\$REPO"
-export PATH="\$HOME/.cargo/bin:\$PATH"      # uv rebuilds coppermesh after a change to its sources
-exec "\$UV" run --project "\$REPO" ${GROUP} coppernicus gui "\$@" >> "\$LOG" 2>&1
+exec "\$UV" run --project "\$REPO" coppernicus gui "\$@" >> "\$LOG" 2>&1
 LAUNCHER
 chmod +x "$APP/Contents/MacOS/coppernicus"
 

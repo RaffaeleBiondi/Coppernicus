@@ -7,10 +7,10 @@ the algorithms, the determinism rules and every source used. No Triangle code wa
 
 It is Coppernicus's default mesher: a solve that names no mesher meshes with it (the CLI's
 `--mesher`, the MCP `mesher`, the project's `settings.mesher` choose another; Triangle is
-`triangle`). Where it is not built (a plain `uv sync`), such a solve meshes with Triangle and its
-result says so in a warning; one that names `rust` stops with `mesher_unavailable`. Its AC mesh
-default is finer than Triangle's: `RUST_AC_MAX_EDGE_MM` (0.5 mm) in
-`src/coppernicus/engine/ac.py`, where the project does not set `ac: max_edge_mm`.
+`triangle`). Where it is not installed (removed from the environment), such a solve meshes with
+Triangle and its result says so in a warning; one that names `rust` stops with
+`mesher_unavailable`. Its AC mesh default is finer than Triangle's: `RUST_AC_MAX_EDGE_MM`
+(0.5 mm) in `src/coppernicus/engine/ac.py`, where the project does not set `ac: max_edge_mm`.
 
 - `src/`: the core.
   - `geom.rs`: predicates and the scalar helpers.
@@ -35,35 +35,54 @@ default is finer than Triangle's: `RUST_AC_MAX_EDGE_MM` (0.5 mm) in
 
   Both skip the rust cases when the extension is not built.
 
-## Build
+## Build and develop
 
-coppermesh is uv's `rust` dependency group of Coppernicus (`pyproject.toml`, locked in
-`uv.lock` as a path dependency). The group is not a default one, because building it needs a Rust
-toolchain: a plain `uv sync`, the GitHub Action (`--no-dev`) and `uv tool install git+...` leave it
-out and need no Rust; they then mesh with Triangle, with the fallback warning in each result. With Rust (installed per user: add `~/.cargo/bin` to `PATH` for these
-commands; the build output can go anywhere, through `CARGO_TARGET_DIR`):
+Coppernicus depends on coppermesh from PyPI (`pyproject.toml`: `coppermesh>=0.1,<0.2`, not on
+Intel macOS, which has no wheel; `uv.lock` pins 0.1.0 with its wheels). A plain `uv sync`,
+`uv tool install git+...` and the GitHub Action install the prebuilt wheel and need no Rust. It is
+one abi3 extension (CPython ≥ 3.12, so 3.12 and 3.13).
 
-    uv sync --group rust                              # maturin builds and installs coppermesh
-    uv run --group rust pytest tests/test_mesher_rs.py tests/test_meshing_seam.py \
+Working on the mesher means testing this folder instead of the wheel: build it over the wheel,
+then keep uv from putting the wheel back. With Rust (installed per user: add `~/.cargo/bin` to
+`PATH` for these commands; the build output can go anywhere, through `CARGO_TARGET_DIR`):
+
+    uv sync                                           # the project, with PyPI's coppermesh
+    uv pip install ./tools/mesher_rs                  # maturin builds this folder, over the wheel
+    uv run --no-sync python tools/mesher_rs/check_source.py   # which coppermesh is installed
+    uv run --no-sync pytest tests/test_mesher_rs.py tests/test_meshing_seam.py \
         tests/test_meshing_default.py tests/test_mesher_sliver.py
-    uv run --group rust python tools/mesher_rs/check_fma.py      # 0 fused multiply-add, or it fails
-    uv run --group rust python tools/mesher_rs/check_digest.py   # the recorded mesh, bit for bit
+    uv run --no-sync python tools/mesher_rs/check_fma.py      # 0 fused multiply-add, or it fails
+    uv run --no-sync python tools/mesher_rs/check_digest.py   # the recorded mesh, bit for bit
     cd tools/mesher_rs && cargo test --release        # core tests, no Python needed
 
-A later plain `uv sync` removes coppermesh again (uv syncs exactly); pass `--group rust` to it,
-and to `uv run`, while working on the mesher. uv rebuilds it when a Rust source, `Cargo.toml` or
-`Cargo.lock` changes (the crate's `cache-keys`). It is one abi3 extension (CPython ≥ 3.12, so
-3.12 and 3.13).
+Pass `--no-sync` to every `uv run` (or `export UV_NO_SYNC=1`) while the source build is
+installed: `uv.lock` names PyPI's wheel, and a plain `uv run` or `uv sync` reinstalls it over the
+source build without a word (both are coppermesh 0.1.0; only `check_source.py` tells them apart).
+After a change here, run `uv pip install ./tools/mesher_rs` again: uv rebuilds it when a Rust
+source, `Cargo.toml` or `Cargo.lock` changed (the crate's `cache-keys`). A plain `uv sync` goes
+back to the wheel.
+
+Users get what is on PyPI, not this folder: a change here reaches them only with a new version
+published (see "Publishing coppermesh") and `uv.lock` updated to it
+(`uv lock --upgrade-package coppermesh`; past 0.1.x, `pyproject.toml`'s bound too).
 
 Where it is built and checked:
 - `.github/workflows/tests.yml`, on Linux x86_64, macOS arm64 and Windows x64: the cargo tests,
-  `uv sync --group rust`, `check_fma.py`, `check_digest.py`, and the whole pytest suite with
+  `uv sync --no-install-package coppermesh` then `uv pip install ./tools/mesher_rs`,
+  `check_source.py`, `check_fma.py`, `check_digest.py`, and the whole pytest suite with
   `COPPERNICUS_REQUIRE_RUST=1` (the rust cases then fail instead of skipping when the extension is
-  missing), and one Ubuntu job without the group (`no-rust`: the fallback tests and a CLI solve
-  of the demo, coppermesh really missing). On Intel macOS (macos-15-intel): the cargo tests, `maturin build`, and the two checks
-  on that wheel; pytest cannot run there, Triangle has no Intel macOS wheel for its pin.
-- The packaged app (`packaging/`, `release.yml`) bundles it; `packaging/check_bundle.py` fails
-  without it, and `check_fma.py` runs on the bundled extension.
+  missing), every `uv run` with `--no-sync`. One Ubuntu job tests PyPI's wheel as users get it
+  (`pypi-wheel`: `uv sync --no-build-package coppermesh`, `check_source.py --pypi`, the two
+  checks, the mesher tests and a CLI solve of the demo with rust); one leaves coppermesh out
+  (`no-rust`: the fallback tests and a CLI solve of the demo, coppermesh really missing). On
+  Intel macOS (macos-15-intel): the cargo tests, `maturin build`, and the two checks on that
+  wheel; pytest cannot run there, Triangle has no Intel macOS wheel for its pin.
+- `.github/workflows/triangle-free.yml` builds it from this folder the same way, then removes
+  Triangle.
+- The packaged app (`packaging/`, `release.yml`) bundles it built from this folder (the build
+  scripts sync without PyPI's coppermesh, install this folder and run `check_source.py`);
+  `packaging/check_bundle.py` fails without it, and `check_fma.py` runs on the bundled
+  extension.
 - `.github/workflows/wheels.yml` builds the PyPI wheels (macOS arm64, Windows x86_64, Linux
   x86_64 manylinux_2_28) and the sdist, installs each wheel, and a wheel pip builds from the
   sdist, in a fresh venv and runs the import, `check_fma.py` and `check_digest.py` on it (see
@@ -179,6 +198,5 @@ The owner's steps, once this workflow is on `main`:
    `publish to PyPI` job when GitHub asks for the review. Afterwards, check that
    `pip install coppermesh==0.1.0` works in a fresh venv.
 
-Coppernicus itself depends on the PyPI package only after 0.1.0 is there. Until then its
-`rust` dependency group builds coppermesh from this folder.
+Coppernicus depends on the PyPI package since 0.1.0 is there (see "Build and develop").
 

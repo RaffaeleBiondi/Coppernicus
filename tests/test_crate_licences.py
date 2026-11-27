@@ -75,7 +75,7 @@ def test_bundled_notices_hold_every_crate_or_the_bundle_check_fails(tmp_path):
     notices, check_bundle = _packaging()
     crates = CRATES.read_text(encoding="utf-8")
     if importlib.util.find_spec("coppermesh") is None:
-        pytest.skip("coppermesh not installed (uv sync --group rust)")
+        pytest.skip("coppermesh not installed (uv sync installs it)")
     out = tmp_path / "THIRD_PARTY_NOTICES.txt"
     listed = notices.write(out, ["coppermesh/coppermesh.abi3.so", "coppermesh/__init__.py"], "0.0")
     assert "coppermesh" in listed

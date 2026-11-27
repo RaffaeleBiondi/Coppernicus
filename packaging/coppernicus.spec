@@ -4,10 +4,10 @@
 # on Windows. Run it through packaging/build_macos.sh or packaging/build_windows.ps1.
 #
 # The bundle holds everything except the Triangle mesher (the 'triangle' package): its
-# licence forbids bundling it. It does hold coppermesh, the rust mesher (tools/mesher_rs, built
-# into the build environment by `uv sync --group rust`); Triangle stays the default mesher. The build writes the pin uv.lock holds for it (version, wheel
-# URLs, SHA-256) into the bundle; the app fetches it on its first start
-# (coppernicus.bootstrap_triangle). The build fails if triangle ends up in the bundle.
+# licence forbids bundling it. It does hold coppermesh, the rust mesher and the default one
+# (built into the build environment from tools/mesher_rs by the build scripts). The build writes
+# the pin uv.lock holds for Triangle (version, wheel URLs, SHA-256) into the bundle; the app
+# fetches it when Triangle is chosen (coppernicus.bootstrap_triangle). The build fails if triangle ends up in the bundle.
 
 import re
 import sys
@@ -124,8 +124,9 @@ if leaks:
 rust = [e[0] for e in a.binaries
         if re.fullmatch(r"coppermesh[/\\]coppermesh(\.[^/\\]*)?\.(so|pyd)", e[0])]
 if not rust:
-    raise SystemExit("coppernicus.spec: coppermesh's extension is not in the bundle: build the "
-                     "environment with `uv sync --group rust` (it needs a Rust toolchain)")
+    raise SystemExit("coppernicus.spec: coppermesh's extension is not in the bundle: build it into "
+                     "the environment with `uv pip install ./tools/mesher_rs` (it needs a Rust "
+                     "toolchain), as the build scripts do")
 print(f"coppernicus.spec: coppermesh bundled as {rust[0]}")
 
 # THIRD_PARTY_NOTICES.txt from what was collected.

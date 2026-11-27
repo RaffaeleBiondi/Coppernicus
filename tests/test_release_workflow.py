@@ -48,12 +48,19 @@ def test_the_build_scripts_keep_triangle_out():
 
 
 def test_the_build_scripts_bundle_coppermesh_and_check_it():
-    """The rust mesher is in the packaged app (not the default mesher): the build environment
-    syncs uv's "rust" group, the spec stops without its extension, check_bundle.py and the FMA
-    check run on the bundle."""
+    """The rust mesher is in the packaged app, built from this checkout's tools/mesher_rs: the
+    build environment is synced without PyPI's coppermesh, the source build goes in and
+    check_source.py proves it, the spec stops without its extension, check_bundle.py and the
+    FMA check run on the bundle."""
     for script in ("build_macos.sh", "build_windows.ps1"):
         text = (ROOT / "packaging" / script).read_text(encoding="utf-8")
-        assert "--no-dev --group rust" in text and "check_fma.py" in text
+        sync = text.index("--no-install-package coppermesh")
+        build = text.index("./tools/mesher_rs")
+        source = text.index("check_source.py", build)
+        assert "uv sync --frozen --no-dev " in text[text.rindex("\n", 0, sync):sync]
+        assert "uv pip install --python " in text[text.rindex("\n", 0, build):build]
+        assert sync < build < source < text.index("PyInstaller", source)
+        assert "--group" not in text and "check_fma.py" in text
     spec = (ROOT / "packaging" / "coppernicus.spec").read_text(encoding="utf-8")
     assert '"coppermesh"' in spec and "coppermesh's extension is not in the bundle" in spec
     check = (ROOT / "packaging" / "check_bundle.py").read_text(encoding="utf-8")
