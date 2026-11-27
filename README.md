@@ -270,7 +270,7 @@ is not installed (a plain `uv sync`), a solve that names no mesher meshes with T
 so in its warnings; one that names `rust` stops with `mesher_unavailable`. In the app, the
 **Mesher** box at the top of the setup panel chooses it for every solve and is kept for the next
 start; a project's `settings.mesher` wins (the box then shows it, locked). The status bar and the
-HTML report name the mesher each result was meshed with.
+HTML report name the mesher each result was meshed with. See [the mesher](docs/mesher.md).
 
 **AC mesh edge.** Unless the project sets `ac: max_edge_mm`, the AC, noise and tolerance solves
 use the mesher's own default: 0.5 mm with rust (finer than KiPI's 1.0 mm, so that copper loops
@@ -435,6 +435,7 @@ warning lists the differences. Set `override_board_fields: true` on that rail to
 | Current-density default: spots above 60 A/mm² at 1 oz, scaled ×√(35 µm / t) per layer (≈85 at 0.5 oz, ≈42 at 2 oz), are flagged ATTENTION, never a verdict; set `max_current_density` to judge them ([why and sources](docs/technical.md#current-density-default)) | ✅ |
 | Above every current-density colour bar, the layer's peak \|J\| (mesh-dependent, never judged) and its verdict as the problem list judges it; the colour scale stays at the layer's 99.5th percentile ([how](docs/technical.md#physics)) | ✅ app, PNG maps (CLI and MCP `render_map`), HTML report |
 | Tolerance stack-up per load: `coppernicus tolerance PROJECT`: the DC drop on the worst pins (power tree) plus the source's DC accuracy, the ripple from the noise solve (or your `ripple_mv`) and your `transient_mv` (KiPI's estimate shown, never judged), against your `tol` / `dc_tol` / `ac_tol`; judged only with every part known, never on a KiPI stand-in or a default 0. Example: `examples/tolerance` | ✅ CLI and app (Tolerance tab: built from the results the app holds; a stale one counts as missing) |
+| Our own mesher, `rust` (coppermesh), the default: the same verdicts as Triangle on every example, the same mesh bit for bit on every platform; Triangle when chosen; the AC mesh edge by mesher (rust 0.5 mm, Triangle 1.0 mm) ([guide](docs/mesher.md)) | ✅ CLI, MCP, app (Mesher box), CI |
 | Packaged app: macOS `.dmg`, Windows `.zip`; the rust mesher built in; Triangle an optional download when chosen, checked against `uv.lock` ([install](docs/install.md)) | ✅ macOS built and tried; Windows built by CI, not yet tried; unsigned |
 | Speed: SuperLU's symmetric ordering for the board temperature and DC solves (about half the time and memory of the electro-thermal solve on a large board; `COPPERNICUS_SUPERLU_ORDER=off` restores KiPI's); a DC system above KiPI's 200,000-unknown direct limit factorized directly up to 400,000 unknowns instead of solved with AMG-CG (about half the time on large rails for about a quarter more memory, equal within 1e-9; `COPPERNICUS_DC_DIRECT_MAX=0` or empty restores KiPI's rule, any other value sets the ceiling); a faster bit-identical board opening (`COPPERNICUS_FAST_TRIM=0` restores KiPI's) ([details](docs/technical.md#physics)) | ✅ on by default, each factorization checked as KiPI checks its own |
 | Benchmark harness for every step (`tools/bench`): wall time, CPU, peak memory and a fingerprint of the result per step, compared before and after a change ([README](tools/bench/README.md)) | ✅ developer tooling |
@@ -446,7 +447,7 @@ and HyperLynx files, which have not been tried through Coppernicus yet.
 
 - [Changelog](CHANGELOG.md): what changed in each release.
 - [Installing the packaged app](docs/install.md).
-- Feature guides: [power tree](docs/power-tree.md), [KiCad fields](docs/kicad-fields.md), [what-if and compare](docs/what-if-and-compare.md), [HTML report](docs/html-report.md), [board temperature](docs/thermal.md), [PDN impedance](docs/ac-impedance.md), [ripple and coupled noise](docs/noise.md), [tolerance stack-up](docs/tolerance.md), [CI](docs/ci.md), [agents](docs/agents.md).
+- Feature guides: [power tree](docs/power-tree.md), [KiCad fields](docs/kicad-fields.md), [what-if and compare](docs/what-if-and-compare.md), [HTML report](docs/html-report.md), [board temperature](docs/thermal.md), [PDN impedance](docs/ac-impedance.md), [ripple and coupled noise](docs/noise.md), [tolerance stack-up](docs/tolerance.md), [the mesher](docs/mesher.md), [CI](docs/ci.md), [agents](docs/agents.md).
 - [How it works](docs/technical.md): architecture, physics, validation, repository layout.
 - [Stage-1 analysis of KiPI](docs/kipi-analysis.md), the engine underneath.
 - [Workstreams](docs/workstreams.md) and the [roadmap plan](docs/superpowers/plans/2026-11-24-coppernicus-roadmap.md).
@@ -457,8 +458,10 @@ and HyperLynx files, which have not been tried through Coppernicus yet.
   does the import, meshing and solving.
 - **[padne](https://github.com/atx/padne)** by Josef Gajdusek (GPL-3.0): KiCad-native 2.5D FEM
   DC voltage-drop solver. Prior art.
+- Coppernicus meshes with its own mesher, written from the published papers of Jim Ruppert
+  and Jonathan Richard Shewchuk ([sources](tools/mesher_rs/DESIGN.md#sources)).
 - KiPI meshes with [Triangle](https://www.cs.cmu.edu/~quake/triangle.html) by J. R. Shewchuk,
-  whose notice reads in part: *"Private, research, and institutional use is free. […]
+  optional in Coppernicus, whose notice reads in part: *"Private, research, and institutional use is free. […]
   Distribution of this code as part of a commercial system is permissible ONLY BY DIRECT
   ARRANGEMENT WITH THE AUTHOR."* The full text is quoted in the [analysis](docs/kipi-analysis.md).
 
