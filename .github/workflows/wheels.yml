@@ -1,0 +1,204 @@
+name: coppermesh wheels
+
+# coppermesh (tools/mesher_rs), the rust mesher, as its own package on PyPI: one abi3 wheel per
+# platform (CPython >= 3.12) for macOS arm64, Windows x86_64 and Linux x86_64 (manylinux_2_28),
+# and the sdist. Each wheel is installed in a fresh venv on its own runner and checked (the
+# import, check_fma.py: no fused multiply-add, check_digest.py: the recorded mesh bit for bit);
+# the sdist builds a wheel from source the same way, which gets the same checks.
+#
+# Publishing (Trusted Publishing, OIDC: no token secret; tools/mesher_rs/README.md, "Publishing
+# coppermesh"):
+# - a pushed tag coppermesh-v* builds, checks and uploads to TestPyPI (environment testpypi),
+#   never to PyPI; the tag must name the version in pyproject.toml;
+# - a manual run (workflow_dispatch) builds and checks, and publishes only what its `publish`
+#   input says: none (the default), testpypi, or pypi. PyPI takes a manual run with
+#   publish=pypi on main or on a coppermesh-v* tag, through the environment pypi, whose required
+#   reviewer approves the upload.
+# A plain push to a branch does not start this workflow.
+
+on:
+  push:
+    tags: ["coppermesh-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Where to upload the wheels and the sdist after the checks"
+        type: choice
+        options: [none, testpypi, pypi]
+        default: none
+
+permissions:
+  contents: read
+
+# One run per ref at a time; a running one is never cancelled (an upload is not stopped halfway).
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  wheel:
+    name: wheel (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            manylinux: "2_28"
+          - platform: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            manylinux: ""
+          - platform: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            manylinux: ""
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # maturin's interpreter on macOS and Windows (the abi3 extension links python3.dll there),
+      # and the fresh venv the wheel is tested in.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Build the abi3 wheel (maturin, Cargo.lock as committed)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: tools/mesher_rs
+          command: build
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          rust-toolchain: stable
+          args: --release --locked --out dist
+      - name: llvm-objdump for check_fma.py (the runner's Rust toolchain)
+        shell: bash
+        run: rustup component add llvm-tools
+      - name: Install the wheel in a fresh venv; the import, no fused multiply-add, the recorded mesh
+        shell: bash               # stops at the first failing command on every runner (not so pwsh)
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          if [ "$RUNNER_OS" = Windows ]; then py="$RUNNER_TEMP/venv/Scripts/python.exe"; else py="$RUNNER_TEMP/venv/bin/python"; fi
+          wheels=(tools/mesher_rs/dist/coppermesh-*-cp312-abi3-*.whl)
+          test "${#wheels[@]}" -eq 1 && test -f "${wheels[0]}"
+          "$py" -m pip install "${wheels[0]}"
+          cd "$RUNNER_TEMP"          # away from the checkout: the installed package is imported
+          "$py" -I -c "import coppermesh; print('coppermesh', coppermesh.__version__, coppermesh.__file__)"
+          "$py" -I "$GITHUB_WORKSPACE/tools/mesher_rs/check_fma.py"
+          "$py" -I "$GITHUB_WORKSPACE/tools/mesher_rs/check_digest.py"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coppermesh-wheel-${{ matrix.platform }}
+          path: tools/mesher_rs/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: sdist (and a wheel built from it)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: A tag names the version in pyproject.toml (coppermesh-v0.1.0 for 0.1.0)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('tools/mesher_rs/pyproject.toml', 'rb'))['project']['version'])")
+          echo "tag $GITHUB_REF_NAME, version $version"
+          test "$GITHUB_REF_NAME" = "coppermesh-v$version"
+      - name: Build the sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: tools/mesher_rs
+          command: sdist
+          args: --out dist
+      - name: llvm-objdump for check_fma.py (the runner's Rust toolchain)
+        run: rustup component add llvm-tools
+      - name: Build a wheel from the sdist alone (pip, maturin from PyPI, the runner's Rust) and check it
+        run: |
+          sdists=(tools/mesher_rs/dist/coppermesh-*.tar.gz)
+          test "${#sdists[@]}" -eq 1 && test -f "${sdists[0]}"
+          python -m venv "$RUNNER_TEMP/venv"
+          py="$RUNNER_TEMP/venv/bin/python"
+          cp "${sdists[0]}" "$RUNNER_TEMP/"
+          cd "$RUNNER_TEMP"          # away from the checkout: only the sdist is built
+          "$py" -m pip wheel --no-deps --no-cache-dir -w "$RUNNER_TEMP/from-sdist" "$(basename "${sdists[0]}")"
+          "$py" -m pip install "$RUNNER_TEMP"/from-sdist/coppermesh-*.whl
+          "$py" -I -c "import coppermesh; print('coppermesh', coppermesh.__version__, coppermesh.__file__)"
+          "$py" -I "$GITHUB_WORKSPACE/tools/mesher_rs/check_fma.py"
+          "$py" -I "$GITHUB_WORKSPACE/tools/mesher_rs/check_digest.py"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coppermesh-sdist
+          path: tools/mesher_rs/dist/*.tar.gz
+          if-no-files-found: error
+
+  # TestPyPI: a pushed coppermesh-v* tag, or a manual run with publish=testpypi. A file once
+  # uploaded cannot be replaced, so one already there is skipped (a tag and a manual run of the
+  # same version).
+  publish-testpypi:
+    name: publish to TestPyPI
+    needs: [wheel, sdist]
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/coppermesh-v'))
+      || (github.event_name == 'workflow_dispatch' && inputs.publish == 'testpypi')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/coppermesh
+    permissions:
+      id-token: write          # Trusted Publishing (OIDC), nothing else
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coppermesh-*
+          merge-multiple: true
+          path: dist
+      - name: The three wheels and the sdist
+        run: |
+          ls -l dist
+          wheels=(dist/*.whl) sdists=(dist/*.tar.gz)
+          test "${#wheels[@]}" -eq 3 && test -f "${wheels[0]}" && test "${#sdists[@]}" -eq 1 && test -f "${sdists[0]}"
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+          skip-existing: true
+
+  # PyPI: only a manual run with publish=pypi, on main or on a coppermesh-v* tag, and only once
+  # the environment pypi's required reviewer has approved the job.
+  publish-pypi:
+    name: publish to PyPI
+    needs: [wheel, sdist]
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.publish == 'pypi'
+      && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/coppermesh-v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/p/coppermesh
+    permissions:
+      id-token: write          # Trusted Publishing (OIDC), nothing else
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coppermesh-*
+          merge-multiple: true
+          path: dist
+      - name: The three wheels and the sdist
+        run: |
+          ls -l dist
+          wheels=(dist/*.whl) sdists=(dist/*.tar.gz)
+          test "${#wheels[@]}" -eq 3 && test -f "${wheels[0]}" && test "${#sdists[@]}" -eq 1 && test -f "${sdists[0]}"
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist

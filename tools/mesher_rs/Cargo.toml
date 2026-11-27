@@ -3,7 +3,8 @@ name = "coppermesh"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-description = "Constrained Delaunay triangulation and Delaunay refinement for Coppernicus (experimental drop-in for KiPI's mesh_polygon)"
+description = "Constrained Delaunay triangulation and Delaunay refinement for Coppernicus (its default mesher, a drop-in for KiPI's mesh_polygon)"
+repository = "https://github.com/RaffaeleBiondi/Coppernicus"
 publish = false
 
 [lib]

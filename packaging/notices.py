@@ -144,8 +144,12 @@ def write(out: Path, names: Iterable[str], version: str, python_licence: Optiona
     if python_licence and Path(python_licence).is_file():
         text = Path(python_licence).read_text(encoding="utf-8", errors="replace")
         texts.append(("Python", "LICENSE.txt", text))
+    crates = RUST_CRATES.read_text(encoding="utf-8").rstrip() if RUST_CRATES.is_file() else None
     for d in dists:
-        files = licence_files(d)
+        # coppermesh's wheel ships the crates' licences too (licenses/coppermesh-crates.txt, a
+        # copy of RUST_CRATES): they are appended below, once.
+        files = [(path, text) for path, text in licence_files(d)
+                 if crates is None or text.replace("\r\n", "\n").rstrip() != crates]
         if not files:
             texts.append((d.metadata["Name"], "(no licence file in the wheel)",
                           f"{licence_of(d)}: see {_url(d)}\n"))
@@ -159,6 +163,6 @@ def write(out: Path, names: Iterable[str], version: str, python_licence: Optiona
         if not RUST_CRATES.is_file():
             raise SystemExit(f"coppermesh is in the bundle but {RUST_CRATES} is missing: "
                              "run tools/mesher_rs/crate_licences.py")
-        lines += ["#" * 78, "", RUST_CRATES.read_text(encoding="utf-8").rstrip(), "", ""]
+        lines += ["#" * 78, "", crates, "", ""]
     Path(out).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return listed
