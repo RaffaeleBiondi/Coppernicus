@@ -1440,6 +1440,7 @@ class AcPanel(QWidget):
         ax.text(0.5, 0.5, text, ha="center", va="center", color=theme.color("muted"), transform=ax.transAxes)
         self.canvas.draw_idle()
         self.header.setText("")
+        self.verdict.show_verdict(None, [])        # no result: no verdict, no cards
         self.table.setRowCount(0)
         self.stats.setText("")
         self.notes.clear()

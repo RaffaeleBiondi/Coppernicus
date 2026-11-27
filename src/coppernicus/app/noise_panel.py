@@ -1740,6 +1740,7 @@ class NoisePanel(QWidget):
         for kind in "HE":
             self._empty(kind, f"The near {kind} field shows here after a solve")
         self.header.setText("")
+        self.verdict.show_verdict(None, [])        # no result: no verdict, no cards
         self.ripple_table.setRowCount(0)
         self.victim_table.setRowCount(0)
         self.radiated.setText("")

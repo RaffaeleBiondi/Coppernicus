@@ -78,3 +78,26 @@ def test_a_result_from_before_a_setup_change_is_marked_on_the_page_and_in_the_na
         assert window.navigator.badge_of(p) == ("fail", "FAIL", True)
         assert window.navigator.item_of(p).toolTip(0) == STALE_TIP
     ''')
+
+
+def test_with_no_result_shown_the_page_shows_no_verdict_and_no_cards():
+    """Reopening a project drops the results: the verdict line and cards go with them."""
+    run_in_window(f'''
+        from coppernicus.app import ac_panel as acm
+        from coppernicus.engine.ac import solve_ac_rail
+        window.show()
+        window.open_project({PDN!r})
+        window.nets.select("+3V3")
+        app.processEvents()
+        p = window.ac_panel
+        res = solve_ac_rail(window.board, window.merged.project, "+3V3")
+        p.results["+3V3"] = (res, acm._project_key(p.merged_project))
+        p.show_result()
+        assert p.verdict.shown_cards()
+        p.results.clear()
+        p.show_result()
+        assert p.verdict.shown_cards() == [] and p.verdict.badge.text() != "FAIL"
+        n = window.noise_panel
+        n._show_empty()
+        assert n.verdict.shown_cards() == []
+    ''')
