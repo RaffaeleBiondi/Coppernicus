@@ -5,6 +5,7 @@ parallel calls with different meshers taking turns (the installed mesher is glob
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -315,7 +316,8 @@ def test_parallel_mcp_calls_with_different_meshers(tmp_path):
 
 def _cli(*args):
     run = subprocess.run([sys.executable, "-m", "coppernicus", *args], capture_output=True, text=True,
-                         timeout=600)
+                         encoding="utf-8", timeout=600,
+                         env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     return run.returncode, (json.loads(run.stdout) if run.stdout.strip() else None), run.stderr
 
 

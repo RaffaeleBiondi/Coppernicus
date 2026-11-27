@@ -56,8 +56,9 @@ print(json.dumps(out))
 
 def _solve(mode):
     env = {k: v for k, v in os.environ.items() if k != "KIPI_SERIAL"}
+    env["PYTHONIOENCODING"] = "utf-8"
     run = subprocess.run([sys.executable, "-c", SCRIPT, mode, str(ROOT)], capture_output=True, text=True,
-                         timeout=600, env=env)
+                         encoding="utf-8", timeout=600, env=env)
     assert run.returncode == 0, run.stderr[-2000:]
     return json.loads(run.stdout.strip().splitlines()[-1])
 

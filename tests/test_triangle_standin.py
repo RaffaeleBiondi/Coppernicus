@@ -36,10 +36,10 @@ sys.meta_path.insert(0, _BLOCKER)
 
 
 def _run(code: str, block: bool = True, timeout: int = 300) -> str:
-    env = {**os.environ, "KIPI_SERIAL": "1", "QT_QPA_PLATFORM": "offscreen"}
+    env = {**os.environ, "KIPI_SERIAL": "1", "QT_QPA_PLATFORM": "offscreen", "PYTHONIOENCODING": "utf-8"}
     script = "import sys\n" + (BLOCK if block else "") + textwrap.dedent(code)
     run = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=timeout,
-                         cwd=ROOT, env=env)
+                         encoding="utf-8", cwd=ROOT, env=env)
     assert run.returncode == 0, run.stderr[-3000:]
     return run.stdout
 

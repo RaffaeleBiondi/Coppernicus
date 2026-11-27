@@ -523,9 +523,9 @@ def test_the_dialog_fetches_and_reports_a_failure(tmp_path):
         assert "no network" in boxes[0] and "start Coppernicus again" in boxes[0], boxes
         print("ok")
     """)
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8")
     out = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True,
-                         timeout=120)
+                         encoding="utf-8", timeout=120)
     assert out.returncode == 0 and "ok" in out.stdout, out.stdout + out.stderr
 
 

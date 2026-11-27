@@ -76,7 +76,8 @@ def metadata() -> dict:
            "--manifest-path", str(CRATE / "Cargo.toml")]
     for target in TARGETS:
         cmd += ["--filter-platform", target]
-    return json.loads(subprocess.run(cmd, capture_output=True, text=True, check=True).stdout)
+    return json.loads(subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                                     check=True).stdout)
 
 
 def crates(meta: dict) -> list:

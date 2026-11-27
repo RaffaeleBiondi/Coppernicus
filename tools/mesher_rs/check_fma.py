@@ -77,8 +77,9 @@ def _rust_llvm_objdump():
         return None
     try:
         sysroot = subprocess.run([rustc, "--print", "sysroot"], capture_output=True, text=True,
-                                 check=True).stdout.strip()
-        info = subprocess.run([rustc, "-vV"], capture_output=True, text=True, check=True).stdout
+                                 encoding="utf-8", check=True).stdout.strip()
+        info = subprocess.run([rustc, "-vV"], capture_output=True, text=True, encoding="utf-8",
+                              check=True).stdout
         host = next(line.split(":", 1)[1].strip() for line in info.splitlines() if line.startswith("host:"))
     except (OSError, subprocess.CalledProcessError, StopIteration):
         return None
@@ -115,7 +116,8 @@ def default_binaries():
 
 
 def check(binary: Path, command) -> tuple:
-    run = subprocess.run([*command, str(binary)], capture_output=True, text=True, errors="replace")
+    run = subprocess.run([*command, str(binary)], capture_output=True, text=True, encoding="utf-8",
+                         errors="replace")
     if run.returncode != 0:
         raise RuntimeError(f"{Path(command[0]).name} failed on {binary} ({run.returncode}): "
                            f"{run.stderr[-500:]}")
