@@ -28,6 +28,11 @@ results against your own judgement.
   foot (hide it from its title bar; ⇤ Setup in the status bar or View → Setup panel shows it
   again). Tolerance: double-click a row to see its load on the board. The probes table shows
   Name, Part, Pins and Target; the selected probe's other fields are in a card under it.
+- The Rail pages open with the verdict (a FAIL / PASS / not judged badge beside the summary
+  line) and up to four cards: the worst load, the largest drop (or ground rise) on the copper,
+  the copper loss and where most of it goes, the strongest current crowding. Problems are one
+  line each; the selected one's detail shows in a strip under the list and a ring marks it on
+  the map.
 
 ### Fixed
 
