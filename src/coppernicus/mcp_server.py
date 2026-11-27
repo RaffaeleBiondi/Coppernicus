@@ -68,6 +68,10 @@ at 1 oz, scaled with each layer's copper thickness) raises attention items (seve
 "attention"), never a verdict: report them as such, never as a fail; a max_current_density
 the user sets replaces it. Read 'assumptions' and 'warnings' in every result. Errors come
 back as {"error": {code, message, hint}}; the hint says what to do.
+The mesher: Triangle by default (KiPI's own). The solve tools take mesher ("rust" is an
+experimental mesher of Coppernicus's own; it wins over the project's settings.mesher); use it
+only when the user asks. Each result records it in mesher; compare_results and
+compare_revisions warn when two results were meshed differently.
 """
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -249,6 +253,12 @@ class SettingsSpec(BaseModel):
                                      "of distance, 0 (off) to 2 (default: KiPI's 0.2).")
 
 
+Mesher = Annotated[Optional[str], Field(
+    description="The mesher: 'triangle' (the default, KiPI's own) or 'rust' (experimental); only "
+                "when the user asks. Wins over the project's settings.mesher. Unavailable here: "
+                "mesher_unavailable, with a hint.")]
+
+
 def _error_result(err: dict) -> CallToolResult:
     return CallToolResult(content=[TextContent(type="text", text=json.dumps({"error": err},
                                                                          ensure_ascii=False))],
@@ -353,8 +363,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
     def solve_rail(board_id: str, net: str, sources: list[SourceSpec], loads: list[LoadSpec],
                    ctx: Context, limits: Optional[LimitsSpec] = None,
                    settings: Optional[SettingsSpec] = None, follow_net_ties: bool = True,
-                   top: Annotated[int, Field(ge=1, le=50, description="Hotspots and vias to rank.")] = 5
-                   ) -> dict[str, Any]:
+                   top: Annotated[int, Field(ge=1, le=50, description="Hotspots and vias to rank.")] = 5,
+                   mesher: Mesher = None) -> dict[str, Any]:
         """Solve the DC voltage drop and current density of one power net. Sources hold
         voltage_v on their pins; loads draw current_a split equally across their pins.
         Returns result_id and a summary: load voltages and drops, max drop, loss per layer,
@@ -365,7 +375,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         return _call("solve_rail", session.solve_rail, board_id, net,
                      [s.model_dump() for s in sources], [ld.model_dump() for ld in loads],
                      _dump(limits), _dump(settings), follow_net_ties, top,
-                     progress=bridge.progress, cancelled=bridge.cancelled)
+                     progress=bridge.progress, cancelled=bridge.cancelled, mesher=mesher)
 
     @mcp.tool(annotations=READ_ONLY)
     def get_problems(result_id: str, limits: Optional[LimitsSpec] = None,
@@ -427,7 +437,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
     @mcp.tool(annotations=READ_ONLY)
     def compare_results(result_a: str, result_b: str) -> dict[str, Any]:
         """What-if deltas b − a between two results: settings changed, max drop, loss, drop per
-        load and loss per layer, and both verdicts. Rail results only (not tree groups)."""
+        load and loss per layer, and both verdicts; a warning when they were meshed by different
+        meshers. Rail results only (not tree groups)."""
         return _call("compare_results", session.compare_results, result_a, result_b)
 
     @mcp.tool(annotations=READ_ONLY)
@@ -441,6 +452,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                           description="false: ignore the board's KiCad footprint fields (PI_RAIL, "
                                       "PI_SOURCE, PI_LOAD, ...); default: the project file's "
                                       "use_board_fields, which is on.")] = None,
+                      mesher: Mesher = None,
                       ) -> dict[str, Any]:
         """Solve the rails of a project file with its sources, loads, limits and settings
         (including its optional what-if copper_thickness_mm, named in each rail's
@@ -455,7 +467,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         bridge = _Bridge(ctx)
         return _call("solve_project", session.solve_project, project_path, rails, top,
                      progress=bridge.progress, cancelled=bridge.cancelled,
-                     use_board_fields=use_board_fields)
+                     use_board_fields=use_board_fields, mesher=mesher)
 
     @mcp.tool(annotations=READ_ONLY)
     def solve_tree(project_path: Annotated[str, Field(description="Absolute path to a "
@@ -484,6 +496,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                                    "A display shift: every value stays in the solve's frame, the "
                                    "document adds reference.offset_v to subtract from an absolute "
                                    "voltage; drops, rises and verdicts are from the solve's 0 V.")] = None,
+                   mesher: Mesher = None,
                       ) -> dict[str, Any]:
         """Solve a project's whole power tree at once: every rail and ground group together,
         with the regulators' input currents and the ground return computed exactly (when a
@@ -509,7 +522,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                                       if thermal_options is not None else None),
                      confirm_large=confirm_large,
                      reference=(reference.model_dump(exclude_none=True)
-                                if reference is not None else None))
+                                if reference is not None else None),
+                     mesher=mesher)
 
     @mcp.tool(annotations=WRITES_FILE)
     def solve_ac(project_path: Annotated[str, Field(description="Absolute path to a *.coppernicus.yml "
@@ -523,6 +537,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                                  "user first.")] = False,
                  use_board_fields: Annotated[Optional[bool], Field(
                      description="false: ignore the board's KiCad footprint fields.")] = None,
+                 mesher: Mesher = None,
                  ) -> dict[str, Any]:
         """The open-loop PDN impedance |Z|(f) at the project's probes (probes:, capacitors: and
         ac: in the project file), rail by rail: the same document as `coppernicus ac --json`
@@ -535,7 +550,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         bridge = _Bridge(ctx)
         return _call("solve_ac", session.solve_ac, project_path, rails, progress=bridge.progress,
                      cancelled=bridge.cancelled, confirm_large=confirm_large,
-                     use_board_fields=use_board_fields)
+                     use_board_fields=use_board_fields, mesher=mesher)
 
     @mcp.tool(annotations=WRITES_FILE)
     def solve_noise(project_path: Annotated[str, Field(description="Absolute path to a *.coppernicus.yml "
@@ -549,6 +564,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                                     "user first.")] = False,
                     use_board_fields: Annotated[Optional[bool], Field(
                         description="false: ignore the board's KiCad footprint fields.")] = None,
+                    mesher: Mesher = None,
                     ) -> dict[str, Any]:
         """The DC-DC ripple and coupled noise of the project's switching regulators (aggressors:,
         victims:, noise: in the project file), aggressor by aggressor: the same document as
@@ -565,7 +581,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         bridge = _Bridge(ctx)
         return _call("solve_noise", session.solve_noise, project_path, aggressors,
                      progress=bridge.progress, cancelled=bridge.cancelled,
-                     confirm_large=confirm_large, use_board_fields=use_board_fields)
+                     confirm_large=confirm_large, use_board_fields=use_board_fields, mesher=mesher)
 
     @mcp.tool(annotations=WRITES_FILE)
     def solve_tolerance(project_path: Annotated[str, Field(description="Absolute path to a "
@@ -583,6 +599,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                                         "user first.")] = False,
                         use_board_fields: Annotated[Optional[bool], Field(
                             description="false: ignore the board's KiCad footprint fields.")] = None,
+                        mesher: Mesher = None,
                         ) -> dict[str, Any]:
         """Each load's tolerance stack-up (tol_*, dc_tol_*, ac_tol_* on the loads, accuracy_* on
         the sources, ripple_mv / transient_mv entered, tolerance: in the project file): per load
@@ -602,7 +619,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         bridge = _Bridge(ctx)
         return _call("solve_tolerance", session.solve_tolerance, project_path, skip_ac, skip_noise,
                      progress=bridge.progress, cancelled=bridge.cancelled,
-                     confirm_large=confirm_large, use_board_fields=use_board_fields)
+                     confirm_large=confirm_large, use_board_fields=use_board_fields, mesher=mesher)
 
     @mcp.tool(annotations=WRITES_FILE)
     def compare_revisions(result_a: Annotated[str, Field(description="The result before the change.")],
@@ -613,7 +630,7 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         deltas (matched by part), per-layer loss deltas, via currents matched by position and
         drill, where the drop grew or shrank most (B's drop mapped onto A's mesh; a PNG map per
         layer), and what could not be matched: parts moved, removed or added, a renamed net,
-        copper only one of them has. Warns when the currents, sources or settings differ."""
+        copper only one of them has. Warns when the currents, sources, settings or meshers differ."""
         return _call("compare_revisions", session.compare_revisions, result_a, result_b)
 
     @mcp.tool(annotations=READ_ONLY)
@@ -626,7 +643,8 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
         (0.5 oz 0.0175 mm, 1 oz 0.035, 2 oz 0.070, 3 oz 0.105), from the design's own thickness,
         and compare it with that result (compare_results' deltas, plus the new result_id).
         Bigger jumps, a non-standard start and stepping a what-if are refused: real changes are
-        made in KiCad. The stack is rebuilt, so via barrels change length too. Rail results
+        made in KiCad. The stack is rebuilt, so via barrels change length too, and the mesher is
+        the baseline's. Rail results
         only: for the tree, one step of copper_thickness_mm in the project, then solve_tree."""
         bridge = _Bridge(ctx)
         return _call("copper_step", session.copper_step, result_id, layer, step,
@@ -673,7 +691,9 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                       settings: Annotated[Optional[dict[str, Any]], Field(
                           description="Settings keys to set (max_edge_mm, via_plating_um, copper_temp_c, "
                                       "copper_thickness_mm, and the advanced min_edge_mm and "
-                                      "grading near plated holes); null removes one (its default). "
+                                      "grading near plated holes, and mesher: 'rust' is "
+                                      "experimental, only when the user asks); null removes one "
+                                      "(its default). "
                                       "copper_thickness_mm merges by layer (a layer set to null "
                                       "goes back to the board file); each layer changed takes a "
                                       "standard weight at most one step from the board file's "
