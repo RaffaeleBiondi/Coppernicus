@@ -41,7 +41,9 @@ results against your own judgement.
 - The app's look follows the HTML report: dark by default with the report's colours, **☀ Light**
   at the right end of the toolbar (also View menu, Ctrl+Shift+L) switches to light and back,
   kept for the next start; the same look on macOS, Windows and Linux (Qt's Fusion style). The
-  plots stay on a light panel, as in the report.
+  plots follow the theme, in the app and in the HTML pages (shown inverted in dark with their
+  hues turned back, so a red limit stays red; the maps keep their colour scales); the files
+  written to disk (PNG and CSV exports, the CLI's plots) stay light.
 - The app's layout follows the HTML report's pages: the results pages are chosen in a
   navigator under the nets (Rail, Power tree, AC, Tolerance), the map sits above the page that
   has one, and the right panel shows the setup of the page shown with its solve button at the
@@ -57,6 +59,21 @@ results against your own judgement.
   Solve noise), with Open ▾, Save ▾ and Export ▾ menus for the rest. Every page and rail net
   carries a badge: its verdict, or a dashed "not solved"; a group shows the worst of its solved
   pages; Problems counts its FAILs.
+- The Impedance and Ripple & noise pages open with the verdict and cards, as the Rail pages
+  do: the worst probe against its target and the |Z| range; the worst victim against its noise
+  margin, the ripple, the hot loop and the radiated estimate (these never judged). A result from
+  before a setup change keeps its verdict with a dashed outline, on the page and in the
+  navigator, and its tooltip says to solve again; Tolerance still treats it as missing.
+- The Tolerance page has one row per load with its verdict; under it, the selected load's
+  stack-up (DC drop + accuracy and ripple + transient against the allowed band), its parts (a
+  missing part named, with what gives it) and its cards.
+- Every numeric field of the app shows its unit ("50 mΩ", "500 kHz", "3 %", "±5 mV") and takes a
+  number typed with it or without it: alone, the number is in the unit the field's label names;
+  with an SI prefix or the unit it means what it says ("0.5 MHz" in a kHz field is 500 kHz, "50m"
+  in an Ω cell is 50 mΩ).
+- The app shows the mesher's warnings with every result: the fallback to Triangle where the rust
+  mesher is not installed, and a coarse AC mesh edge. The Tolerance page states the AC and noise
+  solves' mesh edge in its assumptions, as `coppernicus tolerance` does.
 - **The rust mesher is the default.** `solve`, `ac`, `noise`, `tolerance`, the MCP solve tools
   and the app mesh with Coppernicus's own mesher (`rust`, `tools/mesher_rs`) unless a mesher is
   named; `--mesher triangle` (the project's `settings.mesher`, the MCP `mesher`) meshes with

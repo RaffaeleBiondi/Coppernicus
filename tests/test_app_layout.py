@@ -150,7 +150,7 @@ def test_the_probes_table_shows_four_columns_and_the_card_edits_the_rest():
         up_to.setText("20M")
         up_to.editingFinished.emit()
         col = [k for _h, k in PROBE_COLUMNS].index("target_hz")
-        assert t.item(0, col).text() == "20M" and window.project.probes[0].target_hz == 2e7
+        assert t.item(0, col).text() == "20 MHz" and window.project.probes[0].target_hz == 2e7
         before = window.project.to_dict()
         up_to.setText("lots")
         up_to.editingFinished.emit()

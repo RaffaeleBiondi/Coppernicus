@@ -47,6 +47,7 @@ from coppernicus import __version__, bootstrap_triangle
 from coppernicus import board_fields as BF
 from coppernicus.app import fields_view, label_text, shown_label, theme
 from coppernicus.app.ac_panel import AcPanel
+from coppernicus.app.ac_panel import _project_key as ac_project_key
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.guide import GuideCard
@@ -56,6 +57,7 @@ from coppernicus.app.guide import set_done as guide_set_done
 from coppernicus.app.mesher import MesherBox
 from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.noise_panel import NoisePanel
+from coppernicus.app.noise_panel import project_key as noise_project_key
 from coppernicus.app.pages import Navigator, PageStack, SetupDock
 from coppernicus.app.panels import (
     ComparePanel,
@@ -586,8 +588,10 @@ class MainWindow(QMainWindow):
             out["tree"] = out["temperature"] = None
         entry = self.ac_panel.results.get(self.net or "")
         out["impedance"] = (ac_rail_verdict(entry[0])[0] or "not_judged") if entry else None
+        out["impedance_stale"] = bool(entry) and ac_project_key(self.ac_panel.merged_project) != entry[1]
         noise = self.noise_panel.results.get(self.noise_panel.aggressor_box.currentText())
         out["noise"] = (noise[0].verdict if noise[0].verdict in RANK else "not_judged") if noise else None
+        out["noise_stale"] = bool(noise) and noise_project_key(self.noise_panel.merged_project) != noise[1]
         tol = self.tolerance_panel.result
         out["tolerance"] = (tol.verdict if tol.verdict in RANK else "not_judged") if tol is not None else None
         return out
@@ -620,10 +624,12 @@ class MainWindow(QMainWindow):
                       else ("note", "off"))
         solved = [v[k] for k in ("tree", "temperature") if v[k] is not None]
         nav.set_group_badge("Power tree", badge(worst(solved)))
-        nav.set_badge(self.ac_panel, badge(v["impedance"]))
-        nav.set_badge(self.noise_panel, badge(v["noise"]))
-        solved = [v[k] for k in ("impedance", "noise") if v[k] is not None]
-        nav.set_group_badge("AC", badge(worst(solved)))
+        nav.set_badge(self.ac_panel, badge(v["impedance"], stale=v["impedance_stale"]))
+        nav.set_badge(self.noise_panel, badge(v["noise"], stale=v["noise_stale"]))
+        solved = {k: v[k] for k in ("impedance", "noise") if v[k] is not None}
+        group = worst(solved.values())
+        stale = group is not None and all(v[f"{k}_stale"] for k, w in solved.items() if w == group)
+        nav.set_group_badge("AC", badge(group, stale=stale))       # the worst page's mark
         nav.set_badge(self.tolerance_panel, badge(v["tolerance"]))
         self.nets.set_badges(self.net_badges())
         nav.viewport().update()
@@ -1705,6 +1711,7 @@ class MainWindow(QMainWindow):
         self.worker.generation = self._generation
         self.worker.revision = self._revision
         self.worker.mesher = mesher = self.mesher_name()
+        self.worker.fallback = self.mesher_box.fallback()
         self.worker.succeeded.connect(lambda res, m=mesher: self.solved_mesher.__setitem__(res.net, m))
         # What produced the result, as it is now (the user may edit while it runs).
         self.worker.run_inputs = (copy.deepcopy(rail), copy.deepcopy(project.settings),
@@ -1770,6 +1777,7 @@ class MainWindow(QMainWindow):
         self.results_tabs.setCurrentWidget(self.thermal_panel if thermal else self.tree_panel)
         self.tree_worker = TreeWorker(self.board, self.merged.project, self)
         self.tree_worker.mesher = mesher = self.mesher_name()
+        self.tree_worker.fallback = self.mesher_box.fallback()
         self.tree_worker.succeeded.connect(lambda _tree, m=mesher: setattr(self, "tree_mesher", m))
         self.tree_worker.merged = self.merged          # its notes and warnings, for the result
         self.tree_worker.thermal = thermal

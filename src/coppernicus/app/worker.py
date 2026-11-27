@@ -35,6 +35,7 @@ class SolveWorker(QThread):
         self._notes, self._warnings = list(notes), list(warnings)
         self._cancel = False
         self.mesher: Optional[str] = None       # the solve's mesher (None: the default); set by the window
+        self.fallback: Optional[str] = None     # its warning when the default could not run (set too)
 
     def cancel(self):
         self._cancel = True
@@ -55,6 +56,7 @@ class SolveWorker(QThread):
         else:
             result.assumptions.extend(self._notes)
             result.warnings.extend(self._warnings)
+            add_fallback(result, self.fallback)
             self.succeeded.emit(result)
 
 
@@ -69,6 +71,7 @@ class TreeWorker(QThread):
         self._board, self._project = board, copy.deepcopy(project)
         self._cancel = False
         self.mesher: Optional[str] = None       # the solve's mesher (None: the default); set by the window
+        self.fallback: Optional[str] = None     # its warning when the default could not run (set too)
 
     def cancel(self):
         self._cancel = True
@@ -93,7 +96,15 @@ class TreeWorker(QThread):
         except Exception:                                   # noqa: BLE001 - shown to the user
             self.failed.emit("Unexpected error:\n" + traceback.format_exc())
         else:
+            add_fallback(result, self.fallback)
             self.succeeded.emit(result)
+
+
+def add_fallback(result, warning: Optional[str]) -> None:
+    """The mesher's fallback warning (Triangle meshed because the default cannot run here)
+    among ``result``'s warnings, once."""
+    if warning and warning not in result.warnings:
+        result.warnings.append(warning)
 
 
 class ReportWorker(QThread):

@@ -1,6 +1,7 @@
 """The theme of every HTML page Coppernicus writes: dark by default (data-theme on <html>), a
 button in the header that switches to light and back, the choice kept in localStorage where the
-browser allows it; the plots keep their own colours on a light panel, and the PNGs written to
+browser allows it; the plots follow the page's theme (in dark their light PNG is shown inverted,
+hues turned back; maps keep their colour scales), and the PNGs written to
 --out are the same bytes whether a page is written or not."""
 
 import base64
@@ -223,3 +224,43 @@ def test_the_toggle_in_node(mode, tmp_path):
         assert once["kept"] is None and twice["kept"] is None
     else:
         assert once["kept"] == other and twice["kept"] == first
+
+
+def test_a_plot_follows_the_pages_theme_and_a_map_keeps_its_colours(tmp_path):
+    """The |Z| plot and the noise waveforms carry class "plot", shown inverted in dark with
+    their hues turned back; the H and E field maps carry "map" and are never inverted. The
+    PNGs embedded are the files' own bytes."""
+    plots = [png(tmp_path / f"x_U1_noise{s}.png") for s in ("", "_h_field", "_e_field")]
+    doc = {"verdict": "pass", "aggressors": [{"aggressor": "U1", "png_files": [str(p) for p in plots]}]}
+    text = write_noise_report(doc, tmp_path / "noise.html").read_text(encoding="utf-8")
+    assert re.findall(r'<img class="(\w+)"', text) == ["plot", "map", "map"]
+    assert ':root[data-theme="dark"] img.plot { filter: invert(0.88) hue-rotate(180deg); }' in NOISE_PAGE_CSS
+    assert "img.map" not in NOISE_PAGE_CSS.split("filter")[0].split("\n")[-1]
+    ac = {"verdict": "pass", "rails": [{"rail": "+3V3", "png_file": str(plots[0]), "probes": []}]}
+    text = write_ac_report(ac, tmp_path / "ac.html").read_text(encoding="utf-8")
+    assert '<img class="plot"' in text and embedded(text) == [plots[0].read_bytes()]
+
+
+def _css_filter(hex_colour: str, invert: float = 0.88, degrees: float = 180.0):
+    """``filter: invert(invert) hue-rotate(degrees)`` on a colour, as the Filter Effects spec
+    defines them (invert per channel, then the hue-rotate matrix), in 0..1 RGB."""
+    import math
+    rgb = [int(hex_colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    rgb = [invert * (1 - c) + (1 - invert) * c for c in rgb]
+    a = math.radians(degrees)
+    cs, sn = math.cos(a), math.sin(a)
+    m = [[0.213 + cs * 0.787 - sn * 0.213, 0.715 - cs * 0.715 - sn * 0.715, 0.072 - cs * 0.072 + sn * 0.928],
+         [0.213 - cs * 0.213 + sn * 0.143, 0.715 + cs * 0.285 + sn * 0.140, 0.072 - cs * 0.072 - sn * 0.283],
+         [0.213 - cs * 0.213 - sn * 0.787, 0.715 - cs * 0.715 + sn * 0.715, 0.072 + cs * 0.928 + sn * 0.072]]
+    return [min(max(sum(m[r][k] * rgb[k] for k in range(3)), 0.0), 1.0) for r in range(3)]
+
+
+def test_the_dark_filter_keeps_the_verdict_colours_recognisable():
+    """In dark, a plot's red limit line stays red and a green PASS stays green (hue within
+    25°), the white panel goes dark: the filter the pages use, computed as browsers do."""
+    import colorsys
+    for name, colour in (("fail red", "#c62828"), ("pass green", "#2e7d32"), ("plot blue", "#1f77b4")):
+        before = colorsys.rgb_to_hsv(*[int(colour[i:i + 2], 16) / 255 for i in (1, 3, 5)])[0] * 360
+        after = colorsys.rgb_to_hsv(*_css_filter(colour))[0] * 360
+        assert min(abs(after - before), 360 - abs(after - before)) < 25, (name, before, after)
+    assert max(_css_filter("#ffffff")) < 0.2                          # the panel goes dark

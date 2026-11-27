@@ -483,9 +483,9 @@ def test_the_tolerance_tab_follows_ripple_and_noise_and_opening_changes_nothing(
         app.processEvents()
         before = window.project.to_dict()
         row = [panel.loads.item(0, c).text() for c in range(panel.loads.columnCount())]
-        assert row == ["U2", "VOUT", "6", "", "3", "", "", "50", "", "30"], row
+        assert row == ["U2", "VOUT", "±6 %", "", "±3 %", "", "", "±50 mV", "", "±30 mV"], row
         assert [panel.sources.item(i, 0).text() for i in range(panel.sources.rowCount())] == ["J1", "U1"]
-        assert panel.sources.item(1, 2).text() == "1" and panel.sources.item(0, 2).text() == ""
+        assert panel.sources.item(1, 2).text() == "±1 %" and panel.sources.item(0, 2).text() == ""
         assert panel.ripple_sum.currentText() == "linear" and not panel.bw_limit.isChecked()
         for c in range(2, panel.loads.columnCount()):
             item = panel.loads.item(0, c)
@@ -774,9 +774,9 @@ def test_a_cell_a_kicad_field_holds_is_read_only_in_the_tab_and_its_neighbours_s
             return table.item(0, 2 + [k for k, _h in columns].index(key))
         editable = QtCore.Qt.ItemIsEditable
         for table, columns, key, text, field, part in (
-                (panel.sources, SOURCE_COLUMNS, "accuracy_pct", "1", "PI_ACC", "J1"),
+                (panel.sources, SOURCE_COLUMNS, "accuracy_pct", "±1 %", "PI_ACC", "J1"),
                 (panel.sources, SOURCE_COLUMNS, "accuracy_mv", "", "PI_ACC", "J1"),
-                (panel.loads, LOAD_COLUMNS, "ac_tol_mv", "20", "PI_AC_TOL", "U1"),
+                (panel.loads, LOAD_COLUMNS, "ac_tol_mv", "±20 mV", "PI_AC_TOL", "U1"),
                 (panel.loads, LOAD_COLUMNS, "ac_tol_pct", "", "PI_AC_TOL", "U1")):
             item = cell(table, columns, key)
             assert item.text() == text and not item.flags() & editable, (key, item.text())
@@ -789,11 +789,11 @@ def test_a_cell_a_kicad_field_holds_is_read_only_in_the_tab_and_its_neighbours_s
         panel.set_cell("source", "J1", "accuracy_pct", "2")     # typed anyway: refused, nothing written
         said = panel.status.text()
         assert said.startswith('Not applied: from KiCad field PI_ACC "1%" on J1'), said
-        assert cell(panel.sources, SOURCE_COLUMNS, "accuracy_pct").text() == "1"
+        assert cell(panel.sources, SOURCE_COLUMNS, "accuracy_pct").text() == "±1 %"
         assert window.project.rails == [] and not window.dirty
         panel.set_cell("load", "U1", "tol_pct", "5")
         assert window.project.rail("VCC").loads[0].tol_pct == (-5.0, 5.0) and window.dirty
-        assert window.merged.warnings == [] and cell(panel.loads, LOAD_COLUMNS, "tol_pct").text() == "5"
+        assert window.merged.warnings == [] and cell(panel.loads, LOAD_COLUMNS, "tol_pct").text() == "±5 %"
         assert not cell(panel.loads, LOAD_COLUMNS, "ac_tol_mv").flags() & editable
         assert window.merged.project.rail("VCC").sources[0].accuracy_pct == (-1.0, 1.0)
 
@@ -802,8 +802,8 @@ def test_a_cell_a_kicad_field_holds_is_read_only_in_the_tab_and_its_neighbours_s
         fields_view.ask_override = no_dialog
         assert window.override_fields("VCC")                 # the tooltip's way: the project's values
         panel.refresh()
-        for table, columns, key, text in ((panel.sources, SOURCE_COLUMNS, "accuracy_pct", "1"),
-                                          (panel.loads, LOAD_COLUMNS, "ac_tol_mv", "20")):
+        for table, columns, key, text in ((panel.sources, SOURCE_COLUMNS, "accuracy_pct", "±1 %"),
+                                          (panel.loads, LOAD_COLUMNS, "ac_tol_mv", "±20 mV")):
             item = cell(table, columns, key)
             assert item.text() == text and item.flags() & editable, (key, item.text())
             assert item.background().style() == QtCore.Qt.NoBrush, key

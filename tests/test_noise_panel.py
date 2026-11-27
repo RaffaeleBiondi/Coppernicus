@@ -33,17 +33,18 @@ NOISE = os.path.join(ROOT, "examples", "noise", "noise.coppernicus.yml")
 # ---------------------------------------------------------------------- numbers in the cells
 
 def test_scaled_numbers_read_back_exactly_what_was_typed():
-    from coppernicus.app.noise_panel import parse_scaled, scaled_text
-    assert parse_scaled("", -6) is None and parse_scaled("  ", 3) is None
-    assert parse_scaled("1.5", -9) == 1.5e-9 and parse_scaled("1000", 3) == 1e6
-    assert parse_scaled("3,3", 0) == 3.3 and parse_scaled("2e3", -3) == pytest.approx(2.0)
-    assert parse_scaled("300", -12) == 3e-10
-    for value, exp in ((1e-6, -6), (3e-10, -12), (2e-9, -9), (1e6, 3), (0.05, 0), (5.0, 0)):
-        assert parse_scaled(scaled_text(value, exp), exp) == pytest.approx(value), (value, exp)
-    assert scaled_text(None, 3) == "" and scaled_text(1e6, 3) == "1000" and scaled_text(3e-10, -12) == "300"
-    for bad in ("abc", "1x", "nan", "inf", "1 2"):
+    from coppernicus.app.units import Unit
+    us, khz, pf, v = Unit("H", -6), Unit("Hz", 3), Unit("F", -12), Unit()
+    assert us.parse("") is None and khz.parse("  ") is None
+    assert Unit("s", -9).parse("1.5") == 1.5e-9 and khz.parse("1000") == 1e6   # alone: the label's unit
+    assert v.parse("3,3") == 3.3 and Unit("V", -3).parse("2e3") == pytest.approx(2.0)
+    assert pf.parse("300") == 3e-10
+    for value, unit in ((1e-6, us), (3e-10, pf), (2e-9, Unit("s", -9)), (1e6, khz), (0.05, v), (5.0, v)):
+        assert unit.parse(unit.text(value)) == value, (value, unit)
+    assert khz.text(None) == "" and khz.text(1e6) == "1000 kHz" and pf.text(3e-10) == "300 pF"
+    for bad in ("abc", "1x", "nan", "inf", "1 2", "5 V"):
         with pytest.raises(ValueError):
-            parse_scaled(bad, 0)
+            khz.parse(bad)
 
 
 # ---------------------------------------------------------------------- the file's own checks
@@ -69,10 +70,12 @@ def test_aggressor_fields_map_to_the_file_in_the_forms_units():
     a = Aggressor("U1 buck", vrm="U1", fsw_hz=1e6, rise_s=2e-9, fall_s=3e-9, vin_v=12.0)
     assert [aggressor_text(a, k) for k in ("name", "fsw_hz", "rise_s", "fall_s", "vin_v", "duty",
                                            "min_ring_zeta", "soft_edge_zeta")] == \
-        ["U1 buck", "1000", "2", "3", "12", "", "0.05", "0.5"]
+        ["U1 buck", "1000 kHz", "2 ns", "3 ns", "12 V", "", "0.05", "0.5"]
     q = with_aggressor_field(a, "fsw_hz", "500")
     assert q.fsw_hz == 5e5 and q.rise_s == 2e-9 and a.fsw_hz == 1e6        # a copy, one field
     assert with_aggressor_field(a, "rise_s", "1.5").rise_s == 1.5e-9
+    assert with_aggressor_field(a, "fsw_hz", "2 MHz").fsw_hz == 2e6        # its unit: what it says
+    assert with_aggressor_field(a, "rise_s", "1500p").rise_s == 1.5e-9
     assert with_aggressor_field(a, "fsw_hz", "").fsw_hz is None             # empty: not entered
     assert with_aggressor_field(a, "duty", "0.15").duty == 0.15
     assert with_aggressor_field(a, "topology", "buck").topology == "buck"
@@ -86,10 +89,11 @@ def test_aggressor_fields_map_to_the_file_in_the_forms_units():
 def test_noise_options_are_checked_by_the_file_and_quick_is_five_per_decade():
     from coppernicus.app.noise_panel import QUICK_FIELD_PER_DECADE, option_text, with_option
     o = NoiseOptions()
-    assert option_text(o, "f_max_hz") == "" and option_text(o, "segment_mm") == "0.5"
+    assert option_text(o, "f_max_hz") == "" and option_text(o, "segment_mm") == "0.5 mm"
     assert with_option(o, "f_max_hz", "500").f_max_hz == 5e8 and o.f_max_hz is None    # MHz, a copy
     assert with_option(o, "f_max_hz", "").f_max_hz is None
     assert with_option(o, "dead_time_ns", "0").dead_time_ns == 0.0
+    assert with_option(o, "dead_time_ns", "15 ns").dead_time_ns == 15.0
     assert with_option(o, "max_harmonics", 2000).max_harmonics == 2000
     assert with_option(o, "board_model", False).board_model is False
     for key, text, words in (("segment_mm", "0", "segment_mm"), ("window_mm", "", "give a number"),
@@ -164,10 +168,10 @@ def test_phase_cells_show_and_read_the_files_fields_in_the_tables_units():
     from coppernicus.app.noise_panel import PHASE_COLUMNS, edit_phase, phase_cell
     ph = _agg().phases[0]
     cells = {key: phase_cell(ph, key) for _h, key in PHASE_COLUMNS}
-    assert cells["inductance_h"] == "1" and cells["coss_f"] == "300" and cells["qrr_nc"] == "5"
+    assert cells["inductance_h"] == "1 µH" and cells["coss_f"] == "300 pF" and cells["qrr_nc"] == "5 nC"
     assert cells["high_side_pins"] == "1" and cells["input_caps"] == "C1"
     assert cells["rds_on_hs_ohm"] == "" and cells["inductor_shielded"] == "yes"
-    assert cells["dcr_ohm"] == "0" and cells["inductor_axis"] == "vertical"
+    assert cells["dcr_ohm"] == "0 mΩ" and cells["inductor_axis"] == "vertical"
     a = _agg()
     q = edit_phase(a, 0, "coss_f", "450")
     assert q.phases[0].coss_f == 4.5e-10 and a.phases[0].coss_f == 3e-10      # a copy
@@ -176,6 +180,8 @@ def test_phase_cells_show_and_read_the_files_fields_in_the_tables_units():
     assert edit_phase(a, 0, "qrr_nc", "").phases[0].qrr_nc is None            # empty: stand-in
     assert edit_phase(a, 0, "output_caps", "C2, C3 C4").phases[0].output_caps == ["C2", "C3", "C4"]
     assert edit_phase(a, 0, "inductance_h", "2.2").phases[0].inductance_h == 2.2e-6
+    assert edit_phase(a, 0, "inductance_h", "4.7 µH").phases[0].inductance_h == 4.7e-6
+    assert edit_phase(a, 0, "coss_f", "0.5n").phases[0].coss_f == 5e-10
     assert edit_phase(a, 0, "high_side_pins", "all").phases[0].high_side_pins is None
     assert edit_phase(a, 0, "inductor_shielded", "no").phases[0].inductor_shielded is False
     for key, text, words in (("coss_f", "0", "coss_f"), ("inductor_axis", "diagonal", "inductor_axis"),
@@ -215,9 +221,11 @@ def test_victim_cells_map_to_the_file_and_a_preset_owns_its_terminations():
     cells = {key: victim_cell(v, key) for _h, key in VICTIM_COLUMNS}
     assert (cells["name"], cells["net"], cells["preset"], cells["driver_ref"], cells["driver_pins"]) == \
         ("", "SIG", "cmos", "U5", "1")
-    assert cells["receiver_pins"] == "" and cells["logic_v"] == "3.3" and cells["noise_margin_v"] == "400"
+    assert cells["receiver_pins"] == "" and cells["logic_v"] == "3.3 V"
+    assert cells["noise_margin_v"] == "400 mV"
     q, note = with_victim_cell(v, "noise_margin_v", "250")
     assert q.noise_margin_v == 0.25 and v.noise_margin_v == 0.4 and note == ""
+    assert with_victim_cell(v, "noise_margin_v", "0.3 V")[0].noise_margin_v == 0.3
     with pytest.raises(ValueError, match="own terminations"):
         with_victim_cell(v, "driver_ohm", "50")
     custom, note = with_victim_cell(v, "preset", "custom")
@@ -539,7 +547,7 @@ def test_the_noise_tab_follows_the_impedance_tab_and_opening_changes_nothing(tmp
         window.results_tabs.setCurrentWidget(panel)
         app.processEvents()
         assert panel.aggressor_box.currentText() == "U1" and panel.vrm_box.currentData() == "U1"
-        assert panel.field["fsw_hz"].text() == "1000" and panel.field["rise_s"].text() == "2"
+        assert panel.field["fsw_hz"].text() == "1000 kHz" and panel.field["rise_s"].text() == "2 ns"
         assert panel.phases.rowCount() == 1 and panel.phases.item(0, 0).text() == "L1"
         assert panel.victims.rowCount() == 3 and panel.victims.item(1, 1).text() == "SIG_LOOP"
         probes = [panel.probe_list.item(i) for i in range(panel.probe_list.count())]
@@ -552,7 +560,8 @@ def test_the_noise_tab_follows_the_impedance_tab_and_opening_changes_nothing(tmp
         window.open_project({str(precise)!r})
         app.processEvents()
         before = window.project.to_dict()
-        assert panel.field["rise_s"].text() == "2.12346" and panel.opt["segment_mm"].text() == "0.123457"
+        assert panel.field["rise_s"].text() == "2.12346 ns"
+        assert panel.opt["segment_mm"].text() == "0.123457 mm"
         assert panel.opt["max_harmonics"].value() == 200000 and panel.opt["field_per_decade"].value() == 500
         for w in list(panel.field.values()) + list(panel.opt.values()):
             if hasattr(w, "editingFinished"):

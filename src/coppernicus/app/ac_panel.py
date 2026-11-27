@@ -64,6 +64,9 @@ from coppernicus.app import theme
 from coppernicus.app.mesher import failure
 from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.panels import without_tolerances
+from coppernicus.app.units import _NUMBER, SI_TIP, UNIT_SPELLINGS, parse_si, si_text  # noqa: F401
+from coppernicus.app.verdict import VerdictHeader, ac_cards
+from coppernicus.app.worker import add_fallback
 from coppernicus.engine.meshing import session as meshing
 from coppernicus.impedance import ac_summary, ac_text, draw_impedance, hz_text, ohm_text, rail_verdict
 from coppernicus.project import (
@@ -89,59 +92,27 @@ from coppernicus.triangle_standin import TriangleNotInstalled
 QUICK_FIELD_POINTS = 10
 KIPI_FIELD_POINTS = AcOptions().field_points_per_decade       # KiPI's default (AcOptions copies it)
 
-_SI = {"p": -12, "n": -9, "u": -6, "µ": -6, "μ": -6, "m": -3, "k": 3, "K": 3, "M": 6, "G": 9}
-_SI_RE = re.compile(r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*([pnuµμmkKMG]?)$")
-_PREFIXES = ((1e9, "G"), (1e6, "M"), (1e3, "k"), (1.0, ""), (1e-3, "m"), (1e-6, "µ"), (1e-9, "n"),
-             (1e-12, "p"))
-SI_TIP = "SI prefixes work: p n u (µ) m k M G, so 50m = 0.05 and 10M = 1e7 (m is milli, M is mega)"
-
-
-def parse_si(text: Optional[str]) -> Optional[float]:
-    """A number typed in a cell: ``"50m"`` → 0.05, ``"10M"`` → 1e7, ``"3,3"`` → 3.3; ``None``
-    when empty. Raises ValueError for anything else."""
-    t = (text or "").strip().replace(",", ".")
-    if not t:
-        return None
-    m = _SI_RE.match(t)
-    if not m:
-        raise ValueError(f"{text.strip()!r} is not a number ({SI_TIP})")
-    number, prefix = m.groups()
-    if not prefix:
-        return float(number)
-    if "e" in number.lower():
-        return float(number) * 10.0 ** _SI[prefix]
-    return float(f"{number}e{_SI[prefix]}")          # "33m" is 0.033 exactly as typed
-
-
-def si_text(x: Optional[float]) -> str:
-    """A number as a cell shows it, 4 significant digits with an SI prefix ("" for None)."""
-    if x is None:
-        return ""
-    if x == 0:
-        return "0"
-    scale, prefix = _PREFIXES[-1]
-    for s, p in _PREFIXES:
-        if abs(x) >= s * 0.9995:
-            scale, prefix = s, p
-            break
-    return f"{x / scale:.4g}{prefix}"
+_MASK_POINT = re.compile(rf"({_NUMBER}\s*[pnuµμmkKMG]?\s*(?:Hz|hz)?)\s+({_NUMBER}\s*[pnuµμmkKMG]?\s*"
+                         rf"(?:{'|'.join(map(re.escape, UNIT_SPELLINGS['Ω']))})?)$")
 
 
 def parse_mask(text: str) -> List[Tuple[float, float]]:
-    """A target mask typed as ``"Hz Ω; Hz Ω; …"`` (``"100k 50m; 10M 50m"``)."""
+    """A target mask typed as ``"Hz Ω; Hz Ω; …"``, with units or without
+    (``"100 kHz 50 mΩ; 10 MHz 50 mΩ"`` or ``"100k 50m; 10M 50m"``)."""
     out = []
     for part in (p.strip() for p in (text or "").split(";")):
         if not part:
             continue
-        words = part.split()
-        if len(words) != 2:
-            raise ValueError(f"a mask is Hz Ω pairs separated by ';' (100k 50m; 10M 50m), not {part!r}")
-        out.append((parse_si(words[0]), parse_si(words[1])))
+        m = _MASK_POINT.match(part)
+        if not m:
+            raise ValueError(f"a mask is Hz Ω pairs separated by ';' (100 kHz 50 mΩ; 10 MHz 50 mΩ), "
+                             f"not {part!r}")
+        out.append((parse_si(m.group(1), "Hz"), parse_si(m.group(2), "Ω")))
     return out
 
 
 def mask_text(points: Sequence[Tuple[float, float]]) -> str:
-    return "; ".join(f"{si_text(f)} {si_text(z)}" for f, z in points)
+    return "; ".join(f"{si_text(f, 'Hz')} {si_text(z, 'Ω')}" for f, z in points)
 
 
 # ---------------------------------------------------------------------- probe and model rows
@@ -167,6 +138,10 @@ PROBE_TIPS = {
 # through the table's own checks.
 PROBE_SHOWN = ("name", "ref", "pins", "target_ohm")
 _PROBE_TEXT = ("name", "ref", "net", "ground_ref", "ground_net")
+# The unit each number column shows and takes (slew in A/µs keeps its header's unit).
+UNITS = {"target_ohm": "Ω", "target_hz": "Hz", "ac_tolerance_v": "V", "step_a": "A",
+         "capacitance_f": "F", "esl_h": "H", "esr_ohm": "Ω", "rated_v": "V",
+         "f_start_hz": "Hz", "f_stop_hz": "Hz"}
 _PROBE_NUMBERS = ("target_ohm", "target_hz", "ac_tolerance_v", "step_a", "slew_a_per_us")
 
 CAP_COLUMNS = [("Name", "name"), ("C (F)", "capacitance_f"), ("ESL (H)", "esl_h"), ("ESR (Ω)", "esr_ohm"),
@@ -198,7 +173,7 @@ def probe_cell(p: Probe, key: str) -> str:
     if key == "target_points":
         return mask_text(v)
     if key in _PROBE_NUMBERS:
-        return si_text(v)
+        return si_text(v, UNITS.get(key, ""))
     return str(v)
 
 
@@ -222,7 +197,7 @@ def with_probe_cell(p: Probe, key: str, text: str) -> Probe:
         elif key == "target_points":
             value = parse_mask(text)
         else:
-            value = parse_si(text)
+            value = parse_si(text, UNITS.get(key, ""))
     except (ValueError, ProjectError) as e:
         raise ValueError(f"{_header(PROBE_COLUMNS, key)}: {e}") from None
     q = copy.deepcopy(p)
@@ -300,11 +275,11 @@ def cap_cell(m: CapModel, key: str) -> str:
     """What the capacitor model table shows in column ``key`` (0 = not entered: empty)."""
     v = getattr(m, key)
     if key in _CAP_VALUES:
-        return si_text(v) if v else ""
+        return si_text(v, UNITS.get(key, "")) if v else ""
     if key == "refs":
         return ", ".join(v)
     if key == "rated_v":
-        return si_text(v)
+        return si_text(v, "V")
     if key == "kept_at_rated_pct":
         return "" if v is None else f"{v:g}"
     return str(v)
@@ -319,9 +294,9 @@ def with_cap_cell(m: CapModel, key: str, text: str) -> CapModel:
         elif key == "refs":
             value = [r for r in re.split(r"[,\s]+", text.strip()) if r]
         elif key in _CAP_VALUES:
-            value = parse_si(text) or 0.0
+            value = parse_si(text, UNITS.get(key, "")) or 0.0
         else:
-            value = parse_si(text)
+            value = parse_si(text, UNITS.get(key, ""))
     except ValueError as e:
         raise ValueError(f"{_header(CAP_COLUMNS, key)}: {e}") from None
     q = copy.deepcopy(m)
@@ -585,6 +560,7 @@ class AcWorker(QThread):
         self._cancel = False
         self.generation = 0
         self.mesher: Optional[str] = None       # the solve's mesher (None: the default); set by the panel
+        self.fallback: Optional[str] = None     # its warning when the default could not run (set too)
 
     def cancel(self):
         self._cancel = True
@@ -605,6 +581,7 @@ class AcWorker(QThread):
                                         progress=self.message.emit, cancelled=lambda: self._cancel,
                                         fraction=self.fraction.emit, transient=self.transient)
                     self.merged.annotate(res)
+                    add_fallback(res, self.fallback)
                     self.succeeded.emit(res)
         except Cancelled:
             self.cancelled.emit()
@@ -631,7 +608,6 @@ def _table(headers, tips=None) -> QTableWidget:
     return t
 
 
-CHART_SURFACE = "#fcfcfb"
 
 
 class AcPanel(QWidget):
@@ -658,6 +634,7 @@ class AcPanel(QWidget):
         self._pairs: Tuple[Any, Dict[str, Optional[str]]] = (None, {})   # (key, each load's probe)
         self._refresh_pending = False
         self._build()
+        theme.signals.changed.connect(lambda *_: self.show_result())   # the plots follow the theme
         window.view.pad_picked.connect(self._pad_picked)
         window.rail_panel.pick_changed.connect(lambda kind: kind and self._leave_pick())
         window.measure.toggled.connect(lambda on: on and self._leave_pick())
@@ -825,7 +802,7 @@ class AcPanel(QWidget):
         # Results: the plot with the dock's full height beside the verdict, rows, stats and notes.
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         from matplotlib.figure import Figure
-        self.figure = Figure(figsize=(6, 3), facecolor=CHART_SURFACE, layout="constrained")
+        self.figure = Figure(figsize=(6, 3), facecolor=theme.color("panel"), layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setMinimumSize(160, 100)
         self.header = QLabel()
@@ -842,7 +819,8 @@ class AcPanel(QWidget):
         rl = QVBoxLayout(results)
         rl.setContentsMargins(4, 4, 4, 4)
         head = QHBoxLayout()
-        head.addWidget(self.header, 1)
+        self.verdict = VerdictHeader(self.header)       # the badge, this line and the cards, on top
+        head.addStretch(1)
         head.addWidget(self.export_button, 0, Qt.AlignTop)
         rl.addLayout(head)
         rl.addWidget(self.table, 1)
@@ -860,9 +838,11 @@ class AcPanel(QWidget):
             split.setStretchFactor(i, stretch)
         split.setSizes([430, 560, 300])           # the editor at its natural width, the plot widest
         self.setup_area, self._split = scroll, split
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(split)
+        layout.setSpacing(0)
+        layout.addWidget(self.verdict)
+        layout.addWidget(split, 1)
 
         # Wiring.
         self.rail_box.currentIndexChanged.connect(lambda *_: self._rail_shown())
@@ -991,7 +971,7 @@ class AcPanel(QWidget):
                 w.setPlaceholderText(f"{ac_max_edge(a).mm:g} (default)")
                 self._shown[key] = ""
             else:
-                w.setText(si_text(getattr(a, key)) if key in ("f_start_hz", "f_stop_hz")
+                w.setText(si_text(getattr(a, key), "Hz") if key in ("f_start_hz", "f_stop_hz")
                           else f"{getattr(a, key):g}")
                 self._shown[key] = w.text()
             w.blockSignals(False)
@@ -1001,8 +981,9 @@ class AcPanel(QWidget):
         self.links.setRowCount(0)
         for r, k in enumerate(self.merged_project.links):         # the KiCad fields' links too
             self.links.insertRow(r)
+            esl = si_text(link_esl_of(self.project.ac, k), "H")
             for c, text in enumerate((f"{k.name} ({k.ref})" if k.name != k.ref else k.ref,
-                                      f"{k.net_a} ↔ {k.net_b}", si_text(link_esl_of(self.project.ac, k)))):
+                                      f"{k.net_a} ↔ {k.net_b}", esl)):
                 item = QTableWidgetItem(text)
                 if c < 2:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
@@ -1337,7 +1318,7 @@ class AcPanel(QWidget):
         if not isinstance(w, QSpinBox) and w.text().strip() == self._shown.get(key):
             return                                # committed unchanged: the exact value stays
         try:
-            value: Any = w.value() if isinstance(w, QSpinBox) else parse_si(w.text())
+            value: Any = w.value() if isinstance(w, QSpinBox) else parse_si(w.text(), UNITS.get(key, ""))
             if value is None and key != "max_edge_mm":     # max_edge_mm emptied: not set again
                 raise ValueError("give a number")
             new = dataclasses.replace(self.project.ac, **{key: value})
@@ -1371,7 +1352,7 @@ class AcPanel(QWidget):
         if src is None or self._loading or self.bandwidth.text().strip() == self._shown.get("bandwidth"):
             return
         try:
-            hz = parse_si(self.bandwidth.text())
+            hz = parse_si(self.bandwidth.text(), "Hz")
             new = copy.deepcopy(self.project.ac)
             set_bandwidth(new, src, hz)
             check_ac([], [], new)
@@ -1396,7 +1377,7 @@ class AcPanel(QWidget):
             return
         k = links[r]
         try:
-            henry = parse_si(item.text())
+            henry = parse_si(item.text(), "H")
             new = copy.deepcopy(self.project.ac)
             set_link_esl(new, k, henry)
             check_ac([], [], new)
@@ -1438,7 +1419,7 @@ class AcPanel(QWidget):
         self.bandwidth.blockSignals(True)
         self.bandwidth.setEnabled(src is not None)
         hz = bandwidth_of(self.project.ac, src) if src is not None else None
-        self.bandwidth.setText(si_text(hz))
+        self.bandwidth.setText(si_text(hz, "Hz"))
         self._shown["bandwidth"] = self.bandwidth.text()
         self.bandwidth.blockSignals(False)
         if src is None:
@@ -1453,11 +1434,13 @@ class AcPanel(QWidget):
 
     def _show_empty(self, text: str = "Solve a rail's impedance to see |Z|(f) at its probes"):
         self.figure.clear()
+        self.figure.set_facecolor(theme.color("panel"))
         ax = self.figure.add_subplot()
         ax.axis("off")
-        ax.text(0.5, 0.5, text, ha="center", va="center", color="#898781", transform=ax.transAxes)
+        ax.text(0.5, 0.5, text, ha="center", va="center", color=theme.color("muted"), transform=ax.transAxes)
         self.canvas.draw_idle()
         self.header.setText("")
+        self.verdict.show_verdict(None, [])        # no result: no verdict, no cards
         self.table.setRowCount(0)
         self.stats.setText("")
         self.notes.clear()
@@ -1470,7 +1453,9 @@ class AcPanel(QWidget):
             self._show_empty()
             return
         r = entry[0]
-        draw_result(self.figure, r)
+        with theme.plotting():                    # on screen in the theme; Export writes it light
+            draw_result(self.figure, r)
+        theme.restyle_figure(self.figure)
         self.canvas.draw_idle()
         rows = result_rows(r)
         self.table.setRowCount(len(rows))
@@ -1546,13 +1531,17 @@ class AcPanel(QWidget):
         entry = self.results.get(self.rail_box.currentText())
         if entry is None:
             self.header.setText("")
+            self.verdict.show_verdict(None, [])
             return
         r, solved = entry
+        word = rail_verdict(r)[0] or "not_judged"
         verdict = {"fail": theme.span("fail", "<b>FAIL</b>"), "pass": "<b>pass</b>",
-                   "not_judged": theme.span("warn", "<b>not judged</b>")}[rail_verdict(r)[0]]
+                   "not_judged": theme.span("warn", "<b>not judged</b>")}[word]
+        changed = _project_key(self.merged_project) != solved
         stale = ("<br>" + theme.span("warn", "<b>Setup changed since this solve</b>: solve again")
-                 if _project_key(self.merged_project) != solved else "")
+                 if changed else "")
         self.header.setText(f"<b>{r.rail}</b> against {r.ground}: {verdict}{stale}")
+        self.verdict.show_verdict(word, ac_cards(r), stale=changed)
 
     @property
     def stale(self) -> bool:
@@ -1800,6 +1789,7 @@ class AcPanel(QWidget):
     def _start(self, worker: AcWorker):
         worker.generation = self._generation
         worker.mesher = self._mesher = self._win.mesher_name()    # the estimate's and the solve's
+        worker.fallback = self._win.mesher_box.fallback()
         worker.message.connect(self._message)
         worker.fraction.connect(self._fraction)
         worker.sized.connect(self._sized)

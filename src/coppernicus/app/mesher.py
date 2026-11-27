@@ -109,6 +109,11 @@ class MesherBox(QWidget):
         """The mesher a solve started now uses."""
         return meshing.resolve(None, self._project_mesher, app_choice())
 
+    def fallback(self) -> Optional[str]:
+        """The warning a solve started now carries when nothing chose a mesher and the default
+        cannot run here, so Triangle meshes instead (session.choose); None otherwise."""
+        return meshing.choose(None, self._project_mesher, app_choice())[1]
+
     def refresh(self) -> None:
         name = self.current()
         self.box.blockSignals(True)
@@ -128,10 +133,11 @@ class MesherBox(QWidget):
         self.box.blockSignals(False)
         locked = self._project_mesher is not None
         self.box.setEnabled(not locked)
-        self.box.setToolTip(f"Set by the project file (settings.mesher: {self._project_mesher}); "
-                            "change it there" if locked else
-                            "The mesher every solve uses (rail, tree, impedance, noise, tolerance); "
-                            "kept for the next start. A project file's settings.mesher wins.")
+        tip = (f"Set by the project file (settings.mesher: {self._project_mesher}); change it there"
+               if locked else "The mesher every solve uses (rail, tree, impedance, noise, tolerance); "
+               "kept for the next start. A project file's settings.mesher wins.")
+        warning = self.fallback()
+        self.box.setToolTip(f"{tip}\n\n{warning}" if warning else tip)
         self._name = name
 
     def _chosen(self, index: int) -> None:

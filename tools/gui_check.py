@@ -491,7 +491,7 @@ def run_flow_demo(window, check: Checks, args, out: Path):
           shown == [("U1", None), ("U2", None), ("U3", None)]
           and window._rail_draft is window.project.rail("+3V3"), str(shown))
     max_drop = window.rail_panel.max_drop.text()
-    check("... with its limits", max_drop == "0.25", max_drop)
+    check("... with its limits", max_drop == "0.25 %", max_drop)
     layers = [window.layer_box.itemText(i) for i in range(window.layer_box.count())]
     check("... and the new board's layers", layers == ["F.Cu", "B.Cu"], str(layers))
     if not args.window:       # + / − as in KiCad (real keys need the window active: offscreen only)
@@ -506,9 +506,12 @@ def run_flow_demo(window, check: Checks, args, out: Path):
             QTest.keyClick(widget, key)
             QApplication.processEvents()
             stepped.append(window.layer_box.currentText())
+        # The field took the − as typing (a number with its unit may still be under way): the
+        # layer did not step.
         check("+ and − step the layer, not while a text field has focus",
-              stepped == ["B.Cu", "F.Cu", "F.Cu"] and window.rail_panel.max_drop.text() == max_drop,
+              stepped == ["B.Cu", "F.Cu", "F.Cu"] and window.rail_panel.max_drop.text() == max_drop + "-",
               f"{stepped} {window.rail_panel.max_drop.text()!r}")
+        window.rail_panel.max_drop.setText(max_drop)
     # One number format whatever the system locale: dots, as in the limits and the problems.
     spin_texts = [window.rail_panel.max_edge.text(), window.rail_panel.temp.text(),
                   window.rail_panel.sources.table.cellWidget(0, 3).text(),
@@ -1042,7 +1045,7 @@ def run_copper_thickness(window, check: Checks, args, out: Path):
           panel.copper_summary.text() == "B.Cu 0.07 mm, In3.Cu 0.05 mm", panel.copper_summary.text())
     dialog = edit_copper(window, lambda d: d.reject())
     check("... listed with a Remove button", list(dialog.remove_buttons) == ["In3.Cu"]
-          and dialog.fields["B.Cu"].text() == "0.07", str(list(dialog.remove_buttons)))
+          and dialog.fields["B.Cu"].text() == "0.07 mm", str(list(dialog.remove_buttons)))
 
     def remove(d):
         d.remove_buttons["In3.Cu"].click()
@@ -1415,7 +1418,8 @@ def run_power_tree(window, check: Checks, args, out: Path):
     window.nets.select("+3V3")
     QApplication.processEvents()
     check("... the field holding it stays editable, so it can be cleared, and says why it is not judged",
-          rp.max_rise.isEnabled() and rp.max_rise.text() == "0.001" and "not judged" in rp.max_rise.toolTip())
+          rp.max_rise.isEnabled() and rp.max_rise.text() == "0.001 mV"
+          and "not judged" in rp.max_rise.toolTip())
     rp.max_rise.setText("")
     rp.max_rise.editingFinished.emit()
     QApplication.processEvents()
@@ -1450,7 +1454,7 @@ def run_thermal(window, check: Checks, args, out: Path):
     check("thermal: the Temperature page follows the power tree's Tree",
           tabs[tabs.index("Tree") + 1] == "Temperature", str(tabs))
     check("... it shows the project's options: Electro-thermal ticked, max rise 15 °C",
-          panel.enabled.isChecked() and panel.max_rise.text() == "15" and panel.max_temp.text() == ""
+          panel.enabled.isChecked() and panel.max_rise.text() == "15 °C" and panel.max_temp.text() == ""
           and panel.grid.text() == "automatic", f"{panel.max_rise.text()!r} {panel.grid.text()!r}")
     window.nets.select("+3V3")
     QApplication.processEvents()
@@ -2346,7 +2350,7 @@ def run_fields(window, check: Checks, args, out: Path):
     check("... the KiCad values (U1 1 A), the project's own rail (1.5 A) ignored with a warning",
           rp.loads.rows() == [("", "U1", None, 1.0)]
           and "project file rail VCC ignored" in rp.banner.warnings.text(), rp.banner.warnings.text())
-    check("... max drop 2 % from PI_LIMIT_DROP on U1, read-only", rp.max_drop.text() == "2"
+    check("... max drop 2 % from PI_LIMIT_DROP on U1, read-only", rp.max_drop.text() == "2 %"
           and rp.max_drop.isReadOnly() and "U1" in rp.max_drop.toolTip(), rp.max_drop.toolTip())
     print(f"[INFO] fields example: {time_remerge(window)}", flush=True)
 
@@ -2471,7 +2475,7 @@ def run_ac(window, check: Checks, args, out: Path):
     QApplication.processEvents()
     check("ac: the Impedance tab shows the example's probe, model, rail and bandwidth",
           panel.probes.rowCount() == 1 and panel.caps.item(0, 4).text() == "C1"
-          and panel.rail_box.currentText() == "+3V3" and panel.bandwidth.text() == "100k",
+          and panel.rail_box.currentText() == "+3V3" and panel.bandwidth.text() == "100 kHz",
           f"{panel.rail_box.currentText()} {panel.bandwidth.text()}")
     spin = panel.opt["field_points_per_decade"]
     check("ac: KiPI's 20 copper solves per decade until the quick preset is pressed",
@@ -2631,7 +2635,7 @@ def run_ac_fields(window, check: Checks, args, out: Path):
     locked = all(not caps.item(r, c).flags() & Qt.ItemIsEditable for r in (1, 2)
                  for c in range(caps.columnCount()))
     check("ac fields: C1's and C2's models from KiCad fields follow the project's bulk, read-only",
-          names == ["bulk", "C1 (KiCad)", "C2 (KiCad)"] and locked and caps.item(1, 3).text() == "20m"
+          names == ["bulk", "C1 (KiCad)", "C2 (KiCad)"] and locked and caps.item(1, 3).text() == "20 mΩ"
           and [m.name for m in window.project.capacitors] == ["bulk"], str(names))
     tip = caps.item(1, 3).toolTip()
     check("ac fields: ... each cell's tooltip names its field and how a project model takes its place",
@@ -2643,7 +2647,7 @@ def run_ac_fields(window, check: Checks, args, out: Path):
           f"{parts} | {panel.cap_note.text()}")
     caps.item(2, 1).setText("1u")                       # only a script can: refused, as typed back
     check("ac fields: an edit of a KiCad fields row is refused, its value back, the field named",
-          caps.item(2, 1).text() == "100n" and "Not applied" in panel.status.text()
+          caps.item(2, 1).text() == "100 nF" and "Not applied" in panel.status.text()
           and 'PI_C "100nF" on C2' in panel.status.text()
           and abs(window.merged.project.capacitors[2].capacitance_f - 1e-7) < 1e-15, panel.status.text())
     shot = folder / "ac_fields.png"
@@ -2740,7 +2744,7 @@ def run_noise(window, check: Checks, args, out: Path):
     QApplication.processEvents()
     check("noise: the tab shows the example's aggressor, source, fsw, phase and victims",
           panel.aggressor_box.currentText() == "U1" and panel.vrm_box.currentData() == "U1"
-          and panel.field["fsw_hz"].text() == "1000" and panel.phases.rowCount() == 1
+          and panel.field["fsw_hz"].text() == "1000 kHz" and panel.phases.rowCount() == 1
           and panel.victims.rowCount() == 3,
           f"{panel.aggressor_box.currentText()} {panel.field['fsw_hz'].text()}")
     n_boxes = len(DIALOGS)
@@ -2924,8 +2928,8 @@ def run_tolerance(window, check: Checks, args, out: Path):
     row = [panel.loads.item(0, c).text() for c in range(panel.loads.columnCount())]
     check("tolerance: the tab follows Ripple & noise and shows U2's tolerances and U1's accuracy",
           tabs[tabs.index("Ripple & noise") + 1] == "Tolerance"
-          and row == ["U2", "VOUT", "6", "", "3", "", "", "50", "", "30"]
-          and panel.sources.item(1, 2).text() == "1", str(row))
+          and row == ["U2", "VOUT", "±6 %", "", "±3 %", "", "", "±50 mV", "", "±30 mV"]
+          and panel.sources.item(1, 2).text() == "±1 %", str(row))
 
     def cell(c):
         return panel.table.item(0, c).text() if panel.table.rowCount() else ""
@@ -3022,7 +3026,7 @@ def run_tolerance(window, check: Checks, args, out: Path):
     check("tolerance: saved and reopened, the tolerances are kept",
           load.tol_pct == (-3.0, 3.0) and load.dc_tol_pct == (-3.0, 3.0) and load.ac_tol_mv == (-50.0, 50.0)
           and load.transient_mv == (-30.0, 30.0) and window.project.rail("VOUT").sources[0].accuracy_pct
-          == (-1.0, 1.0) and panel.loads.item(0, 2).text() == "3" and not window.dirty, str(load))
+          == (-1.0, 1.0) and panel.loads.item(0, 2).text() == "±3 %" and not window.dirty, str(load))
     shot = out / "tolerance_panel.png"
     window.results_tabs.setCurrentWidget(panel)
     QApplication.processEvents()
@@ -3065,7 +3069,7 @@ def run_tolerance_fields(window, check: Checks, out: Path):
     held = [i for i in (acc, ac) if i is not None]
     check("tolerance: a cell a KiCad field holds is read-only, showing the field's value, the tooltip "
           "naming the field and the part",
-          len(held) == 2 and acc.text() == "1" and ac.text() == "20"
+          len(held) == 2 and acc.text() == "±1 %" and ac.text() == "±20 mV"
           and not any(i.flags() & Qt.ItemIsEditable for i in held)
           and all(i.background().color() == theme.qcolor("cell-readonly") for i in held)
           and 'KiCad field PI_ACC "1%" on J1; change it in KiCad' in acc.toolTip()
@@ -3074,7 +3078,7 @@ def run_tolerance_fields(window, check: Checks, out: Path):
     panel.set_cell("source", "J1", "accuracy_pct", "2")
     check("tolerance: typed anyway into a field's cell, refused: nothing written",
           panel.status.text().startswith("Not applied: from KiCad field PI_ACC")
-          and cell(panel.sources, SOURCE_COLUMNS, "accuracy_pct").text() == "1"
+          and cell(panel.sources, SOURCE_COLUMNS, "accuracy_pct").text() == "±1 %"
           and window.project.rails == [] and not window.dirty, panel.status.text()[:120])
     free = cell(panel.loads, LOAD_COLUMNS, "tol_pct")
     editable = free is not None and bool(free.flags() & Qt.ItemIsEditable)

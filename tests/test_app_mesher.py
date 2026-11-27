@@ -48,7 +48,7 @@ def test_triangle_offers_its_download_while_only_the_stand_in_is_here(only_trian
 def test_the_project_wins_over_the_app_and_the_app_over_the_default():
     project = Project()
     app_mesher.save_choice(None)
-    assert app_mesher.effective(project) == meshing.DEFAULT
+    assert app_mesher.effective(project) == meshing.resolve(None)   # the default, or its fallback here
     app_mesher.save_choice("rust")
     assert app_mesher.effective(project) == "rust"
     project.settings.mesher = "triangle"
@@ -105,7 +105,8 @@ def test_the_box_sits_atop_the_setup_shows_a_project_mesher_and_the_solve_names_
         mw.SolveWorker = HeldWorker
         box = window.mesher_box
         assert window.setup_dock.header is box and box.isEnabled()
-        assert box.current() == meshing.DEFAULT and box.box.currentData() == meshing.DEFAULT
+        here = meshing.resolve(None)                     # the default, or Triangle where it cannot run
+        assert box.current() == here and box.box.currentData() == here
         window.open_project({DEMO!r})
         window.project.settings.mesher = "triangle"            # as a project file would say it
         window._remerge()
@@ -124,3 +125,25 @@ def test_the_box_sits_atop_the_setup_shows_a_project_mesher_and_the_solve_names_
         assert f"meshed with {{app_mesher.shown(window.mesher_name())}}" in msg, msg
         assert window.solved_mesher["+3V3"] == window.mesher_name()
     ''')
+
+
+def test_the_fallback_warning_goes_with_every_result(monkeypatch):
+    """With no mesher chosen and the default unable to run here, Triangle meshes and the result
+    says so (session.FALLBACK_WARNING), once."""
+    from types import SimpleNamespace
+
+    from coppernicus.app import worker as app_worker
+    monkeypatch.setattr(meshing, "_runs", lambda name: name == meshing.FALLBACK)
+    name, warning = meshing.choose(None, None, None)
+    assert name == meshing.FALLBACK and warning == meshing.FALLBACK_WARNING
+    assert meshing.choose(None, "triangle", None) == ("triangle", None)        # chosen: no warning
+    result = SimpleNamespace(warnings=["other"], assumptions=[])
+    monkeypatch.setattr(app_worker, "solve_rail", lambda *a, **k: result)
+    w = app_worker.SolveWorker(None, None, None)
+    w.mesher, w.fallback = name, warning
+    heard = []
+    w.succeeded.connect(heard.append)
+    w.run()
+    assert heard == [result] and result.warnings == ["other", meshing.FALLBACK_WARNING]
+    app_worker.add_fallback(result, warning)
+    assert result.warnings.count(meshing.FALLBACK_WARNING) == 1

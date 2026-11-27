@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from coppernicus.app import shown_label
-from coppernicus.app.verdict import BADGE_ROLE, BadgeDelegate
+from coppernicus.app.verdict import BADGE_ROLE, STALE_TIP, BadgeDelegate
 
 PAGE_ROLE = Qt.UserRole          # on a navigator item: the page widget's id (None on a group)
 
@@ -58,11 +58,13 @@ class Navigator(QTreeWidget):
         item = self._items.get(id(page))
         if item is not None:
             item.setData(0, BADGE_ROLE, data)
+            item.setToolTip(0, STALE_TIP if data and len(data) > 2 and data[2] else "")
 
     def set_group_badge(self, group: str, data) -> None:
         item = self._groups.get(group)
         if item is not None:
             item.setData(0, BADGE_ROLE, data)
+            item.setToolTip(0, STALE_TIP if data and len(data) > 2 and data[2] else "")
 
     def badge_of(self, page: QWidget):
         item = self._items.get(id(page))
