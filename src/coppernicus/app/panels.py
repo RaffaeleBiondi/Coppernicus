@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 from coppernicus.app import theme
 from coppernicus.app.copper_thickness import CopperThicknessDialog, thickness_summary
 from coppernicus.app.fields_view import FieldsBanner
-from coppernicus.app.units import UNIT_TIP, Unit, UnitEdit
+from coppernicus.app.units import PLAIN_SPELLINGS, UNIT_SPELLINGS, UNIT_TIP, Unit, UnitEdit
 from coppernicus.app.verdict import BADGE_ROLE, BadgeDelegate, CardData, VerdictHeader
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.power_tree import ACROSS_NOTE
@@ -108,11 +108,41 @@ class DecimalSpinBox(WheelWhenFocused, QDoubleSpinBox):
     separator and dropped, turning 3,3 into 33. It takes the wheel only when focused
     (:class:`WheelWhenFocused`)."""
 
+    def _unit(self) -> Optional[Unit]:
+        """The unit its suffix names (" V", " A", " mm", " °C"); None for one Unit does not know
+        (" m/s") or no suffix: then a plain number, as Qt reads it."""
+        symbol = self.suffix().strip()
+        return Unit(symbol) if symbol in UNIT_SPELLINGS or symbol in PLAIN_SPELLINGS else None
+
+    def _parse(self, text: str) -> Optional[float]:
+        """The value typed, with its unit or an SI prefix ("500m", "500 mA", "0.5 A"); None
+        when it is not one (yet). The suffix Qt shows after the number is read away."""
+        unit = self._unit()
+        if unit is None:
+            return None
+        t = text.strip()
+        candidates = [t]
+        if t.endswith(self.suffix().strip()):
+            candidates.append(t[: -len(self.suffix().strip())])
+        for c in candidates:
+            try:
+                value = unit.parse(c)
+            except ValueError:
+                continue
+            if value is not None:
+                return value
+        return None
+
     def validate(self, text, pos):
+        value = self._parse(text)
+        if value is not None:
+            ok = self.minimum() <= value <= self.maximum()
+            return (QValidator.Acceptable if ok else QValidator.Intermediate), text, pos
         return super().validate(text.replace(",", "."), pos)
 
     def valueFromText(self, text):
-        return super().valueFromText(text.replace(",", "."))
+        value = self._parse(text)
+        return value if value is not None else super().valueFromText(text.replace(",", "."))
 
 
 class FieldComboBox(WheelWhenFocused, QComboBox):

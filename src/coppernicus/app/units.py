@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from PySide6.QtGui import QValidator
 from PySide6.QtWidgets import QLineEdit
@@ -174,12 +174,14 @@ class Unit:
 class UnitValidator(QValidator):
     """Accepts what :meth:`Unit.parse` reads within ``lo``..``hi`` (as the project holds it),
     or an empty field when ``optional`` (each field says what empty means). Anything else is
-    unfinished: the field then never emits editingFinished and keeps its text."""
+    unfinished while typing; left so (Return, or the focus leaving), the field goes back to its
+    last accepted text (``restore``), so a typo never stays on screen as if it were applied."""
 
     def __init__(self, unit: Unit, lo: Optional[float] = None, hi: Optional[float] = None,
                  optional: bool = True, parent=None):
         super().__init__(parent)
         self.unit, self.lo, self.hi, self.optional = unit, lo, hi, optional
+        self.restore: Optional[Callable[[], str]] = None
 
     def validate(self, text, pos):
         try:
@@ -192,30 +194,38 @@ class UnitValidator(QValidator):
             return QValidator.Intermediate, text, pos
         return QValidator.Acceptable, text, pos
 
+    def fixup(self, text):
+        return self.restore() if self.restore is not None else text
+
 
 class UnitEdit(QLineEdit):
     """A line edit for a number with its unit: :meth:`value` reads it, :meth:`set_value` shows
     it (every digit: what is shown is what an untouched field commits), and a finished edit is
-    shown again with its unit ("500" → "500 kHz") before any other slot reads it."""
+    shown again with its unit ("500" → "500 kHz") before any other slot reads it. While its
+    text is not accepted (a typo, a value out of range), :meth:`value` is the last accepted
+    one: a slot reading every field of a group never takes, or fails on, a half-typed one."""
 
     def __init__(self, unit: Unit, lo: Optional[float] = None, hi: Optional[float] = None,
                  optional: bool = True, placeholderText: str = "", parent=None):
         super().__init__(parent)
         self.unit = unit
-        self.setValidator(UnitValidator(unit, lo, hi, optional, self))
+        validator = UnitValidator(unit, lo, hi, optional, self)
+        validator.restore = lambda: self._accepted
+        self.setValidator(validator)
         self.setPlaceholderText(placeholderText)
+        self._accepted = ""
         self.editingFinished.connect(self._tidy)        # first: later slots read the tidy text
 
     def value(self) -> Optional[float]:
-        return self.unit.parse(self.text())
+        return self.unit.parse(self.text() if self.hasAcceptableInput() else self._accepted)
 
     def set_value(self, x: Optional[float]) -> None:
-        self.setText(self.unit.exact(x))
+        self._accepted = self.unit.exact(x)
+        self.setText(self._accepted)
 
     def _tidy(self):
-        try:
-            t = self.unit.exact(self.value())
-        except ValueError:
+        if not self.hasAcceptableInput():
             return
-        if t != self.text():
-            self.setText(t)
+        self._accepted = self.unit.exact(self.value())
+        if self._accepted != self.text():
+            self.setText(self._accepted)

@@ -245,7 +245,7 @@ class ThermalPanel(QWidget):
         self.iterations = _IntSpin(minimum=1, maximum=10000)
         self.iterations.setToolTip("Electro-thermal passes. Settled when the last one changed no cell by "
                                    "more than 5 % of the peak rise.")
-        self.grid = DecimalSpinBox(decimals=3, minimum=0.0, maximum=1000.0, singleStep=0.05)
+        self.grid = DecimalSpinBox(decimals=3, minimum=0.0, maximum=1000.0, singleStep=0.05, suffix=" mm")
         self.grid.setSpecialValueText("automatic")
         self.grid.setToolTip("Square cell of the heat grid; 0 = automatic (about 250 cells across the board)")
         self.load_heat = QCheckBox("Heat from the loads")

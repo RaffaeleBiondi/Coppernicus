@@ -75,3 +75,43 @@ def test_the_fields_show_their_units_and_take_a_typed_one():
         th.max_temp.editingFinished.emit()
         assert th.max_temp.text() == "85 °C" and window.project.thermal.max_temp_c == 85.0
     ''')
+
+
+def test_a_typo_in_one_field_never_loses_another_fields_edit():
+    """A text not accepted (a typo, a value out of range) stays unfinished while typed; the
+    slot writing a group of fields reads that one's last accepted value, so the edit of its
+    neighbour lands; left so, the field goes back to its last accepted text."""
+    run_in_window(f'''
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        rp = window.rail_panel
+        window.open_project({PDN!r})
+        window.nets.select("+3V3")
+        app.processEvents()
+        limits = window.project.rail("+3V3").limits
+        shown = rp.max_drop.text()
+        rp.max_drop.setText(shown + "-")                     # a typo, never finished
+        rp.max_via.setText("2")
+        rp.max_via.editingFinished.emit()
+        limits = window.project.rail("+3V3").limits
+        assert limits.max_via_current == 2.0 and rp.max_drop.value() == limits.max_drop_pct, limits
+        window.show()
+        rp.max_drop.setFocus()
+        QTest.keyClick(rp.max_drop, Qt.Key_Return)            # left with Return: back to its value
+        assert rp.max_drop.text() == shown, rp.max_drop.text()
+    ''')
+
+
+def test_the_spin_boxes_take_an_si_prefix_and_their_unit():
+    run_in_window(f'''
+        window.open_project({PDN!r})
+        window.nets.select("+3V3")
+        app.processEvents()
+        spin = window.rail_panel.sources.table.cellWidget(0, 3)   # the source's voltage, in V
+        for text in ("2500m", "2500 mV", "2.5 V", "2,5"):
+            spin.lineEdit().setText(text)
+            spin.interpretText()
+            assert spin.value() == 2.5, (text, spin.value())
+        assert window.project.rail("+3V3").sources[0].voltage == 2.5
+        assert window.thermal_panel.grid.suffix() == " mm"
+    ''')
