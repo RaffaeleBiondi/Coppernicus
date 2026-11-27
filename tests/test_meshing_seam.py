@@ -34,6 +34,16 @@ def name(request):
     return request.param
 
 
+def test_rust_backend_is_there_when_required():
+    """CI sets COPPERNICUS_REQUIRE_RUST=1 where it builds coppermesh (uv sync --group rust): the
+    rust cases here and in the other mesher tests skip when the extension is missing, so a
+    missing or broken build must fail this test instead of passing as skips."""
+    if os.environ.get("COPPERNICUS_REQUIRE_RUST") != "1":
+        pytest.skip("COPPERNICUS_REQUIRE_RUST is not 1")
+    import coppermesh  # noqa: F401  (an ImportError here is the failure to see)
+    assert "rust" in meshing.available()
+
+
 def _mesh(name, *args, **kw):
     """One polygon through the seam, as KiPI calls it once ``name`` is installed."""
     meshing.install(name)
