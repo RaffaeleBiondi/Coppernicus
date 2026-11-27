@@ -58,7 +58,8 @@ def failure(error: BaseException) -> Optional[str]:
 
 
 def shown(name: str) -> str:
-    """How the status bar and the box name a mesher: "Triangle", "Rust (experimental)"."""
+    """How the status bar and the box name a mesher: "Rust", "Triangle"; a backend
+    added with ``registry.register`` gets "(experimental)"."""
     info = meshing.describe(name)
     label = LABELS.get(name, name)
     return f"{label} (experimental)" if info["experimental"] else label

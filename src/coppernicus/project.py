@@ -329,8 +329,8 @@ class Settings:
     # 0 turns the grading off). None: KiPI's defaults (0.02 mm, 0.2). Saved only when set.
     min_edge_mm: Optional[float] = None
     grading: Optional[float] = None
-    # The mesher (coppernicus.engine.meshing): "triangle" (the default, KiPI's own) or an
-    # experimental one such as "rust". None: the app's setting, else the default. A CLI --mesher
+    # The mesher (coppernicus.engine.meshing): "rust" (the default, Coppernicus's own) or
+    # "triangle" (KiPI's own). None: the app's setting, else the default. A CLI --mesher
     # or the MCP mesher argument wins over it. Saved only when set.
     mesher: Optional[str] = None
 
@@ -593,8 +593,8 @@ def check_mesher(name) -> Optional[str]:
     if name is None:
         return None
     if not isinstance(name, str) or not name.strip() or not name.strip().replace("_", "").isalnum():
-        raise ProjectError(f"settings mesher = {name!r}: give a mesher's name (triangle, the default; "
-                           "rust, experimental), or leave it out")
+        raise ProjectError(f"settings mesher = {name!r}: give a mesher's name (rust, the default; "
+                           "triangle, KiPI's own), or leave it out")
     return name.strip().lower()
 
 

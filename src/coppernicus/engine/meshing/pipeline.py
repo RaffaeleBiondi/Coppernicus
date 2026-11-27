@@ -1,4 +1,4 @@
-"""KiPI v1.0.1's ``mesh_polygon`` around a meshing backend (experimental).
+"""KiPI v1.0.1's ``mesh_polygon`` around a meshing backend.
 
 The pre-processing and the fallbacks are KiPI's own (``kipi.core.mesh.mesher``), called through
 the module at call time, so a wrapper on one of KiPI's helpers reaches every backend:

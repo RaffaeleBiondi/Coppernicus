@@ -1,4 +1,4 @@
-"""The "rust" meshing backend (experimental): coppermesh, our own constrained Delaunay triangulation
+"""The "rust" meshing backend: coppermesh, our own constrained Delaunay triangulation
 and Delaunay refinement in Rust (tools/mesher_rs; its DESIGN.md gives the algorithms and sources).
 
 The PSLG is triangulated and carved by its hole seeds in the core, then refined to the angle and

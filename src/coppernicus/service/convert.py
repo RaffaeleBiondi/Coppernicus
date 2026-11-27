@@ -141,8 +141,8 @@ def settings_from_dict(data: Optional[Mapping[str, Any]], base: Optional[Setting
         try:
             s.mesher = check_mesher(data["mesher"])
         except ProjectError as e:
-            raise ServiceError(E.INVALID_INPUT, str(e), "triangle (the default) or rust "
-                               "(experimental)") from None
+            raise ServiceError(E.INVALID_INPUT, str(e), "rust (the default) or triangle "
+                               "(KiPI's own)") from None
     try:
         s.copper_thickness_mm = {**base.copper_thickness_mm,
                                  **check_copper_thickness(data.get("copper_thickness_mm"))}
