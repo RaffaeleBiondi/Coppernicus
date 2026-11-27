@@ -9,7 +9,9 @@ disk (a folder or file named ``triangle``, ``triangle-*.dist-info``, an extensio
 modules live there, not on disk), matched by their exact top-level name, so ``matplotlib.tri``
 is not mistaken for it. coppermesh must be there twice: its extension on disk
 (``coppermesh/coppermesh*.so`` or ``.pyd``; on Windows with ``python3.dll``, which an abi3
-extension loads) and its package in a PYZ archive. Prints the counts and the size; ``--list``
+extension loads) and its package in a PYZ archive; and the bundle's THIRD_PARTY_NOTICES.txt must
+hold licenses/coppermesh-crates.txt whole, with every Rust crate it lists (the licences of the
+crates compiled into coppermesh, from its Cargo.lock). Prints the counts and the size; ``--list``
 writes the full listing (files, then modules). Exit code 1 if triangle is found or coppermesh is
 missing. Needs PyInstaller (its archive readers): run it with the build environment's Python.
 """
@@ -22,6 +24,8 @@ from pathlib import Path
 
 NAME = "triangle"
 RUST = "coppermesh"
+NOTICES = "THIRD_PARTY_NOTICES.txt"
+RUST_CRATES = Path(__file__).resolve().parent / "licenses" / "coppermesh-crates.txt"
 
 
 def _is_triangle_path(rel: Path) -> bool:
@@ -53,6 +57,24 @@ def rust_problems(files, modules):
     if any(f.suffix.lower() == ".pyd" for f in extensions) and not any(
             f.name.lower() == "python3.dll" for f in files):
         out.append(f"python3.dll, which the abi3 {RUST} extension loads, is not in the bundle")
+    return out
+
+
+def crate_notice_problems(notices_text, crates_text):
+    """Why the bundled notices do not cover the Rust crates in coppermesh (empty: they do).
+    ``notices_text`` is the bundle's THIRD_PARTY_NOTICES.txt (None: not found), ``crates_text``
+    the committed licenses/coppermesh-crates.txt."""
+    if notices_text is None:
+        return [f"no {NOTICES} in the bundle"]
+    notices_text = notices_text.replace("\r\n", "\n")
+    out = []
+    for line in crates_text.splitlines():
+        if line.strip().startswith("Rust crate: "):
+            marker = " ".join(line.strip().split()[:4])          # "Rust crate: NAME VERSION"
+            if marker not in notices_text:
+                out.append(f"{NOTICES} lacks the licences of {marker}")
+    if not out and crates_text.rstrip() not in notices_text:
+        out.append(f"{NOTICES} does not hold licenses/{RUST_CRATES.name} whole (a licence text differs)")
     return out
 
 
@@ -114,6 +136,10 @@ def main(argv=None) -> int:
         print("error: no PYZ archive found: is this a PyInstaller bundle?", file=sys.stderr)
         return 1
     missing = rust_problems(files, modules)
+    if rust_extensions(files):
+        found = [bundle / f for f in files if f.name == NOTICES and (bundle / f).is_file()]
+        notices_text = found[0].read_text(encoding="utf-8", errors="replace") if found else None
+        missing += crate_notice_problems(notices_text, RUST_CRATES.read_text(encoding="utf-8"))
     if bad_files or bad_modules or missing:
         for f in bad_files:
             print(f"error: triangle in the bundle: {f.as_posix()}", file=sys.stderr)
@@ -123,7 +149,8 @@ def main(argv=None) -> int:
             print(f"error: {message}", file=sys.stderr)
         return 1
     print(f"OK: no '{NAME}' file, folder, distribution or module in the bundle")
-    print(f"OK: {RUST} is in the bundle: {', '.join(f.as_posix() for f in rust_extensions(files))}")
+    print(f"OK: {RUST} is in the bundle: {', '.join(f.as_posix() for f in rust_extensions(files))}, "
+          f"with the licences of the Rust crates it is built from in {NOTICES}")
     return 0
 
 

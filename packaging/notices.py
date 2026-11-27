@@ -5,7 +5,10 @@ distribution with a module, extension or data file in the bundle is listed with 
 licence (from its metadata), and the licence files its wheel ships (``*.dist-info/licenses/``,
 ``LICENSE``, ``COPYING``, ``NOTICE``) follow in full, so vendored libraries (OpenBLAS in
 numpy and scipy, GEOS in shapely, the image libraries in Pillow...) are covered by their own
-wheels' texts. Python's licence and the LGPL-3.0 text for Qt are added by hand.
+wheels' texts. Python's licence and the LGPL-3.0 text for Qt are added by hand. coppermesh, the
+rust mesher, is one extension compiled from Rust crates: when it is in the bundle, the licence
+texts of every crate it is built from (licenses/coppermesh-crates.txt, generated from its
+Cargo.lock by tools/mesher_rs/crate_licences.py) follow, in full.
 
 Not importable as ``packaging.notices``: this folder must stay without ``__init__.py`` so that
 it never shadows the ``packaging`` distribution.
@@ -20,6 +23,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
 LICENSE_FILE = re.compile(r"^(LICEN[CS]E|COPYING|NOTICE)", re.IGNORECASE)
+#: The licences of the Rust crates compiled into coppermesh (tools/mesher_rs/crate_licences.py).
+RUST_CRATES = Path(__file__).resolve().parent / "licenses" / "coppermesh-crates.txt"
 
 HEADER = """\
 Coppernicus {version}: third-party notices
@@ -144,5 +149,10 @@ def write(out: Path, names: Iterable[str], version: str, python_licence: Optiona
     for name, path, text in texts:
         head = f"{name}: {path}"
         lines += ["=" * 78, head, "=" * 78, "", text.rstrip(), "", ""]
+    if any(n.lower() == "coppermesh" for n in listed):
+        if not RUST_CRATES.is_file():
+            raise SystemExit(f"coppermesh is in the bundle but {RUST_CRATES} is missing: "
+                             "run tools/mesher_rs/crate_licences.py")
+        lines += ["#" * 78, "", RUST_CRATES.read_text(encoding="utf-8").rstrip(), "", ""]
     Path(out).write_text("\n".join(lines) + "\n", encoding="utf-8")
     return listed
