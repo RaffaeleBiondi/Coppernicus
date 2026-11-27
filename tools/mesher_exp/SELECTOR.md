@@ -49,7 +49,9 @@ coppernicus.engine.meshing
   - `install()` replaces `kipi.core.workers._start` (BoardPool's initializer, looked up when a pool is built) with `pool.WorkerStart`;
   - pickled for a worker, `WorkerStart` becomes `partial(coppernicus.mesh_worker.start, spec)`. The spec holds the name, the backend's `settings` read at spawn, and the options;
   - each worker installs the same backend, then runs KiPI's `_start`;
-  - pooled meshes are bit-identical to one process (`tests/test_meshing_pool.py`).
+  - pooled meshes are bit-identical to one process (`tests/test_meshing_pool.py`);
+  - the 3D view's pool (`kipi/core/viz/parallel.py`) runs through the same hook. Its workers install the backend and its `triangle` stand-in, and build the same nets (tested without a plotter);
+  - the packaged app is unchanged. Its programs (`Coppernicus`, `coppernicus-cli`) are not a Python, so KiPI's `can_spawn()` builds no pool and the hook is never pickled.
 
   A `register()`-ed backend, a `stats` list or unpicklable options still switch the pool off (`KIPI_SERIAL=1`). Upstream, a `mesh_polygon` backend argument or entry point in KiPI would replace the hook.
 - **KiPI version**: `install()` refuses any KiPI but 1.0.1, and any KiPI whose hooked functions have other signatures (`registry.seam_problem()`).

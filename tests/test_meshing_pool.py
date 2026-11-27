@@ -206,3 +206,59 @@ def test_what_a_worker_cannot_rebuild_stays_in_one_process(how, monkeypatch):
         assert os.environ["KIPI_SERIAL"] == "1" and P.mesh_layers(None) is None and W._start is before[1]
         meshing.uninstall()
         assert os.environ.get("KIPI_SERIAL") == value and (P.mesh_layers, W._start) == before
+
+
+def test_the_3d_view_pool_runs_the_installed_mesher(forced, monkeypatch):
+    """KiPI's 3D-view pool (``kipi.core.viz.parallel.build_nets``, the nets' meshes as arrays; no
+    plotter, no window) hooks into the same initializer: its workers install the backend and its
+    ``triangle`` stand-in before KiPI's ``_start`` loads the view there, and the nets come out as
+    built in one process."""
+    if "rust" not in meshing.available():
+        pytest.skip("rust not available here")
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("PYVISTA_OFF_SCREEN", "true")
+    import kipi.core.viz.parallel as VP
+    from kipi.core.viz.batch import Packed, _arrays
+    _, lines = forced
+    board, _ = _demo()
+    snap = board.snapshot
+    nets = snap.net_names()
+    meshing.install("rust")
+
+    def build(n):
+        monkeypatch.setattr(VP, "workers", lambda n_nets: n)
+        return {ns.net: ns for ns in VP.build_nets(snap, list(nets), {}) if not isinstance(ns, VP.Coatings)}
+
+    def arrays(ns):
+        return [(lm.layer_id, *(np.asarray(a).tobytes() for a in _arrays(lm.mesh))) for lm in ns.copper]
+    here = build(0)
+    assert not lines()
+    pooled = build(2)
+    assert sorted(here) == sorted(pooled) == sorted(nets)
+    assert any(ns.copper for ns in pooled.values())
+    assert all(isinstance(lm.mesh, Packed) for ns in pooled.values() for lm in ns.copper)  # from the pool
+    assert all(arrays(here[k]) == arrays(pooled[k]) for k in nets)
+    traced = lines()
+    assert len({t["pid"] for t in traced}) >= 2 and os.getpid() not in {t["pid"] for t in traced}
+    for t in traced:
+        assert t["installed"] == "rust" and t["early"] == {"triangle": False, "kipi_mesher": False}
+        assert t["view_triangle"] == "coppernicus.engine.meshing.rust_backend:TriangleCompat"
+
+
+@pytest.mark.parametrize("exe", ["Coppernicus.app/Contents/MacOS/Coppernicus", "Coppernicus/Coppernicus.exe",
+                                 "Coppernicus/coppernicus-cli.exe"])
+def test_the_packaged_app_still_meshes_in_one_process(name, exe, forced, monkeypatch, tmp_path):
+    """The packaged app's programs (packaging/coppernicus.spec) are not a Python: KiPI's
+    ``can_spawn()`` says no, so no pool is built and the hook is never pickled, mesher installed
+    or not."""
+    import sys
+
+    import kipi.core.workers as W
+    started, lines = forced
+    board, project = _demo()
+    monkeypatch.setattr(sys, "executable", str(tmp_path / exe))
+    assert not W.can_spawn() and W.workers(16) == 0
+    meshing.install(name)
+    assert registry.pooled()
+    _, here = _solve(board, project, False, monkeypatch)
+    assert here and not started and not lines()                 # meshed here, no worker

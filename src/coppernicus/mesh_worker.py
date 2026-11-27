@@ -13,9 +13,10 @@ One thing runs before it: spawn re-imports the parent's main module (as ``__mp_m
 KiPI at module level, so Triangle is not loaded first there. A main module that imports
 :mod:`coppernicus.engine` at the top would load Triangle before :func:`start`.
 
-``COPPERNICUS_MESH_WORKER_TRACE``: a file each worker appends one JSON line to when it starts.
-The line holds its pid, the mesher installed, the settings, and whether KiPI's mesher or
-Triangle had been imported before :func:`start` ran. It is for the tests and for diagnostics.
+``COPPERNICUS_MESH_WORKER_TRACE``: a file each worker appends one JSON line to once it has
+started. The line holds its pid, the mesher installed, the settings, whether KiPI's mesher or
+Triangle had been imported before :func:`start` ran, and what the 3D view meshes with there. It
+is for the tests and for diagnostics.
 """
 
 from __future__ import annotations
@@ -40,9 +41,9 @@ def start(spec, *kipi_args) -> None:
         from coppernicus.engine.meshing import registry
         registry.install_in_worker(spec["name"], spec["settings"], spec["options"])
         installed = registry.installed()
-    _trace(spec, installed, early)
     from kipi.core import workers
     workers._start(*kipi_args)
+    _trace(spec, installed, early)
 
 
 def _trace(spec, installed, early) -> None:
@@ -51,6 +52,20 @@ def _trace(spec, installed, early) -> None:
         return
     line = {"pid": os.getpid(), "installed": installed,
             "settings": spec["settings"] if spec is not None else None,
-            "options": spec["options"] if spec is not None else None, "early": early}
+            "options": spec["options"] if spec is not None else None, "early": early,
+            "view_triangle": _view_triangle()}
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(line) + "\n")
+
+
+def _view_triangle():
+    """What the 3D view meshes with here (``kipi.core.viz.meshes._triangle``, which KiPI's
+    ``_start`` loads in a 3D-view pool's workers): "module:class" of a stand-in, the module's
+    name for Triangle itself, None when the view is not loaded or has no Triangle."""
+    viz = sys.modules.get("kipi.core.viz.meshes")
+    tri = getattr(viz, "_triangle", None)
+    if tri is None:
+        return None
+    if type(tri).__name__ == "module":
+        return tri.__name__
+    return f"{type(tri).__module__}:{type(tri).__name__}"
