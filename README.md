@@ -64,8 +64,10 @@ removes the rust mesher again. The commands below are written without it.
 
 **On macOS you can get a double-clickable app.** Run `tools/make_mac_launcher.sh`. It builds
 `~/Applications/Coppernicus.app` with the project icon, ready for the Dock or Launchpad. The app
-starts Coppernicus from your copy of the repository, so it always runs the latest version you
-have pulled. It works only on the machine where you built it. Rebuild it if you move the folder.
+starts Coppernicus from your copy of the repository (`uv run coppernicus gui`, which installs what
+`uv sync` does, the rust mesher's wheel included: no Rust toolchain needed), so it always runs the
+latest version you have pulled. It works only on the machine where you built it. Rebuild it if you
+move the folder.
 
 ## Use it in six steps
 
