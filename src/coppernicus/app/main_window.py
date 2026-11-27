@@ -59,6 +59,7 @@ from coppernicus.app.panels import (
 from coppernicus.app.picking import add_picked_pin, pick_nets
 from coppernicus.app.thermal_panel import CANCELLING, NO_MAP, ThermalPanel, record_solve
 from coppernicus.app.tolerance_panel import TolerancePanel, read_misspelt
+from coppernicus.app.verdict import dc_cards
 from coppernicus.app.worker import CANCELLED, ReportWorker, SolveWorker, TreeWorker
 from coppernicus.compare import difference_layer, same_mesh
 from coppernicus.engine import Board, EngineError, tied_nets
@@ -194,6 +195,15 @@ def tree_header_html(key: str, res: RailResult, gv) -> str:
             f"· copper loss {res.power_loss * 1e3:.3g} mW · {verdict}{attention_html(gv.problems)}")
 
 
+def rail_verdict(res: RailResult, limits: Limits, problems) -> str:
+    """The verdict of a rail solved alone, as its header states it: "fail" when a problem
+    fails, "not_judged" when no limit is set or a set limit could not judge, else "pass"."""
+    fails = sum(p.severity == FAIL for p in problems)
+    missing = not_judged_items(res, limits)
+    set_any = any(v is not None for v in vars(limits).values())
+    return "fail" if fails else "not_judged" if missing or not set_any else "pass"
+
+
 def rail_header_html(res: RailResult, limits: Limits, problems) -> str:
     """The Problems header of a rail solved alone, judged against ``limits`` (``problems``:
     its find_problems list)."""
@@ -209,8 +219,7 @@ def rail_header_html(res: RailResult, limits: Limits, problems) -> str:
                  f"({res.drop(worst) * 1e3:.2f} mV{share}) · ") if worst else ""
     missing = not_judged_items(res, limits)      # the per-rail rule (service), one source
     set_any = any(v is not None for v in vars(limits).values())
-    verdict = verdict_html("fail" if fails else "not_judged" if missing or not set_any else "pass",
-                           fails, missing, set_any)
+    verdict = verdict_html(rail_verdict(res, limits, problems), fails, missing, set_any)
     return (f"<b>{res.net}</b>: {worst_txt}{max_drop_text(res)} · copper loss "
             f"{res.power_loss * 1e3:.3g} mW ({split}) · {verdict}{attention_html(problems)}")
 
@@ -361,7 +370,13 @@ class MainWindow(QMainWindow):
         self.centre_split.addWidget(self.pages)
         self.centre_split.setStretchFactor(0, 3)
         self.centre_split.setStretchFactor(1, 2)
-        self.setCentralWidget(self.centre_split)
+        centre_column = QWidget()                         # the verdict line and cards on top (DC pages)
+        cc = QVBoxLayout(centre_column)
+        cc.setContentsMargins(0, 0, 0, 0)
+        cc.setSpacing(0)
+        cc.addWidget(self.problems.header)
+        cc.addWidget(self.centre_split, 1)
+        self.setCentralWidget(centre_column)
         self.results_title = QLabel(RESULTS_TITLE)
         self.results_title.setProperty("role", "muted")
         left = QWidget()
@@ -417,6 +432,7 @@ class MainWindow(QMainWindow):
         self.rail_panel.settings_changed.connect(self._settings_edited)
         self.rail_panel.solve_requested.connect(self.solve)
         self.problems.problem_activated.connect(self.go_to_problem)
+        self.problems.problem_selected.connect(self.view.mark_problem)
         self.layer_box.currentIndexChanged.connect(lambda *_: self.refresh_view())
         self.group_box.currentIndexChanged.connect(lambda *_: self._group_changed())
         self.tree_panel.group_requested.connect(self.show_group)
@@ -465,6 +481,7 @@ class MainWindow(QMainWindow):
         size = "none" if page in (self.noise_panel, self.tolerance_panel) else \
             "small" if page is self.ac_panel else "full"
         self.map_pane.setVisible(size != "none")
+        self.problems.header.setVisible(page in (self.problems, self.losses, self.compare))
         if size != "none" and size != self._map_size:
             total = max(self.centre_split.height(), 400)
             share = MAP_SHARE[size]
@@ -1714,7 +1731,9 @@ class MainWindow(QMainWindow):
     def _show_tree_problems(self, key: str):
         res = self.tree.groups[key]
         gv = group_verdict(self.tree, key)
-        self.problems.set_result(tree_header_html(key, res, gv), gv.problems, res.warnings + res.assumptions)
+        limits = group_limits(self.tree, key)[0]
+        self.problems.set_result(tree_header_html(key, res, gv), gv.problems, res.warnings + res.assumptions,
+                                 gv.verdict, dc_cards(res, gv.problems, limits))
         self.view.set_problems(res, gv.problems,          # the current map's peak and verdict
                                group_limits(self.tree, key)[0])
 
@@ -1908,7 +1927,8 @@ class MainWindow(QMainWindow):
         rail = self._solved_rail(res.net)
         problems = find_problems(res, rail.limits)
         self.problems.set_result(rail_header_html(res, rail.limits, problems), problems,
-                                 res.warnings + res.assumptions)
+                                 res.warnings + res.assumptions, rail_verdict(res, rail.limits, problems),
+                                 dc_cards(res, problems, rail.limits))
         self.view.set_problems(res, problems)             # the current map's peak and verdict
 
     def go_to_problem(self, problem):

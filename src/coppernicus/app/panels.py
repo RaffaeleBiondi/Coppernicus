@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import copy
 import html
-from typing import Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QValidator
@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 from coppernicus.app import theme
 from coppernicus.app.copper_thickness import CopperThicknessDialog, thickness_summary
 from coppernicus.app.fields_view import FieldsBanner
+from coppernicus.app.verdict import CardData, VerdictHeader
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.power_tree import ACROSS_NOTE
 from coppernicus.problems import ATTENTION, FAIL, Problem
@@ -983,34 +984,46 @@ class RailPanel(QWidget):
 
 
 class ProblemsPanel(QWidget):
-    problem_activated = Signal(object)
+    """The problems of the shown DC result, one line each, the selected one's detail in a strip
+    under the list. Its verdict line (:attr:`header`: the badge, :attr:`summary` and the cards)
+    is placed by the window at the top of the page column (layout C)."""
+    problem_activated = Signal(object)          # a row clicked: zoom the map there
+    problem_selected = Signal(object)           # the current row (None: none): ring it on the map
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.summary = QLabel("<i>No results yet</i>")
         self.summary.setWordWrap(True)
         self.summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.header = VerdictHeader(self.summary)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["", "Problem", "Layer", "Where (mm)", "Detail"])
+        self.tree.setHeaderLabels(["", "Problem", "Layer", "Where (mm)"])
         self.tree.setRootIsDecorated(False)
         self.tree.setAlternatingRowColors(True)
-        self.tree.setMinimumHeight(170)
+        self.tree.setMinimumHeight(120)
+        self.tree.setUniformRowHeights(True)
         header = self.tree.header()
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         for col in (0, 2, 3):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        self.detail = QLabel()                 # the selected row's detail, one strip
+        self.detail.setObjectName("detailStrip")
+        self.detail.setWordWrap(True)
+        self.detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.notes = QPlainTextEdit(readOnly=True)
         self.notes.setMaximumHeight(72)
         self.notes.setPlaceholderText("Assumptions and warnings of the last solve")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.addWidget(self.summary)
         layout.addWidget(self.tree, 1)
+        layout.addWidget(self.detail)
         layout.addWidget(self.notes)
         self.tree.itemClicked.connect(self._activated)
+        self.tree.currentItemChanged.connect(self._current_changed)
         self._problems: List[Problem] = []
         self._pinned = ""
         self._notes: List[str] = []
+        self._show_detail(None)
 
     def pin_note(self, text: str):
         """A note kept above the others, whatever is shown, until it is changed ("" for
@@ -1024,28 +1037,55 @@ class ProblemsPanel(QWidget):
 
     def clear(self, text: str = "<i>No results yet</i>"):
         self.summary.setText(text)
+        self.header.show_verdict(None, [])
         self.tree.clear()
         self.set_notes([])
         self._problems = []
+        self._show_detail(None)
 
-    def set_result(self, summary: str, problems: List[Problem], notes: List[str]):
+    def set_result(self, summary: str, problems: List[Problem], notes: List[str],
+                   verdict: Optional[str] = None, cards: Sequence[CardData] = ()):
+        """``summary`` (the line beside the badge of ``verdict``: "fail", "pass",
+        "not_judged"), the ``cards`` under it, ``problems`` one per row and the ``notes``."""
         self.summary.setText(summary)
+        self.header.show_verdict(verdict, cards)
         self.tree.clear()
         self._problems = list(problems)
         for i, p in enumerate(problems):
             tag = {FAIL: "FAIL", ATTENTION: "ATTENTION"}.get(p.severity, "")
-            item = QTreeWidgetItem([tag, p.title, p.layer or "", f"{p.x:.2f}, {p.y:.2f}", p.detail])
+            item = QTreeWidgetItem([tag, p.title, p.layer or "", f"{p.x:.2f}, {p.y:.2f}"])
             item.setData(0, Qt.UserRole, i)
             item.setToolTip(1, p.detail)
             if tag:         # a fail red; an attention item (the current-density default) amber
                 color = theme.brush("fail" if p.severity == FAIL else "warn")
-                for col in range(5):
+                for col in range(4):
                     item.setForeground(col, color)
                 f = item.font(0)
                 f.setBold(True)
                 item.setFont(0, f)
             self.tree.addTopLevelItem(item)
         self.set_notes(notes)
+        self._show_detail(None)
+
+    def current_problem(self) -> Optional[Problem]:
+        item = self.tree.currentItem()
+        i = item.data(0, Qt.UserRole) if item is not None else None
+        return self._problems[int(i)] if i is not None and int(i) < len(self._problems) else None
+
+    def _current_changed(self, item: Optional[QTreeWidgetItem], _previous):
+        problem = self.current_problem() if item is not None else None
+        self._show_detail(problem)
+        self.problem_selected.emit(problem)
+
+    def _show_detail(self, problem: Optional[Problem]):
+        if problem is None:
+            self.detail.setText("Select a row for its detail; a click also zooms the map there."
+                                if self._problems else "")
+            self.detail.setVisible(bool(self._problems))
+            return
+        self.detail.setText(f"<b>{html.escape(problem.title)}</b>. {html.escape(problem.detail)} "
+                            f"Ringed on the map; a click zooms there.")
+        self.detail.setVisible(True)
 
     def _activated(self, item: QTreeWidgetItem, _col: int):
         i = item.data(0, Qt.UserRole)

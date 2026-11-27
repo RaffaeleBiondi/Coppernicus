@@ -206,7 +206,7 @@ QLabel#setupTitle {{ color: {t['fg']}; font-weight: 600; }}
 QWidget#setupFoot {{ border-top: 1px solid {t['line']}; }}
 QWidget#setupFoot QPushButton {{ background: {t['selected']}; border-color: {t['selected']}; color: {WHITE};
   font-weight: 600; }}
-QWidget#setupFoot QPushButton:hover {{ background: {t['accent']}; }}
+QWidget#setupFoot QPushButton:hover {{ border-color: {t['fg']}; }}
 QWidget#setupFoot QPushButton:disabled {{ background: {t['panel']}; border-color: {t['line']};
   color: {t['muted']}; }}
 QTreeWidget#navigator {{ background: {t['bg']}; border: none; }}
@@ -214,6 +214,17 @@ QTreeWidget#navigator::item {{ padding: 3px 4px; border-radius: 4px; }}
 QTreeWidget#navigator::item:hover {{ background: {t['hover']}; }}
 QTreeWidget#navigator::item:selected {{ background: {t['selected']}; color: {WHITE}; }}
 QLabel[role="muted"] {{ color: {t['muted']}; }}
+QLabel#badge {{ border-radius: 4px; padding: 1px 6px; font-weight: 600; }}
+QLabel#badge[badge="fail"] {{ background: {t['badge-fail']}; color: {WHITE}; }}
+QLabel#badge[badge="pass"] {{ background: {t['badge-pass']}; color: {WHITE}; }}
+QLabel#badge[badge="not_judged"] {{ border: 1px solid {t['line']}; color: {t['muted']}; }}
+QFrame#card {{ background: {t['panel']}; border: 1px solid {t['line']}; border-radius: 8px; }}
+QFrame#card[state="fail"] {{ border-color: {t['fail']}; }}
+QFrame#card[state="attention"] {{ border-color: {t['warn']}; }}
+QFrame#card QLabel {{ background: transparent; border: none; }}
+QLabel#cardValue {{ color: {t['fg']}; font-size: 17px; font-weight: 600; }}
+QLabel#detailStrip {{ background: {t['panel']}; border: 1px solid {t['line']}; border-radius: 4px;
+  padding: 5px 8px; }}
 QLabel[role="fail"] {{ color: {t['fail']}; }}
 QLabel[role="warning"] {{ color: {t['fg']}; background: {t['cell-missing']}; border: 1px solid {t['warn']};
   border-radius: 4px; padding: 4px; }}
