@@ -329,10 +329,15 @@ class Settings:
     # 0 turns the grading off). None: KiPI's defaults (0.02 mm, 0.2). Saved only when set.
     min_edge_mm: Optional[float] = None
     grading: Optional[float] = None
+    # The mesher (coppernicus.engine.meshing): "triangle" (the default, KiPI's own) or an
+    # experimental one such as "rust". None: the app's setting, else the default. A CLI --mesher
+    # or the MCP mesher argument wins over it. Saved only when set.
+    mesher: Optional[str] = None
 
     def __post_init__(self):
         self.copper_thickness_mm = check_copper_thickness(self.copper_thickness_mm)
         self.min_edge_mm, self.grading = check_mesh_near_holes(self.min_edge_mm, self.grading)
+        self.mesher = check_mesher(self.mesher)
 
 
 # Where a regulator's conversion loss (input − output power) heats the board: "output_pads",
@@ -580,6 +585,17 @@ def check_copper_thickness(values) -> Dict[str, float]:
 # The range of KiPI's own "Via grading" field (kipi/dc/gui/pi_panel.py, kipi/ac/gui/panel.py):
 # 0 (off) to 2 mm of edge per mm of distance.
 GRADING_RANGE = (0.0, 2.0)
+
+
+def check_mesher(name) -> Optional[str]:
+    """``settings.mesher``: None, or a mesher's name (lower-cased). Whether it can run here is
+    checked when solving, so a project naming a mesher this machine lacks still loads."""
+    if name is None:
+        return None
+    if not isinstance(name, str) or not name.strip() or not name.strip().replace("_", "").isalnum():
+        raise ProjectError(f"settings mesher = {name!r}: give a mesher's name (triangle, the default; "
+                           "rust, experimental), or leave it out")
+    return name.strip().lower()
 
 
 def check_mesh_near_holes(min_edge_mm, grading) -> Tuple[Optional[float], Optional[float]]:
@@ -1449,10 +1465,10 @@ def _flag(data: Dict[str, Any], key: str, default: bool) -> bool:
 
 
 def _settings_out(settings: Settings) -> Dict[str, Any]:
-    """The settings as written to the file; copper_thickness_mm, min_edge_mm and grading only
-    when set, so a project without them is written exactly as before."""
+    """The settings as written to the file; copper_thickness_mm, min_edge_mm, grading and mesher
+    only when set, so a project without them is written exactly as before."""
     out = dict(vars(settings))
-    for key in ("min_edge_mm", "grading"):           # KiPI's defaults: not written
+    for key in ("min_edge_mm", "grading", "mesher"):   # defaults: not written
         if out.get(key) is None:
             out.pop(key, None)
     if not out.get("copper_thickness_mm"):

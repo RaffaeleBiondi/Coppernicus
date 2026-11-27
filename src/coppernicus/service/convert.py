@@ -19,6 +19,7 @@ from coppernicus.project import (
     Settings,
     check_copper_thickness,
     check_mesh_near_holes,
+    check_mesher,
     parse_pins,
     pins_text,
 )
@@ -42,7 +43,7 @@ NET_KIND_CAVEAT = ("Net kind (power / ground / signal) is a name-and-zone heuris
 # so a limit added to the model is accepted, judged and named everywhere at once).
 LIMIT_KEYS = PROBLEM_LIMIT_KEYS
 SETTING_KEYS = ("max_edge_mm", "via_plating_um", "copper_temp_c", "copper_thickness_mm",
-                "min_edge_mm", "grading")
+                "min_edge_mm", "grading", "mesher")
 
 
 # ---------------------------------------------------------------------- JSON safety
@@ -120,7 +121,8 @@ def settings_from_dict(data: Optional[Mapping[str, Any]], base: Optional[Setting
     _check_keys(data, SETTING_KEYS, "settings")
     base = base or Settings()
     s = Settings(max_edge_mm=base.max_edge_mm, via_plating_um=base.via_plating_um,
-                 copper_temp_c=base.copper_temp_c, min_edge_mm=base.min_edge_mm, grading=base.grading)
+                 copper_temp_c=base.copper_temp_c, min_edge_mm=base.min_edge_mm, grading=base.grading,
+                 mesher=base.mesher)
     if data.get("max_edge_mm") is not None:
         s.max_edge_mm = _number(data["max_edge_mm"], "max_edge_mm", positive=True, allow_zero=False)
     if data.get("via_plating_um") is not None:
@@ -135,6 +137,12 @@ def settings_from_dict(data: Optional[Mapping[str, Any]], base: Optional[Setting
     except ProjectError as e:
         raise ServiceError(E.INVALID_INPUT, str(e), "min_edge_mm > 0 and grading from 0 to 2; "
                            "leave them out for KiPI's defaults (0.02 mm, 0.2)") from None
+    if data.get("mesher") is not None:
+        try:
+            s.mesher = check_mesher(data["mesher"])
+        except ProjectError as e:
+            raise ServiceError(E.INVALID_INPUT, str(e), "triangle (the default) or rust "
+                               "(experimental)") from None
     try:
         s.copper_thickness_mm = {**base.copper_thickness_mm,
                                  **check_copper_thickness(data.get("copper_thickness_mm"))}
@@ -146,13 +154,13 @@ def settings_from_dict(data: Optional[Mapping[str, Any]], base: Optional[Setting
 
 def settings_to_dict(s: Settings, thickness: Optional[Mapping[str, float]] = None) -> Dict[str, Any]:
     """The settings as plain data; ``copper_thickness_mm`` (``thickness``, else the
-    settings' own), ``min_edge_mm`` and ``grading`` only when set."""
+    settings' own), ``min_edge_mm``, ``grading`` and ``mesher`` only when set."""
     out: Dict[str, Any] = {"max_edge_mm": s.max_edge_mm, "via_plating_um": s.via_plating_um,
                            "copper_temp_c": s.copper_temp_c}
     thickness = thickness or s.copper_thickness_mm
     if thickness:
         out["copper_thickness_mm"] = dict(thickness)
-    for key in ("min_edge_mm", "grading"):         # advanced, near holes: only when set
+    for key in ("min_edge_mm", "grading", "mesher"):   # advanced: only when set
         if getattr(s, key) is not None:
             out[key] = getattr(s, key)
     return out
