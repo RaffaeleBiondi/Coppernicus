@@ -48,21 +48,45 @@ def test_every_window_test_starts_its_children_with_the_suites_environment():
 def test_a_window_in_a_child_writes_only_into_the_suites_folder():
     pytest.importorskip("PySide6")
     body = textwrap.dedent('''
-        import os, sys
         from PySide6 import QtWidgets
-        from coppernicus.app import settings, theme
+        from coppernicus.app import settings
         from coppernicus.app.main_window import MainWindow
         app = QtWidgets.QApplication([])
         window = MainWindow()
         window.dirty = False
         window.toggle_theme()
         print(settings().fileName(), flush=True)
-        sys.stdout.flush()
-        os._exit(0)
-    ''')
+    ''')                                  # a normal exit: os._exit with Qt alive crashed on Windows
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     out = subprocess.run([sys.executable, "-c", body], env=env, capture_output=True, text=True, timeout=180)
     assert out.returncode == 0, out.stderr
     written = Path(out.stdout.strip().splitlines()[-1])
     assert written.parent == Path(os.environ[SETTINGS_DIR_ENV]), written
     assert written.is_file() and "theme" in written.read_text(encoding="utf-8")
+
+
+def test_the_app_exits_cleanly_after_a_theme_switch():
+    """The packaged app's own way out (coppernicus.app.run: the window shown, the theme switched,
+    the window closed, app.exec() returns, Python exits normally) ends with code 0 on every
+    system: on Windows a crash there would show as 0xC0000005."""
+    pytest.importorskip("PySide6")
+    body = textwrap.dedent('''
+        import sys
+        from PySide6 import QtCore, QtWidgets
+        from coppernicus.app import run
+        from coppernicus.app.main_window import MainWindow
+
+        def act():
+            window = next(w for w in QtWidgets.QApplication.topLevelWidgets() if isinstance(w, MainWindow))
+            window.dirty = False
+            window.toggle_theme()
+            window.toggle_theme()
+            window.close()
+
+        app = QtWidgets.QApplication(sys.argv[:1])
+        QtCore.QTimer.singleShot(300, act)
+        sys.exit(run())
+    ''')
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    out = subprocess.run([sys.executable, "-c", body], env=env, capture_output=True, text=True, timeout=180)
+    assert out.returncode == 0, (out.returncode, out.stderr[-2000:])

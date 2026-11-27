@@ -29,6 +29,12 @@ results against your own judgement.
   Triangle's licence and downloads it. A mesher that cannot run, or Triangle missing, is shown
   with its message and what to do, not as an unexpected error. The status bar and the HTML
   report name the mesher each result was meshed with.
+- The app's first run shows a guided start: four steps to a first solve (open a board, pick
+  a net, add a source and the loads, solve), each ticked as it gets done; it goes after the
+  first solve, or with Don't show again, and never comes back.
+- Help → Keyboard shortcuts (F1) lists every shortcut; every toolbar button's tooltip names
+  its own. The toolbar and the navigator have icons (Phosphor Icons, MIT, listed in the
+  packaged app's third-party notices).
 
 ### Changed
 
