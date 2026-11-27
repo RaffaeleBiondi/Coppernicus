@@ -455,7 +455,7 @@ def render_scene(view, path: Path, size=(1100, 800)) -> float:
 
     import pyvista as pv
     off = pv.Plotter(off_screen=True, window_size=size)
-    off.set_background("white")
+    off.set_background(view.plotter.background_color)        # the theme's map background
     off.enable_parallel_projection()
     for name, actor in view.plotter.renderer.actors.items():
         off.add_actor(actor, name=name, reset_camera=False)
@@ -3036,7 +3036,8 @@ def run_tolerance_fields(window, check: Checks, out: Path):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
-    from coppernicus.app.tolerance_panel import LOAD_COLUMNS, READ_ONLY_BG, SOURCE_COLUMNS
+    from coppernicus.app import theme
+    from coppernicus.app.tolerance_panel import LOAD_COLUMNS, SOURCE_COLUMNS
     from coppernicus.engine.synthetic import write_strip_kicad_pcb
     from coppernicus.project import Project
     folder = out / "tolerance_fields"
@@ -3060,7 +3061,7 @@ def run_tolerance_fields(window, check: Checks, out: Path):
           "naming the field and the part",
           len(held) == 2 and acc.text() == "1" and ac.text() == "20"
           and not any(i.flags() & Qt.ItemIsEditable for i in held)
-          and all(i.background().color() == READ_ONLY_BG for i in held)
+          and all(i.background().color() == theme.qcolor("cell-readonly") for i in held)
           and 'KiCad field PI_ACC "1%" on J1; change it in KiCad' in acc.toolTip()
           and 'KiCad field PI_AC_TOL "20mV" on U1' in ac.toolTip(),
           " | ".join(f"{i.text()!r} {i.toolTip()[:70]}" for i in held))

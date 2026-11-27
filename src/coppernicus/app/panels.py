@@ -9,7 +9,7 @@ import html
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QDoubleValidator, QValidator
+from PySide6.QtGui import QDoubleValidator, QValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app import theme
 from coppernicus.app.copper_thickness import CopperThicknessDialog, thickness_summary
 from coppernicus.app.fields_view import FieldsBanner
 from coppernicus.engine import Board, NetTie, PartPins
@@ -59,7 +60,6 @@ from coppernicus.project import (
 
 # Attention rows (a spot above Coppernicus's current-density default) and their count in the
 # Problems header: a dark amber, 4.9:1 on white.
-ATTENTION_COLOR = "#9a6700"
 
 
 def without_tolerances(d: Dict) -> Dict:
@@ -1026,9 +1026,9 @@ class ProblemsPanel(QWidget):
             item.setData(0, Qt.UserRole, i)
             item.setToolTip(1, p.detail)
             if tag:         # a fail red; an attention item (the current-density default) amber
-                color = QColor("#c0392b" if p.severity == FAIL else ATTENTION_COLOR)
+                color = theme.brush("fail" if p.severity == FAIL else "warn")
                 for col in range(5):
-                    item.setForeground(col, QBrush(color))
+                    item.setForeground(col, color)
                 f = item.font(0)
                 f.setBold(True)
                 item.setFont(0, f)
@@ -1305,7 +1305,7 @@ class TreePanel(QWidget):
                 if c > 1 and text[:1] in "-0123456789":
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if r in fails:
-                    item.setForeground(QBrush(QColor("#c0392b")))
+                    item.setForeground(theme.brush("fail"))
                 table.setItem(r, c, item)
 
     # ------------------------------------------------------------------ "0 V at" (S2)
@@ -1373,7 +1373,7 @@ class TreePanel(QWidget):
 
     def set_reference_note(self, text: str, error: bool = False):
         text = html.escape(text, quote=False)            # "U1's" stays readable in .text()
-        self.reference_note.setText(f"<span style='color:#c0392b'>{text}</span>" if error else text)
+        self.reference_note.setText(theme.span("fail", text) if error else text)
 
     def clear(self, text: str = ""):
         self.summary.setText(text or "<i>No power-tree result</i>")
@@ -1433,7 +1433,7 @@ class TreePanel(QWidget):
             f"{k['name']} {k['resistance_ohm']:g} Ω, {' ↔ '.join(k['nets'])}: {k['current_a']:.4f} A, "
             f"{k['power_w'] * 1e3:.3g} mW" for k in tree.links if not k["name"].startswith("net tie "))
             if any(not k["name"].startswith("net tie ") for k in tree.links) else "")
-        self.notes.setText("<span style='color:#b9770e'><b>Warnings</b></span>: " + " · ".join(
+        self.notes.setText(theme.span("warn", "<b>Warnings</b>") + ": " + " · ".join(
             html.escape(w) for w in tree.warnings) if tree.warnings else "")
         groups = ", ".join(f"{k} ({r.kind})" for k, r in tree.groups.items())
         self.summary.setText(f"<b>Power tree</b>: {len(tree.groups)} groups ({groups}) solved in "

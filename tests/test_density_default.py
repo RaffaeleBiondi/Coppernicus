@@ -584,15 +584,16 @@ def test_the_problems_panel_shows_amber_attention_rows():
     body = textwrap.dedent('''
         from PySide6 import QtWidgets
         app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-        from coppernicus.app.panels import ProblemsPanel, ATTENTION_COLOR
+        from coppernicus.app import theme
+        from coppernicus.app.panels import ProblemsPanel
         from coppernicus.problems import ATTENTION, FAIL, INFO, Problem
         panel = ProblemsPanel()
         rows = [Problem(s, "hotspot", s, "", 1.0, 0.0, 0.0, "F.Cu") for s in (FAIL, ATTENTION, INFO)]
         panel.set_result("", rows, [])
         items = [panel.tree.topLevelItem(i) for i in range(3)]
         assert [it.text(0) for it in items] == ["FAIL", "ATTENTION", ""], [it.text(0) for it in items]
-        assert items[1].foreground(1).color().name() == ATTENTION_COLOR
-        assert items[0].foreground(1).color().name() != ATTENTION_COLOR
+        assert items[1].foreground(1).color().name() == theme.color("warn")
+        assert items[0].foreground(1).color().name() != theme.color("warn")
     ''')
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     out = subprocess.run([sys.executable, "-c", body], env=env, capture_output=True, text=True, timeout=180)

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -40,13 +41,12 @@ from PySide6.QtWidgets import (
 
 from coppernicus import __version__, bootstrap_triangle
 from coppernicus import board_fields as BF
-from coppernicus.app import fields_view, label_text
+from coppernicus.app import fields_view, label_text, theme
 from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.noise_panel import NoisePanel
 from coppernicus.app.panels import (
-    ATTENTION_COLOR,
     ComparePanel,
     LossChart,
     NetPanel,
@@ -84,6 +84,7 @@ from coppernicus.temperature import apply_thermal_limits, thermal_verdict
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 USER_RESULTS = ("Documents", "Coppernicus", "results")     # under the home folder
 REMOVE_MESHER = "Remove downloaded mesher (Triangle)…"
+THEME_KEY = "Ctrl+Shift+L"                              # dark <-> light (View menu, toolbar)
 # + / − step the Layer selector, as in KiCad: (key, modifiers, step); "=" is "+" without Shift.
 LAYER_KEYS = ((Qt.Key_Plus, Qt.NoModifier, 1), (Qt.Key_Equal, Qt.NoModifier, 1),
               (Qt.Key_Plus, Qt.KeypadModifier, 1), (Qt.Key_Minus, Qt.NoModifier, -1),
@@ -160,15 +161,15 @@ def tree_i_max(tree: TreeResult) -> Dict[str, Optional[float]]:
 def verdict_html(verdict: str, fails: int, not_judged, has_limits: bool) -> str:
     """A power-tree verdict for the summary lines: what failed, and what a limit set could not
     judge (a group passes only when everything was judged)."""
-    missing = (f"<span style='color:#b9770e'><b>not judged</b>: {not_judged_text(not_judged)}</span>"
+    missing = (theme.span("warn", f"<b>not judged</b>: {not_judged_text(not_judged)}")
                if not_judged else "")
     if verdict == "fail":
-        text = f"<span style='color:#c0392b'><b>{fails} limit(s) exceeded</b></span>"
+        text = theme.span("fail", f"<b>{fails} limit(s) exceeded</b>")
         return f"{text} · {missing}" if missing else text
     if verdict == "pass":
         return "no limits exceeded"
     if has_limits:
-        return missing or "<span style='color:#b9770e'><b>limits set, nothing judged</b></span>"
+        return missing or theme.span("warn", "<b>limits set, nothing judged</b>")
     return "no limits set: nothing is judged"
 
 
@@ -178,8 +179,8 @@ def attention_html(problems) -> str:
     n = sum(p.severity == ATTENTION for p in problems)
     if not n:
         return ""
-    return (f" · <span style='color:{ATTENTION_COLOR}'><b>{n} attention</b> (current density above "
-            "Coppernicus's default, not a verdict)</span>")
+    return " · " + theme.span("warn", f"<b>{n} attention</b> (current density above Coppernicus's "
+                              "default, not a verdict)")
 
 
 def tree_header_html(key: str, res: RailResult, gv) -> str:
@@ -226,6 +227,8 @@ class MainWindow(QMainWindow):
         # before any numeric widget exists.
         QLocale.setDefault(QLocale.c())
         super().__init__()
+        theme.apply(theme.saved())                   # dark unless the user chose light
+        self._theme = theme.current()
         self.setWindowTitle(f"Coppernicus {__version__}")
         screen = self.screen()
         free = screen.availableGeometry() if screen is not None else None
@@ -378,7 +381,11 @@ class MainWindow(QMainWindow):
         self.measure.toggled.connect(self._measure_toggled)
         self.view.probed.connect(lambda text: self.statusBar().showMessage(text))
         self.view.pad_picked.connect(self.pick_pad)
-        self.view.add_hover_menu(self.menuBar().addMenu("View"))      # View → Hover shows
+        self.view_menu = self.menuBar().addMenu("View")
+        self.view.add_hover_menu(self.view_menu)                       # View → Hover shows
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(self.theme_action)
+        theme.signals.changed.connect(self._theme_changed)
         self.compare.pin_requested.connect(self.pin_baseline)
         self.compare.clear_requested.connect(self.clear_baseline)
         self.rail_panel.pick_changed.connect(self._pick_mode_changed)
@@ -464,6 +471,33 @@ class MainWindow(QMainWindow):
             remove.triggered.connect(self.remove_mesher)
             self.help_menu.addAction(remove)
         self.noise_panel.add_solve_action(tb)         # "Solve noise" (Ctrl+Shift+N), the Ripple & noise tab's
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        tb.addWidget(spacer)
+        self.theme_action = QAction(self)
+        self.theme_action.setShortcut(QKeySequence(THEME_KEY))
+        self.theme_action.triggered.connect(self.toggle_theme)
+        self._show_theme_action()
+        tb.addAction(self.theme_action)               # at the right end, as the report's button
+
+    # ------------------------------------------------------------------ theme
+    def toggle_theme(self):
+        """Switch dark <-> light and keep the choice for the next start."""
+        new = "light" if theme.current() == "dark" else "dark"
+        theme.save(new)
+        theme.apply(new)
+
+    def _theme_changed(self, new: str):
+        """Colours already written in cells and rich-text labels follow the new theme."""
+        theme.recolor(self, self._theme, new)
+        self._theme = new
+        self._show_theme_action()
+
+    def _show_theme_action(self):
+        light = theme.current() == "dark"            # what the button switches to
+        self.theme_action.setText("☀ Light" if light else "☾ Dark")
+        self.theme_action.setToolTip(f"Switch to the {'light' if light else 'dark'} theme "
+                                     f"({QKeySequence(THEME_KEY).toString(QKeySequence.NativeText)})")
 
     # ------------------------------------------------------------------ files
     def open_path(self, path):

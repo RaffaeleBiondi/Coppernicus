@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import QSettings, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QKeySequence
+from PySide6.QtGui import QAction, QBrush, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app import theme
 from coppernicus.app.panels import without_tolerances
 from coppernicus.impedance import ac_summary, ac_text, draw_impedance, hz_text, ohm_text, rail_verdict
 from coppernicus.project import (
@@ -615,8 +616,6 @@ def _table(headers, tips=None) -> QTableWidget:
     return t
 
 
-PROBLEM_BG, DRAFT_BG, ERROR_BG = QColor("#fdecea"), QColor("#f0f0f0"), QColor("#f8c9c4")
-READ_ONLY_BG, LOST_BG = QColor("#f0f0f0"), QColor("#fff3cd")    # as the Tolerance tab's read-only, missing
 CHART_SURFACE = "#fcfcfb"
 
 
@@ -699,7 +698,7 @@ class AcPanel(QWidget):
         cl.addWidget(self.caps, 1)
         self.cap_note = QLabel()                  # the KiCad fields' models, and the parts they took
         self.cap_note.setWordWrap(True)
-        self.cap_note.setStyleSheet("color: #52514e")
+        self.cap_note.setProperty("role", "muted")
         self.cap_note.setVisible(False)
         cl.addWidget(self.cap_note)
 
@@ -782,7 +781,7 @@ class AcPanel(QWidget):
         self.estimate = QLabel()                  # the pre-solve estimate, kept through the solve
         self.estimate.setWordWrap(True)
         self.estimate.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.estimate.setStyleSheet("color: #52514e")
+        self.estimate.setProperty("role", "muted")
         # Editor: rail, Solve and progress on top (always in sight in a short dock), then the tabs.
         editor = QWidget()
         el = QVBoxLayout(editor)
@@ -914,7 +913,7 @@ class AcPanel(QWidget):
                 for c, (_h, key) in enumerate(CAP_COLUMNS):
                     item = QTableWidgetItem(cap_cell(m, key))
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                    item.setBackground(QBrush(READ_ONLY_BG))
+                    item.setBackground(theme.brush("cell-readonly"))
                     item.setToolTip(cap_field_tip(held, key))
                     t.setItem(n + i, c, item)
             t.blockSignals(False)
@@ -928,8 +927,8 @@ class AcPanel(QWidget):
         t.blockSignals(True)
         for r, pairs in lost.items():
             item = t.item(r, col)
-            if item is not None and item.background().color() != ERROR_BG:
-                item.setBackground(QBrush(LOST_BG))
+            if item is not None and item.background().color() != theme.qcolor("cell-error"):
+                item.setBackground(theme.brush("cell-missing"))
                 item.setToolTip("\n".join(x for x in (item.toolTip(), cap_lost_tip(pairs)) if x))
         t.blockSignals(False)
         note = fields_note(self._field_rows, lost, self._cap_rows)
@@ -1360,7 +1359,7 @@ class AcPanel(QWidget):
             for c, text in enumerate(row):
                 item = QTableWidgetItem(text)
                 if row[8] == "FAIL":
-                    item.setForeground(QBrush(QColor("#c0392b")))
+                    item.setForeground(theme.brush("fail"))
                 self.table.setItem(i, c, item)
         self.stats.setText(stats_text(r.stats))
         self._show_notes()
@@ -1430,10 +1429,10 @@ class AcPanel(QWidget):
             self.header.setText("")
             return
         r, solved = entry
-        verdict = {"fail": "<span style='color:#c0392b'><b>FAIL</b></span>", "pass": "<b>pass</b>",
-                   "not_judged": "<span style='color:#b9770e'><b>not judged</b></span>"}[rail_verdict(r)[0]]
-        stale = ("<br><span style='color:#b9770e'><b>Setup changed since this solve</b>: solve "
-                 "again</span>" if _project_key(self.merged_project) != solved else "")
+        verdict = {"fail": theme.span("fail", "<b>FAIL</b>"), "pass": "<b>pass</b>",
+                   "not_judged": theme.span("warn", "<b>not judged</b>")}[rail_verdict(r)[0]]
+        stale = ("<br>" + theme.span("warn", "<b>Setup changed since this solve</b>: solve again")
+                 if _project_key(self.merged_project) != solved else "")
         self.header.setText(f"<b>{r.rail}</b> against {r.ground}: {verdict}{stale}")
 
     @property
@@ -1584,20 +1583,21 @@ class AcPanel(QWidget):
 
     def _mark_cell(self, table, item, why):
         table.blockSignals(True)
-        item.setBackground(QBrush(ERROR_BG))
+        item.setBackground(theme.brush("cell-error"))
         item.setToolTip(f"Not applied: {why}")
         table.blockSignals(False)
 
     def _flag_rows(self, table, problems: Dict[int, str], count: Optional[int] = None):
         """Mark the first ``count`` rows (every row: None) by ``problems``; a cell refused
-        (ERROR_BG) keeps its mark."""
+        (the cell-error colour) keeps its mark."""
         table.blockSignals(True)
         for r in range(table.rowCount() if count is None else min(count, table.rowCount())):
             why = problems.get(r, "")
-            bg = QBrush(DRAFT_BG if why.startswith("draft") else PROBLEM_BG) if why else QBrush()
+            bg = (theme.brush("cell-readonly" if why.startswith("draft") else "cell-problem") if why
+                  else QBrush())
             for c in range(table.columnCount()):
                 item = table.item(r, c)
-                if item is not None and item.background().color() != ERROR_BG:
+                if item is not None and item.background().color() != theme.qcolor("cell-error"):
                     item.setBackground(bg)
                     item.setToolTip(why)
         table.blockSignals(False)

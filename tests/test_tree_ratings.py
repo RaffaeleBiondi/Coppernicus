@@ -20,6 +20,8 @@ from coppernicus.project import Project  # noqa: E402
 CHAIN = Path(__file__).resolve().parents[1] / "examples" / "power_chain"
 
 SOLVE = '''
+        from coppernicus.app import theme
+
         def solve_tree(project):
             window.dirty = False
             assert window.open_project(project), project
@@ -101,7 +103,7 @@ def test_the_i_max_column_shows_the_judged_rating_of_a_label_on_several_rails_an
         assert rows["REG (+3V3)"]["I max (A)"] == "2" and rows["REG (+1V8)"]["I max (A)"] == "—", rows
         table = window.tree_panel.vrms
         red = [table.item(r, 0).text() for r in range(table.rowCount())
-               if table.item(r, 0).foreground().color().name() == "#c0392b"]
+               if table.item(r, 0).foreground().color().name() == theme.color("fail")]
         assert red == ["REG (+3V3)"], red
 
         window.dirty = False
@@ -385,7 +387,7 @@ def test_the_power_tree_tab_and_problems_show_a_regulator_over_its_rating(tmp_pa
         table = window.tree_panel.vrms
         color = {{table.item(r, 0).text(): table.item(r, 0).foreground().color().name()
                  for r in range(table.rowCount())}}
-        assert color["U1"] == "#c0392b" and color["U2"] != "#c0392b", color
+        assert color["U1"] == theme.color("fail") and color["U2"] != theme.color("fail"), color
         window.show_group("+3V3")
         app.processEvents()
         top = window.problems.tree.topLevelItem(0)

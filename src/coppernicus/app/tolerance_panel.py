@@ -38,7 +38,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -59,7 +58,7 @@ from PySide6.QtWidgets import (
 )
 
 from coppernicus import board_fields as BF
-from coppernicus.app import label_text
+from coppernicus.app import label_text, theme
 from coppernicus.app.panels import FieldComboBox
 from coppernicus.project import (
     LOAD_PART_KEYS,
@@ -455,15 +454,12 @@ def result_rows(result) -> List[Tuple[str, ...]]:
     return out
 
 
-FAIL_COLOR, AMBER = "#c0392b", "#b9770e"
-
-
 def header_html(result, why: str = "") -> str:
     """The verdict line: fail > not judged > pass, and its note; or why nothing is judged."""
     if result is None:
         return f"<b>Tolerance stack-up</b>: {html.escape(why)}" if why else ""
-    words = {"fail": f"<span style='color:{FAIL_COLOR}'><b>FAIL</b></span>", "pass": "<b>PASS</b>",
-             "not_judged": f"<span style='color:{AMBER}'><b>NOT JUDGED</b></span>"}
+    words = {"fail": theme.span("fail", "<b>FAIL</b>"), "pass": "<b>PASS</b>",
+             "not_judged": theme.span("warn", "<b>NOT JUDGED</b>")}
     return (f"<b>Tolerance stack-up</b>: {words.get(result.verdict, result.verdict)}"
             f"<br><small>{html.escape(result.verdict_note)}</small>")
 
@@ -478,7 +474,6 @@ def notes_text(result) -> str:
 
 # ---------------------------------------------------------------------- the tab
 
-READ_ONLY_BG, MISSING_BG = QColor("#f0f0f0"), QColor("#fff3cd")
 
 
 def _table(headers, tips=()) -> QTableWidget:
@@ -697,7 +692,7 @@ class TolerancePanel(QWidget):
                     why = r.why(key)               # the row, or this cell: a KiCad field holds it
                     if why:
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                        item.setBackground(QBrush(READ_ONLY_BG))
+                        item.setBackground(theme.brush("cell-readonly"))
                         item.setToolTip(why)
                     else:
                         item.setToolTip(f"{KEY_TIPS[key]}. {PAIR_TIP}")
@@ -785,11 +780,11 @@ class TolerancePanel(QWidget):
                 if tip:
                     item.setToolTip(tip)
                 if text.startswith("missing"):
-                    item.setBackground(QBrush(MISSING_BG))
+                    item.setBackground(theme.brush("cell-missing"))
                 if text.startswith("FAIL"):
-                    item.setForeground(QBrush(QColor(FAIL_COLOR)))
+                    item.setForeground(theme.brush("fail"))
                 elif text.startswith("NOT JUDGED"):
-                    item.setForeground(QBrush(QColor(AMBER)))
+                    item.setForeground(theme.brush("warn"))
                 self.table.setItem(i, c, item)
         self.notes.setPlainText(notes_text(result))
         if 0 <= keep < len(rows):
