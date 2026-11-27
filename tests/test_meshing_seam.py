@@ -168,13 +168,18 @@ def test_no_copper_lost_silently_and_kipis_fallbacks(name, monkeypatch):
 def test_install_and_uninstall_are_idempotent_and_restore_kipi(name):
     import kipi.core.mesh.parallel as P
     import kipi.core.viz.meshes as V
+    import kipi.core.workers as W
+
+    from coppernicus.engine.meshing import pool
     orig = (M.mesh_polygon, P.mesh_layers, os.environ.get("KIPI_SERIAL"), V._triangle,
-            sys.modules.get("triangle"))
+            sys.modules.get("triangle"), W._start)
     meshing.uninstall()                                          # nothing installed: nothing to do
     b = meshing.install(name)
     first = M.mesh_polygon
     assert meshing.install(name) is b and M.mesh_polygon is first   # twice: unchanged
-    assert meshing.installed() == name and P.mesh_layers(None) is None and os.environ["KIPI_SERIAL"] == "1"
+    assert meshing.installed() == name and meshing.pooled()
+    assert P.mesh_layers is orig[1] and os.environ.get("KIPI_SERIAL") == orig[2]     # KiPI's pool left on
+    assert isinstance(W._start, pool.WorkerStart) and W._start.kipi_start is orig[5]   # KiPI's workers too
     other = [n for n in meshing.available() if n != name]
     if other:
         meshing.install(other[0])                                # another: replaces it
@@ -183,7 +188,7 @@ def test_install_and_uninstall_are_idempotent_and_restore_kipi(name):
     meshing.uninstall()
     assert meshing.installed() is None
     assert (M.mesh_polygon, P.mesh_layers, os.environ.get("KIPI_SERIAL"), V._triangle,
-            sys.modules.get("triangle")) == orig
+            sys.modules.get("triangle"), W._start) == orig
 
 
 def _via_array():

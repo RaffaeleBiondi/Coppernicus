@@ -45,9 +45,14 @@ coppernicus.engine.meshing
 - `kipi/noise/extract/xsection.py`: the noise cross-section, "pq28a…" then "rpq28a" with per-triangle limits. CGAL's stand-in applies those limits as a sampled size field, so the result is close to Triangle's, not identical. Not yet checked on a full noise solve.
 
 **Gaps:**
-- **KiPI's layer pool** (`kipi/core/mesh/parallel.py`, above ~1.5 M estimated triangles) spawns workers that re-import KiPI and miss the patch. Today `install()` switches the pool off (`KIPI_SERIAL=1`). Fix before shipping, by either:
-  - a pool initializer that calls `install(name)` in each worker, needing a hook in `kipi.core.workers.BoardPool`; or
-  - upstream, a `mesh_polygon` backend argument / entry point in KiPI.
+- **KiPI's layer pool** (`kipi/core/mesh/parallel.py`, above ~1.5 M estimated triangles) spawns workers that re-import KiPI and miss the patch. Done for the backends in `registry.KNOWN`:
+  - `install()` replaces `kipi.core.workers._start` (BoardPool's initializer, looked up when a pool is built) with `pool.WorkerStart`;
+  - pickled for a worker, `WorkerStart` becomes `partial(coppernicus.mesh_worker.start, spec)`. The spec holds the name, the backend's `settings` read at spawn, and the options;
+  - each worker installs the same backend, then runs KiPI's `_start`;
+  - pooled meshes are bit-identical to one process (`tests/test_meshing_pool.py`).
+
+  A `register()`-ed backend, a `stats` list or unpicklable options still switch the pool off (`KIPI_SERIAL=1`). Upstream, a `mesh_polygon` backend argument or entry point in KiPI would replace the hook.
+- **KiPI version**: `install()` refuses any KiPI but 1.0.1, and any KiPI whose hooked functions have other signatures (`registry.seam_problem()`).
 - **`kipi/core/mesh/mesher.py` imports `triangle` at load.** A Triangle-free install must put a stand-in module in `sys.modules["triangle"]` before anything imports KiPI. This happens in the same early bootstrap step where `bootstrap_triangle.activate()` runs today.
 
 ## 2. Choosing the mesher

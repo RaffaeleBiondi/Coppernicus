@@ -58,8 +58,10 @@ def test_importing_the_seam_installs_nothing():
 
     import kipi.core.mesh.mesher as M
     import kipi.core.mesh.parallel as P
+    import kipi.core.workers as W
     def hooks():
-        return M.mesh_polygon, P.mesh_layers, os.environ.get("KIPI_SERIAL"), sys.modules.get("triangle")
+        return (M.mesh_polygon, P.mesh_layers, os.environ.get("KIPI_SERIAL"), sys.modules.get("triangle"),
+                W._start)
     before = hooks()
     import coppernicus.engine.meshing as meshing
     from coppernicus.engine.meshing import pipeline, protocol, registry, triangle_backend  # noqa: F401

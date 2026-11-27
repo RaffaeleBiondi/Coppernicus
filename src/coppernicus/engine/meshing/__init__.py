@@ -17,11 +17,12 @@ from coppernicus.engine.meshing.registry import (
     get,
     install,
     installed,
+    pooled,
     register,
     seam_problem,
     uninstall,
 )
 
 __all__ = ["Backend", "SizeField", "Triangulation", "graded_cap", "graded_limits", "STATUS_OK", "STATUS_CAP",
-           "STATUS_NO_DOMAIN", "STATUS_GRADED_CAP", "available", "get", "install", "installed", "register",
-           "seam_problem", "uninstall"]
+           "STATUS_NO_DOMAIN", "STATUS_GRADED_CAP", "available", "get", "install", "installed", "pooled",
+           "register", "seam_problem", "uninstall"]
