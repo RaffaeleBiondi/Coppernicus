@@ -559,8 +559,11 @@ def test_the_noise_tab_follows_the_impedance_tab_and_opening_changes_nothing(tmp
                 w.editingFinished.emit()                      # shown rounded, committed unchanged
         assert window.dirty is False and window.project.to_dict() == before
         assert window.project.aggressors[0].rise_s == 2.123456789e-9
+        window.results_tabs.setCurrentWidget(window.problems)   # the same page (and map) both times
+        app.processEvents()
         with_tab = window.minimumSizeHint()                  # the laptop fit: the tab grows nothing
         window.results_tabs.removeTab(window.results_tabs.indexOf(panel))
+        window.results_tabs.setCurrentWidget(window.problems)
         app.processEvents()
         without = window.minimumSizeHint()
         assert with_tab.height() <= without.height() and with_tab.width() <= without.width(), (

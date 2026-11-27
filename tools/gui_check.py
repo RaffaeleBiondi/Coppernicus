@@ -2998,8 +2998,11 @@ def run_tolerance(window, check: Checks, args, out: Path):
     QApplication.processEvents()
     said = panel.go_to_row(0)
     QApplication.processEvents()
-    check("tolerance: clicking the row shows U2 on the board (its rail, zoomed to its pads)",
-          window.net == "VOUT" and said.startswith("U2 on VOUT: FAIL"), f"{window.net} {said}")
+    check("tolerance: double-clicking the row shows U2 on the board (Rail · Problems, zoomed to its pads)",
+          window.net == "VOUT" and said.startswith("U2 on VOUT: FAIL")
+          and window.results_tabs.currentWidget() is window.problems and window.map_size() == "full",
+          f"{window.net} {said}")
+    window.results_tabs.setCurrentWidget(panel)
 
     window.rail_panel.loads.table.cellWidget(0, 3).setValue(4.0)    # U2's current, in the Rail setup
     QApplication.processEvents()

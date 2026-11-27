@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -53,6 +54,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -155,6 +157,10 @@ PROBE_TIPS = {
     "ac_tolerance_v": "With Step and Slew and no Target: KiPI's computed target Z = V_ac/I_step "
                       "up to 1/(π·t_rise), t_rise = I_step/slew",
     "step_a": "The load step, A", "slew_a_per_us": "The load step's slew rate, A/µs"}
+# The probes table shows these columns (layout C, narrow setup panel); the selected probe's other
+# fields are edited in the card under it, which writes the same hidden cells, so every edit goes
+# through the table's own checks.
+PROBE_SHOWN = ("name", "ref", "pins", "target_ohm")
 _PROBE_TEXT = ("name", "ref", "net", "ground_ref", "ground_net")
 _PROBE_NUMBERS = ("target_ohm", "target_hz", "ac_tolerance_v", "step_a", "slew_a_per_us")
 
@@ -549,7 +555,8 @@ def draw_result(fig, r) -> None:
     handles, labels = ax.get_legend_handles_labels()
     if labels:
         width = max(16, int(fig.get_figwidth() * 72 * 0.45 / (0.55 * LEGEND_FONT)))   # ≤ ~half the width
-        ax.legend(handles, [textwrap.fill(t, width) for t in labels], fontsize=LEGEND_FONT, loc="best")
+        ax.legend(handles, [textwrap.fill(t, width, break_on_hyphens=False) for t in labels],
+                  fontsize=LEGEND_FONT, loc="best")
 
 
 # ---------------------------------------------------------------------- worker
@@ -650,6 +657,14 @@ class AcPanel(QWidget):
         window.rail_panel.settings_changed.connect(self._check_stale)
         self.load_project()
 
+
+    def take_setup(self) -> QWidget:
+        """The editor, handed to the window's setup panel (layout C): the page keeps
+        the plot and the results."""
+        self.setup_area.setParent(None)
+        self._split.setSizes([620, 360])
+        return self.setup_area
+
     # ------------------------------------------------------------------ build
     def _build(self):
         # Editor.
@@ -675,6 +690,9 @@ class AcPanel(QWidget):
         pl.setContentsMargins(2, 2, 2, 2)
         pl.addLayout(pb)
         pl.addWidget(self.probes, 1)
+        for c, (_h, key) in enumerate(PROBE_COLUMNS):
+            self.probes.setColumnHidden(c, key not in PROBE_SHOWN)
+        pl.addWidget(self._build_probe_card())
 
         self.caps = _table([h for h, _ in CAP_COLUMNS], [CAP_TIPS[k] for _, k in CAP_COLUMNS])
         self.pick_parts = QPushButton("Pick parts")
@@ -833,6 +851,7 @@ class AcPanel(QWidget):
         for i, stretch in enumerate((2, 3, 2)):
             split.setStretchFactor(i, stretch)
         split.setSizes([430, 560, 300])           # the editor at its natural width, the plot widest
+        self.setup_area, self._split = scroll, split
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(split)
@@ -848,6 +867,7 @@ class AcPanel(QWidget):
         imp.clicked.connect(self._import_dialog)
         exp.clicked.connect(self._export_model_dialog)
         self.probes.itemChanged.connect(self._probe_item_changed)
+        self.probes.currentCellChanged.connect(lambda row, *_: self._show_probe_card(row))
         self.caps.itemChanged.connect(self._cap_item_changed)
         self.links.itemChanged.connect(self._link_item_changed)
         for kind, b in self._pick_buttons.items():
@@ -948,6 +968,8 @@ class AcPanel(QWidget):
             for c, (_h, key) in enumerate(columns):
                 table.setItem(r, c, QTableWidgetItem(cell(obj, key)))
         table.blockSignals(False)
+        if table is self.probes:
+            self._show_probe_card(table.currentRow())
 
     def _fill_options(self):
         a = self.project.ac
@@ -1002,6 +1024,90 @@ class AcPanel(QWidget):
             self._probe_rows.pop(r)
         self._fill(self.probes, PROBE_COLUMNS, self._probe_rows, probe_cell)
         self._write_probes()
+
+    def _build_probe_card(self) -> QWidget:
+        """The selected probe's fields the table does not show (its net, ground, the target's
+        band or mask, the load step), under the table: closed, one line says what is set."""
+        card = QFrame()
+        card.setObjectName("probeCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(0, 4, 0, 0)
+        self.probe_card_toggle = QToolButton()
+        self.probe_card_toggle.setCheckable(True)
+        self.probe_card_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.probe_card_toggle.setArrowType(Qt.RightArrow)
+        self.probe_card_toggle.setAutoRaise(True)
+        self.probe_card_toggle.toggled.connect(self._probe_card_toggled)
+        self.probe_summary = QLabel()
+        self.probe_summary.setWordWrap(True)
+        self.probe_summary.setProperty("role", "muted")
+        self.probe_card_body = QWidget()
+        form = QFormLayout(self.probe_card_body)
+        form.setContentsMargins(4, 0, 0, 0)
+        self.probe_fields: Dict[str, QLineEdit] = {}
+        for header, key in PROBE_COLUMNS:
+            if key in PROBE_SHOWN:
+                continue
+            edit = QLineEdit()
+            edit.setToolTip(PROBE_TIPS[key])
+            edit.editingFinished.connect(lambda k=key: self._probe_field_edited(k))
+            self.probe_fields[key] = edit
+            form.addRow(header, edit)
+        self.probe_card_body.hide()
+        layout.addWidget(self.probe_card_toggle)
+        layout.addWidget(self.probe_summary)
+        layout.addWidget(self.probe_card_body)
+        self._show_probe_card(-1)
+        return card
+
+    def _probe_card_toggled(self, on: bool):
+        self.probe_card_toggle.setArrowType(Qt.DownArrow if on else Qt.RightArrow)
+        self.probe_card_body.setVisible(on)
+        self.probe_summary.setVisible(not on)
+
+    def probe_summary_text(self, r: int) -> str:
+        """The hidden cells of row ``r`` set, as one line ("Net +3V3; Ground net GND; …")."""
+        parts = []
+        for c, (header, key) in enumerate(PROBE_COLUMNS):
+            item = self.probes.item(r, c)
+            if key not in PROBE_SHOWN and item is not None and item.text().strip():
+                parts.append(f"{header} {item.text().strip()}")
+        return "; ".join(parts) or "Nothing more set for this probe"
+
+    def _show_probe_card(self, r: int):
+        """The card shows row ``r``'s hidden cells (none: a row is not selected)."""
+        valid = 0 <= r < self.probes.rowCount()
+        name = self.probes.item(r, 0).text() if valid and self.probes.item(r, 0) else ""
+        self.probe_card_toggle.setText(f"Details of {name or 'the probe'}" if valid else "Details")
+        self.probe_card_toggle.setEnabled(valid)
+        self.probe_summary.setText(self.probe_summary_text(r) if valid else "Select a probe for its details")
+        refused = theme.qcolor("cell-error")
+        for c, (_header, key) in enumerate(PROBE_COLUMNS):
+            edit = self.probe_fields.get(key)
+            if edit is None:
+                continue
+            item = self.probes.item(r, c) if valid else None
+            edit.blockSignals(True)
+            edit.setText(item.text() if item is not None else "")
+            edit.blockSignals(False)
+            edit.setEnabled(item is not None)
+            bad = item is not None and item.background().color() == refused
+            edit.setProperty("state", "error" if bad else "")
+            edit.setToolTip(item.toolTip() if bad else PROBE_TIPS[key])
+            edit.style().unpolish(edit)
+            edit.style().polish(edit)
+
+    def _probe_field_edited(self, key: str):
+        """A card field committed: written into its hidden cell, checked as a typed cell is."""
+        r = self.probes.currentRow()
+        c = [k for _h, k in PROBE_COLUMNS].index(key)
+        item = self.probes.item(r, c) if r >= 0 else None
+        if item is None:
+            return
+        text = self.probe_fields[key].text()
+        if text != item.text():
+            item.setText(text)                        # itemChanged -> _probe_item_changed
+        self._show_probe_card(r)
 
     def _probe_item_changed(self, item: QTableWidgetItem):
         r, c = item.row(), item.column()
@@ -1572,6 +1678,8 @@ class AcPanel(QWidget):
     def _refill_row(self, table, columns, r, obj, cell):
         for c, (_h, key) in enumerate(columns):
             self._set_cell(table, r, c, cell(obj, key))
+        if table is self.probes:
+            self._show_probe_card(table.currentRow())
 
     def _set_cell(self, table, r, c, text):
         table.blockSignals(True)

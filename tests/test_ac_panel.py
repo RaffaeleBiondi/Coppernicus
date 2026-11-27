@@ -322,8 +322,11 @@ def test_the_impedance_tab_follows_the_power_tree_and_opening_changes_nothing():
             if hasattr(w, "editingFinished"):
                 w.editingFinished.emit()
         assert window.dirty is False and window.project.to_dict() == before_dict
+        window.results_tabs.setCurrentWidget(window.problems)   # the same page (and map) both times
+        app.processEvents()
         with_tab = window.minimumSizeHint()                  # the laptop fit: the tab grows nothing
         window.results_tabs.removeTab(window.results_tabs.indexOf(panel))
+        window.results_tabs.setCurrentWidget(window.problems)
         app.processEvents()
         without = window.minimumSizeHint()
         assert with_tab.height() <= without.height() and with_tab.width() <= without.width(), (

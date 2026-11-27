@@ -870,6 +870,13 @@ class NoisePanel(QWidget):
         window.rail_panel.settings_changed.connect(self._check_stale)
         self.load_project()
 
+    def take_setup(self) -> QWidget:
+        """The editor, handed to the window's setup panel (layout C): the page keeps
+        the waveforms and the results."""
+        self.setup_area.setParent(None)
+        self._split.setSizes([560, 400])
+        return self.setup_area
+
     # ------------------------------------------------------------------ build
     def _build(self):
         # Editor: the aggressor, Solve and progress on top (in sight in a short dock), then tabs.
@@ -1112,6 +1119,7 @@ class NoisePanel(QWidget):
         for i, stretch in enumerate((2, 3, 2)):
             split.setStretchFactor(i, stretch)
         split.setSizes([430, 520, 360])
+        self.setup_area, self._split = scroll, split
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(split)

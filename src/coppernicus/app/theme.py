@@ -188,6 +188,7 @@ QSplitter::handle {{ background: {t['line']}; }}
 QLineEdit {{ background: {t['input']}; border: 1px solid {t['input-line']}; border-radius: 4px;
   padding: 2px 4px; selection-background-color: {t['selected']}; selection-color: {WHITE}; }}
 QLineEdit:focus {{ border-color: {t['focus']}; }}
+QLineEdit[state="error"] {{ border-color: {t['fail']}; background: {t['cell-error']}; }}
 QLineEdit:disabled, QLineEdit:read-only {{ background: {t['panel']}; color: {t['muted']}; }}
 QCheckBox::indicator, QGroupBox::indicator, QAbstractItemView::indicator {{ width: 13px; height: 13px;
   border: 1px solid {t['outline']}; border-radius: 3px; background: {t['input']}; }}
@@ -200,6 +201,14 @@ QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; color:
 QProgressBar {{ border: 1px solid {t['line']}; border-radius: 4px; background: {t['input']};
   color: {t['fg']}; text-align: center; }}
 QProgressBar::chunk {{ background: {t['accent']}; border-radius: 3px; }}
+QWidget#setupBar {{ background: {t['chrome']}; border-bottom: 1px solid {t['line']}; }}
+QLabel#setupTitle {{ color: {t['fg']}; font-weight: 600; }}
+QWidget#setupFoot {{ border-top: 1px solid {t['line']}; }}
+QWidget#setupFoot QPushButton {{ background: {t['selected']}; border-color: {t['selected']}; color: {WHITE};
+  font-weight: 600; }}
+QWidget#setupFoot QPushButton:hover {{ background: {t['accent']}; }}
+QWidget#setupFoot QPushButton:disabled {{ background: {t['panel']}; border-color: {t['line']};
+  color: {t['muted']}; }}
 QTreeWidget#navigator {{ background: {t['bg']}; border: none; }}
 QTreeWidget#navigator::item {{ padding: 3px 4px; border-radius: 4px; }}
 QTreeWidget#navigator::item:hover {{ background: {t['hover']}; }}

@@ -222,8 +222,7 @@ class SetupDock(QDockWidget):
         when None)."""
         page, foot = self._setups[key]
         self.stack.setCurrentWidget(page)
-        self.title.setText(title)
-        self.setWindowTitle(title)
+        self.title.setText(title)       # not the window title: it would rename View → Setup panel
         chosen = button if button in foot else next(iter(foot), None)
         for name, widget in foot.items():
             widget.setVisible(name == chosen)

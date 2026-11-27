@@ -8,7 +8,7 @@ import copy
 import html
 from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtGui import QDoubleValidator, QValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -695,6 +695,7 @@ class RailPanel(QWidget):
 
         self.solve = QPushButton("Solve rail  (F5)")
         self.solve.setMinimumHeight(34)
+        self._solve_free = True          # no rail solve running (set_solve_free)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         for w in (self.title, self.banner, self.sources, self.source_box, self.loads, self.load_box,
@@ -722,6 +723,17 @@ class RailPanel(QWidget):
         self.solve.clicked.connect(self.solve_requested.emit)
         self._settings: Optional[Settings] = None
         self.setEnabled(False)
+
+    def set_solve_free(self, free: bool):
+        """Solve rail is offered when no rail solve runs and the panel is enabled (a board, a
+        net): the button may sit outside the panel (the setup panel's foot), so both count."""
+        self._solve_free = free
+        self.solve.setEnabled(free and self.isEnabled())
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.EnabledChange and hasattr(self, "_solve_free"):
+            self.solve.setEnabled(self._solve_free and self.isEnabled())
 
     # ------------------------------------------------------------------ picking
     @property

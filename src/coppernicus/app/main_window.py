@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -46,7 +47,7 @@ from coppernicus.app.ac_panel import AcPanel
 from coppernicus.app.board_view import FIELDS, BoardView, copper_rings
 from coppernicus.app.comparing import Run, compare_runs
 from coppernicus.app.noise_panel import NoisePanel
-from coppernicus.app.pages import Navigator, PageStack
+from coppernicus.app.pages import Navigator, PageStack, SetupDock
 from coppernicus.app.panels import (
     ComparePanel,
     LossChart,
@@ -85,6 +86,7 @@ from coppernicus.temperature import apply_thermal_limits, thermal_verdict
 PROJECT_FILTER = "Coppernicus project (*.coppernicus.yml *.yml *.yaml)"
 USER_RESULTS = ("Documents", "Coppernicus", "results")     # under the home folder
 REMOVE_MESHER = "Remove downloaded mesher (Triangle)…"
+MAP_SHARE = {"full": 0.6, "small": 0.3}   # the map's share of the centre's height, by page
 RESULTS_TITLE = "Results"              # above the navigator; "Results for +3V3" with a net shown
 THEME_KEY = "Ctrl+Shift+L"                              # dark <-> light (View menu, toolbar)
 # + / − step the Layer selector, as in KiCad: (key, modifiers, step); "=" is "+" without Shift.
@@ -376,7 +378,34 @@ class MainWindow(QMainWindow):
         rail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)     # scroll down only
         rail_scroll.setMinimumWidth(self.rail_panel.minimumSizeHint().width()
                                     + rail_scroll.verticalScrollBar().sizeHint().width())
-        self._dock("Rail setup", rail_scroll, Qt.RightDockWidgetArea)
+        # The right panel: the setup of the page shown, its solve at the foot (layout C).
+        self.setup_dock = SetupDock(self)
+        self.setup_dock.add_setup("rail", rail_scroll, {"rail": self.rail_panel.solve,
+                                                        "tree": self._tree_button()})
+        self.setup_dock.add_setup("thermal", self.thermal_panel.take_setup(), {"tree": self._tree_button()})
+        for key, panel in (("impedance", self.ac_panel), ("noise", self.noise_panel),
+                           ("tolerance", self.tolerance_panel)):
+            self.setup_dock.add_setup(key, panel.take_setup(), {"solve": panel.solve_button})
+        self.addDockWidget(Qt.RightDockWidgetArea, self.setup_dock)
+        self._page_setups = {id(self.problems): ("rail", "Rail setup", "rail"),
+                             id(self.losses): ("rail", "Rail setup", "rail"),
+                             id(self.compare): ("rail", "Rail setup", "rail"),
+                             id(self.tree_panel): ("rail", "Rail setup", "tree"),
+                             id(self.thermal_panel): ("thermal", "Thermal setup", "tree"),
+                             id(self.ac_panel): ("impedance", "Impedance setup", "solve"),
+                             id(self.noise_panel): ("noise", "Noise setup", "solve"),
+                             id(self.tolerance_panel): ("tolerance", "Tolerance setup", "solve")}
+        self._map_size = ""
+        self.pages.currentChanged.connect(self._page_shown)
+        self._page_shown(self.pages.currentIndex())
+        self.setup_button = QToolButton()               # shows the hidden setup panel again
+        self.setup_button.setText("⇤ Setup")
+        self.setup_button.setToolTip("Show the setup panel")
+        self.setup_button.setAutoRaise(True)
+        self.setup_button.clicked.connect(self.setup_dock.show)
+        self.statusBar().addPermanentWidget(self.setup_button)
+        self.setup_button.hide()
+        self.setup_dock.toggleViewAction().toggled.connect(lambda on: self.setup_button.setVisible(not on))
 
         self._actions()
         self.statusBar().showMessage("Open a board (.kicad_pcb) or a project to start")
@@ -403,6 +432,7 @@ class MainWindow(QMainWindow):
         self.view_menu = self.menuBar().addMenu("View")
         self.view.add_hover_menu(self.view_menu)                       # View → Hover shows
         self.view_menu.addSeparator()
+        self.view_menu.addAction(self.setup_dock.toggleViewAction())
         self.view_menu.addAction(self.theme_action)
         theme.signals.changed.connect(self._theme_changed)
         self.compare.pin_requested.connect(self.pin_baseline)
@@ -414,6 +444,36 @@ class MainWindow(QMainWindow):
                                       activated=lambda s=step: self.step_layer(s))
                             for key, mods, step in LAYER_KEYS]
         QApplication.instance().focusChanged.connect(self._focus_changed)
+
+    def _tree_button(self) -> QPushButton:
+        """A "Solve tree" button for a setup panel's foot (the Tree and Temperature pages)."""
+        button = QPushButton("Solve tree  (Ctrl+T)")
+        button.setToolTip("Solve the whole power tree, ground return included")
+        button.clicked.connect(self.solve_tree)
+        return button
+
+    def _page_shown(self, index: int):
+        """The setup panel follows the page (its setup, title and solve button), and so does
+        the map: none on Ripple & noise (the plots need the height; the H and E fields have
+        their own tabs) and Tolerance (the stack-up replaces it), small on Impedance (where
+        the probes are), full on the rail and power-tree pages."""
+        page = self.pages.widget(index)
+        if page is None:
+            return
+        if id(page) in self._page_setups:
+            self.setup_dock.show_setup(*self._page_setups[id(page)])
+        size = "none" if page in (self.noise_panel, self.tolerance_panel) else \
+            "small" if page is self.ac_panel else "full"
+        self.map_pane.setVisible(size != "none")
+        if size != "none" and size != self._map_size:
+            total = max(self.centre_split.height(), 400)
+            share = MAP_SHARE[size]
+            self.centre_split.setSizes([int(total * share), total - int(total * share)])
+        self._map_size = size
+
+    def map_size(self) -> str:
+        """How the shown page has the map: "full", "small" or "none"."""
+        return self._map_size
 
     def step_layer(self, step: int):
         """+ / − (as in KiCad): the next (``step`` 1) or previous (−1) copper layer in the Layer
@@ -1365,7 +1425,7 @@ class MainWindow(QMainWindow):
         rail = self._solved_rail(self.net)
         project = self.merged.project
         notes, warnings = self._rail_warnings(self.net)
-        self.rail_panel.solve.setEnabled(False)
+        self.rail_panel.set_solve_free(False)
         self.problems.clear(f"<b>{self.net}</b>: solving…")
         self.worker = SolveWorker(self.board, rail, project.settings, self, project=project,
                                   notes=notes, warnings=warnings)
@@ -1377,7 +1437,7 @@ class MainWindow(QMainWindow):
         self.worker.message.connect(lambda m: self.statusBar().showMessage(m))
         self.worker.succeeded.connect(self._solved)
         self.worker.failed.connect(self._solve_failed)
-        self.worker.finished.connect(lambda: self.rail_panel.solve.setEnabled(True))
+        self.worker.finished.connect(lambda: self.rail_panel.set_solve_free(True))
         self.worker.start()
 
     def _is_stale(self) -> bool:

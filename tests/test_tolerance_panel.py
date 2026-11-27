@@ -493,8 +493,11 @@ def test_the_tolerance_tab_follows_ripple_and_noise_and_opening_changes_nothing(
         assert window.dirty is False and window.project.to_dict() == before
         assert "NOT JUDGED" in panel.header.text(), panel.header.text()
         assert cells()[3].startswith("missing") and "Ctrl+T" in panel.table.item(0, 3).toolTip()
+        window.results_tabs.setCurrentWidget(window.problems)   # the same page (and map) both times
+        app.processEvents()
         with_tab = window.minimumSizeHint()                  # the laptop fit: the tab grows nothing
         window.results_tabs.removeTab(window.results_tabs.indexOf(panel))
+        window.results_tabs.setCurrentWidget(window.problems)
         app.processEvents()
         without = window.minimumSizeHint()
         assert with_tab.height() <= without.height() and with_tab.width() <= without.width(), (
@@ -576,7 +579,9 @@ def test_the_verdict_is_in_view_at_the_docs_window_size():
     ''')
 
 
-def test_a_row_click_shows_its_load_on_the_board():
+def test_a_row_double_click_shows_its_load_on_the_board():
+    """Tolerance has no map: a click selects the row; a double-click goes to Rail · Problems,
+    the load's rail, zoomed to its pads."""
     run_in_window(f'''
         window.show()
         window.open_project({EXAMPLE!r})
@@ -589,6 +594,12 @@ def test_a_row_click_shows_its_load_on_the_board():
         app.processEvents()
         assert window.net == "VOUT" and text.startswith("U2 on VOUT"), (window.net, text)
         assert window.statusBar().currentMessage() == text and len(zoomed) == 1, zoomed
+        assert window.results_tabs.currentWidget() is window.problems and window.map_size() == "full"
+        assert window.map_pane.isVisible()
+        window.results_tabs.setCurrentWidget(panel)
+        assert window.map_size() == "none" and not window.map_pane.isVisible()
+        panel.table.cellClicked.emit(0, 0)                    # one click: no page change
+        assert window.results_tabs.currentWidget() is panel
     ''')
 
 

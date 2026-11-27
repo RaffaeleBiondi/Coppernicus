@@ -339,6 +339,7 @@ class ThermalPanel(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(scroll)
+        self.setup_area = scroll
         layout.addWidget(right, 1)
 
         self.enabled.toggled.connect(lambda on: self._edited("enabled", on))
@@ -353,6 +354,12 @@ class ThermalPanel(QWidget):
         self.max_rise.editingFinished.connect(lambda: self._edited("max_rise_c", self.max_rise.text()))
         self.cancel.clicked.connect(self.cancel_requested.emit)
         self.clear()
+
+    def take_setup(self) -> QWidget:
+        """The editor, handed to the window's setup panel (layout C): the page keeps
+        the per-layer and load tables."""
+        self.setup_area.setParent(None)
+        return self.setup_area
 
     @staticmethod
     def _table(headers):
