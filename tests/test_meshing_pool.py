@@ -89,11 +89,16 @@ def _same(a, b) -> bool:
 
 def _meshed_in_workers(started, lines, here, name, settings):
     """Every polygon was meshed outside this process, by live workers that had ``name`` installed
-    with ``settings``, and the workers' first step ran before KiPI's mesher or Triangle loaded."""
+    with ``settings``, and the workers' first step ran before KiPI's mesher or Triangle loaded.
+
+    Each pool is sized for two workers, but how many of them the executor starts is its own
+    business: it starts them as tasks come, and on Windows (slow to spawn) the first one may take
+    all of the demo's polygons. So at least one worker, never this process."""
     assert started and not any(p.broken for p in started)        # the pool ran and never broke
+    assert all(p.pool.n >= 2 for p in started)                   # sized for two workers
     assert here == []                                            # no polygon meshed here
     pids = {t["pid"] for t in lines}
-    assert len(pids) >= 2 and os.getpid() not in pids
+    assert pids and os.getpid() not in pids
     for t in lines:
         assert t["installed"] == name and t["settings"] == settings
         assert t["early"] == {"triangle": False, "kipi_mesher": False}
@@ -241,7 +246,8 @@ def test_the_3d_view_pool_runs_the_installed_mesher(forced, monkeypatch):
     assert all(isinstance(lm.mesh, Packed) for ns in pooled.values() for lm in ns.copper)  # from the pool
     assert all(arrays(here[k]) == arrays(pooled[k]) for k in nets)
     traced = lines()
-    assert len({t["pid"] for t in traced}) >= 2 and os.getpid() not in {t["pid"] for t in traced}
+    pids = {t["pid"] for t in traced}                  # how many of the two start is the executor's
+    assert pids and os.getpid() not in pids
     for t in traced:
         assert t["installed"] == "rust" and t["early"] == {"triangle": False, "kipi_mesher": False}
         assert t["view_triangle"] == "coppernicus.engine.meshing.rust_backend:TriangleCompat"
