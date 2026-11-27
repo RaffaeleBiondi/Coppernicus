@@ -25,7 +25,13 @@ running app has it loaded), it leaves the folder whole, writes :data:`REMOVE_MAR
 :class:`RemovalDeferred`; the next start deletes the folder before anything imports it, then
 downloads it again as usual.
 
-The folder is per user: ``~/Library/Application Support/Coppernicus/site-packages`` on macOS,
+When to fetch is one switch, :data:`ON_DEMAND` (and :data:`ON_DEMAND_ENV`, :func:`on_demand`).
+Off (the default while Triangle is the default mesher): on the first start, as above. On: a
+start fetches nothing (:func:`at_start`) and Coppernicus's stand-in takes Triangle's place
+(:mod:`coppernicus.triangle_standin`); the dialog and the download happen when the user chooses
+the triangle mesher (:func:`fetch_for_mesher`), or with ``--fetch-triangle`` in the packaged app.
+
+The folder is per user:``~/Library/Application Support/Coppernicus/site-packages`` on macOS,
 ``%LOCALAPPDATA%\\Coppernicus\\site-packages`` on Windows (:func:`site_dir`). Two environment
 variables exist for tests, mirrors and offline machines: :data:`SITE_ENV` moves the folder and
 :data:`URL_ENV` replaces the download URL (a mirror, or ``file:///`` path to a wheel copied by
@@ -79,6 +85,12 @@ STAGING_PREFIX = ".triangle-download-"
 #: Beside the folder: a removal asked for while a file of it was in use; the next start deletes
 #: the folder before anything imports it.
 REMOVE_MARKER = ".triangle-remove"
+#: Whether the packaged app fetches Triangle only when the triangle mesher is chosen, not on
+#: the first start (:func:`on_demand`). False while Triangle is the default mesher: the first
+#: start fetches it, as before.
+ON_DEMAND = False
+#: Environment variable: ``1`` fetches on demand, ``0`` on the first start (else :data:`ON_DEMAND`).
+ON_DEMAND_ENV = "COPPERNICUS_TRIANGLE_ON_DEMAND"
 #: Shewchuk's notice, copied into the bundle by the build.
 NOTICE_FILE = Path("licenses") / "TRIANGLE_NOTICE.txt"
 
@@ -645,6 +657,56 @@ def needed(env=None) -> Optional[Plan]:
         activate(site)
         return None
     return Plan(pin, wheel, site, env.get(URL_ENV) or wheel.url)
+
+
+def on_demand(env=None) -> bool:
+    """Whether the packaged app fetches Triangle only when the triangle mesher is chosen
+    (:func:`fetch_for_mesher`) instead of on the first start: :data:`ON_DEMAND_ENV` set to
+    ``1`` or ``0`` decides, else :data:`ON_DEMAND`."""
+    env = os.environ if env is None else env
+    value = env.get(ON_DEMAND_ENV, "").strip()
+    return ON_DEMAND if value not in ("0", "1") else value == "1"
+
+
+def at_start(env=None) -> Optional[Plan]:
+    """What a start of the frozen app must fetch before it imports KiPI, or ``None``.
+
+    :func:`needed` runs in both modes: a deferred removal is done, an installed and verified
+    copy is put on ``sys.path``, what lies around it is tidied. Fetching on the first start
+    (the default) returns its :class:`Plan` and raises its :class:`BootstrapError`. On demand
+    (:func:`on_demand`) nothing is fetched and nothing stops the start (no wheel for this
+    platform, an incomplete bundle): Coppernicus's stand-in takes Triangle's place
+    (:mod:`coppernicus.triangle_standin`) until the triangle mesher is chosen."""
+    if not on_demand(env):
+        return needed(env)
+    try:
+        needed(env)
+    except BootstrapError:
+        pass
+    return None
+
+
+def fetch_for_mesher(name: str, gui: bool, env=None, stream: Optional[TextIO] = None) -> bool:
+    """The user chose the mesher ``name``; for "triangle", make the real Triangle what KiPI uses,
+    fetching it first in the frozen app if it is not here (with the dialog when ``gui``, else
+    with lines on ``stream``): the download happens here, not at the start, when
+    :func:`on_demand`. Returns whether Triangle is in use; any other mesher needs nothing (True).
+    Call it with no seam backend installed (see
+    :func:`coppernicus.triangle_standin.use_real_triangle`). Raises :class:`BootstrapError` from a
+    console fetch; the dialog shows its own errors (False)."""
+    if name != PACKAGE:
+        return True
+    from coppernicus import triangle_standin
+    if not triangle_standin.standin_in_use():
+        return True
+    plan = needed(env)
+    if plan is not None:
+        if gui:
+            if not fetch_with_dialog(plan):
+                return False
+        else:
+            fetch_on_console(plan, stream)
+    return triangle_standin.use_real_triangle()
 
 
 def notice_text() -> str:
