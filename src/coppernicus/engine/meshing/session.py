@@ -4,6 +4,7 @@
     check(name)                     -> MesherUnavailable (message, hint) when it cannot run here
     using(name, **options)          -> a context: the solve inside meshes with ``name``
     describe(name)                  -> {"name", "version", "experimental"}, recorded in results
+    stamp(doc, name)                -> a solve's document with its mesher (and note) recorded
 
 The installed mesher is global to the process: :func:`registry.install` patches KiPI's module
 functions. Every solve therefore runs inside :func:`using`, which holds one process-wide lock
@@ -101,6 +102,16 @@ def note(name: str) -> Optional[str]:
     v = version(name)
     return (f"Meshed with the experimental {name} mesher{f' ({v})' if v else ''}, not the default "
             f"{DEFAULT}: small differences from a {DEFAULT} result are the mesh, not the design.")
+
+
+def stamp(doc: Dict[str, Any], name: str) -> Dict[str, Any]:
+    """A solve's document records its mesher (``doc["mesher"]``, :func:`describe`); for a
+    non-default one, its assumptions also carry :func:`note`."""
+    doc["mesher"] = describe(name)
+    text = note(name)
+    if text:
+        doc.setdefault("assumptions", []).append(text)
+    return doc
 
 
 def current() -> Optional[str]:
