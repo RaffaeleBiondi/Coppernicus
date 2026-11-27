@@ -33,3 +33,28 @@ def kipis_method():
         so.enable(*sorted(before))
     if ceiling is not None:
         so.set_dc_direct_max(ceiling)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def app_settings_kept_apart(tmp_path_factory):
+    """The app's settings (theme, hover label, solve times) go into a folder of the run, never
+    the user's: COPPERNICUS_SETTINGS_DIR for this process and every child it starts (the window
+    tests run in children, with this environment), and QSettings' own default for anything that
+    asks Qt directly."""
+    import os
+
+    from coppernicus.app import SETTINGS_DIR_ENV
+    folder = tmp_path_factory.mktemp("app-settings")
+    before = os.environ.get(SETTINGS_DIR_ENV)
+    os.environ[SETTINGS_DIR_ENV] = str(folder)
+    try:
+        from PySide6.QtCore import QSettings
+        QSettings.setDefaultFormat(QSettings.IniFormat)
+        QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(folder))
+    except ImportError:                     # no Qt: the core tests still run
+        pass
+    yield folder
+    if before is None:
+        os.environ.pop(SETTINGS_DIR_ENV, None)
+    else:
+        os.environ[SETTINGS_DIR_ENV] = before

@@ -236,11 +236,8 @@ def test_a_cancelled_tree_solve_pops_no_box_and_clears_the_temperature_tab():
 # ---------------------------------------------------------------------- solves in the window
 
 HELPERS = '''
-        import tempfile
         from pathlib import Path
         import coppernicus
-        QtCore.QSettings.setDefaultFormat(QtCore.QSettings.IniFormat)       # never the user's
-        QtCore.QSettings.setPath(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, tempfile.mkdtemp())
         EXAMPLES = Path(coppernicus.__file__).resolve().parents[2] / "examples"
         boxes = []
         QtWidgets.QMessageBox.warning = staticmethod(lambda *a, **k: boxes.append(a[1:3]))

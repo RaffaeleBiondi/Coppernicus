@@ -36,7 +36,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from coppernicus.app import APP_NAME, theme
+from coppernicus.app import settings as app_settings
+from coppernicus.app import theme
 from coppernicus.app.panels import DecimalSpinBox, FieldComboBox, OptionalDecimalValidator, WheelWhenFocused
 from coppernicus.engine.ac import total_memory_bytes
 from coppernicus.engine.thermal import thermal_cost_text, thermal_ram_estimate, thermal_size
@@ -150,7 +151,7 @@ def stats_text(st: Mapping[str, Any], cells: int, layers: int) -> str:
 
 
 def _settings() -> QSettings:
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
+    return app_settings()
 
 
 def last_solve() -> Optional[Dict[str, float]]:

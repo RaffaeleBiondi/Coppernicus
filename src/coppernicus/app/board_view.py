@@ -27,7 +27,8 @@ from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap  # noqa: E402
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QMenu, QVBoxLayout, QWidget  # noqa: E402
 from pyvistaqt import QtInteractor  # noqa: E402
 
-from coppernicus.app import APP_NAME, theme  # noqa: E402
+from coppernicus.app import settings as app_settings  # noqa: E402
+from coppernicus.app import theme  # noqa: E402
 from coppernicus.app.hover import (  # noqa: E402
     HOVER_DEFAULT,
     HOVER_VALUES,
@@ -927,7 +928,7 @@ class BoardView(QWidget):
 
 def _settings() -> QSettings:
     """The user's settings for the app (the default format, so a test can redirect them)."""
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
+    return app_settings()
 
 
 def copper_rings(geom) -> List[np.ndarray]:

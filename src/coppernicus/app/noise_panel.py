@@ -65,6 +65,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app import settings as app_settings
 from coppernicus.app import theme
 from coppernicus.app.panels import (
     FieldComboBox,
@@ -746,8 +747,7 @@ _LAST_KEYS = ("seconds", "field_seconds", "triangles", "ports", "field_solves")
 
 
 def _settings() -> QSettings:
-    from coppernicus.app import APP_NAME
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
+    return app_settings()
 
 
 # ---------------------------------------------------------------------- worker

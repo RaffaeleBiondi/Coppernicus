@@ -12,6 +12,19 @@ os.environ.setdefault("QT_API", "pyside6")
 
 ICON = Path(__file__).resolve().parent / "resources" / "icon.png"
 APP_NAME = "Coppernicus"
+# A folder for the app's settings instead of the user's own (the test suite and the scripted
+# checks set it): each process writes its own ini file there, so no run sees another's choices.
+SETTINGS_DIR_ENV = "COPPERNICUS_SETTINGS_DIR"
+
+
+def settings():
+    """The app's settings (a QSettings): the user's own, or, with ``COPPERNICUS_SETTINGS_DIR``
+    set, ``Coppernicus-<pid>.ini`` in that folder. Every setting the app keeps goes through here."""
+    from PySide6.QtCore import QSettings
+    folder = os.environ.get(SETTINGS_DIR_ENV)
+    if folder:
+        return QSettings(str(Path(folder) / f"{APP_NAME}-{os.getpid()}.ini"), QSettings.IniFormat)
+    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
 
 
 def label_text(text: str) -> str:

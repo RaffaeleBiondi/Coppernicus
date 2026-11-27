@@ -1728,8 +1728,8 @@ def hover_settle(window, timeout_ms: int = 1000):
 
 
 def hover_settings():
-    from PySide6.QtCore import QSettings
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, "Coppernicus", "Coppernicus")
+    from coppernicus.app import settings
+    return settings()
 
 
 def time_hover(window, n: int = 200):
@@ -3112,9 +3112,9 @@ def main(argv=None) -> int:
     if args.window:
         watch = FrontWatch(app, front_before)
         show_in_background(app)
-    from PySide6.QtCore import QSettings
-    QSettings.setDefaultFormat(QSettings.IniFormat)       # the app's settings go into --out,
-    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(out / "settings"))   # never the user's
+    from coppernicus.app import SETTINGS_DIR_ENV
+    os.environ[SETTINGS_DIR_ENV] = str(out / "settings")    # the app's settings go into --out,
+    (out / "settings").mkdir(parents=True, exist_ok=True)   # never the user's
     _quiet_dialogs()
     window = MainWindow()
     window.show()

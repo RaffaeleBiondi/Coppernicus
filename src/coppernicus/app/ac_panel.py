@@ -59,6 +59,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app import settings as app_settings
 from coppernicus.app import theme
 from coppernicus.app.panels import without_tolerances
 from coppernicus.impedance import ac_summary, ac_text, draw_impedance, hz_text, ohm_text, rail_verdict
@@ -529,8 +530,7 @@ LAST_SOLVE_SETTING = "ac/last_solve"     # the last AC solve's size and time (QS
 
 
 def _settings() -> QSettings:
-    from coppernicus.app import APP_NAME
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
+    return app_settings()
 
 
 def export_name(project_path, board_name: str, rail: str) -> str:

@@ -22,6 +22,8 @@ from typing import Dict, Optional
 from PySide6.QtCore import QObject, QSettings, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QPalette
 
+from coppernicus.app import settings as app_settings
+
 THEMES = ("dark", "light")
 DEFAULT = "dark"
 SETTING = "view/theme"            # QSettings key: "dark" or "light"
@@ -105,7 +107,7 @@ def span(token: str, html: str) -> str:
 
 
 def _settings() -> QSettings:
-    return QSettings(QSettings.defaultFormat(), QSettings.UserScope, APP_NAME, APP_NAME)
+    return app_settings()
 
 
 def saved() -> str:

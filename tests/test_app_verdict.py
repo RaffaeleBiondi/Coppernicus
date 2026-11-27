@@ -72,10 +72,7 @@ def test_the_badges_and_the_setup_foot_read_in_both_themes(name):
 def test_the_header_line_cards_rows_strip_and_ring_follow_the_solve():
     run_in_window(f'''
         import html
-        import tempfile
         import coppernicus.app.main_window as mw
-        QtCore.QSettings.setDefaultFormat(QtCore.QSettings.IniFormat)       # never the user's
-        QtCore.QSettings.setPath(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, tempfile.mkdtemp())
         from coppernicus.app import theme
 
         class HeldWorker(mw.SolveWorker):

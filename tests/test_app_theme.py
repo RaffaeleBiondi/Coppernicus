@@ -80,17 +80,14 @@ def test_no_rich_text_or_widget_style_carries_a_colour_of_its_own():
 def run_in_window(body: str) -> None:
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     prelude = textwrap.dedent('''
-        import os, re, sys, tempfile
+        import os, re, sys
         from PySide6 import QtCore, QtWidgets
-        QtCore.QSettings.setDefaultFormat(QtCore.QSettings.IniFormat)       # never the user's
-        QtCore.QSettings.setPath(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, tempfile.mkdtemp())
-        from coppernicus.app import theme
+        from coppernicus.app import settings, theme
         from coppernicus.app.main_window import MainWindow
         app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
         def stored():
-            return QtCore.QSettings(QtCore.QSettings.IniFormat, QtCore.QSettings.UserScope, "Coppernicus",
-                                    "Coppernicus").value(theme.SETTING)
+            return settings().value(theme.SETTING)       # the suite's own folder (tests/conftest.py)
     ''')
     out = subprocess.run([sys.executable, "-c", prelude + textwrap.dedent(body)], env=env,
                          capture_output=True, text=True, timeout=180)
