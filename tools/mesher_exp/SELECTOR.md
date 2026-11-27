@@ -1,11 +1,16 @@
 # Mesher selector: design note (target v0.5.0, with the owner's OK)
 
-Status: design only.
+Status: design, partly built.
 - The seam it builds on (`src/coppernicus/engine/meshing/`) and the Rust backend are in the
   product tree, inactive: nothing is installed unless a mesher is selected, and Triangle stays
   the default.
 - The CGAL backend is kept on an experimental branch.
-- No product file (app, CLI, project, MCP, reports, packaging) is changed yet.
+- Built since (without the app): the selector of §2 in the CLI, the project and MCP, through
+  `coppernicus.engine.meshing.session.using(name)`, which holds one process-wide lock for the
+  whole solve and leaves the registry uninstalled for Triangle; each summary records its
+  mesher (§5); compare warns on different meshers (§6). Not yet: the app's combo and setting,
+  `--meshers`, the Triangle download path (§4), the mesher in the AC, noise and tolerance
+  HTML pages.
 
 **Goal**
 - The default mesher is the best licence-compatible bundled one: CGAL 2D Mesh_2 (GPL-3.0-or-later) or our own in Rust.
