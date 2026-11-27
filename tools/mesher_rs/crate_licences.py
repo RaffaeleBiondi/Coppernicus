@@ -3,6 +3,10 @@
     python tools/mesher_rs/crate_licences.py            # write packaging/licenses/coppermesh-crates.txt
     python tools/mesher_rs/crate_licences.py --check    # regenerate and compare; exit 1 if it differs
 
+The same text is written to tools/mesher_rs/licenses/coppermesh-crates.txt (COPY), the copy the
+PyPI wheel and sdist carry (pyproject.toml's license-files may only name files inside the crate);
+``--check`` compares both, and tests/test_crate_licences.py checks the copy is the same bytes.
+
 The crates: those ``cargo metadata --locked`` resolves for coppermesh with the ``python``
 feature (the one maturin builds) on the platforms CI and the app build for (TARGETS), following
 normal and build dependencies, never dev-dependencies. Each is marked "in the binary" (reached
@@ -35,6 +39,8 @@ from pathlib import Path
 CRATE = Path(__file__).resolve().parent
 ROOT = CRATE.parents[1]
 OUT = ROOT / "packaging" / "licenses" / "coppermesh-crates.txt"
+#: The copy inside the crate, for the wheel's and the sdist's license-files.
+COPY = CRATE / "licenses" / OUT.name
 FEATURES = "python"
 TARGETS = ("aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc",
            "x86_64-unknown-linux-gnu")
@@ -165,20 +171,25 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--check", action="store_true",
                     help="compare with the committed file instead of writing it")
-    ap.add_argument("--out", type=Path, default=OUT)
+    ap.add_argument("--out", type=Path, nargs="+", default=[OUT, COPY],
+                    help="the files to write or compare (default: OUT and its copy in the crate)")
     args = ap.parse_args(argv)
     text = generate(metadata())
     if args.check:
-        current = args.out.read_text(encoding="utf-8") if args.out.is_file() else ""
-        if current != text:
-            print(f"error: {args.out} is not what Cargo.lock gives: run tools/mesher_rs/crate_licences.py",
+        stale = [out for out in args.out
+                 if (out.read_text(encoding="utf-8") if out.is_file() else "") != text]
+        for out in stale:
+            print(f"error: {out} is not what Cargo.lock gives: run tools/mesher_rs/crate_licences.py",
                   file=sys.stderr)
+        if stale:
             return 1
-        print(f"OK: {args.out.name} lists the {len(listed_crates(text))} crates Cargo.lock gives, "
-              "with their licence texts")
+        print(f"OK: {', '.join(str(o) for o in args.out)} list the {len(listed_crates(text))} crates "
+              "Cargo.lock gives, with their licence texts")
         return 0
-    args.out.write_text(text, encoding="utf-8", newline="\n")
-    print(f"wrote {args.out} ({len(listed_crates(text))} crates)")
+    for out in args.out:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"wrote {out} ({len(listed_crates(text))} crates)")
     return 0
 
 

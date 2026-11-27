@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,18 @@ def test_every_listed_crate_is_locked_at_its_version_and_has_a_text():
         assert f"  {name} {version} (" in text                 # among a licence text's users
 
 
+def test_the_crate_carries_the_same_licence_texts_for_its_wheel_and_sdist():
+    """pyproject.toml's license-files may only name files inside tools/mesher_rs: the crates'
+    texts are copied there by crate_licences.py, the GPL text from the repository's LICENSE."""
+    crate = ROOT / "tools" / "mesher_rs"
+    assert (crate / "licenses" / CRATES.name).read_bytes() == CRATES.read_bytes(), \
+        "run tools/mesher_rs/crate_licences.py"
+    assert (crate / "LICENSE").read_bytes() == (ROOT / "LICENSE").read_bytes(), \
+        "copy the repository's LICENSE to tools/mesher_rs/LICENSE"
+    project = tomllib.loads((crate / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert project["license-files"] == ["LICENSE", f"licenses/{CRATES.name}"]
+
+
 @pytest.mark.skipif(shutil.which("cargo") is None, reason="cargo not on PATH")
 def test_regenerating_gives_the_committed_file():
     assert crate_licences.main(["--check"]) == 0
@@ -68,6 +81,7 @@ def test_bundled_notices_hold_every_crate_or_the_bundle_check_fails(tmp_path):
     assert "coppermesh" in listed
     full = out.read_text(encoding="utf-8")
     assert check_bundle.crate_notice_problems(full, crates) == []
+    assert full.count(crates.rstrip()) == 1        # once, though coppermesh's wheel ships it too
     without = full.replace("Rust crate: numpy 0.30.0", "Rust crate: (removed)")
     assert check_bundle.crate_notice_problems(without, crates) == [
         "THIRD_PARTY_NOTICES.txt lacks the licences of Rust crate: numpy 0.30.0"]

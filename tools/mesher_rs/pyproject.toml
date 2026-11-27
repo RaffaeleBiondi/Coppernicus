@@ -4,14 +4,38 @@ build-backend = "maturin"
 
 [project]
 name = "coppermesh"
-version = "0.1.0"
-description = "Experimental CDT + Delaunay refinement mesher for Coppernicus"
+version = "0.1.0"           # the same as Cargo.toml's (tests/test_wheels_workflow.py)
+description = "Constrained Delaunay triangulation and Delaunay refinement in Rust: Coppernicus's 2D mesher"
+readme = "README.pypi.md"
 license = "GPL-3.0-or-later"
+# In the wheel and the sdist: the GPL text (a copy of the repository's LICENSE) and the licence
+# texts of the Rust crates compiled in (a copy of packaging/licenses/coppermesh-crates.txt,
+# written by crate_licences.py; tests/test_crate_licences.py checks both copies).
+license-files = ["LICENSE", "licenses/coppermesh-crates.txt"]
 requires-python = ">=3.12"
+authors = [{ name = "RaffaeleBiondi" }]
+keywords = ["mesh", "delaunay", "triangulation", "ruppert", "pcb", "fem"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+]
 dependencies = ["numpy"]
 
 [project.urls]
-Source = "https://github.com/RaffaeleBiondi/Coppernicus"
+Homepage = "https://github.com/RaffaeleBiondi/Coppernicus"
+Source = "https://github.com/RaffaeleBiondi/Coppernicus/tree/main/tools/mesher_rs"
+Documentation = "https://github.com/RaffaeleBiondi/Coppernicus/blob/main/tools/mesher_rs/DESIGN.md"
+Issues = "https://github.com/RaffaeleBiondi/Coppernicus/issues"
 
 [tool.maturin]
 features = ["python"]
