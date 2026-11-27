@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
 from coppernicus import board_fields as BF
 from coppernicus.app import label_text, theme
 from coppernicus.app.panels import FieldComboBox
+from coppernicus.app.units import Unit
 from coppernicus.app.verdict import VerdictHeader, tolerance_cards
 from coppernicus.project import (
     LOAD_PART_KEYS,
@@ -100,17 +101,29 @@ KEY_TIPS = {
     "accuracy_mv": "accuracy_mv: the source's DC accuracy, mV from its set voltage",
 }
 PAIR_TIP = ("A number n is ± n; a signed pair as datasheets write it: -3, 2 (or [-3, 2], -3 / +2). "
+            "With its unit or without: 5 mV = 5 = 0.005 V in an mV column, 3 % = 3 in a % one. "
             "Empty: not set; 0 is a value. A % and its mV: one of the two.")
 
 _NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?")
-_DECIMAL_COMMA = re.compile(r"^\+?\d+,\d+$")       # 3,3 is 3.3; -3,2 can only be a pair
+_DECIMAL_COMMA = re.compile(r"^\+?\d+,\d+\s*[^\d,;/]*$")    # 3,3 is 3.3; -3,2 can only be a pair
+PCT, MV = Unit("%"), Unit("V", -3, stored=-3)
+
+
+def key_unit(key: str) -> Optional[Unit]:
+    """The unit of a tolerance key's cell: % for ``_pct``, mV for ``_mv``."""
+    return PCT if key.endswith("_pct") else MV if key.endswith("_mv") else None
+
+
+def _key_of(what: str) -> str:
+    return what.split(":")[-1].strip()
 
 
 def parse_pair(text: Optional[str], what: str) -> Optional[Pair]:
     """A cell's text as the project file's ``(below, above)`` (:func:`coppernicus.project.
     tolerance_pair`, which checks it): empty → None, ``5`` or ``±5`` → (−5, 5), ``-3, 2``,
-    ``[-3, 2]``, ``-3 / +2`` or ``-3; 2`` → (−3, 2); ``3,3`` reads as 3.3. Raises
-    :class:`ProjectError` naming ``what``."""
+    ``[-3, 2]``, ``-3 / +2`` or ``-3; 2`` → (−3, 2); ``3,3`` reads as 3.3. Each number with
+    its unit or without, the unit of the key ``what`` ends with (``"load U2: tol_mv"``: 5 mV,
+    5, 0.005 V). Raises :class:`ProjectError` naming ``what``."""
     t = (text or "").strip()
     if not t:
         return None
@@ -119,11 +132,23 @@ def parse_pair(text: Optional[str], what: str) -> Optional[Pair]:
         t = t.replace(",", ".")
     if t.startswith("[") and t.endswith("]"):
         t = t[1:-1]
+    unit = key_unit(_key_of(what))
     parts = [x.strip() for x in re.split(r"[,;/]", t)]
+    values = []
     for x in parts:
-        if not _NUMBER.fullmatch(x):
-            raise ProjectError(f"{what}: {x!r} is not a number (a number n is ± n, or below, above: -3, 2)")
-    values = [float(x) for x in parts]
+        try:
+            if unit is None:
+                if not _NUMBER.fullmatch(x):
+                    raise ValueError(x)
+                values.append(float(x))
+            else:
+                v = unit.parse(x)
+                if v is None:
+                    raise ValueError(x)
+                values.append(v)
+        except ValueError:
+            raise ProjectError(f"{what}: {x!r} is not a number (a number n is ± n, or below, above: -3, 2)"
+                               ) from None
     if len(values) > 2:
         raise ProjectError(f"{what} must be a number (± that) or [below, above], not {text.strip()!r}")
     return tolerance_pair(values[0] if len(values) == 1 else values, what)
@@ -133,13 +158,18 @@ def _num(x: float) -> str:
     return f"{x:.15g}"
 
 
-def pair_text(pair: Optional[Pair]) -> str:
+def pair_text(pair: Optional[Pair], key: str = "") -> str:
     """A pair as a cell shows it, read back exactly by :func:`parse_pair`: "5" for ± 5,
-    "-3, 2" otherwise, "" for None."""
+    "-3, 2" otherwise, "" for None; with the unit of ``key`` after it ("±5 mV", "-3, 2 %")."""
     if pair is None:
         return ""
     below, above = pair
-    return _num(above) if below == -above else f"{_num(below)}, {_num(above)}"
+    unit = key_unit(key)
+    if unit is None:
+        return _num(above) if below == -above else f"{_num(below)}, {_num(above)}"
+    if below == -above:
+        return "±" + unit.exact(above)
+    return f"{_num(below)}, {unit.exact(above)}"
 
 
 def terminal_keys(term: Terminal) -> Tuple[str, ...]:
@@ -763,7 +793,7 @@ class TolerancePanel(QWidget):
         win = self._win
         rows = edit_rows(win.project, win.merged) if win.board is not None else []
         signature = [(r.kind, r.net, r.index, r.term.label, r.read_only, tuple(sorted(r.held.items())),
-                      tuple(pair_text(getattr(r.term, k)) for k in terminal_keys(r.term))) for r in rows]
+                      tuple(pair_text(getattr(r.term, k), k) for k in terminal_keys(r.term))) for r in rows]
         opts = win.project.tolerance
         self.ripple_sum.blockSignals(True)
         self.ripple_sum.setCurrentText(opts.ripple_sum)
@@ -788,7 +818,7 @@ class TolerancePanel(QWidget):
                     item.setData(Qt.UserRole, self._rows.index(r))
                     table.setItem(i, c, item)
                 for c, (key, _h) in enumerate(columns, start=2):
-                    item = QTableWidgetItem(pair_text(getattr(r.term, key)))
+                    item = QTableWidgetItem(pair_text(getattr(r.term, key), key))
                     item.setData(Qt.UserRole, self._rows.index(r))
                     why = r.why(key)               # the row, or this cell: a KiCad field holds it
                     if why:
@@ -818,7 +848,7 @@ class TolerancePanel(QWidget):
         row = self._rows[item.data(Qt.UserRole)]
         key = columns[c - 2][0]
         win = self._win
-        old = pair_text(getattr(row.term, key))
+        old = pair_text(getattr(row.term, key), key)
         try:
             note = set_value(win.project, win.merged, kind, row.net, row.index, key, item.text())
         except (IndexError, AttributeError):  # the rail changed under the edit: show it anew
@@ -835,7 +865,7 @@ class TolerancePanel(QWidget):
         win.dirty = True
         win._update_title()
         self._fill_editor(force=True)
-        value = pair_text(getattr(self._term(kind, row.net, row.index), key))
+        value = pair_text(getattr(self._term(kind, row.net, row.index), key), key)
         self._say(f"{row.term.label} {key} {value or 'cleared'}" + (f" · {note}" if note else ""),
                   bar=bool(note))
         self.refresh()

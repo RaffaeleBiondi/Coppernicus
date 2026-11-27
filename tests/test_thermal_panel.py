@@ -98,7 +98,7 @@ def test_form_shows_the_options_and_empty_limits():
     values = form_values(ThermalOptions(enabled=True, max_temp_c=105.0, max_rise_c=15.5,
                                         regulator_heat="part_pads"))
     assert (values["enabled"], values["max_temp_c"], values["max_rise_c"], values["regulator_heat"]) == (
-        True, "105", "15.5", "part_pads")
+        True, "105 °C", "15.5 °C", "part_pads")
 
 
 def test_each_field_is_read_back_as_the_project_stores_it():

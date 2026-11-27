@@ -21,7 +21,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from coppernicus.app.units import Unit
 from coppernicus.project import ProjectError, check_copper_thickness
+
+MM = Unit("mm")
 
 
 def thickness_summary(values: Mapping[str, float]) -> str:
@@ -39,13 +42,21 @@ def off_board(values: Mapping[str, float], layers: Iterable[str]) -> List[str]:
     return [layer for layer in values if layer not in on_board]
 
 
+def _mm(text: str) -> object:
+    """A field's thickness, "0.035", "0,035" or "0.035 mm"; text that is no number is passed
+    on as typed, for the check to name it."""
+    try:
+        return MM.parse(text)
+    except ValueError:
+        return text.strip()
+
+
 def thickness_from_texts(texts: Mapping[str, str], kept: Mapping[str, float]) -> Dict[str, float]:
     """The settings from the dialog: ``texts`` is each board layer's field (empty: the board
     file's value, no key), ``kept`` the keys for layers not on the board still listed. A
     comma reads as the decimal sign. Checked by :func:`check_copper_thickness`, which raises
     :class:`ProjectError` naming the layer."""
-    values: Dict[str, object] = {layer: text.strip().replace(",", ".")
-                                 for layer, text in texts.items() if text.strip()}
+    values: Dict[str, object] = {layer: _mm(text) for layer, text in texts.items() if text.strip()}
     values.update(kept)
     return check_copper_thickness(values)
 
@@ -68,8 +79,8 @@ class CopperThicknessDialog(QDialog):
         self.fields: Dict[str, QLineEdit] = {}
         form = QFormLayout()
         for layer, mm in file_mm.items():
-            edit = QLineEdit(placeholderText=f"{mm:g} (board file)")
-            edit.setText(repr(float(values[layer])) if layer in values else "")   # every digit
+            edit = QLineEdit(placeholderText=f"{mm:g} mm (board file)")
+            edit.setText(MM.exact(float(values[layer])) if layer in values else "")   # every digit
             self.fields[layer] = edit
             form.addRow(layer, edit)
         layout = QVBoxLayout(self)

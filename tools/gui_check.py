@@ -1042,7 +1042,7 @@ def run_copper_thickness(window, check: Checks, args, out: Path):
           panel.copper_summary.text() == "B.Cu 0.07 mm, In3.Cu 0.05 mm", panel.copper_summary.text())
     dialog = edit_copper(window, lambda d: d.reject())
     check("... listed with a Remove button", list(dialog.remove_buttons) == ["In3.Cu"]
-          and dialog.fields["B.Cu"].text() == "0.07", str(list(dialog.remove_buttons)))
+          and dialog.fields["B.Cu"].text() == "0.07 mm", str(list(dialog.remove_buttons)))
 
     def remove(d):
         d.remove_buttons["In3.Cu"].click()
@@ -1415,7 +1415,8 @@ def run_power_tree(window, check: Checks, args, out: Path):
     window.nets.select("+3V3")
     QApplication.processEvents()
     check("... the field holding it stays editable, so it can be cleared, and says why it is not judged",
-          rp.max_rise.isEnabled() and rp.max_rise.text() == "0.001" and "not judged" in rp.max_rise.toolTip())
+          rp.max_rise.isEnabled() and rp.max_rise.text() == "0.001 mV"
+          and "not judged" in rp.max_rise.toolTip())
     rp.max_rise.setText("")
     rp.max_rise.editingFinished.emit()
     QApplication.processEvents()
@@ -1450,7 +1451,7 @@ def run_thermal(window, check: Checks, args, out: Path):
     check("thermal: the Temperature page follows the power tree's Tree",
           tabs[tabs.index("Tree") + 1] == "Temperature", str(tabs))
     check("... it shows the project's options: Electro-thermal ticked, max rise 15 °C",
-          panel.enabled.isChecked() and panel.max_rise.text() == "15" and panel.max_temp.text() == ""
+          panel.enabled.isChecked() and panel.max_rise.text() == "15 °C" and panel.max_temp.text() == ""
           and panel.grid.text() == "automatic", f"{panel.max_rise.text()!r} {panel.grid.text()!r}")
     window.nets.select("+3V3")
     QApplication.processEvents()
@@ -2346,7 +2347,7 @@ def run_fields(window, check: Checks, args, out: Path):
     check("... the KiCad values (U1 1 A), the project's own rail (1.5 A) ignored with a warning",
           rp.loads.rows() == [("", "U1", None, 1.0)]
           and "project file rail VCC ignored" in rp.banner.warnings.text(), rp.banner.warnings.text())
-    check("... max drop 2 % from PI_LIMIT_DROP on U1, read-only", rp.max_drop.text() == "2"
+    check("... max drop 2 % from PI_LIMIT_DROP on U1, read-only", rp.max_drop.text() == "2 %"
           and rp.max_drop.isReadOnly() and "U1" in rp.max_drop.toolTip(), rp.max_drop.toolTip())
     print(f"[INFO] fields example: {time_remerge(window)}", flush=True)
 
@@ -2740,7 +2741,7 @@ def run_noise(window, check: Checks, args, out: Path):
     QApplication.processEvents()
     check("noise: the tab shows the example's aggressor, source, fsw, phase and victims",
           panel.aggressor_box.currentText() == "U1" and panel.vrm_box.currentData() == "U1"
-          and panel.field["fsw_hz"].text() == "1000" and panel.phases.rowCount() == 1
+          and panel.field["fsw_hz"].text() == "1000 kHz" and panel.phases.rowCount() == 1
           and panel.victims.rowCount() == 3,
           f"{panel.aggressor_box.currentText()} {panel.field['fsw_hz'].text()}")
     n_boxes = len(DIALOGS)

@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -38,7 +37,8 @@ from PySide6.QtWidgets import (
 
 from coppernicus.app import settings as app_settings
 from coppernicus.app import theme
-from coppernicus.app.panels import DecimalSpinBox, FieldComboBox, OptionalDecimalValidator, WheelWhenFocused
+from coppernicus.app.panels import DecimalSpinBox, FieldComboBox, WheelWhenFocused
+from coppernicus.app.units import Unit, UnitEdit
 from coppernicus.engine.ac import total_memory_bytes
 from coppernicus.engine.thermal import thermal_cost_text, thermal_ram_estimate, thermal_size
 from coppernicus.project import ThermalOptions
@@ -178,6 +178,7 @@ def record_solve(tree) -> None:
 
 # output_part_heat_pct is set in the project file only: the form edits the project's own
 # options object, so it is kept as it is.
+CELSIUS = Unit("°C")        # the limits: "85 °C", "85"
 FORM_KEYS = tuple(f.name for f in dataclasses.fields(ThermalOptions) if f.name != "output_part_heat_pct")
 
 
@@ -185,7 +186,7 @@ def form_values(options: ThermalOptions) -> Dict[str, Any]:
     """What the form shows for ``options``: the limits as text, empty when not checked."""
     out = {k: v for k, v in vars(options).items() if k in FORM_KEYS}
     for key in THERMAL_LIMITS:
-        out[key] = "" if out[key] is None else f"{out[key]:g}"
+        out[key] = CELSIUS.exact(out[key])
     return out
 
 
@@ -200,8 +201,7 @@ def field_value(key: str, raw: Any) -> Any:
     if key == "regulator_heat":
         return str(raw)
     if key in THERMAL_LIMITS:
-        text = str(raw).strip().replace(",", ".")
-        return float(text) if text else None
+        return CELSIUS.parse(str(raw))
     if key in ("ambient_c", "airflow_m_s", "grid_mm"):
         return float(raw)
     raise KeyError(key)
@@ -258,11 +258,9 @@ class ThermalPanel(QWidget):
                                        "of its own part, the one with its input pins (an external-"
                                        "inductor buck's IC); output_part_heat_pct in the project file "
                                        "moves a share you enter to its inductor")
-        self.max_temp = QLineEdit(placeholderText="empty = not checked")
-        self.max_temp.setValidator(OptionalDecimalValidator(-273.15, 1e4, 3))
+        self.max_temp = UnitEdit(CELSIUS, -273.15, 1e4, placeholderText="empty = not checked")
         self.max_temp.setToolTip("Fail when a layer's hottest solved copper is hotter")
-        self.max_rise = QLineEdit(placeholderText="above the ambient")
-        self.max_rise.setValidator(OptionalDecimalValidator(0.0, 1e4, 3))
+        self.max_rise = UnitEdit(CELSIUS, 0.0, 1e4, placeholderText="above the ambient")
         self.max_rise.setToolTip("Fail when a layer's hottest solved copper rises more above the ambient")
         self.options_box = QGroupBox("Electro-thermal options (whole project)")
         form = QFormLayout(self.options_box)

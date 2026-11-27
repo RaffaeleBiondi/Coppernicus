@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 from coppernicus.app import theme
 from coppernicus.app.copper_thickness import CopperThicknessDialog, thickness_summary
 from coppernicus.app.fields_view import FieldsBanner
+from coppernicus.app.units import UNIT_TIP, Unit, UnitEdit
 from coppernicus.app.verdict import BADGE_ROLE, BadgeDelegate, CardData, VerdictHeader
 from coppernicus.engine import Board, NetTie, PartPins
 from coppernicus.power_tree import ACROSS_NOTE
@@ -489,9 +490,8 @@ def rail_index(has_part: List[bool], row: int) -> Optional[int]:
     return sum(has_part[:row])
 
 
-def _optional_float(edit: QLineEdit) -> Optional[float]:
-    text = edit.text().strip().replace(",", ".")
-    return float(text) if text else None
+def _optional_float(edit: UnitEdit) -> Optional[float]:
+    return edit.value()
 
 
 class PinRefEdit(QWidget):
@@ -558,10 +558,9 @@ class RegulatorBox(QGroupBox):
         self.kind = FieldComboBox()
         for k in SOURCE_KINDS:
             self.kind.addItem(KIND_LABELS[k], k)
-        self.efficiency = QLineEdit(placeholderText="switcher: a fraction 0–1, e.g. 0.9")
-        self.efficiency.setValidator(OptionalDecimalValidator(0.001, 1.0, 4))     # empty: None
-        self.quiescent = QLineEdit(placeholderText="0")
-        self.quiescent.setValidator(OptionalDecimalValidator(0.0, 1e3, 6))        # empty: 0 A
+        self.efficiency = UnitEdit(Unit(), 0.001, 1.0, placeholderText="switcher: a fraction 0–1, e.g. 0.9")
+        self.quiescent = UnitEdit(Unit("A", None), 0.0, 1e3, placeholderText="0")     # empty: 0 A
+        self.quiescent.setToolTip(UNIT_TIP)
         self.input, self.ground = PinRefEdit(), PinRefEdit()
         self.sense, self.ground_sense = PinRefEdit(), PinRefEdit()
         form = QFormLayout(self)
@@ -598,8 +597,8 @@ class RegulatorBox(QGroupBox):
         self.setEnabled(s is not None)
         s = s or Source("", 0.0)
         self.kind.setCurrentIndex(max(0, self.kind.findData(s.kind)))
-        self.efficiency.setText("" if s.efficiency is None else f"{s.efficiency:g}")
-        self.quiescent.setText(f"{s.quiescent_a:g}" if s.quiescent_a else "")
+        self.efficiency.set_value(s.efficiency)
+        self.quiescent.set_value(s.quiescent_a or None)
         for what in ("input", "ground", "sense", "ground_sense"):
             edit = getattr(self, what)
             edit.set_nets(nets)
@@ -611,10 +610,8 @@ class RegulatorBox(QGroupBox):
     def write(self, s: Source):
         """Copy the box into source ``s``."""
         s.kind = self.kind.currentData()
-        text = self.efficiency.text().strip().replace(",", ".")
-        s.efficiency = float(text) if text else None
-        text = self.quiescent.text().strip().replace(",", ".")
-        s.quiescent_a = float(text) if text else 0.0
+        s.efficiency = self.efficiency.value()
+        s.quiescent_a = self.quiescent.value() or 0.0
         for what in ("input", "ground", "sense", "ground_sense"):
             ref, pins, net = getattr(self, what).get()
             setattr(s, f"{what}_ref", ref if net else "")
@@ -655,14 +652,15 @@ class RailPanel(QWidget):
         self.load_box.setEnabled(False)
 
         limits = QGroupBox("Limits (empty = not checked; problems are still ranked)")
-        self.max_drop = QLineEdit(placeholderText="e.g. 3")
-        self.max_j = QLineEdit(placeholderText="A/mm²")
-        self.max_via = QLineEdit(placeholderText="A")
-        self.max_rise = QLineEdit(placeholderText="mV, for a ground net")
+        # Empty: no limit.
+        self.max_drop = UnitEdit(Unit("%"), 0.0, 1e9, placeholderText="e.g. 3 %")
+        self.max_j = UnitEdit(Unit("A/mm²"), 0.0, 1e9, placeholderText="A/mm²")
+        self.max_via = UnitEdit(Unit("A", None), 0.0, 1e9, placeholderText="A")
+        self.max_via.setToolTip(UNIT_TIP)
+        self.max_rise = UnitEdit(Unit("V", -3, stored=-3), 0.0, 1e9, placeholderText="mV, for a ground net")
         self.max_rise.setToolTip("For a ground net: the largest rise above its 0 V reference. Judged "
-                                 "on its group in Solve tree, and when this net is solved alone.")
-        for e in (self.max_drop, self.max_j, self.max_via, self.max_rise):
-            e.setValidator(OptionalDecimalValidator(0.0, 1e9, 6))                   # empty: no limit
+                                 "on its group in Solve tree, and when this net is solved alone. "
+                                 + UNIT_TIP)
         self.max_drop.setToolTip("For a supply net: the largest load drop, % of the source voltage.")
         self._tips = {e: e.toolTip() for e in (self.max_drop, self.max_rise)}
         form = QFormLayout(limits)
@@ -673,21 +671,20 @@ class RailPanel(QWidget):
 
         settings = QGroupBox("Solve settings (whole project)")
         self.max_edge = DecimalSpinBox(decimals=3, minimum=0.02, maximum=5.0, singleStep=0.1, suffix=" mm")
-        self.plating = QLineEdit(placeholderText="engine defaults (IPC-6012 Class 2)")
-        self.plating.setValidator(OptionalDecimalValidator(0.1, 1000.0, 3))      # empty: the engine's
+        self.plating = UnitEdit(Unit("µm"), 0.1, 1000.0,                             # empty: the engine's
+                                placeholderText="engine defaults (IPC-6012 Class 2)")
         self.plating.setToolTip("Via barrel plating in µm for every plated hole. Empty: the engine's "
                                 "table (micro 12, buried 13, others 20 µm). Ask your fabricator.")
         self.temp = DecimalSpinBox(decimals=1, minimum=-55.0, maximum=250.0, suffix=" °C")
         self.temp.setToolTip("Copper temperature; resistivity is referenced to 20 °C")
         # Advanced, the mesh near plated holes (KiPI's): empty = KiPI's default.
-        self.min_edge = QLineEdit(placeholderText="engine default 0.02")
-        self.min_edge.setValidator(OptionalDecimalValidator(0.0001, 5.0, 4))
+        self.min_edge = UnitEdit(Unit("mm"), 0.0001, 5.0, placeholderText="engine default 0.02 mm")
         self.min_edge.setToolTip("Advanced: the smallest mesh element, at a plated hole's wall, in mm. "
                                  "The largest mesh edge does not refine there; a smaller value here "
                                  "does, to check a small current-density spot at a via. Empty: the "
                                  "engine's 0.02 mm.")
-        self.grading = QLineEdit(placeholderText="engine default 0.2")
-        self.grading.setValidator(OptionalDecimalValidator(GRADING_RANGE[0], GRADING_RANGE[1], 3))
+        self.grading = UnitEdit(Unit(), GRADING_RANGE[0], GRADING_RANGE[1],
+                                placeholderText="engine default 0.2")
         self.grading.setToolTip("Advanced: how fast mesh elements grow away from a plated hole, mm of "
                                 "edge per mm of distance, 0 (off) to 2. Lower keeps the mesh fine "
                                 "further from the hole. Empty: the engine's 0.2.")
@@ -776,10 +773,10 @@ class RailPanel(QWidget):
         self._loading = True
         self._settings = settings
         self.max_edge.setValue(settings.max_edge_mm)
-        self.plating.setText("" if settings.via_plating_um is None else f"{settings.via_plating_um:g}")
+        self.plating.set_value(settings.via_plating_um)
         self.temp.setValue(settings.copper_temp_c)
-        self.min_edge.setText("" if settings.min_edge_mm is None else f"{settings.min_edge_mm:g}")
-        self.grading.setText("" if settings.grading is None else f"{settings.grading:g}")
+        self.min_edge.set_value(settings.min_edge_mm)
+        self.grading.set_value(settings.grading)
         self.copper_summary.setText(thickness_summary(settings.copper_thickness_mm))
         self._loading = False
 
@@ -804,7 +801,7 @@ class RailPanel(QWidget):
         lim = rail.limits
         for edit, value in ((self.max_drop, lim.max_drop_pct), (self.max_j, lim.max_current_density),
                             (self.max_via, lim.max_via_current), (self.max_rise, lim.max_ground_rise_mv)):
-            edit.setText("" if value is None else f"{value:g}")
+            edit.set_value(value)
         self._loading = False
         self.set_read_only()
         self._drop_tip = ""                       # editable again, until lock_drop says otherwise
@@ -842,7 +839,7 @@ class RailPanel(QWidget):
             return                                # nothing locked: as set_rail and set_net_kind left it
         own = self._rail.limits.max_drop_pct if self._rail is not None else None
         value = pct if tip else own
-        self.max_drop.setText("" if value is None else f"{value:g}")
+        self.max_drop.set_value(value)
         self._drop_tip = tip
         self.max_drop.setReadOnly(bool(tip))
         self.max_drop.setToolTip(tip or self._tips[self.max_drop])

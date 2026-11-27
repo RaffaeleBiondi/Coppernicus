@@ -159,7 +159,7 @@ def test_the_app_settings_edit_them():
         panel.min_edge.setText(""); panel.min_edge.editingFinished.emit()
         assert s.min_edge_mm is None and s.grading == 0.1
         panel.set_settings(Settings(min_edge_mm=0.005, grading=0.0))
-        assert (panel.min_edge.text(), panel.grading.text()) == ("0.005", "0"), panel.grading.text()
+        assert (panel.min_edge.text(), panel.grading.text()) == ("0.005 mm", "0"), panel.grading.text()
         s = panel._settings
         panel.grading.setText("2.5"); panel.min_edge.setText("0")      # not accepted, left there
         panel.temp.setValue(30.0)                                       # another setting changes

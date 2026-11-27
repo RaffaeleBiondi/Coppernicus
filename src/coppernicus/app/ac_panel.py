@@ -64,6 +64,7 @@ from coppernicus.app import theme
 from coppernicus.app.mesher import failure
 from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.panels import without_tolerances
+from coppernicus.app.units import _NUMBER, SI_TIP, UNIT_SPELLINGS, parse_si, si_text  # noqa: F401
 from coppernicus.app.verdict import VerdictHeader, ac_cards
 from coppernicus.app.worker import add_fallback
 from coppernicus.engine.meshing import session as meshing
@@ -90,60 +91,6 @@ from coppernicus.triangle_standin import TriangleNotInstalled
 # tests/accuracy/test_ac_accuracy.py holds to its tolerances. Applied only when pressed.
 QUICK_FIELD_POINTS = 10
 KIPI_FIELD_POINTS = AcOptions().field_points_per_decade       # KiPI's default (AcOptions copies it)
-
-_SI = {"p": -12, "n": -9, "u": -6, "µ": -6, "μ": -6, "m": -3, "k": 3, "K": 3, "M": 6, "G": 9}
-_NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
-# A unit as it may be typed after the prefix: Ω also as ohm (Ω is awkward on a keyboard).
-UNIT_SPELLINGS = {"Ω": ("Ω", "Ω", "ohm", "ohms", "Ohm", "Ohms"), "Hz": ("Hz", "hz"), "F": ("F",),
-                  "H": ("H",), "V": ("V",), "A": ("A",)}
-_ANY_UNIT = sorted({u for us in UNIT_SPELLINGS.values() for u in us}, key=len, reverse=True)
-_SI_RE = re.compile(rf"^({_NUMBER})\s*([pnuµμmkKMG]?)\s*({'|'.join(map(re.escape, _ANY_UNIT))})?$")
-_PREFIXES = ((1e9, "G"), (1e6, "M"), (1e3, "k"), (1.0, ""), (1e-3, "m"), (1e-6, "µ"), (1e-9, "n"),
-             (1e-12, "p"))
-SI_TIP = ("With or without its unit, SI prefixes work: p n u (µ) m k M G, so 50 mΩ = 50m = 0.05 and "
-          "10 MHz = 10M = 1e7 (m is milli, M is mega; ohm for Ω)")
-
-
-def _unit_of(spelled: Optional[str]) -> Optional[str]:
-    return next((u for u, spellings in UNIT_SPELLINGS.items() if spelled in spellings), None)
-
-
-def parse_si(text: Optional[str], unit: str = "") -> Optional[float]:
-    """A number typed in a cell, with its unit or without: ``"50 mΩ"``, ``"50m"`` and
-    ``"0.05"`` are all 0.05 for a cell in ohm; ``"10 MHz"`` → 1e7, ``"3,3"`` → 3.3; ``None``
-    when empty. Raises ValueError for anything else, a unit that is not the cell's included."""
-    t = (text or "").strip().replace(",", ".")
-    if not t:
-        return None
-    m = _SI_RE.match(t)
-    if not m:
-        raise ValueError(f"{text.strip()!r} is not a number ({SI_TIP})")
-    number, prefix, spelled = m.groups()
-    if spelled is not None and _unit_of(spelled) != unit:
-        want = f"in {unit}" if unit else "a plain number"
-        raise ValueError(f"{text.strip()!r}: this cell is {want}, not in {_unit_of(spelled)}")
-    if not prefix:
-        return float(number)
-    if "e" in number.lower():
-        return float(number) * 10.0 ** _SI[prefix]
-    return float(f"{number}e{_SI[prefix]}")          # "33m" is 0.033 exactly as typed
-
-
-def si_text(x: Optional[float], unit: str = "") -> str:
-    """A number as a cell shows it, 4 significant digits with an SI prefix and its unit
-    ("50 mΩ"; "50m" without a unit; "" for None)."""
-    if x is None:
-        return ""
-    if x == 0:
-        return f"0 {unit}" if unit else "0"
-    scale, prefix = _PREFIXES[-1]
-    for sc, p in _PREFIXES:
-        if abs(x) >= sc * 0.9995:
-            scale, prefix = sc, p
-            break
-    number = f"{x / scale:.4g}"
-    return f"{number} {prefix}{unit}" if unit else f"{number}{prefix}"
-
 
 _MASK_POINT = re.compile(rf"({_NUMBER}\s*[pnuµμmkKMG]?\s*(?:Hz|hz)?)\s+({_NUMBER}\s*[pnuµμmkKMG]?\s*"
                          rf"(?:{'|'.join(map(re.escape, UNIT_SPELLINGS['Ω']))})?)$")

@@ -71,10 +71,10 @@ from coppernicus.app.mesher import failure
 from coppernicus.app.mesher import shown as mesher_shown
 from coppernicus.app.panels import (
     FieldComboBox,
-    OptionalDecimalValidator,
     WheelWhenFocused,
     without_tolerances,
 )
+from coppernicus.app.units import UNIT_TIP, Unit, UnitValidator
 from coppernicus.app.verdict import VerdictHeader, noise_cards
 from coppernicus.app.worker import add_fallback
 from coppernicus.engine.meshing import session as meshing
@@ -97,30 +97,6 @@ from coppernicus.project import (
 from coppernicus.triangle_standin import TriangleNotInstalled
 
 # ---------------------------------------------------------------------- numbers
-
-_NUMBER = re.compile(r"^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$")
-
-
-def parse_scaled(text: Optional[str], exp: int) -> Optional[float]:
-    """A number typed in a field shown in units of 10^exp (kHz: 3, ns: -9), in SI units:
-    ``("1.5", -9)`` → 1.5e-9 exactly as typed; ``"3,3"`` reads as 3.3; None when empty.
-    Raises ValueError for anything else."""
-    t = (text or "").strip().replace(",", ".")
-    if not t:
-        return None
-    if not _NUMBER.match(t):
-        raise ValueError(f"{text.strip()!r} is not a number")
-    if exp == 0:
-        return float(t)
-    if "e" in t.lower():
-        return float(t) * 10.0 ** exp
-    return float(f"{t}e{exp}")
-
-
-def scaled_text(x: Optional[float], exp: int) -> str:
-    """A value as a field in units of 10^exp shows it, 6 significant digits ("" for None)."""
-    return "" if x is None else f"{x / 10.0 ** exp:.6g}"
-
 
 def _volts(x: Optional[float]) -> str:
     """A voltage in mV below 1 V and in V above (4 significant digits)."""
@@ -152,11 +128,13 @@ def _checked(what: str, *args) -> None:
 
 # ---------------------------------------------------------------------- aggressor form
 
-# key: (label, power of ten of the unit shown, may be empty)
-AGGRESSOR_FIELDS: Dict[str, Tuple[str, int, bool]] = {
-    "vin_v": ("Vin (V)", 0, True), "fsw_hz": ("fsw (kHz)", 3, True), "rise_s": ("Rise (ns)", -9, True),
-    "fall_s": ("Fall (ns)", -9, True), "duty": ("Duty", 0, True), "load_a": ("Load (A)", 0, True),
-    "min_ring_zeta": ("Ringing ζ at least", 0, False), "soft_edge_zeta": ("Soft edge ζ at least", 0, False)}
+# key: (label, the field's unit, may be empty)
+AGGRESSOR_FIELDS: Dict[str, Tuple[str, Unit, bool]] = {
+    "vin_v": ("Vin (V)", Unit("V"), True), "fsw_hz": ("fsw (kHz)", Unit("Hz", 3), True),
+    "rise_s": ("Rise (ns)", Unit("s", -9), True), "fall_s": ("Fall (ns)", Unit("s", -9), True),
+    "duty": ("Duty", Unit(), True), "load_a": ("Load (A)", Unit("A"), True),
+    "min_ring_zeta": ("Ringing ζ at least", Unit(), False),
+    "soft_edge_zeta": ("Soft edge ζ at least", Unit(), False)}
 AGGRESSOR_TIPS = {
     "name": "Unique in the project",
     "vin_v": "Empty: the voltage of the source feeding the switcher's input",
@@ -173,7 +151,7 @@ AGGRESSOR_TIPS = {
 def aggressor_text(a: Aggressor, key: str) -> str:
     """What the aggressor form shows for ``key``."""
     if key in AGGRESSOR_FIELDS:
-        return scaled_text(getattr(a, key), AGGRESSOR_FIELDS[key][1])
+        return AGGRESSOR_FIELDS[key][1].text(getattr(a, key))
     return str(getattr(a, key))
 
 
@@ -186,9 +164,9 @@ def with_aggressor_field(a: Aggressor, key: str, text: str) -> Aggressor:
         if key == "name" and not value:
             raise ValueError("an aggressor needs a name")
     else:
-        label, exp, optional = AGGRESSOR_FIELDS[key]
+        label, unit, optional = AGGRESSOR_FIELDS[key]
         try:
-            value = parse_scaled(text, exp)
+            value = unit.parse(text)
         except ValueError as e:
             raise ValueError(f"{label}: {e}") from None
         if value is None and not optional:
@@ -270,8 +248,9 @@ PHASE_COLUMNS = [("Inductor", "inductor"), ("L (µH)", "inductance_h"), ("DCR (m
                  ("Rds on, high (mΩ)", "rds_on_hs_ohm"), ("Rds on, low (mΩ)", "rds_on_ls_ohm"),
                  ("Package L (nH)", "package_l_h"), ("Axis", "inductor_axis"),
                  ("Shielded", "inductor_shielded")]
-_PHASE_SCALE = {"inductance_h": -6, "dcr_ohm": -3, "package_l_h": -9, "coss_f": -12, "qrr_nc": 0,
-                "rds_on_hs_ohm": -3, "rds_on_ls_ohm": -3}
+_PHASE_UNITS = {"inductance_h": Unit("H", -6), "dcr_ohm": Unit("Ω", -3), "package_l_h": Unit("H", -9),
+                "coss_f": Unit("F", -12), "qrr_nc": Unit("C", -9, stored=-9),
+                "rds_on_hs_ohm": Unit("Ω", -3), "rds_on_ls_ohm": Unit("Ω", -3)}
 _PHASE_ZERO = ("inductance_h", "dcr_ohm", "package_l_h")        # empty is 0: not entered
 _PHASE_TEXT = ("inductor", "switch_net", "high_side_ref", "high_side_net", "low_side_ref",
                "low_side_net", "inductor_axis")
@@ -303,8 +282,8 @@ _SIDES = (("high_side", "High-side"), ("low_side", "Low-side"))
 def phase_cell(ph: Phase, key: str) -> str:
     """What the phases table shows in column ``key``."""
     v = getattr(ph, key)
-    if key in _PHASE_SCALE:
-        return scaled_text(v, _PHASE_SCALE[key])
+    if key in _PHASE_UNITS:
+        return _PHASE_UNITS[key].text(v)
     if key.endswith("_pins"):
         side = key[: -len("_pins")]
         return pins_text(v) if (getattr(ph, f"{side}_net") or getattr(ph, f"{side}_ref")) else ""
@@ -335,7 +314,7 @@ def with_phase_cell(ph: Phase, key: str, text: str) -> Phase:
                 raise ValueError(f"yes or no, not {t!r}")
             value = t.lower() in ("yes", "true", "1")
         else:
-            value = parse_scaled(t, _PHASE_SCALE[key])
+            value = _PHASE_UNITS[key].parse(t)
             if value is None and key in _PHASE_ZERO:
                 value = 0.0
     except (ValueError, ProjectError) as e:
@@ -382,8 +361,10 @@ VICTIM_COLUMNS = [("Name", "name"), ("Net", "net"), ("Type (preset)", "preset"),
                   ("Logic (V)", "logic_v"), ("Margin (mV)", "noise_margin_v"), ("Driver (Ω)", "driver_ohm"),
                   ("Receiver (Ω)", "receiver_ohm"), ("Receiver (pF)", "receiver_pf"),
                   ("Termination (Ω)", "termination_ohm"), ("Driver low (Ω)", "driver_low_ohm")]
-_VICTIM_SCALE = {"logic_v": 0, "noise_margin_v": -3, "driver_ohm": 0, "receiver_ohm": 0, "receiver_pf": 0,
-                 "termination_ohm": 0, "driver_low_ohm": 0}
+_OHM = Unit("Ω", None)        # an SI prefix for each value: 33 Ω, 1 MΩ
+_VICTIM_UNITS = {"logic_v": Unit("V"), "noise_margin_v": Unit("V", -3), "driver_ohm": _OHM,
+                 "receiver_ohm": _OHM, "receiver_pf": Unit("F", -12, stored=-12), "termination_ohm": _OHM,
+                 "driver_low_ohm": _OHM}
 # A custom victim's terminations start at KiPI's cmos preset (kipi/noise/model.py:153-173; a
 # test checks them): the user enters the line's own.
 CUSTOM_START = {"driver_ohm": 33.0, "receiver_ohm": 1e6, "receiver_pf": 3.0}
@@ -407,8 +388,8 @@ GUESS_TIP = ("KiPI's guess (the net's two pads farthest apart), not entered: gue
 def victim_cell(v: Victim, key: str) -> str:
     """What the victims table shows in column ``key``."""
     x = getattr(v, key)
-    if key in _VICTIM_SCALE:
-        return scaled_text(x, _VICTIM_SCALE[key])
+    if key in _VICTIM_UNITS:
+        return _VICTIM_UNITS[key].text(x)
     if key.endswith("_pins"):
         return pins_text(x) if (x is not None or getattr(v, key.replace("_pins", "_ref"))) else ""
     return str(x)
@@ -449,7 +430,7 @@ def with_victim_cell(v: Victim, key: str, text: str) -> Tuple[Victim, str]:
             if key in TERMINATION_KEYS and v.preset != CUSTOM_PRESET:
                 raise ValueError(f"the preset {v.preset or '(none)'} has its own terminations: choose "
                                  f"{CUSTOM_PRESET} to enter them")
-            value = parse_scaled(t, _VICTIM_SCALE[key])
+            value = _VICTIM_UNITS[key].parse(t)
     except (ValueError, ProjectError) as e:
         raise ValueError(f"{header}: {e}") from None
     q = copy.deepcopy(v)
@@ -512,10 +493,12 @@ def usable_victims(rows: Sequence[Victim]) -> Tuple[List[Victim], Dict[int, str]
 
 # ---------------------------------------------------------------------- noise options
 
-# key: (label, power of ten of the unit shown, may be empty)
-OPTION_FIELDS: Dict[str, Tuple[str, int, bool]] = {
-    "f_max_hz": ("Highest harmonic (MHz)", 6, True), "dead_time_ns": ("Dead time (ns)", 0, False),
-    "segment_mm": ("Victim cut every (mm)", 0, False), "window_mm": ("Copper within (mm)", 0, False)}
+# key: (label, the field's unit, may be empty)
+OPTION_FIELDS: Dict[str, Tuple[str, Unit, bool]] = {
+    "f_max_hz": ("Highest harmonic (MHz)", Unit("Hz", 6), True),
+    "dead_time_ns": ("Dead time (ns)", Unit("s", -9, stored=-9), False),
+    "segment_mm": ("Victim cut every (mm)", Unit("mm"), False),
+    "window_mm": ("Copper within (mm)", Unit("mm"), False)}
 # The quick preset (Coppernicus's choice, as the Impedance tab's): the board model solved at
 # this many frequencies per decade instead of KiPI's 10 (kipi/noise/model.py:264). Applied only
 # when pressed; the result's assumptions say how many were used.
@@ -524,16 +507,16 @@ KIPI_FIELD_PER_DECADE = NoiseOptions().field_per_decade
 
 
 def option_text(o: NoiseOptions, key: str) -> str:
-    return scaled_text(getattr(o, key), OPTION_FIELDS[key][1])
+    return OPTION_FIELDS[key][1].text(getattr(o, key))
 
 
 def with_option(o: NoiseOptions, key: str, value: Any) -> NoiseOptions:
     """A copy of ``o`` with ``key`` set: text for the number fields, an int or a bool for the
     others; ValueError, with the file's reason, for a value it would refuse."""
     if key in OPTION_FIELDS:
-        label, exp, optional = OPTION_FIELDS[key]
+        label, unit, optional = OPTION_FIELDS[key]
         try:
-            value = parse_scaled(value, exp)
+            value = unit.parse(value)
         except ValueError as e:
             raise ValueError(f"{label}: {e}") from None
         if value is None and not optional:
@@ -939,9 +922,9 @@ class NoisePanel(QWidget):
         placeholders = {"vin_v": "from the input's source", "fsw_hz": "required (or the source's)",
                         "rise_s": "required", "fall_s": "required", "duty": "from voltages and losses",
                         "load_a": "the output rail's loads"}
-        for key, (label, _exp, _optional) in AGGRESSOR_FIELDS.items():
+        for key, (label, unit, _optional) in AGGRESSOR_FIELDS.items():
             w = QLineEdit()
-            w.setValidator(OptionalDecimalValidator(w))
+            w.setValidator(UnitValidator(unit, parent=w))
             w.setPlaceholderText(placeholders.get(key, ""))
             self.field[key] = w
             form.addRow(label, w)
@@ -951,7 +934,7 @@ class NoisePanel(QWidget):
                 self.fsw_hint.setProperty("role", "muted")
                 form.addRow("", self.fsw_hint)
         for key, w in self.field.items():
-            w.setToolTip(AGGRESSOR_TIPS[key])
+            w.setToolTip(AGGRESSOR_TIPS[key] + (". " + UNIT_TIP if key in AGGRESSOR_FIELDS else ""))
         self.probe_list = QListWidget()
         self.probe_list.setMaximumHeight(80)
         self.probe_list.setToolTip("The ripple is shown at the ticked probes (the project's probes: "
@@ -1005,9 +988,9 @@ class NoisePanel(QWidget):
         # Options tab.
         self.opt: Dict[str, QWidget] = {}
         oform = QFormLayout()
-        for key, (label, _exp, optional) in OPTION_FIELDS.items():
+        for key, (label, unit, optional) in OPTION_FIELDS.items():
             w = QLineEdit()
-            w.setValidator(OptionalDecimalValidator(w))
+            w.setValidator(UnitValidator(unit, parent=w))
             if optional:
                 w.setPlaceholderText("auto")
             self.opt[key] = w

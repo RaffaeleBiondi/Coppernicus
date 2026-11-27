@@ -408,7 +408,7 @@ def test_a_kicad_rail_is_read_only_each_value_naming_its_field(tmp_path):
         tip = rp.loads.table.cellWidget(0, 2).toolTip()
         assert 'PI_LOAD "1000mA"' in tip and 'PI_PINS "1"' in tip and "U1" in tip, tip
         assert not rp.source_box.isEnabled() and not rp.load_box.isEnabled()
-        assert rp.max_drop.text() == "2" and rp.max_drop.isReadOnly(), rp.max_drop.text()
+        assert rp.max_drop.text() == "2 %" and rp.max_drop.isReadOnly(), rp.max_drop.text()
         tip = rp.max_drop.toolTip()
         assert "PI_LIMIT_DROP" in tip and "U1" in tip and "Override" not in tip, tip
         assert not rp.max_j.isReadOnly() and not rp.max_via.isReadOnly()
@@ -507,7 +507,7 @@ def test_override_copies_the_kicad_rail_into_the_project_and_the_way_back_keeps_
         assert own.limits == Limits(max_via_current=2.0), own.limits          # its own limits, kept
         assert window.merged.origins["VCC"].source == "overridden" and "VCC" not in window.results
         assert not rp.read_only and rp.loads.add_button.isEnabled()
-        assert rp.max_drop.text() == "2" and rp.max_drop.isReadOnly(), rp.max_drop.text()   # still in force
+        assert rp.max_drop.text() == "2 %" and rp.max_drop.isReadOnly(), rp.max_drop.text()   # still in force
         text = rp.banner.text.text()
         assert text.startswith('Project rail overrides the KiCad fields (KiCad: source J1 1 V '
                                '(from KiCad field PI_SOURCE "1V"'), text
@@ -547,7 +547,7 @@ def test_a_kicad_drop_limit_stays_locked_under_override_and_over_incomplete_fiel
     run_in_window('''
         def locked(tip_part="PI_LIMIT_DROP"):
             tip = rp.max_drop.toolTip()
-            assert rp.max_drop.text() == "2" and rp.max_drop.isReadOnly(), (rp.max_drop.text(), tip)
+            assert rp.max_drop.text() == "2 %" and rp.max_drop.isReadOnly(), (rp.max_drop.text(), tip)
             assert tip_part in tip and "U1" in tip, tip
 
         # Overridden, the project saying 5 %: 2 % shown and judged; 5 % kept and saved.
