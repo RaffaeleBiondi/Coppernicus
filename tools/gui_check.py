@@ -1481,8 +1481,11 @@ def run_thermal(window, check: Checks, args, out: Path):
     check("... the history, the grid peak and its nearest pad", "41.33 → 42.26 → 42.31 °C" in details
           and ": settled" in details and rows[0][6] == "J1.1", details)
     loads = panel.shown_load_rows()
-    check("... U1's drop: 39.156 mV at the ambient, 41.354 mV electro-thermal",
-          bool(loads) and loads[0][:4] == ("U1", "+3V3", "39.156", "41.354"), str(loads[:1]))
+    # The drops depend on the mesh (rust, the default, or Triangle) by a few parts in 1e5: within 0.1 %.
+    check("... U1's drop: about 39.156 mV at the ambient, 41.354 mV electro-thermal",
+          bool(loads) and loads[0][:2] == ("U1", "+3V3")
+          and abs(float(loads[0][2]) / 39.156 - 1) < 1e-3 and abs(float(loads[0][3]) / 41.354 - 1) < 1e-3,
+          str(loads[:1]))
     estimate = panel.estimate.text()
     check("... before it solved, the tab showed its cost and memory: 83,500 unknowns, a measured fit",
           estimate.startswith("Before solving: 250 × 167 cells of 0.24 mm (automatic)")
