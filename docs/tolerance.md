@@ -150,16 +150,16 @@ On `examples/tolerance/tolerance-tight.coppernicus.yml` (U2 at ±3 %):
 Load U2 on VOUT (nominal 1.8 V from U1, probe LOAD): FAIL
   DC drop      27.05 / 0 mV  power tree; worst pins across its ground: ...
   DC accuracy  18 / 18 mV  accuracy_pct of U1; accuracy_pct ±1 % of 1.8 V
-  ripple       7.883 / 10.57 mV  noise of U1 at LOAD; at probe LOAD, full band: U1 7.883 / 10.57 mV (20 MHz 4.727 / 7.006 mV)
+  ripple       7.822 / 10.53 mV  noise of U1 at LOAD; at probe LOAD, full band: U1 7.822 / 10.53 mV (20 MHz 4.727 / 7.001 mV)
   transient    30 / 30 mV  entered (transient_mv); KiPI's estimate with a typical loop at 100 kHz: 25.99 / 25.98 mV, ... (shown, never judged)
   check DC    45.05 / 18 mV of 54 / 54 allowed (dc_tol_pct), margin 8.946 / 36 mV  PASS
-  check AC    37.88 / 40.57 mV of 50 / 50 allowed (ac_tol_mv), margin 12.12 / 9.431 mV  PASS
-  check total 82.94 / 58.57 mV of 54 / 54 allowed (tol_pct), margin -28.94 / -4.569 mV  FAIL
-Verdict: fail. Fail: U2 on VOUT (tol_pct): total 82.94 mV below nominal, over the 54 mV allowed and 58.57 mV above nominal, over the 54 mV allowed
+  check AC    37.82 / 40.53 mV of 50 / 50 allowed (ac_tol_mv), margin 12.18 / 9.468 mV  PASS
+  check total 82.88 / 58.53 mV of 54 / 54 allowed (tol_pct), margin -28.88 / -4.532 mV  FAIL
+Verdict: fail. Fail: U2 on VOUT (tol_pct): total 82.88 mV below nominal, over the 54 mV allowed and 58.53 mV above nominal, over the 54 mV allowed
 ```
 
 Each share holds on its own (DC 45 mV of 54, AC 41 mV of 50), but the four parts together
-reach 82.94 mV below nominal against the 54 mV that ±3 % of 1.8 V allows. In
+reach 82.88 mV below nominal against the 54 mV that ±3 % of 1.8 V allows. In
 `tolerance.coppernicus.yml` the same load has ±6 %, 108 mV: a pass. The DC drop sits below
 nominal only (U2 has one supply pin), while the ripple and the transient go both ways. KiPI's
 transient estimate, 26 mV, is printed beside the 30 mV entered, never judged.
