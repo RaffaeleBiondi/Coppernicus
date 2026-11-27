@@ -1110,12 +1110,9 @@ class ProblemsPanel(QWidget):
 
 # ---------------------------------------------------------------------- losses and comparison
 
-# Chart colours (the dataviz reference palette, validated for colour-vision deficiency):
-# the current result is always categorical slot 1, the baseline always slot 2, so a colour
-# never changes meaning when the baseline appears.
-CURRENT_COLOR, BASELINE_COLOR = "#2a78d6", "#eb6834"
-CHART_SURFACE, INK, INK_2, INK_MUTED = "#fcfcfb", "#0b0b0b", "#52514e", "#898781"
-GRID, AXIS = "#e1e0d9", "#c3c2b7"
+# Chart colours: the theme's (the dataviz reference palette, validated for colour-vision
+# deficiency in both themes): the current result is always series 1, the baseline always
+# series 2, so a colour never changes meaning when the baseline appears.
 
 
 class LossChart(QWidget):
@@ -1127,25 +1124,30 @@ class LossChart(QWidget):
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         from matplotlib.figure import Figure
         # "constrained" re-fits the labels at every draw, so they survive a resized dock.
-        self.figure = Figure(figsize=(6, 2.6), facecolor=CHART_SURFACE, layout="constrained")
+        self.figure = Figure(figsize=(6, 2.6), facecolor=theme.color("panel"), layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.addWidget(self.canvas)
         self.series: List[str] = []
+        self._shown = (None, None, "")
         self.set_losses(None)
+        theme.signals.changed.connect(lambda *_: self.set_losses(*self._shown))
 
     def set_losses(self, current, baseline=None, title: str = ""):
         """``current`` / ``baseline``: {name: W} as :meth:`RailResult.loss_breakdown` gives."""
         import numpy as np
+        self._shown = (current, baseline, title)
+        c = theme.tokens(theme.current())
         fig = self.figure
         fig.clear()
+        fig.set_facecolor(c["panel"])
         ax = fig.add_subplot()
-        ax.set_facecolor(CHART_SURFACE)
+        ax.set_facecolor(c["panel"])
         if not current:
             ax.axis("off")
             ax.text(0.5, 0.5, "Solve a rail to see where its copper loss is", ha="center",
-                    va="center", color=INK_MUTED, transform=ax.transAxes)
+                    va="center", color=c["muted"], transform=ax.transAxes)
             self.series = []
             self.canvas.draw_idle()
             return
@@ -1156,30 +1158,30 @@ class LossChart(QWidget):
         if baseline:
             base = np.array([baseline.get(n, 0.0) * 1e3 for n in names])
             h = 0.36
-            bars.append(ax.barh(y - h / 2 - 0.02, base, height=h, color=BASELINE_COLOR, label="baseline"))
-            bars.append(ax.barh(y + h / 2 + 0.02, cur, height=h, color=CURRENT_COLOR, label="current"))
+            bars.append(ax.barh(y - h / 2 - 0.02, base, height=h, color=c["series-2"], label="baseline"))
+            bars.append(ax.barh(y + h / 2 + 0.02, cur, height=h, color=c["series-1"], label="current"))
             self.series = ["baseline", "current"]
         else:
-            bars.append(ax.barh(y, cur, height=0.5, color=CURRENT_COLOR))
+            bars.append(ax.barh(y, cur, height=0.5, color=c["series-1"]))
             self.series = ["current"]
         top = max(float(max((b.datavalues.max() for b in bars), default=0.0)), 1e-12)
         for b in bars:
-            ax.bar_label(b, labels=[f"{v:.3g}" for v in b.datavalues], padding=3, color=INK_2, fontsize=8)
-        ax.set_yticks(y, names, color=INK_2, fontsize=8)
+            ax.bar_label(b, labels=[f"{v:.3g}" for v in b.datavalues], padding=3, color=c["fg"], fontsize=8)
+        ax.set_yticks(y, names, color=c["fg"], fontsize=8)
         ax.invert_yaxis()                                   # layers top to bottom, as stacked
         ax.set_xlim(0, top * 1.18)
-        ax.set_xlabel("Copper loss (mW)", color=INK_MUTED, fontsize=8)
-        ax.tick_params(axis="x", colors=INK_MUTED, labelsize=8)
+        ax.set_xlabel("Copper loss (mW)", color=c["muted"], fontsize=8)
+        ax.tick_params(axis="x", colors=c["muted"], labelsize=8)
         ax.tick_params(axis="y", length=0)
-        ax.grid(axis="x", color=GRID, linewidth=0.6)
+        ax.grid(axis="x", color=c["line"], linewidth=0.6)
         ax.set_axisbelow(True)
         for side in ("top", "right", "bottom"):
             ax.spines[side].set_visible(False)
-        ax.spines["left"].set_color(AXIS)
+        ax.spines["left"].set_color(c["outline"])
         if title:
-            ax.set_title(title, loc="left", color=INK, fontsize=9)
+            ax.set_title(title, loc="left", color=c["fg"], fontsize=9)
         if baseline:
-            ax.legend(frameon=False, fontsize=8, labelcolor=INK_2, loc="lower right")
+            ax.legend(frameon=False, fontsize=8, labelcolor=c["fg"], loc="lower right")
         self.canvas.draw_idle()
 
 

@@ -37,8 +37,12 @@ Board files are only read; the report goes where you say, never next to a board 
 
 Every page opens dark. The **☀ Light** button at the top right switches it to light and
 **☾ Dark** switches it back. The browser keeps the choice for the next page where it allows
-storage; some keep nothing for a page opened from disk. Plots and maps keep their own colours,
-on a white panel in both themes.
+storage; some keep nothing for a page opened from disk. Plots (the |Z|(f) curves, the noise
+waveforms) follow the page: in the dark theme they are shown inverted, their hues turned back,
+so the panel goes dark and red stays red. Maps (the board-temperature and the H and E field
+maps) keep their colour scales on a white panel in both themes. The PNG files written beside
+the page are always light, as they are attached and printed; the app's plots follow its theme
+on screen, and the app's Export writes the same light files.
 
 ## What it holds
 

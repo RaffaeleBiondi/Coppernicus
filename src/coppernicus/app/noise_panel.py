@@ -839,7 +839,6 @@ def _set_item(table: QTableWidget, r: int, c: int, text: str) -> QTableWidgetIte
     return item
 
 
-CHART_SURFACE = "#fcfcfb"
 PLOT_FONT = 7
 
 
@@ -875,6 +874,7 @@ class NoisePanel(QWidget):
         self._outline = None
         self.last_estimate = ""
         self._build()
+        theme.signals.changed.connect(lambda *_: self.show_result())   # the plots follow the theme
         window.rail_panel.rail_changed.connect(self._setup_changed)
         window.rail_panel.settings_changed.connect(self._check_stale)
         self.load_project()
@@ -1078,7 +1078,7 @@ class NoisePanel(QWidget):
         self.plot_tabs.setUsesScrollButtons(True)
         self.canvases = {}
         for key, title in (("wave", "Waveforms"), ("H", "H field"), ("E", "E field")):
-            fig = Figure(figsize=(6, 4), facecolor=CHART_SURFACE, layout="constrained")
+            fig = Figure(figsize=(6, 4), facecolor=theme.color("panel"), layout="constrained")
             canvas = FigureCanvasQTAgg(fig)
             canvas.setMinimumSize(160, 100)
             self.canvases[key] = (fig, canvas)
@@ -1738,9 +1738,11 @@ class NoisePanel(QWidget):
     def _empty(self, key: str, text: str):
         fig, canvas = self.canvases[key]
         fig.clear()
+        fig.set_facecolor(theme.color("panel"))
         ax = fig.add_subplot()
         ax.axis("off")
-        ax.text(0.5, 0.5, text, ha="center", va="center", color="#898781", transform=ax.transAxes, wrap=True)
+        ax.text(0.5, 0.5, text, ha="center", va="center", color=theme.color("muted"), transform=ax.transAxes,
+                wrap=True)
         canvas.draw_idle()
 
     def _show_empty(self):
@@ -1759,7 +1761,9 @@ class NoisePanel(QWidget):
         from coppernicus.coupled_noise import draw_waveforms
         fig, canvas = self.canvases["wave"]
         fig.clear()
-        draw_waveforms(fig, r)
+        with theme.plotting():                    # on screen in the theme; Export writes it light
+            draw_waveforms(fig, r)
+        theme.restyle_figure(fig)
         for ax in fig.axes:              # the core's plot, its text smaller: the dock is short
             ax.title.set_wrap(True)
             ax.title.set_fontsize(PLOT_FONT + 1)
@@ -1776,11 +1780,13 @@ class NoisePanel(QWidget):
         from coppernicus.coupled_noise import draw_field_map
         fig, canvas = self.canvases[kind]
         fig.clear()
-        ax = fig.add_subplot()
-        img = draw_field_map(ax, r, kind, self._board_outline())
-        if img is not None:
-            unit = (r.emi.h_map if kind == "H" else r.emi.e_map).unit
-            fig.colorbar(img, ax=ax, label=f"{kind} ({unit}, strongest harmonic)")
+        with theme.plotting():
+            ax = fig.add_subplot()
+            img = draw_field_map(ax, r, kind, self._board_outline())
+            if img is not None:
+                unit = (r.emi.h_map if kind == "H" else r.emi.e_map).unit
+                fig.colorbar(img, ax=ax, label=f"{kind} ({unit}, strongest harmonic)")
+        theme.restyle_figure(fig)
         ax.title.set_wrap(True)
         canvas.draw_idle()
 

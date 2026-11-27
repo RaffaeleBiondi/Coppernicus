@@ -1,6 +1,7 @@
 """The theme of every HTML page Coppernicus writes: dark by default (data-theme on <html>), a
 button in the header that switches to light and back, the choice kept in localStorage where the
-browser allows it; the plots keep their own colours on a light panel, and the PNGs written to
+browser allows it; the plots follow the page's theme (in dark their light PNG is shown inverted,
+hues turned back; maps keep their colour scales), and the PNGs written to
 --out are the same bytes whether a page is written or not."""
 
 import base64
@@ -223,3 +224,18 @@ def test_the_toggle_in_node(mode, tmp_path):
         assert once["kept"] is None and twice["kept"] is None
     else:
         assert once["kept"] == other and twice["kept"] == first
+
+
+def test_a_plot_follows_the_pages_theme_and_a_map_keeps_its_colours(tmp_path):
+    """The |Z| plot and the noise waveforms carry class "plot", shown inverted in dark with
+    their hues turned back; the H and E field maps carry "map" and are never inverted. The
+    PNGs embedded are the files' own bytes."""
+    plots = [png(tmp_path / f"x_U1_noise{s}.png") for s in ("", "_h_field", "_e_field")]
+    doc = {"verdict": "pass", "aggressors": [{"aggressor": "U1", "png_files": [str(p) for p in plots]}]}
+    text = write_noise_report(doc, tmp_path / "noise.html").read_text(encoding="utf-8")
+    assert re.findall(r'<img class="(\w+)"', text) == ["plot", "map", "map"]
+    assert ':root[data-theme="dark"] img.plot { filter: invert(0.88) hue-rotate(180deg); }' in NOISE_PAGE_CSS
+    assert "img.map" not in NOISE_PAGE_CSS.split("filter")[0].split("\n")[-1]
+    ac = {"verdict": "pass", "rails": [{"rail": "+3V3", "png_file": str(plots[0]), "probes": []}]}
+    text = write_ac_report(ac, tmp_path / "ac.html").read_text(encoding="utf-8")
+    assert '<img class="plot"' in text and embedded(text) == [plots[0].read_bytes()]

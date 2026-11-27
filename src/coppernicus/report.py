@@ -649,6 +649,10 @@ AC_PAGE_CSS = "\n".join([
     "/* The plots are PNGs on white, as written to --out: shown on a light panel in both themes. */",
     "img { box-sizing: border-box; width: 100%; max-width: 900px; height: auto; display: block;",
     "  margin: 8px 0; background: #fff; padding: 6px; border: 1px solid var(--line); border-radius: 8px; }",
+    # A plot follows the page's theme: in dark its light PNG (the file on disk, unchanged) is shown
+    # inverted with its hues turned back, so the panel goes dark and red stays red. Maps keep
+    # their colour scales in both themes.
+    ':root[data-theme="dark"] img.plot { filter: invert(0.88) hue-rotate(180deg); }',
     "table { border-collapse: collapse; width: 100%; margin: 8px 0; }",
     "th, td { border-bottom: 1px solid var(--line); padding: 4px 8px; text-align: left; }",
     "th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }",
@@ -683,7 +687,8 @@ def write_ac_report(doc: Mapping[str, Any], path, *, project: str = "", board_na
     for r in doc.get("rails", []):
         png = Path(r.get("png_file") or "")
         data = base64.b64encode(png.read_bytes()).decode("ascii") if png.is_file() else ""
-        img = f'<img src="data:image/png;base64,{data}" alt="|Z|(f) of {esc(r["rail"])}">' if data else ""
+        img = (f'<img class="plot" src="data:image/png;base64,{data}" alt="|Z|(f) of {esc(r["rail"])}">'
+               if data else "")
         rows = "".join(
             f"<tr><td>{esc(p['name'])}</td><td>{esc(p['net'])}</td>"
             f"<td class=num>{esc(ohm_text(p.get('worst_z_ohm')))}</td>"
@@ -762,7 +767,9 @@ def write_noise_report(doc: Mapping[str, Any], path, *, project: str = "", board
                 continue
             label = _noise_image_label(png)
             data = base64.b64encode(p.read_bytes()).decode("ascii")
-            figures.append(f'<figure><img src="data:image/png;base64,{data}" alt="{esc(label)} of '
+            kind = "map" if Path(png).stem.endswith(("_h_field", "_e_field")) else "plot"
+            figures.append(f'<figure><img class="{kind}" src="data:image/png;base64,{data}" '
+                           f'alt="{esc(label)} of '
                            f'{esc(name)}"><figcaption>{esc(label)}</figcaption></figure>')
         point = ", ".join([
             f"{num(a.get('vin_v'), 'g')} V → {num(a.get('vout_v'), 'g')} V", f"{num(a.get('iout_a'))} A",

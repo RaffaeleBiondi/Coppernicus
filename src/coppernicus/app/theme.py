@@ -37,11 +37,14 @@ APP_TOKENS: Dict[str, Dict[str, str]] = {
     "dark": {"chrome": "#111316", "input": "#121518", "input-line": "#3a424a", "hover": "#262b30",
              "focus": "#6aa5e8", "outline": "#6b7580", "pop": "#0e1013",
              "cell-readonly": "#1b1f23", "cell-problem": "#3b2326", "cell-error": "#5c2a2c",
-             "cell-missing": "#3a3220"},
+             "cell-missing": "#3a3220",
+             # Plot series: the dataviz reference palette, validated in both themes; never a verdict.
+             "series-1": "#338ced", "series-2": "#e76624", "series-3": "#00a888", "series-4": "#9887ef"},
     "light": {"chrome": "#e9edf1", "input": "#ffffff", "input-line": "#bfc8d0", "hover": "#e2e8ee",
               "focus": "#2f6fb2", "outline": "#8a949e", "pop": "#ffffff",
               "cell-readonly": "#f0f0f0", "cell-problem": "#fdecea", "cell-error": "#f8c9c4",
-              "cell-missing": "#fff3cd"},
+              "cell-missing": "#fff3cd",
+              "series-1": "#257de0", "series-2": "#f47230", "series-3": "#00b894", "series-4": "#6a4ce2"},
 }
 # The tokens that end up inside cells and rich text, swapped by recolor() on a theme change.
 STATE_TOKENS = ("fail", "warn", "pass", "muted",
@@ -128,6 +131,48 @@ def icon(name: str, token: str = "fg", size: int = 18):
             made.addPixmap(pixmap)
         _icons[key] = made
     return _icons[key]
+
+
+# The plots on screen follow the theme; the files written to disk (the CLI's --out, the app's
+# Export CSV and PNG) are drawn outside plotting() and stay light, as they are attached and
+# printed. The HTML report's pages follow their own theme switch.
+def mpl_rc(name: Optional[str] = None) -> dict:
+    """matplotlib settings for a plot shown in the app in theme ``name`` (default: the one in use)."""
+    from cycler import cycler
+    t = tokens(name or _current)
+    return {"figure.facecolor": t["panel"], "axes.facecolor": t["panel"], "savefig.facecolor": t["panel"],
+            "axes.edgecolor": t["outline"], "axes.labelcolor": t["fg"], "axes.titlecolor": t["fg"],
+            "text.color": t["fg"], "xtick.color": t["muted"], "ytick.color": t["muted"],
+            "xtick.labelcolor": t["fg"], "ytick.labelcolor": t["fg"], "grid.color": t["line"],
+            "legend.facecolor": t["pop"], "legend.edgecolor": t["line"], "legend.labelcolor": t["fg"],
+            "axes.prop_cycle": cycler(color=[t[f"series-{i}"] for i in range(1, 5)])}
+
+
+def plotting():
+    """A context in which a plot shown in the app is drawn in the theme's colours."""
+    import matplotlib
+    return matplotlib.rc_context(mpl_rc())
+
+
+def restyle_figure(fig) -> None:
+    """After a shared drawing function (the CLI's and the report's too) drew ``fig`` inside
+    :func:`plotting`: its fixed light greys (the grid, a shaded band) in the theme's own."""
+    from matplotlib.colors import to_rgb
+    t = tokens(_current)
+    fig.set_facecolor(t["panel"])
+    for ax in fig.axes:
+        ax.set_facecolor(t["panel"])
+        ax.tick_params(which="both", grid_color=t["line"])   # kept by the ticks made at every draw
+        legend = ax.get_legend()
+        handles = list(getattr(legend, "legend_handles", None) or []) if legend is not None else []
+        for patch in list(ax.patches) + [h for h in handles if hasattr(h, "get_facecolor")]:
+            # a grey band ("0.85") and its legend key, never a coloured one
+            r, g, b = to_rgb(patch.get_facecolor())
+            if abs(r - g) < 0.02 and abs(g - b) < 0.02 and r > 0.7:
+                patch.set_facecolor(t["outline"])
+                patch.set_alpha(0.22)
+        for spine in ax.spines.values():
+            spine.set_edgecolor(t["outline"])
 
 
 def span(token: str, html: str) -> str:

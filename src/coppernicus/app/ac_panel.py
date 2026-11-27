@@ -631,7 +631,6 @@ def _table(headers, tips=None) -> QTableWidget:
     return t
 
 
-CHART_SURFACE = "#fcfcfb"
 
 
 class AcPanel(QWidget):
@@ -658,6 +657,7 @@ class AcPanel(QWidget):
         self._pairs: Tuple[Any, Dict[str, Optional[str]]] = (None, {})   # (key, each load's probe)
         self._refresh_pending = False
         self._build()
+        theme.signals.changed.connect(lambda *_: self.show_result())   # the plots follow the theme
         window.view.pad_picked.connect(self._pad_picked)
         window.rail_panel.pick_changed.connect(lambda kind: kind and self._leave_pick())
         window.measure.toggled.connect(lambda on: on and self._leave_pick())
@@ -825,7 +825,7 @@ class AcPanel(QWidget):
         # Results: the plot with the dock's full height beside the verdict, rows, stats and notes.
         from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
         from matplotlib.figure import Figure
-        self.figure = Figure(figsize=(6, 3), facecolor=CHART_SURFACE, layout="constrained")
+        self.figure = Figure(figsize=(6, 3), facecolor=theme.color("panel"), layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setMinimumSize(160, 100)
         self.header = QLabel()
@@ -1453,9 +1453,10 @@ class AcPanel(QWidget):
 
     def _show_empty(self, text: str = "Solve a rail's impedance to see |Z|(f) at its probes"):
         self.figure.clear()
+        self.figure.set_facecolor(theme.color("panel"))
         ax = self.figure.add_subplot()
         ax.axis("off")
-        ax.text(0.5, 0.5, text, ha="center", va="center", color="#898781", transform=ax.transAxes)
+        ax.text(0.5, 0.5, text, ha="center", va="center", color=theme.color("muted"), transform=ax.transAxes)
         self.canvas.draw_idle()
         self.header.setText("")
         self.table.setRowCount(0)
@@ -1470,7 +1471,9 @@ class AcPanel(QWidget):
             self._show_empty()
             return
         r = entry[0]
-        draw_result(self.figure, r)
+        with theme.plotting():                    # on screen in the theme; Export writes it light
+            draw_result(self.figure, r)
+        theme.restyle_figure(self.figure)
         self.canvas.draw_idle()
         rows = result_rows(r)
         self.table.setRowCount(len(rows))
