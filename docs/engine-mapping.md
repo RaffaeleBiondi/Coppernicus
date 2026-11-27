@@ -502,7 +502,12 @@ as for every solve, and the heat model reads the restacked thickness. `via_plati
   grid cell that holds it (model.py:348-375; a point just outside the board goes to the
   nearest inside cell). `regulator_heat` chooses the pads:
   - `output_pads` (default): KiPI's placement, the phase's output pins (cosim.py:205-214);
-  - `part_pads`: every copper pad of the regulator's part, all nets.
+  - `part_pads`: every copper pad of the regulator's own part, all nets: the part with its
+    input pins (`ph.input.ref`; a `source` has none, so its output's part), which for an
+    external-inductor buck (`PI_SOURCE_REF`) is the IC, not the inductor at its output.
+    `output_part_heat_pct` (regulator name → %) moves that share of each phase's loss to the
+    pads of the output's part when it is another part; none is assumed
+    (`engine.thermal._part_pads_heat`, `check_heat_shares`).
 - Loads (`load_heat: true`): each load's power, Σ pin current × pin voltage, at its pins.
 
 The package itself (its body, thermal pad, junction-to-board resistance, its own convection)

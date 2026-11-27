@@ -102,7 +102,15 @@ class ThermalSpec(BaseModel):
     grid_mm: Optional[float] = Field(None, ge=0, description="Thermal cell size, mm; 0 = automatic. "
                                      "Coarser cells lower the cost.")
     load_heat: Optional[bool] = Field(None, description="Also the loads' own power as heat.")
-    regulator_heat: Optional[Literal["output_pads", "part_pads"]] = None
+    regulator_heat: Optional[Literal["output_pads", "part_pads"]] = Field(None, description=(
+        "Where each regulator's conversion loss heats the board: output_pads (KiPI's, at its output "
+        "pins) or part_pads (every pad of its own part, the one with its input pins: an "
+        "external-inductor buck's IC, not its inductor)."))
+    output_part_heat_pct: Optional[dict[str, float]] = Field(None, description=(
+        "With part_pads: regulator name (as in the power tree) -> the % of its loss on the pads of "
+        "the part its output is held at, when that is another part (an external-inductor buck's "
+        "inductor); the rest stays on its own part. Only a share the user gives (from the parts' "
+        "data): never estimate one."))
     max_temp_c: Optional[float] = Field(None, description="Limit on the hottest solved copper, °C.")
     max_rise_c: Optional[float] = Field(None, description="Limit on its rise above the ambient, °C.")
 

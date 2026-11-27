@@ -337,7 +337,9 @@ class Settings:
 
 # Where a regulator's conversion loss (input − output power) heats the board: "output_pads",
 # KiPI's own placement (its output pins); "part_pads", spread evenly over every copper pad of
-# its part, all nets.
+# its part, all nets: the part with its input pins (an external-inductor buck's IC, not the
+# inductor its output is held at), with ThermalOptions.output_part_heat_pct's share, when
+# entered, on the output part's pads instead.
 REGULATOR_HEAT = ("output_pads", "part_pads")
 
 
@@ -357,11 +359,18 @@ class ThermalOptions:
     max_temp_c: Optional[float] = None
     max_rise_c: Optional[float] = None      # above ambient_c
     regulator_heat: str = "output_pads"     # see REGULATOR_HEAT
+    # regulator_heat "part_pads" only: regulator name (as in the power tree) -> the share, in
+    # % of its conversion loss, on the pads of the part its output is held at when that is not
+    # the part with its input pins (an external-inductor buck's inductor, PI_SOURCE_REF); the
+    # rest stays on the input part's pads. The user's number (from the parts' data); none
+    # entered: all of it on the input part.
+    output_part_heat_pct: Dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self):
         """Checked whether made by the app or loaded from a file, with the same messages:
         non-finite numbers, ``iterations`` not a whole number ≥ 1, a negative airflow or
-        grid and an unknown ``regulator_heat`` raise :class:`ProjectError`."""
+        grid, an unknown ``regulator_heat`` and an ``output_part_heat_pct`` share outside
+        0–100 raise :class:`ProjectError`."""
         for k in ("enabled", "load_heat"):
             if not isinstance(getattr(self, k), bool):
                 raise ProjectError(f"thermal: {k} must be true or false, not {getattr(self, k)!r}")
@@ -385,6 +394,29 @@ class ThermalOptions:
         if self.regulator_heat not in REGULATOR_HEAT:
             raise ProjectError(f"thermal: regulator_heat must be one of {', '.join(REGULATOR_HEAT)}, "
                                f"not {self.regulator_heat!r}")
+        self.output_part_heat_pct = _heat_shares(self.output_part_heat_pct)
+
+
+def _heat_shares(data: Any) -> Dict[str, float]:
+    """``thermal: output_part_heat_pct``, checked: regulator names to a share in %, 0–100."""
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise ProjectError("thermal: output_part_heat_pct maps a regulator's name (as in the power "
+                           f"tree) to the % of its loss on its output part, e.g. {{U5: 30}}, not {data!r}")
+    out: Dict[str, float] = {}
+    for name, value in data.items():
+        where = f"thermal: output_part_heat_pct {name}"
+        if isinstance(value, bool):
+            raise ProjectError(f"{where} must be a number, not {value!r}")
+        try:
+            pct = _number(value, where)
+        except ValueError as e:
+            raise ProjectError(str(e)) from None
+        if not 0 <= pct <= 100:
+            raise ProjectError(f"{where} is a share in %, 0 to 100, not {pct:g}")
+        out[str(name)] = pct
+    return out
 
 
 def _thermal_in(data: Any) -> ThermalOptions:

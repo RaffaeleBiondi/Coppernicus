@@ -10,7 +10,8 @@ The loop is a thin copy of KiPI's ``solve_electrothermal`` (``kipi/dc/thermal/co
 :232-280), using KiPI's own model, tree solve and heat gathering, so that
 
 * iteration 1's load drops (copper at the ambient) are kept as the baseline: no extra solve;
-* ``regulator_heat: part_pads`` can spread a regulator's loss over every pad of its part.
+* ``regulator_heat: part_pads`` can spread a regulator's loss over every pad of its part (the
+  part with its input pins; ``output_part_heat_pct`` moves a share to its output part's pads).
 
 With ``regulator_heat: output_pads`` (KiPI's placement) it is bit-identical to KiPI's own
 function: :func:`solve_kipi_reference` runs that one for the drift test.
@@ -95,27 +96,71 @@ class _ThermalProgress(_Progress):
 
 # ---------------------------------------------------------------------- the loop
 
-def _part_pads_heat(heat: _Heat, tree, snap, setup) -> None:
-    """Each regulator phase's conversion loss spread evenly over every copper pad of its
+def _parts(ph) -> Tuple[str, str]:
+    """(the regulator's own part, the part its output is held at) of a VRM phase: the part
+    with its input pins (an external-inductor buck's IC; a "source" has none: its output's
+    part), and its output's (the inductor, with PI_SOURCE_REF), the same part on an LDO."""
+    own = ph.input.ref if ph.input is not None else ph.output.ref
+    return own, ph.output.ref
+
+
+def regulator_parts(setup) -> Dict[str, List[Tuple[str, str]]]:
+    """Regulator name -> (own part, output part) of each of its phases."""
+    return {v.name: [_parts(ph) for ph in v.all_phases()] for v in setup.vrms}
+
+
+def check_heat_shares(setup, options: ThermalOptions) -> List[str]:
+    """``output_part_heat_pct`` against the setup: a name that is no regulator, or one whose
+    output is on its own part, raises :class:`EngineError`; the notes say what is not used."""
+    shares = options.output_part_heat_pct
+    if not shares:
+        return []
+    parts = regulator_parts(setup)
+    for name in shares:
+        if name not in parts:
+            raise EngineError(f"thermal: output_part_heat_pct names {name!r}, which is not a regulator "
+                              f"of the power tree (its regulators: {', '.join(sorted(parts)) or 'none'})")
+        if all(own == out for own, out in parts[name]):
+            raise EngineError(f"thermal: output_part_heat_pct {name}: its output is on its own part "
+                              f"({parts[name][0][0]}), so there is no other part to share its loss with")
+    if options.regulator_heat != "part_pads":
+        return ["output_part_heat_pct is not used: it applies with regulator_heat: part_pads only "
+                "(output_pads puts each regulator's loss at its output pins, KiPI's placement)."]
+    return []
+
+
+def _part_pads_heat(heat: _Heat, tree, snap, setup, shares: Dict[str, float]) -> None:
+    """Each regulator phase's conversion loss spread evenly over every copper pad of its own
     part (all nets), each pad's share over its copper layers: KiPI's ``_vrm_heat``
-    (cosim.py:205-214) with the part's pads in place of its output pads."""
+    (cosim.py:205-214) with the part's pads in place of its output pads. ``shares`` (regulator
+    name -> %): that share on the output part's pads instead, when it is another part."""
     vrm_by_name = {v.name: v for v in setup.vrms}
+
+    def pads_of(ref: str) -> List[str]:
+        return [p.id for p in snap.pads if p.footprint == ref and p.shapes]
+
     for rep in tree.vrms:
         if rep.p_loss:
             phases = vrm_by_name[rep.name].all_phases()
             losses = [ph.p_loss for ph in rep.phases] if rep.phases else [rep.p_loss]
+            pct = shares.get(rep.name, 0.0)
             for ph, loss in zip(phases, losses):
-                pads = [p.id for p in snap.pads if p.footprint == ph.output.ref and p.shapes]
-                heat.add_pads("VRM conversion", pads, loss)
+                own, out = _parts(ph)
+                if out == own or not pct:
+                    heat.add_pads("VRM conversion", pads_of(own), loss)
+                    continue
+                heat.add_pads("VRM conversion", pads_of(own), loss * (100.0 - pct) / 100.0)
+                heat.add_pads("VRM conversion", pads_of(out), loss * pct / 100.0)
 
 
-def _heat(tree, snap, setup, ts: ThermalSettings, regulator_heat: str):
+def _heat(tree, snap, setup, ts: ThermalSettings, regulator_heat: str,
+          shares: Optional[Dict[str, float]] = None):
     """(xy, watts, layer ids, watts by kind) of every loss on the board (cosim.py:217-229)."""
     if regulator_heat == "output_pads":
         return heat_sources(tree, snap, setup, ts)            # KiPI's own placement
     heat = _Heat(snap)
     _copper_heat(heat, tree)
-    _part_pads_heat(heat, tree, snap, setup)
+    _part_pads_heat(heat, tree, snap, setup, shares or {})
     if ts.load_power:
         for watts, pads in load_powers(tree, snap, setup).values():
             heat.add_pads("loads", pads, watts)
@@ -129,7 +174,8 @@ class _Run:
     first_drops: Dict[str, float]      # load name -> drop at iteration 1 (copper at ambient)
 
 
-def _electrothermal(snap, setup, ts: ThermalSettings, progress, regulator_heat: str) -> _Run:
+def _electrothermal(snap, setup, ts: ThermalSettings, progress, regulator_heat: str,
+                    shares: Optional[Dict[str, float]] = None) -> _Run:
     """KiPI's ``solve_electrothermal`` loop (cosim.py:232-280), copied: the same model, tree
     solve, heat and temperature solve, in the same order. It differs only in the regulator
     heat (``part_pads``), in keeping iteration 1's load drops, and in leaving the settling
@@ -156,7 +202,7 @@ def _electrothermal(snap, setup, ts: ThermalSettings, progress, regulator_heat: 
                           mesh_cache=meshes, factor_cache=factors)
         if it == 1:
             first = {ld.name: load_drop(ld)[0] for ld in tree.loads}
-        xy, w, layers, by_kind = _heat(tree, snap, setup, ts, regulator_heat)
+        xy, w, layers, by_kind = _heat(tree, snap, setup, ts, regulator_heat, shares)
         heat = model.empty_heat()
         model.deposit(heat, xy, w, layers)
         heat_total = float(w.sum())
@@ -186,11 +232,13 @@ def solve_thermal_tree(board: Board, project: Project, setup, thickness: Dict[st
     """The power tree solved electro-thermally (called by ``solve_project_tree``, which has
     checked the grounds and built the setup on the what-if board)."""
     options = project.thermal
+    check_heat_shares(setup, options)                 # before the solve: a typo fails at once
     peak0 = peak_rss_bytes()
     t0 = time.perf_counter()
     try:
         run = _electrothermal(board.snapshot, setup, thermal_settings(options),
-                              _ThermalProgress(progress, cancelled), options.regulator_heat)
+                              _ThermalProgress(progress, cancelled), options.regulator_heat,
+                              options.output_part_heat_pct)
     except Canceled as e:
         raise Cancelled("solve cancelled") from e
     except SolveError as e:
@@ -282,11 +330,26 @@ def _breakdown(by_kind: Dict[str, float]) -> str:
     return ", ".join(f"{k} {w:.3g} W" for k, w in sorted(by_kind.items(), key=lambda kv: -kv[1]))
 
 
+def _part_heat_text(v, parts: List[Tuple[str, str]], shares: Dict[str, float]) -> str:
+    """Where one regulator's loss went with part_pads: its own part's pads, or the share the
+    user entered on its output part's."""
+    own = ", ".join(dict.fromkeys(o for o, _ in parts))
+    outs = ", ".join(dict.fromkeys(out for o, out in parts if out != o))
+    pct = shares.get(v.name, 0.0)
+    if outs and pct:
+        return (f"{v.name} {v.p_loss_w:.3g} W: {100 - pct:g} % on {own}'s pads, {pct:g} % on "
+                f"{outs}'s (output_part_heat_pct, entered)")
+    if outs:
+        return f"{v.name} {v.p_loss_w:.3g} W on {own}'s pads, none on {outs} (its output part)"
+    return f"{v.name} {v.p_loss_w:.3g} W on {own}'s pads"
+
+
 def _assumptions(board: Board, options: ThermalOptions, th: ThermalResult, tree: TreeResult,
-                 h_w_m2k: float, cell_mm: float, cells: int, rho_notes: List[str]) -> List[str]:
+                 h_w_m2k: float, cell_mm: float, cells: int, rho_notes: List[str],
+                 parts: Optional[Dict[str, List[Tuple[str, str]]]] = None) -> List[str]:
     snap = board.snapshot
     part = options.regulator_heat == "part_pads"
-    where = "spread over every copper pad of its part" if part else "at its output pins"
+    where = "spread over every copper pad of its own part" if part else "at its output pins"
     load_text = (", and each load's power at its pins" if options.load_heat
                  else "; the loads' own power is not counted (load_heat: false)")
     nx, ny, nl = len(th.x), len(th.y), len(th.layers)
@@ -302,11 +365,17 @@ def _assumptions(board: Board, options: ThermalOptions, th: ThermalResult, tree:
     regs = [f"{v.name} {v.p_loss_w:.3g} W" for v in tree.vrms if v.p_loss_w and v.p_loss_w > 0]
     if regs:
         if part:
-            out.append(f"Regulator heat ({', '.join(regs)}) is spread evenly over every copper pad "
-                       "of each regulator's part (all nets), each pad's share over its copper layers, "
-                       "as a point in the grid cell that holds the pad centre (regulator_heat: "
-                       "part_pads). The package's own spreading and convection are not modelled and "
-                       "the split is even, so individual pads can be over- or under-estimated.")
+            parts = parts or {}
+            where_each = [_part_heat_text(v, parts.get(v.name, []), options.output_part_heat_pct)
+                          for v in tree.vrms if v.p_loss_w and v.p_loss_w > 0]
+            out.append(f"Regulator heat ({'; '.join(where_each)}) is spread evenly over every copper "
+                       "pad of each regulator's own part, the part with its input pins (an "
+                       "external-inductor buck's IC, not the inductor its output is held at), all nets, "
+                       "each pad's share over its copper layers, as a point in the grid cell that "
+                       "holds the pad centre (regulator_heat: part_pads). A share entered in "
+                       "output_part_heat_pct goes to the output part's pads instead; none is assumed. "
+                       "The package's own spreading and convection are not modelled and the split "
+                       "is even, so individual pads can be over- or under-estimated.")
         else:
             out.append(f"Regulator heat ({', '.join(regs)}) goes into the copper at each "
                        "regulator's output pins, split evenly over those pads and each pad's share "
@@ -389,7 +458,8 @@ def _finish(board: Board, project: Project, setup, thickness: Dict[str, float], 
                 "drop_v": float(ld.drop_v)} for name, ld in drops.items()],
         load_heat=bool(options.load_heat), regulator_heat=str(options.regulator_heat),
         assumptions=_assumptions(board, options, th, out, h_w_m2k, cell_mm, cells,
-                                 _rho_notes(project, th, settled)))
+                                 _rho_notes(project, th, settled), regulator_parts(setup))
+        + check_heat_shares(setup, options))
     if settled is False:
         last = th.history[-1]
         temp.warnings.append(
