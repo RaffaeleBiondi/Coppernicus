@@ -2,11 +2,13 @@
 
 Same commands as ``coppernicus`` (no argument or ``gui``: the app; ``solve``, ``nets``, ``mcp``…:
 the command line). Before anything imports KiPI, the Triangle mesher, which the bundle does
-not contain, is put on ``sys.path``; on the first start it is fetched from PyPI
-(coppernicus.bootstrap_triangle): with a small dialog for the app, with lines on stderr for a
-command. With ``bootstrap_triangle.on_demand()`` nothing is fetched at the start: Coppernicus's
-stand-in takes Triangle's place (coppernicus.triangle_standin) until the triangle mesher is
-chosen, or ``--fetch-triangle`` fetches it. In a normal install this file is not used.
+not contain, is put on ``sys.path`` when it was downloaded. By default
+(``bootstrap_triangle.on_demand()``: rust is the default mesher) nothing is fetched at the
+start: Coppernicus's stand-in takes Triangle's place (coppernicus.triangle_standin) until the
+triangle mesher is chosen (``--mesher triangle``), or ``--fetch-triangle`` fetches it. With
+on-demand off, it is fetched from PyPI on the first start (coppernicus.bootstrap_triangle): with
+a small dialog for the app, with lines on stderr for a command. In a normal install this file is
+not used.
 """
 
 import json
@@ -33,8 +35,9 @@ def main() -> int:
 
 
 def remove_triangle() -> int:
-    """``--remove-triangle``: delete the downloaded Triangle mesher (the next start fetches it
-    again). 0 when done or nothing was there, 2 when it could not be deleted."""
+    """``--remove-triangle``: delete the downloaded Triangle mesher (fetched again as
+    ``bootstrap_triangle.again_text`` says). 0 when done or nothing was there, 2 when it could not
+    be deleted."""
     from coppernicus import bootstrap_triangle as bt
     site = bt.site_dir()
     try:
@@ -47,7 +50,7 @@ def remove_triangle() -> int:
         return 2
     if size:
         print(f"Removed the downloaded Triangle mesher from {site} ({size / 1e6:.1f} MB). "
-              "Coppernicus downloads it again on its next start.")
+              f"{bt.again_text()}.")
     else:
         print(f"Nothing to remove: no downloaded Triangle mesher in {site}.")
     return 0

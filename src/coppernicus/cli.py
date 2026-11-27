@@ -20,9 +20,12 @@
     coppernicus tolerance PROJECT [--skip-ac] [--skip-noise] [--out DIR] [--json] [--html [PATH]]
                                                 each load's tolerance stack-up
 
-``solve``, ``ac``, ``noise`` and ``tolerance`` take ``--mesher NAME``: ``triangle`` (the default,
-KiPI's own meshing) or ``rust`` (experimental). It wins over the project's ``settings.mesher``;
-every summary records the mesher in ``mesher``.
+``solve``, ``ac``, ``noise`` and ``tolerance`` take ``--mesher NAME``: ``rust`` (the default,
+Coppernicus's coppermesh) or ``triangle`` (KiPI's own meshing). It wins over the project's
+``settings.mesher``; every summary records the mesher in ``mesher``. With neither set and the
+rust mesher not installed here, the command meshes with Triangle and its summary says so in
+``warnings``; a mesher that is named and cannot run here is an error (``mesher_unavailable``).
+In the packaged app, ``--mesher triangle`` first downloads Triangle when it is not there yet.
 
 ``solve`` exits with 0 when every rail solved and no user limit was exceeded (or none was
 set), 1 when a limit was exceeded, 3 when a limit that was set could not judge something (a
@@ -49,8 +52,8 @@ from typing import List, Optional
 from coppernicus import __version__
 
 EXIT_OK, EXIT_LIMIT, EXIT_ERROR, EXIT_NOT_JUDGED = 0, 1, 2, 3
-MESHER_HELP = ("the mesher: triangle (the default, KiPI's own) or rust (experimental); wins over "
-               "the project's settings.mesher")
+MESHER_HELP = ("the mesher: rust (the default) or triangle (KiPI's own); wins over the project's "
+               "settings.mesher")
 EXIT_CODES = ("exit codes: 0 no limit exceeded (or none set), 1 a limit exceeded, 3 a limit that "
               "was set could not judge something (listed as NOT JUDGED), 2 an error; "
               "precedence 2, 1, 3, 0")
@@ -280,7 +283,7 @@ def _cmd_solve(args) -> int:
                                     progress=progress if args.verbose else None,
                                     on_rail=on_rail, on_board=on_board,
                                     use_board_fields=False if args.no_board_fields else None,
-                                    mesher=args.mesher_name)
+                                    mesher=None if args.mesher_fallback else args.mesher_name)
     except ServiceError as e:
         if quiet:
             _print_json({"error": e.to_dict()})
@@ -416,7 +419,7 @@ def _cmd_solve_tree(args) -> int:
     doc = tree_summary(tree, top=args.top)        # with each VRM's I max, the rating judged
     if estimate is not None:
         doc["thermal_estimate"] = estimate
-    stamp(doc, args.mesher_name)
+    stamp(doc, args.mesher_name, args.mesher_fallback)
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = safe_file_name(Path(args.project).stem)   # as ac, noise, tolerance: "demo-thermal" kept
@@ -546,7 +549,7 @@ def _cmd_ac(args) -> int:
         png_path = csv_path.with_suffix(".png")
         files[res.rail] = (write_csv(res, csv_path).as_posix(), write_png(res, png_path).as_posix())
         results.append(res)
-    doc = stamp(ac_summary(results, files, not_solved, warnings), args.mesher_name)
+    doc = stamp(ac_summary(results, files, not_solved, warnings), args.mesher_name, args.mesher_fallback)
     summary_path = out_dir / f"{stem}_ac_summary.json"
     doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
     if args.html is not None:                  # one offline page: each rail's |Z|(f) and probes
@@ -641,7 +644,7 @@ def _cmd_noise(args) -> int:
         merged.annotate(res)
         files[name] = write_files(res, out_dir / f"{stem}_{safe_name(name)}_noise", outline)
         results.append(res)
-    doc = stamp(noise_summary(results, files), args.mesher_name)
+    doc = stamp(noise_summary(results, files), args.mesher_name, args.mesher_fallback)
     for a in doc["aggressors"]:
         a["estimate"] = estimates.get(a["aggressor"])
     summary_path = out_dir / f"{stem}_noise_summary.json"
@@ -733,7 +736,7 @@ def _cmd_tolerance(args) -> int:
     out_dir = Path(args.out) if args.out else Path(args.project).resolve().parent / "results"
     out_dir.mkdir(parents=True, exist_ok=True)
     csv_path = write_csv(result, out_dir / f"{stem}_tolerance.csv")
-    doc = stamp(tolerance_summary(result, csv_path.as_posix()), args.mesher_name)
+    doc = stamp(tolerance_summary(result, csv_path.as_posix()), args.mesher_name, args.mesher_fallback)
     summary_path = out_dir / f"{stem}_tolerance_summary.json"
     doc["summary_file"] = summary_path.as_posix()      # "/" in the document on every system
     if args.html is not None:            # one offline page: each load's parts and checks
@@ -968,7 +971,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not hasattr(args, "mesher"):
             return args.func(args)
         from coppernicus.engine.meshing import session as meshing
-        args.mesher_name = meshing.resolve(args.mesher, _project_mesher(args.project))
+        args.mesher_name, args.mesher_fallback = meshing.choose(args.mesher, _project_mesher(args.project))
+        _fetch_triangle_if_chosen(args.mesher_name)
         try:
             with meshing.using(args.mesher_name):    # the whole command: its estimates and solves
                 return args.func(args)
@@ -989,6 +993,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _fail(args, "internal_error", f"{type(e).__name__}: {e}",
                      "this is a bug in Coppernicus: please report it with the command you ran",
                      prefix="internal error: ")
+
+
+def _fetch_triangle_if_chosen(name: str) -> None:
+    """In the packaged app, which fetches Triangle only when it is chosen
+    (:func:`coppernicus.bootstrap_triangle.fetch_for_mesher`): download it now, with lines on
+    stderr, when the command meshes with it and only the stand-in is here. A fetch that fails
+    leaves the stand-in: the mesher check then says what to do (``mesher_unavailable``)."""
+    from coppernicus import bootstrap_triangle as bt
+    if name != bt.PACKAGE or not bt.frozen():
+        return
+    try:
+        bt.fetch_for_mesher(name, gui=False, stream=sys.stderr)
+    except (bt.BootstrapError, OSError) as e:
+        print(f"warning: the Triangle mesher could not be downloaded: {e}", file=sys.stderr)
 
 
 def _project_mesher(path) -> Optional[str]:

@@ -123,12 +123,15 @@ tolerance:                 # optional
 - **CI:** the Action's `tolerance` input, off by default (see [CI](ci.md)).
 
 The tree is cheap; the AC and noise solves are heavy on a large board and run only where a
-load with a tolerance needs them. Before anything is solved, Coppernicus says what each will
+load with a tolerance needs them. They mesh with the project's `ac: max_edge_mm`, or when not set
+the mesher's default (0.5 mm with rust, the default mesher; 1.0 mm with Triangle); the summary's
+`ac` gives the edge used, an assumption line says why, and with rust a set value coarser than
+0.5 mm adds a warning (see [PDN impedance](ac-impedance.md)). Before anything is solved, Coppernicus says what each will
 cost, with the same estimates as `coppernicus ac` and `coppernicus noise`:
 
 ```text
-Impedance of VOUT: 5,708 triangles × 2 ports, the copper solved at 111 frequencies: ... About 5,708 unknowns: one factorization, with the mesh and the model, needs up to 0.0616 GB of this machine's ...
-Noise of U1: 14,799 triangles × 5 ports, the copper solved at 34 frequencies: ...; 1592 harmonics to 1.592 GHz. About 14,059 unknowns: the noise solve may peak at up to 0.706 GB of this machine's ...
+Impedance of VOUT: 8,443 triangles × 2 ports, the copper solved at 111 frequencies: ... About 8,443 unknowns: one factorization, with the mesh and the model, needs up to 0.0974 GB of this machine's ...
+Noise of U1: 19,139 triangles × 5 ports, the copper solved at 34 frequencies: ...; 1592 harmonics to 1.592 GHz. About 18,182 unknowns: the noise solve may peak at up to 0.855 GB of this machine's ...
 ```
 
 The command line only warns when a solve could exceed this machine's memory; an agent's call

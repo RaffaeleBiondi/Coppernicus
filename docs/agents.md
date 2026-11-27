@@ -837,19 +837,33 @@ What it adds up and what the user enters: [Tolerance stack-up](tolerance.md); ev
 
 ### Choosing the mesher
 
-The mesher is **Triangle** by default, KiPI's own meshing, and nothing changes unless a mesher
-is chosen. `rust` is Coppernicus's own mesher (`tools/mesher_rs`): **experimental**, built only
-when asked for. Use it only when the user asks.
+The mesher is **rust** by default, Coppernicus's own (`tools/mesher_rs`, coppermesh).
+`triangle` is KiPI's own meshing with Triangle: in a Python install it comes with KiPI; in the
+packaged app it is an optional download, fetched (with its licence note) when it is chosen.
+Change the mesher only when the user asks.
 - `solve_rail`, `solve_project`, `solve_tree`, `solve_ac`, `solve_noise` and `solve_tolerance`
-  take an optional `mesher` (`"triangle"` or `"rust"`).
+  take an optional `mesher` (`"rust"` or `"triangle"`).
 - The order: the tool's `mesher`, else the project's `settings.mesher` (`write_project` sets
-  it), else the app's setting, else Triangle. On the command line, `--mesher NAME` on `solve`,
+  it), else the app's setting, else rust. On the command line, `--mesher NAME` on `solve`,
   `ac`, `noise` and `tolerance` wins over the project's key.
-- A mesher that is unknown or not installed here is one error, `mesher_unavailable`, whose hint
-  says how to get it. Nothing is solved.
-- Every result records its mesher in `mesher` (`name`, `version`, `experimental`); a rail
-  summary also in `settings.mesher`. A result from a non-default mesher says so in its
-  assumptions. A saved summary without the key was meshed by Triangle.
+- Where rust is not installed (a plain `uv sync` without `--group rust`, a pip install), a
+  solve that names no mesher anywhere meshes with Triangle: its `mesher` says `name:
+  "triangle"`, `fallback_from: "rust"`, and its `warnings` say the rust mesher is not installed
+  here. Tell the user.
+- A mesher that is named (by the tool, the project or the app) and is unknown or not installed
+  here is one error, `mesher_unavailable`, whose hint says how to get it. Nothing is solved.
+- Every result records its mesher in `mesher` (`name`, `version`, `experimental`, `default`);
+  a rail summary also in `settings.mesher`. A result meshed with Triangle by choice says so in
+  its assumptions. A saved summary without the key was meshed by Triangle (the mesher before
+  rust became the default).
+- The AC mesh edge: unless the project sets `ac: max_edge_mm`, AC, noise and tolerance solves
+  use the mesher's default, 0.5 mm with rust (finer than KiPI's 1.0 mm so that copper loops
+  are resolved as Triangle resolves them at 1.0 mm) and 1.0 mm with Triangle. A value set in the
+  project wins for any mesher. Their documents give it in `ac` (`max_edge_mm_used`,
+  `max_edge_mm_from`: `"rust default"`, `"triangle default"` or `"project"`) and in an
+  assumption line. With rust and a set value coarser than 0.5 mm they carry a warning (never a
+  verdict): |Z| and the noise can come out a few percent low; 0.5 mm or unset is the cure,
+  0.25 mm gives the highest noise accuracy. The estimates mesh with the same edge.
 - `compare_results` and `compare_revisions` warn when two results were meshed by different
   meshers or mesher versions: small differences are then the mesh, not the design.
 - `copper_step` re-solves with its baseline's mesher. `probe`, `render_map`, `cut_current`,
@@ -914,7 +928,13 @@ when asked for. Use it only when the user asks.
   tree group and the tree and project documents count them in `attention`. A
   `max_current_density_a_mm2` the user sets replaces the default on that rail or group (a
   `fail` when exceeded, no attention items). Every rail and power-tree result has an
-  assumption line with each layer's value. Why it is attention only, and the sources:
+  assumption line with each layer's value. A result judged against a user's
+  `max_current_density_a_mm2` (a rail, a project's rails, a power tree, with or without the
+  board temperature) also has the assumption line *a crowding spot's mean |J| depends on the mesh, with either
+  mesher: typically 1-2 % on detailed boards, up to about 6 %* (more on a spot of only a few
+  elements at a sharp copper corner, where neither mesher converges): read a spot within a few
+  percent of the limit, or one of only a few elements, with care (an assumption, never a
+  verdict; not added for the default alone). Why it is attention only, and the sources:
   [technical.md](technical.md#current-density-default).
 - **`assumptions` and `warnings` come with every answer.** Read them. They say:
   - the via plating, ρ(T) and mesh that were used;

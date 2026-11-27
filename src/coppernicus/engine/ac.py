@@ -67,6 +67,87 @@ ASSUMED_BANDWIDTH_HZ = DEFAULT_BANDWIDTH_KHZ * 1e3
 _DROPPED = re.compile(r"^(Targets apply above the |  .+: \|Z\| )")
 
 
+#: The AC mesh's largest edge (mm) with the rust mesher when the project does not set
+#: ``ac: max_edge_mm``: finer than KiPI's, so that copper loops are resolved as Triangle resolves
+#: them at KiPI's edge (measured; change it here only).
+RUST_AC_MAX_EDGE_MM = 0.5
+#: The AC mesh edge (mm) the rust mesher's noise is most accurate with (the warning suggests it).
+RUST_AC_FINEST_NOISE_MM = 0.25
+#: The AC mesh's largest edge (mm) by mesher when the project does not set ``ac: max_edge_mm``;
+#: Triangle (KiPI's own meshing) keeps KiPI's default (``ACSettings.max_edge_mm``).
+AC_MAX_EDGE_MM = {"triangle": ACSettings().max_edge_mm, "rust": RUST_AC_MAX_EDGE_MM}
+#: ``max_edge_mm_from`` of an edge the project sets.
+FROM_PROJECT = "project"
+
+
+@dataclass(frozen=True)
+class AcEdge:
+    """The AC mesh's largest edge a solve uses, where it comes from ("project", or "<mesher>
+    default") and the mesher it was resolved for."""
+    mm: float
+    origin: str
+    mesher: str
+
+    def summary(self) -> Dict[str, Any]:
+        """What the JSON summaries record (``ac``)."""
+        return {"max_edge_mm_used": self.mm, "max_edge_mm_from": self.origin}
+
+    def assumption(self, refined: str = "") -> str:
+        """The assumption line, ``refined`` (how the mesh is graded) added after the value."""
+        kipi = AC_MAX_EDGE_MM["triangle"]
+        if self.origin == FROM_PROJECT:
+            why = "set in the project (ac.max_edge_mm)"
+        elif self.mesher == "rust":
+            why = (f"the rust mesher's default (finer than KiPI's {kipi:.1f} mm so that copper loops are "
+                   f"resolved as Triangle resolves them at {kipi:.1f} mm)")
+        else:
+            why = f"KiPI's default, with {_mesher_text(self.mesher)}"
+        return f"AC mesh: largest edge {self.mm:g} mm, {why}{refined}."
+
+    def warning(self) -> Optional[str]:
+        """With the rust mesher, an edge the project sets coarser than its default: |Z| and the
+        noise can come out a few percent low (a warning, never a verdict)."""
+        coarser = self.mm > RUST_AC_MAX_EDGE_MM * (1 + 1e-9)
+        if self.mesher != "rust" or self.origin != FROM_PROJECT or not coarser:
+            return None
+        return (f"AC mesh: ac.max_edge_mm {self.mm:g} mm is coarser than the rust mesher's default "
+                f"{RUST_AC_MAX_EDGE_MM:g} mm: with this AC mesh the rust mesher can under-estimate noise "
+                f"and |Z| by a few percent; use ac.max_edge_mm {RUST_AC_MAX_EDGE_MM:g} (the rust "
+                f"default) or leave it unset; {RUST_AC_FINEST_NOISE_MM:g} for the highest noise accuracy.")
+
+
+def _mesher_text(name: str) -> str:
+    return "Triangle (KiPI's own mesher)" if name == "triangle" else f"the {name} mesher"
+
+
+def solve_mesher() -> str:
+    """The mesher this process meshes with now: the one installed through the mesher seam
+    (``coppernicus.engine.meshing``), or "triangle" (KiPI's own) when none is (nor the seam
+    loaded). Inside a ``meshing.session.using`` block, that block's mesher."""
+    registry = sys.modules.get("coppernicus.engine.meshing.registry")
+    return (registry.installed() if registry is not None else None) or "triangle"
+
+
+def ac_max_edge(ac, mesher: Optional[str] = None) -> AcEdge:
+    """The AC mesh's largest edge of a solve with the options ``ac`` (a project's
+    :class:`~coppernicus.project.AcOptions`): the project's ``max_edge_mm`` when set, whatever
+    the mesher; else :data:`AC_MAX_EDGE_MM` of ``mesher`` (default: :func:`solve_mesher`; a mesher
+    without its own, KiPI's)."""
+    mesher = mesher or solve_mesher()
+    if getattr(ac, "max_edge_mm", None) is not None:
+        return AcEdge(float(ac.max_edge_mm), FROM_PROJECT, mesher)
+    return AcEdge(float(AC_MAX_EDGE_MM.get(mesher, AC_MAX_EDGE_MM["triangle"])), f"{mesher} default", mesher)
+
+
+def sweep_settings(ac, mesher: Optional[str] = None) -> Tuple[ACSettings, AcEdge]:
+    """KiPI's ``ACSettings`` with the sweep options of ``ac`` (:data:`SWEEP_KEYS`), the AC mesh
+    edge resolved for the solve's mesher (:func:`ac_max_edge`), and that edge."""
+    s, edge = ACSettings(), ac_max_edge(ac, mesher)
+    for key in SWEEP_KEYS:
+        setattr(s, key, edge.mm if key == "max_edge_mm" else getattr(ac, key))
+    return s, edge
+
+
 def kipi_ac_defaults() -> Dict[str, Any]:
     """KiPI's defaults for the sweep options :class:`coppernicus.project.AcOptions` copies."""
     s = ACSettings()
@@ -107,6 +188,7 @@ class _Context:
     bandwidth_hz: Optional[float]  # as given (None: not given)
     probes: List[Probe]
     notes: List[str] = field(default_factory=list)
+    edge: Optional["AcEdge"] = None   # the AC mesh's largest edge, resolved for the mesher
 
 
 def source_bandwidth(project: Project, source: Source) -> Optional[float]:
@@ -211,14 +293,12 @@ def _context(board: Board, project: Project, net: str) -> _Context:
         s.ref for r in project.rails for s in r.sources}
     notes += [f"ac.bandwidth_hz names {key}, which is no source of the project: not used"
               for key in project.ac.bandwidth_hz if key not in sources]
-    a, s = project.ac, ACSettings()
-    for key in SWEEP_KEYS:
-        setattr(s, key, getattr(a, key))
+    s, edge = sweep_settings(project.ac)
     s.rail, s.ground = vrm_name, gnd
     if project.settings.copper_temp_c != REF_TEMP_C:
         s.temperature, s.temperature_c = "fixed", float(project.settings.copper_temp_c)
     setup.ac = s
-    return _Context(setup, vrm_name, gnd, rail_net, source, bandwidth, probes, notes)
+    return _Context(setup, vrm_name, gnd, rail_net, source, bandwidth, probes, notes, edge)
 
 
 def resolve_rail(board: Board, project: Project, net: str) -> str:
@@ -453,9 +533,9 @@ def _convert(board: Board, project: Project, c: _Context, res, thickness,
         missing_caps=list(res.missing_caps), links=list(res.links),
         cap_gaps={r: project.capacitor_gaps[r] for r in res.missing_caps if r in project.capacitor_gaps},
         cap_derated_f={ref: float(farads) for ref, (_v, farads) in res.cap_bias.items()},
-        warnings=list(dict.fromkeys(c.notes + list(res.warnings))),
+        warnings=list(dict.fromkeys(c.notes + list(res.warnings) + [w for w in [c.edge.warning()] if w])),
         assumed_bandwidth_hz=None if c.bandwidth_hz is not None else ASSUMED_BANDWIDTH_HZ,
-        dielectric_assumed=assumed)
+        dielectric_assumed=assumed, ac_mesh=c.edge.summary())
     out.assumptions = _assumptions(board, project, c, res, summary, assumed, thickness) + notes
     # Task 11 (Q9): a load whose AC tolerance disagrees with its probe's ac_tolerance_v.
     out.ac_tolerance_warnings = ac_tolerance_warnings(project, load_probes(board, project),
@@ -512,9 +592,9 @@ def _assumptions(board: Board, project: Project, c: _Context, res, summary: str,
                "them (PCHIP of jω·Z on log f)")
     out.append(f"Sweep {hz_text(a.f_start_hz)} to {hz_text(a.f_stop_hz)}, {a.points_per_decade} "
                f"points per decade; {how}.")
-    out.append(f"AC mesh: largest edge {a.max_edge_mm:g} mm, refined toward plated holes near the "
-               f"rail from {d.min_edge_mm:g} mm (grading {d.grading:g}), up to "
-               f"{d.far_max_edge_mm:g} mm far from it (KiPI's AC defaults).")
+    out.append(c.edge.assumption(f"; refined toward plated holes near the rail from {d.min_edge_mm:g} mm "
+                                 f"(grading {d.grading:g}), up to {d.far_max_edge_mm:g} mm far from it "
+                                 "(KiPI's AC defaults)"))
     rail_text = " / ".join(res.rail_nets)
     line = (f"Capacitors: ESR + jω·ESL + 1/(jω·C) as entered, {len(res.caps)} modelled")
     if res.missing_caps:

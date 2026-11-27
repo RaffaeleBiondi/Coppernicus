@@ -694,7 +694,7 @@ one model and model names stay unique, as KiPI requires (checks.py:139-152).
 |---|---|---|---|---|
 | `f_start_hz`, `f_stop_hz`, `points_per_decade` | same | Hz, — | 1e3, 300e6, 250 | KiPI's (model.py:237-239); a test checks they match. The point counts must be finite whole numbers. |
 | `field_points_per_decade` | same | — | 20 | 0 = every sweep point. Run time scales with it. |
-| `max_edge_mm` | `ac.max_edge_mm` | mm | 1.0 | The AC mesh's own; `settings.max_edge_mm` stays DC's. |
+| `max_edge_mm` | `ac.max_edge_mm` | mm | not set: the mesher's (rust 0.5, Triangle KiPI's 1.0) | The AC mesh's own; `settings.max_edge_mm` stays DC's. Unset, `engine/ac.py: AC_MAX_EDGE_MM` of the solve's mesher; set, it wins for any mesher. |
 | `loss_tangent`, `default_er` | same | — | 0.02, 4.3 | |
 | `bandwidth_hz: {source: Hz}` | `Vrm.bandwidth_khz` (÷1e3) | Hz | none | Keyed by the source's name, else its ref. Always written onto the solved VRM: KiPI's `Vrm` defaults to 50 kHz (dc/pi/model.py:127). Without it: below. |
 | `link_esl_h: {link: H}` | `DcLink.esl_h` | H | none | Keyed by the link's ref, else its name. Without it a link is a plain R in AC. |

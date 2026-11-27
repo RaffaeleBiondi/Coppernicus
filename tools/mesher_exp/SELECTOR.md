@@ -1,16 +1,24 @@
 # Mesher selector: design note (target v0.5.0, with the owner's OK)
 
 Status: design, partly built.
-- The seam it builds on (`src/coppernicus/engine/meshing/`) and the Rust backend are in the
-  product tree, inactive: nothing is installed unless a mesher is selected, and Triangle stays
-  the default.
+- The default is the rust mesher (owner's decision, Unreleased): `meshing.session.DEFAULT =
+  "rust"`, installed by `using()` for every CLI and MCP solve, and by `coppernicus gui` for the
+  whole app process (the app's solves call the engine directly). Triangle (`triangle`) is KiPI's
+  own path, the registry uninstalled; where coppermesh is not built, a solve that names no mesher
+  falls back to it with a warning (`FALLBACK_WARNING`, `mesher.fallback_from`); one that names
+  rust stops with `mesher_unavailable`. A result recording no mesher reads as Triangle
+  (`RECORDED_BEFORE`). The AC mesh edge, unset, is the mesher's default
+  (`engine/ac.py: AC_MAX_EDGE_MM`, rust 0.5 mm, Triangle KiPI's 1.0 mm). The packaged app
+  fetches Triangle only when it is chosen (`bootstrap_triangle.ON_DEMAND = True`; the CLI's
+  `--mesher triangle` fetches it, with its licence note on stderr).
 - The CGAL backend is kept on an experimental branch.
 - Built since (without the app): the selector of §2 in the CLI, the project and MCP, through
   `coppernicus.engine.meshing.session.using(name)`, which holds one process-wide lock for the
   whole solve and leaves the registry uninstalled for Triangle; each summary records its
-  mesher (§5); compare warns on different meshers (§6). Not yet: the app's combo and setting,
-  `--meshers`, the Triangle download path (§4), the mesher in the AC, noise and tolerance
-  HTML pages.
+  mesher (§5); compare warns on different meshers (§6); the Triangle download on demand (§4,
+  on the command line). Not yet: the app's combo and setting, `--meshers`, the licence
+  acceptance recorded with the version (§4.2), the mesher in the AC, noise and tolerance HTML
+  pages.
 
 **Goal**
 - The default mesher is the best licence-compatible bundled one: CGAL 2D Mesh_2 (GPL-3.0-or-later) or our own in Rust.
@@ -83,7 +91,7 @@ Implementation: one function in `coppernicus.engine` (e.g. `use_mesher(name)`) c
   - speed and memory on large boards;
   - bit-identity across macOS arm64, macOS x86_64 and Windows;
   - licence and wheel size.
-- Until that report and the owner's OK, the default stays Triangle and nothing changes for users.
+- Decided: the rust mesher is the default (the owner's OK); CGAL stays on its branch.
 
 ## 4. Triangle as an optional download
 

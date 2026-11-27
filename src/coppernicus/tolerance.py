@@ -635,13 +635,14 @@ def _row_summary(r: ToleranceRow) -> Dict[str, Any]:
 def tolerance_summary(result: ToleranceResult, csv_file: str = "") -> Dict[str, Any]:
     """The ``<project>_tolerance_summary.json`` document (units in every key; no arrays, no
     NaN): ``kind`` "tolerance", ``verdict``, ``verdict_note``, ``failed``, ``not_judged``,
-    ``options``, ``warnings``, ``assumptions``, ``estimates``, ``stats``, ``csv_file``, then
-    ``loads``."""
+    ``options``, ``warnings``, ``assumptions``, ``estimates``, ``stats``, ``csv_file``, ``ac``
+    (the AC mesh's largest edge of its AC and noise solves, when one ran), then ``loads``."""
     return {"kind": "tolerance", "verdict": result.verdict, "verdict_note": result.verdict_note,
             "failed": [dict(e) for e in result.failed], "not_judged": [dict(e) for e in result.not_judged],
             "options": dict(result.options), "warnings": list(result.warnings),
             "assumptions": list(result.assumptions), "estimates": [dict(e) for e in result.estimates],
             "stats": dict(result.stats), "csv_file": csv_file,
+            **({"ac": dict(result.ac_mesh)} if result.ac_mesh else {}),
             "loads": [_row_summary(r) for r in result.rows]}
 
 

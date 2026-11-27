@@ -675,8 +675,9 @@ def tree_summary(tree, top: int = 5) -> Dict[str, Any]:
     doc["reference"] = reference_block(ref)
     if getattr(tree, "thermal", None) is not None:      # the board temperature (Task 8)
         doc["thermal"] = thermal_summary(tree)
-    note = reference_assumption(ref)
-    doc.update({"assumptions": list(tree.assumptions) + ([note] if note else []),
+    from coppernicus.problems import density_mesh_note
+    notes = [n for n in (density_mesh_note((tree.limits or {}).values()), reference_assumption(ref)) if n]
+    doc.update({"assumptions": list(tree.assumptions) + notes,
                 "warnings": list(tree.warnings)})
     return _clean(doc)
 

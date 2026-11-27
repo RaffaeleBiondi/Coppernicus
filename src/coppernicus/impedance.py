@@ -250,7 +250,7 @@ def rail_summary(r: ImpedanceResult, csv_file: str = "", png_file: str = "") -> 
         "caps_modelled": list(r.caps), "caps_missing": list(r.missing_caps), "links": list(r.links),
         "verdict": verdict, "not_judged": not_judged,
         "csv_file": csv_file, "png_file": png_file,
-        "assumptions": list(r.assumptions), "warnings": list(r.warnings),
+        "assumptions": list(r.assumptions), "warnings": list(r.warnings), "ac": dict(r.ac_mesh),
         "stats": {"seconds": _num(s.get("seconds")), "triangles": int(s.get("triangles", 0)),
                   "unknowns": int(s.get("unknowns", 0)), "ports": int(s.get("ports", 0)),
                   "method": str(s.get("method", "")),
@@ -265,7 +265,8 @@ def ac_summary(results: Sequence[ImpedanceResult],
                not_solved: Sequence[Dict[str, Any]] = (), warnings: Sequence[str] = ()) -> Dict[str, Any]:
     """The ``<project>_ac_summary.json`` document: ``kind``, ``verdict``, ``verdict_note``,
     ``failed`` and ``not_judged`` (each entry with its ``rail``; "" for a probe no rail
-    reaches, ``not_solved``), ``warnings`` (project level), then ``rails``. ``files``: rail ->
+    reaches, ``not_solved``), ``warnings`` (project level), ``ac`` (the AC mesh's largest edge
+    used and where it came from: :func:`ac_mesh_of`), then ``rails``. ``files``: rail ->
     (CSV path, PNG path)."""
     files = files or {}
     verdict, note = ac_verdict(results, not_solved)
@@ -276,7 +277,15 @@ def ac_summary(results: Sequence[ImpedanceResult],
         not_judged += [{**e, "rail": r.rail} for e in nj]
     return {"kind": "ac_impedance", "verdict": verdict, "verdict_note": note, "failed": failed,
             "not_judged": not_judged + [dict(e) for e in not_solved], "warnings": list(warnings),
+            **ac_mesh_of(results),
             "rails": [rail_summary(r, *files.get(r.rail, ("", ""))) for r in results]}
+
+
+def ac_mesh_of(results) -> Dict[str, Any]:
+    """``{"ac": {"max_edge_mm_used", "max_edge_mm_from"}}`` of solved AC or noise results (one
+    project: the same edge in each), or ``{}`` when none records it."""
+    mesh = next((dict(r.ac_mesh) for r in results if getattr(r, "ac_mesh", None)), None)
+    return {"ac": mesh} if mesh else {}
 
 
 def ac_text(doc: Dict[str, Any]) -> List[str]:

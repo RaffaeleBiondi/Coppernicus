@@ -73,7 +73,11 @@ noise:                     # optional; KiPI's defaults otherwise
   an entered `logic_v` (0.8 V for 3.3 V logic). Without any, the victim is ranked, not judged.
 - **`noise:`**: the harmonics (`f_max_hz`, `max_harmonics`), the dead time, the victims'
   cross-section steps (`segment_mm`, `window_mm`), the board model on or off and its field
-  solves per decade (`field_per_decade`). The AC mesh is the project's `ac: max_edge_mm`.
+  solves per decade (`field_per_decade`). The board model's AC mesh is the project's `ac:
+  max_edge_mm`, or when not set the mesher's default: 0.5 mm with rust, the default mesher,
+  1.0 mm with Triangle (see [PDN impedance](ac-impedance.md)). With rust, a value set coarser
+  than 0.5 mm gives a warning: the noise can come out a few percent low (0.25 mm gives the
+  highest noise accuracy). The summary's `ac` gives the edge used and where it came from.
 
 ## Run it
 

@@ -674,14 +674,18 @@ class CapModel:
 @dataclass
 class AcOptions:
     """The AC sweep (``ac:`` in the project file). Defaults are KiPI's ``ACSettings``
-    (kipi/ac/model.py:237-257). ``bandwidth_hz`` maps a source (its name, or its ref) to its
+    (kipi/ac/model.py:237-257), except ``max_edge_mm``: not set by default, the solve's mesher
+    gives it. ``bandwidth_hz`` maps a source (its name, or its ref) to its
     control loop bandwidth; ``link_esl_h`` maps a link (its ref, or its name) to its series
     inductance, without which a link is a plain resistance in AC."""
     f_start_hz: float = 1e3
     f_stop_hz: float = 300e6
     points_per_decade: int = 250
     field_points_per_decade: int = 20     # copper solves per decade; 0 = every sweep point
-    max_edge_mm: float = 1.0              # the AC mesh's own (settings.max_edge_mm is DC's)
+    # The AC mesh's own largest edge (settings.max_edge_mm is DC's); None: not set, the default
+    # of the solve's mesher (coppernicus.engine.ac.AC_MAX_EDGE_MM). Set, it wins for any mesher,
+    # and is saved even when it equals a mesher's default.
+    max_edge_mm: Optional[float] = None
     loss_tangent: float = 0.02
     default_er: float = 4.3               # where the stackup gives no εr
     bandwidth_hz: Dict[str, float] = field(default_factory=dict)
@@ -828,8 +832,8 @@ def _ac_options_in(d: Any) -> AcOptions:
                          f"{', '.join(vars(default))})")
     out: Dict[str, Any] = {}
     for key in ("f_start_hz", "f_stop_hz", "max_edge_mm"):
-        if key in d:
-            out[key] = _positive(d[key], f"ac {key}", False)
+        if key in d:              # max_edge_mm: null (or empty) is not set, as when it is left out
+            out[key] = _positive(d[key], f"ac {key}", key == "max_edge_mm")
     for key in _AC_INTS:
         if key in d:
             v = d[key]

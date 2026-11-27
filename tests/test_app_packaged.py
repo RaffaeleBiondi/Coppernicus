@@ -59,7 +59,7 @@ def test_the_remove_mesher_item_is_offered_only_in_the_packaged_app(monkeypatch)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     assert mw.remove_mesher_shown() is True
 
-def test_help_remove_mesher_asks_first_then_says_the_next_start_downloads_it_again(tmp_path):
+def test_help_remove_mesher_asks_first_then_says_when_it_is_downloaded_again(tmp_path):
     run_in_window(f'''
         ITEM = {ITEM!r}
         plain = MainWindow()
@@ -86,8 +86,9 @@ def test_help_remove_mesher_asks_first_then_says_the_next_start_downloads_it_aga
         assert removed == [site], removed
         kind, _title, text = DIALOGS[-1]
         assert kind == "information" and "12.3 MB" in text and str(site) in text, DIALOGS[-1]
-        assert "downloads it again on its next start" in text, text
-        assert "next start" in window.statusBar().currentMessage(), window.statusBar().currentMessage()
+        assert "downloads it again only when the triangle mesher is chosen" in text, text
+        status = window.statusBar().currentMessage()
+        assert "only when the triangle mesher is chosen" in status, status
 
         bootstrap_triangle.remove = lambda site: 0
         items(window)[ITEM].trigger()

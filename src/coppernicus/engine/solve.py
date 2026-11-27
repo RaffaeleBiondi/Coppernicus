@@ -26,7 +26,7 @@ from kipi.dc.solver.via_barrel import ViaRule, default_via_rules
 
 from coppernicus.engine.board import Board, EngineError, NetTie
 from coppernicus.power_tree import EstimateError, estimate_note, estimated_draws
-from coppernicus.problems import density_default_note
+from coppernicus.problems import density_default_note, density_mesh_note
 from coppernicus.project import SOURCE_PIN_REFS, Project, Rail, Settings, pins_text
 from coppernicus.results import LayerField, RailResult, TerminalResult, ViaCurrent, exclude_degenerate
 
@@ -231,6 +231,7 @@ def solve_rail(board: Board, rail: Rail, settings: Optional[Settings] = None,
         problem.temperature = lambda xy: np.full(len(np.atleast_2d(xy)), t_c)
     assumptions += tree_only_fields(rail) + estimate_note(draws) + sign_note(rail, sign)
     assumptions += thickness_note(thickness, board.file_thickness_mm) + density_note(board)
+    assumptions += [n for n in [density_mesh_note([rail.limits])] if n]   # a user's J limit judges
     if project is not None and project.thermal.enabled:      # coordinator's ruling (T8)
         assumptions.append("Copper not heated by its own losses here: the board temperature is "
                            "solved with the power tree only (Ctrl+T / solve --tree).")

@@ -985,6 +985,11 @@ class AcPanel(QWidget):
             w.blockSignals(True)
             if isinstance(w, QSpinBox):
                 w.setValue(int(getattr(a, key)))
+            elif getattr(a, key) is None:             # max_edge_mm not set: the mesher's default
+                from coppernicus.engine.ac import ac_max_edge
+                w.setText("")
+                w.setPlaceholderText(f"{ac_max_edge(a).mm:g} (default)")
+                self._shown[key] = ""
             else:
                 w.setText(si_text(getattr(a, key)) if key in ("f_start_hz", "f_stop_hz")
                           else f"{getattr(a, key):g}")
@@ -1333,7 +1338,7 @@ class AcPanel(QWidget):
             return                                # committed unchanged: the exact value stays
         try:
             value: Any = w.value() if isinstance(w, QSpinBox) else parse_si(w.text())
-            if value is None:
+            if value is None and key != "max_edge_mm":     # max_edge_mm emptied: not set again
                 raise ValueError("give a number")
             new = dataclasses.replace(self.project.ac, **{key: value})
             check_ac([], [], new)

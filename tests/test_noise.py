@@ -606,14 +606,15 @@ def test_summary_keys_and_no_nan(solved, tmp_path):
     doc = noise_summary([r], {"U1": ("a.csv", ["a.png"])}, warnings=["w"])
     json.dumps(doc, allow_nan=False)
     assert set(doc) == {"kind", "verdict", "verdict_note", "failed", "not_judged", "warnings",
-                        "aggressors"}
+                        "aggressors", "ac"}             # ac: the AC mesh edge used and why
+    assert doc["ac"] == doc["aggressors"][0]["ac"] and doc["ac"]["max_edge_mm_from"]
     assert doc["kind"] == "noise" and doc["warnings"] == ["w"]
     (a,) = doc["aggressors"]
     assert {"aggressor", "vrm", "rail", "input_net", "ground", "topology", "vin_v", "vout_v", "iout_a",
             "iin_a", "duty", "efficiency", "phases", "operating_notes", "fsw_hz", "rise_s", "fall_s",
             "f_max_hz", "harmonics", "harmonics_capped", "inductor_ripple_a", "hot_loops", "ripple",
             "victims", "board", "emi", "stand_ins", "verdict", "verdict_note", "failed", "not_judged",
-            "csv_file", "png_files", "assumptions", "warnings", "stats"} == set(a)
+            "csv_file", "png_files", "assumptions", "warnings", "stats", "ac"} == set(a)
     assert (a["csv_file"], a["png_files"]) == ("a.csv", ["a.png"])
     load = next(x for x in a["ripple"] if x["name"] == "LOAD")
     assert {"name", "where", "net", "ground_net", "ref", "pins", "pp_mv", "pp_20mhz_mv", "below_mv",
@@ -700,24 +701,30 @@ def test_the_ram_estimate_is_the_measured_upper_bound_and_warns_past_the_machine
 
 
 def test_the_example_passes_and_its_tight_copy_fails(tmp_path, capsys):
-    """examples/noise: every value entered, 3.3 V logic; SIG_LOOP's 655 mV is 82 % of the
-    0.8 V JESD8 margin (pass) and above noise-tight's 0.5 V (fail)."""
+    """examples/noise: every value entered, 3.3 V logic; SIG_LOOP's 655 mV (648 mV with the rust
+    mesher, the default, at its 0.5 mm AC mesh) is 82 % (81 %) of the 0.8 V JESD8 margin (pass) and
+    above noise-tight's 0.5 V (fail). Triangle's numbers are the ones from before rust was the
+    default (its 1.0 mm AC mesh); rust's are within about 1 % of them, the same verdicts."""
     import json
 
     from coppernicus.cli import EXIT_LIMIT, EXIT_OK, main
     folder = ROOT / "examples" / "noise"
     assert main(["noise", str(folder / "noise.coppernicus.yml"), "--json", "--out", str(tmp_path)]) == EXIT_OK
-    (a,) = json.loads(capsys.readouterr().out)["aggressors"]
+    doc = json.loads(capsys.readouterr().out)
+    (a,) = doc["aggressors"]
+    rust = doc["mesher"]["name"] == "rust"        # Triangle where coppermesh is not built (the fallback)
     assert a["stand_ins"] == [] and [v["passed"] for v in a["victims"]] == [True, True, True]
     peaks = {v["name"]: f"{v['peak_mv']:.4g}" for v in a["victims"]}
-    assert peaks == {"SIG_SW": "32.67", "SIG_LOOP": "655.4", "SIG_BURIED": "1.425"}
+    assert peaks == ({"SIG_SW": "32.54", "SIG_LOOP": "648.4", "SIG_BURIED": "1.418"} if rust else
+                     {"SIG_SW": "32.67", "SIG_LOOP": "655.4", "SIG_BURIED": "1.425"})
     loop = next(v for v in a["victims"] if v["name"] == "SIG_LOOP")
     assert loop["ratio"] == pytest.approx(0.82, abs=0.01)
     rp = {x["name"]: x for x in a["ripple"]}
 
     def four(x, *keys):
         return [f"{x[k]:.4g}" for k in keys]
-    assert four(rp["LOAD"], "pp_mv", "below_20mhz_mv", "above_20mhz_mv") == ["18.45", "4.727", "7.006"]
+    assert four(rp["LOAD"], "pp_mv", "below_20mhz_mv", "above_20mhz_mv") == (
+        ["18.35", "4.727", "7.001"] if rust else ["18.45", "4.727", "7.006"])
     assert four(rp["input"], "pp_mv", "pp_20mhz_mv") == ["1.534e+04", "1873"]
     assert four(rp["output"], "pp_mv", "pp_20mhz_mv") == ["1878", "268.9"]
     assert main(["noise", str(folder / "noise-tight.coppernicus.yml"), "--json",

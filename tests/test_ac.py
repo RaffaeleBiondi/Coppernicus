@@ -53,10 +53,67 @@ def test_probes_capacitors_and_ac_round_trip_with_defaults_omitted(tmp_path):
 
 
 def test_ac_defaults_are_kipis():
-    """The sweep defaults are KiPI's ``ACSettings`` (kipi/ac/model.py:237-257)."""
-    from coppernicus.engine.ac import kipi_ac_defaults
+    """The sweep defaults are KiPI's ``ACSettings`` (kipi/ac/model.py:237-257), except the AC
+    mesh edge: not set, the solve's mesher gives it (KiPI's own with Triangle)."""
+    from coppernicus.engine.ac import AC_MAX_EDGE_MM, kipi_ac_defaults
     a = AcOptions()
-    assert {k: getattr(a, k) for k in kipi_ac_defaults()} == kipi_ac_defaults()
+    kipi = kipi_ac_defaults()
+    assert a.max_edge_mm is None and AC_MAX_EDGE_MM["triangle"] == kipi.pop("max_edge_mm") == 1.0
+    assert {k: getattr(a, k) for k in kipi} == kipi
+
+
+# ---------------------------------------------------------------------- the AC mesh edge
+
+def test_the_ac_edge_unset_is_the_meshers_default_and_a_user_value_always_wins():
+    from coppernicus.engine.ac import RUST_AC_MAX_EDGE_MM, ac_max_edge, sweep_settings
+    assert RUST_AC_MAX_EDGE_MM == 0.5
+    unset = AcOptions()
+    for mesher, mm in (("triangle", 1.0), ("rust", 0.5), ("other", 1.0)):
+        e = ac_max_edge(unset, mesher)
+        assert (e.mm, e.origin, e.warning()) == (mm, f"{mesher} default", None)
+        assert e.summary() == {"max_edge_mm_used": mm, "max_edge_mm_from": f"{mesher} default"}
+    assert ac_max_edge(unset).mesher == "triangle"            # nothing installed: KiPI's own
+    for mesher in ("triangle", "rust"):
+        for mm in (0.25, 0.7, 1.0):
+            e = ac_max_edge(AcOptions(max_edge_mm=mm), mesher)
+            assert (e.mm, e.origin) == (mm, "project")
+    assert sweep_settings(unset, "rust")[0].max_edge_mm == 0.5
+    assert sweep_settings(AcOptions(max_edge_mm=0.7), "rust")[0].max_edge_mm == 0.7
+    assert ac_max_edge(unset, "rust").assumption() == (
+        "AC mesh: largest edge 0.5 mm, the rust mesher's default (finer than KiPI's 1.0 mm so that "
+        "copper loops are resolved as Triangle resolves them at 1.0 mm).")
+    set_ = ac_max_edge(AcOptions(max_edge_mm=0.7), "rust").assumption()
+    assert set_ == "AC mesh: largest edge 0.7 mm, set in the project (ac.max_edge_mm)."
+    assert "KiPI's default, with Triangle" in ac_max_edge(unset, "triangle").assumption()
+
+
+def test_a_coarser_ac_edge_than_rusts_warns_only_with_rust_and_only_when_set():
+    from coppernicus.engine.ac import ac_max_edge
+    w = ac_max_edge(AcOptions(max_edge_mm=1.0), "rust").warning()
+    assert w and "coarser than the rust mesher's default 0.5 mm" in w and "a few percent" in w
+    assert "use ac.max_edge_mm 0.5 (the rust default) or leave it unset" in w
+    assert "0.25 for the highest noise accuracy" in w
+    assert ac_max_edge(AcOptions(max_edge_mm=1.0), "triangle").warning() is None
+    assert ac_max_edge(AcOptions(max_edge_mm=0.5), "rust").warning() is None      # the default itself
+    assert ac_max_edge(AcOptions(max_edge_mm=0.25), "rust").warning() is None     # finer
+    assert ac_max_edge(AcOptions(), "rust").warning() is None                     # unset
+
+
+def test_a_set_ac_edge_round_trips_even_at_the_old_default_and_an_unset_one_is_never_written(tmp_path):
+    from coppernicus.project import check_ac
+    data = {"board": "b.kipi.json.gz", "rails": []}
+    p = Project.from_dict({**data, "ac": {"max_edge_mm": 1.0}}, tmp_path / "a.coppernicus.yml")
+    assert p.ac.max_edge_mm == 1.0
+    out = p.save(tmp_path / "a.coppernicus.yml")
+    assert yaml.safe_load(out.read_text(encoding="utf-8"))["ac"] == {"max_edge_mm": 1.0}
+    assert Project.load(out).ac.max_edge_mm == 1.0
+    plain = Project.from_dict(data, tmp_path / "b.coppernicus.yml")
+    assert plain.ac.max_edge_mm is None
+    back = yaml.safe_load(plain.save(tmp_path / "b.coppernicus.yml").read_text(encoding="utf-8"))
+    assert "ac" not in back and "max_edge_mm" not in str(back.get("ac", ""))
+    nulled = Project.from_dict({**data, "ac": {"max_edge_mm": None}}, tmp_path / "c.coppernicus.yml")
+    assert nulled.ac.max_edge_mm is None                       # null: not set, as when left out
+    check_ac([], [], AcOptions())                              # an editor's unset edge loads back
 
 
 def _with(**blocks):
@@ -521,8 +578,9 @@ def test_assumptions_name_the_model_the_dielectric_and_the_open_loop(quick):
             "Dielectric loss tangent 0.02 (ac.loss_tangent; KiPI's default 0.02).",
             "Sweep 100 kHz to 100 MHz, 20 points per decade; the copper is solved at 13 frequencies "
             "(4 per decade; KiPI's default 20) and interpolated between them (PCHIP of jω·Z on log f).",
-            "AC mesh: largest edge 2 mm, refined toward plated holes near the rail from 0.03 mm "
-            "(grading 0.3), up to 5 mm far from it (KiPI's AC defaults).",
+            "AC mesh: largest edge 2 mm, set in the project (ac.max_edge_mm); refined toward plated "
+            "holes near the rail from 0.03 mm (grading 0.3), up to 5 mm far from it (KiPI's AC "
+            "defaults).",
             "Capacitors: ESR + jω·ESL + 1/(jω·C) as entered, 1 modelled.",
             "Probe U1: target 50 mΩ over the whole sweep (entered)"):
         assert line in a, line
@@ -574,7 +632,9 @@ def test_csv_png_and_summary_keys(quick, tmp_path):
     doc = ac_summary([r], {"+3V3": ("z.csv", "z.png")})
     json.dumps(doc, allow_nan=False)
     assert set(doc) == {"kind", "verdict", "verdict_note", "failed", "not_judged", "rails",
-                        "warnings"}                    # beyond gate §5: project-level warnings
+                        "warnings", "ac"}              # beyond gate §5: project-level warnings, the AC edge
+    rail_ac = doc["rails"][0]["ac"]
+    assert doc["ac"] == rail_ac == {"max_edge_mm_used": 2.0, "max_edge_mm_from": "project"}
     assert doc["kind"] == "ac_impedance"
     rail = doc["rails"][0]
     assert set(rail) == {"rail", "rail_nets", "ground", "source", "bandwidth_hz", "f_start_hz",
@@ -582,7 +642,7 @@ def test_csv_png_and_summary_keys(quick, tmp_path):
                          "caps_modelled", "caps_missing", "links", "verdict", "not_judged", "csv_file",
                          "png_file", "assumptions", "warnings", "stats",
                          # beyond gate §5: the bandwidth flag and placeholder (brief Q2), the probes
-                         "bandwidth_assumed", "assumed_bandwidth_hz", "probes"}
+                         "bandwidth_assumed", "assumed_bandwidth_hz", "probes", "ac"}
     assert rail["bandwidth_hz"] == 1e5 and rail["assumed_bandwidth_hz"] is None
     assert set(rail["stats"]) == {"seconds", "triangles", "unknowns", "ports", "method",
                                   "memory_peak_mb", "memory_peak_raised"}      # + memory (brief Q7)

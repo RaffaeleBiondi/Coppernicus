@@ -68,10 +68,13 @@ at 1 oz, scaled with each layer's copper thickness) raises attention items (seve
 "attention"), never a verdict: report them as such, never as a fail; a max_current_density
 the user sets replaces it. Read 'assumptions' and 'warnings' in every result. Errors come
 back as {"error": {code, message, hint}}; the hint says what to do.
-The mesher: Triangle by default (KiPI's own). The solve tools take mesher ("rust" is an
-experimental mesher of Coppernicus's own; it wins over the project's settings.mesher); use it
-only when the user asks. Each result records it in mesher; compare_results and
-compare_revisions warn when two results were meshed differently.
+The mesher: rust by default (Coppernicus's own); the solve tools take mesher ("triangle" is
+KiPI's own mesher; it wins over the project's settings.mesher); change it only when the user
+asks. Where rust is not installed, a solve that names no mesher meshes with Triangle and says
+so in warnings. Each result records it in mesher; compare_results and compare_revisions warn
+when two results were meshed differently. The AC mesh edge (the project's ac: max_edge_mm),
+when not set, is the mesher's default (rust finer than Triangle's 1.0 mm); AC, noise and
+tolerance results give the edge used in ac (max_edge_mm_used, max_edge_mm_from).
 """
 
 READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -254,8 +257,8 @@ class SettingsSpec(BaseModel):
 
 
 Mesher = Annotated[Optional[str], Field(
-    description="The mesher: 'triangle' (the default, KiPI's own) or 'rust' (experimental); only "
-                "when the user asks. Wins over the project's settings.mesher. Unavailable here: "
+    description="The mesher: 'rust' (the default) or 'triangle' (KiPI's own); only when the user "
+                "asks. Wins over the project's settings.mesher. Named and unavailable here: "
                 "mesher_unavailable, with a hint.")]
 
 
@@ -691,8 +694,9 @@ def build_server(session: Optional[Session] = None, log_level: str = "INFO") -> 
                       settings: Annotated[Optional[dict[str, Any]], Field(
                           description="Settings keys to set (max_edge_mm, via_plating_um, copper_temp_c, "
                                       "copper_thickness_mm, and the advanced min_edge_mm and "
-                                      "grading near plated holes, and mesher: 'rust' is "
-                                      "experimental, only when the user asks); null removes one "
+                                      "grading near plated holes, and mesher: 'rust', the "
+                                      "default, or 'triangle', only when the user asks); null "
+                                      "removes one "
                                       "(its default). "
                                       "copper_thickness_mm merges by layer (a layer set to null "
                                       "goes back to the board file); each layer changed takes a "

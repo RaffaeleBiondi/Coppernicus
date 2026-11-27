@@ -1263,8 +1263,11 @@ class NoisePanel(QWidget):
         i = self._index()
         self.fsw_hint.setText(fsw_hint(self._agg_rows[i], self.merged_project, self._win.merged.from_fields)
                               if i >= 0 else "")
-        self.mesh_note.setText(f"AC mesh: largest edge {self.project.ac.max_edge_mm:g} mm (ac.max_edge_mm, "
-                               "the Impedance tab's Sweep): a coarser one needs less memory")
+        from coppernicus.engine.ac import ac_max_edge
+        edge = ac_max_edge(self.project.ac)
+        given = "ac.max_edge_mm" if edge.origin == "project" else f"the {edge.origin}; ac.max_edge_mm"
+        self.mesh_note.setText(f"AC mesh: largest edge {edge.mm:g} mm ({given}, the Impedance tab's "
+                               "Sweep): a coarser one needs less memory")
 
     def _fill_probes(self):
         i = self._index()
