@@ -27,14 +27,14 @@ from contextlib import contextmanager
 from importlib import metadata
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
+from coppernicus import triangle_standin
 from coppernicus.engine.meshing import registry
 
 DEFAULT = "triangle"
 
 #: What to do to get a mesher that is not available here.
 HINTS = {
-    "triangle": ("Triangle comes with KiPI in a normal install (uv sync, pip install); the packaged "
-                 "app downloads it on first start"),
+    "triangle": triangle_standin.HINT,
     "rust": ("the Rust mesher (coppermesh) is experimental and not built here: build it as "
              "tools/mesher_rs/README.md says (maturin develop --release), or use the default, triangle"),
 }

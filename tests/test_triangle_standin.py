@@ -122,7 +122,9 @@ def test_the_cli_says_triangle_is_not_installed(tmp_path):
     lines = out.strip().splitlines()
     assert lines[-1] == "exit 2"
     doc = json.loads(_last_json(lines[:-1]))
-    assert doc["error"]["code"] == "triangle_unavailable"
+    # The default mesher is checked before anything is solved (the selector), with the stand-in's hint.
+    assert doc["error"]["code"] == "mesher_unavailable"
+    assert "'triangle'" in doc["error"]["message"] and "rust mesher" in doc["error"]["hint"]
 
 
 def _last_json(lines):
@@ -164,7 +166,8 @@ def test_the_rust_mesher_solves_a_repo_example_without_triangle(tmp_path):
             r = solve_rail(b, rail, p.settings, project=p)
             assert r.layers and math.isfinite(r.max_drop) and r.max_drop > 0, rail.net
         assert pipeline.STATS and all(s["mesher"] == "rust" for s in pipeline.STATS)
-        print("exit", main(["solve", {str(DEMO)!r}, "--json", "--out", {str(tmp_path)!r}]))
+        print("exit", main(["solve", {str(DEMO)!r}, "--mesher", "rust", "--json",
+                            "--out", {str(tmp_path)!r}]))
     ''')
     assert out.strip().splitlines()[-1] in ("exit 0", "exit 1")      # solved (1: a limit exceeded)
 
