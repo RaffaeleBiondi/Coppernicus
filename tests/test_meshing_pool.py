@@ -118,6 +118,8 @@ def test_the_rust_pool_is_not_kipis_mesh(forced, monkeypatch):
     KiPI's own Triangle would not give the rust result."""
     if "rust" not in meshing.available():
         pytest.skip("rust not available here")
+    if "triangle" not in meshing.available():
+        pytest.skip("mesher 'triangle' not available here")
     board, project = _demo()
     meshing.uninstall()
     kipi_own, _ = _solve(board, project, False, monkeypatch)

@@ -61,5 +61,6 @@ jobs:
           .venv/bin/python -m pytest -q -rs
           tests/test_triangle_standin.py
           tests/test_meshing_seam.py
+          tests/test_meshing_pool.py
           tests/test_mesher_rs.py
           tests/test_mesher_sliver.py

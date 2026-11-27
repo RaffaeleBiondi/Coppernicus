@@ -34,8 +34,10 @@ def start(spec, *kipi_args) -> None:
 
     ``spec`` is plain data: ``{"name", "settings", "options"}``."""
     early = {"triangle": "triangle" in sys.modules, "kipi_mesher": "kipi.core.mesh.mesher" in sys.modules}
-    # TODO triangle stand-in (step e): the single place where the stand-in that makes ``triangle``
-    # importable without the real package goes. Nothing here has imported KiPI's mesher or Triangle yet.
+    # Nothing here has imported KiPI's mesher or Triangle yet: without the real package, the stand-in
+    # takes Triangle's place before KiPI loads (multiprocessing has set sys.path by now).
+    from coppernicus.triangle_standin import ensure_triangle_importable
+    ensure_triangle_importable()
     installed = None
     if spec is not None:
         from coppernicus.engine.meshing import registry
