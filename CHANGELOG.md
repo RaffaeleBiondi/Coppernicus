@@ -17,11 +17,11 @@ results against your own judgement.
   board-temperature assumptions say where each regulator's loss went.
 - Every result names the mesher that meshed its copper: `mesher` (`name`, `version`,
   `experimental`) in each JSON summary (rail, project, tree, AC, noise, tolerance), and
-  `settings.mesher` in a rail's summary and HTML report. Triangle, KiPI's own meshing, stays the
-  default and its numbers do not change. An experimental mesher of our own, `rust`
-  (`tools/mesher_rs`, built only with `uv sync --group rust`), can be chosen with `--mesher rust`,
-  the project's `settings.mesher` or the MCP solve tools' `mesher`; `compare_results` and
-  `compare_revisions` warn when two results were meshed differently.
+  `settings.mesher` in a rail's summary and HTML report. The mesher is chosen with `--mesher`,
+  the project's `settings.mesher` or the MCP solve tools' `mesher`: `rust`, Coppernicus's own
+  (`tools/mesher_rs`, built with `uv sync --group rust`; the default, see Changed), or
+  `triangle`, KiPI's own meshing; `compare_results` and `compare_revisions` warn when two results
+  were meshed differently.
 - The app's **Mesher** box, at the top of the setup panel, chooses the mesher of every solve
   (rail, tree and board temperature, impedance, noise, tolerance, and the estimates that mesh)
   and is kept for the next start; a project's `settings.mesher` wins and locks it. While the
