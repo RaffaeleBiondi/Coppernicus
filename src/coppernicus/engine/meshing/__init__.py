@@ -12,8 +12,16 @@ from coppernicus.engine.meshing.protocol import (
     graded_cap,
     graded_limits,
 )
-from coppernicus.engine.meshing.registry import available, get, install, installed, register, uninstall
+from coppernicus.engine.meshing.registry import (
+    available,
+    get,
+    install,
+    installed,
+    register,
+    seam_problem,
+    uninstall,
+)
 
 __all__ = ["Backend", "SizeField", "Triangulation", "graded_cap", "graded_limits", "STATUS_OK", "STATUS_CAP",
            "STATUS_NO_DOMAIN", "STATUS_GRADED_CAP", "available", "get", "install", "installed", "register",
-           "uninstall"]
+           "seam_problem", "uninstall"]

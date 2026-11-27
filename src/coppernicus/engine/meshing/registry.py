@@ -6,6 +6,12 @@
     uninstall() -> KiPI's own path back, exactly as it was
     installed() -> the installed name, or None
 
+``install`` refuses (RuntimeError, :func:`seam_problem`) on a KiPI other than the one the seam was
+written for (:data:`KIPI_VERSION`), or whose functions below have other signatures: the seam
+copies KiPI's ``mesh_polygon`` and calls its helpers, so a mesh there could differ from KiPI's
+without a word. It does not fall back to KiPI's own mesher: that would give results under a
+mesher name that did not mesh them.
+
 ``install`` patches, in this process:
 - ``kipi.core.mesh.mesher.mesh_polygon``: every copper mesh goes through it (DC rail and tree
   solves via ``mesh_layer``, AC's ``ac/solver/fem.py`` via ``mesh_many``, noise copper via
@@ -27,6 +33,7 @@ when nothing is installed does nothing.
 from __future__ import annotations
 
 import importlib
+import inspect
 import os
 import sys
 from functools import partial
@@ -42,6 +49,21 @@ KNOWN: Dict[str, str] = {
 _factories: Dict[str, Callable[[], Backend]] = {}
 _state: Dict[str, object] = {}          # the installed name and what install() replaced
 _VIZ = "kipi.core.viz.meshes"
+
+#: The KiPI the seam was written for.
+KIPI_VERSION = "1.0.1"
+#: KiPI's functions the seam replaces or hooks into, with their parameters.
+_SEAMS = {
+    ("kipi.core.mesh.mesher", "mesh_polygon"): ["poly", "constraints", "max_area", "min_angle", "size_fn",
+                                                "warn", "points"],
+    ("kipi.core.mesh.parallel", "mesh_layers"): ["snap", "jobs", "opts", "features", "progress", "far"],
+    ("kipi.core.workers", "_start"): ["path", "colors"],
+    ("kipi.core.workers", "BoardPool.__init__"): ["self", "snap", "n", "colors"],
+}
+#: What the pipeline and the Triangle backend use of ``kipi.core.mesh.mesher``.
+_HELPERS = ("_clip_constraint", "_linework", "pslg_problems", "_pad_nodes", "_steiner_cap", "_hole_seeds",
+            "_place", "_triangulate", "_carve_holes", "MeshError", "MeshCapHit", "CONSTRAINT_CLEARANCE_MM",
+            "NODING_GRID_MM")
 
 
 def register(name: str, factory: Callable[[], Backend]) -> None:
@@ -85,12 +107,44 @@ def installed() -> Optional[str]:
     return _state.get("name")  # type: ignore[return-value]
 
 
+def seam_problem() -> Optional[str]:
+    """Why the seam can't go into this KiPI, or None."""
+    import kipi
+    version = getattr(kipi, "__version__", None)
+    if version != KIPI_VERSION:
+        return f"written for KiPI {KIPI_VERSION}, this is KiPI {version}"
+    for (module, name), params in _SEAMS.items():
+        fn = importlib.import_module(module)
+        for part in name.split("."):
+            fn = getattr(fn, part, None)
+        if not callable(fn):
+            return f"KiPI has no {module}.{name}"
+        try:
+            got = list(inspect.signature(fn).parameters)
+        except (TypeError, ValueError):
+            got = None
+        if got != params:
+            return f"{module}.{name} takes ({', '.join(got or ['?'])}), not ({', '.join(params)})"
+    from kipi.core import workers
+    if "_start" not in workers.BoardPool.__init__.__code__.co_names or workers.SERIAL_ENV != "KIPI_SERIAL":
+        return "kipi.core.workers.BoardPool no longer starts its workers with the module's _start"
+    import kipi.core.mesh.mesher as M
+    missing = [h for h in _HELPERS if not hasattr(M, h)]
+    if missing:
+        return f"KiPI has no kipi.core.mesh.mesher.{', '.join(missing)}"
+    return None
+
+
 def install(name: str, **options) -> Backend:
     """Route KiPI's meshing through the seam with backend ``name`` (see the module docstring).
-    ``options`` go to the pipeline (e.g. ``empty="warn"``)."""
+    ``options`` go to the pipeline (e.g. ``empty="warn"``). RuntimeError when this KiPI is not the
+    one the seam was written for (:func:`seam_problem`) or the backend can't run here."""
     if _state.get("name") == name and _state.get("options") == options:
         return _state["backend"]  # type: ignore[return-value]
     uninstall()
+    problem = seam_problem()
+    if problem is not None:
+        raise RuntimeError(f"mesher {name!r} not installed: {problem}")
     backend = get(name)
     import kipi.core.mesh.mesher as M
     import kipi.core.mesh.parallel as P

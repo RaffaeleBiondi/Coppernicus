@@ -231,3 +231,31 @@ def test_triangle_through_the_seam_is_bit_identical_to_kipis_own_path(case):
         assert np.array_equal(a.points, b.points) and np.array_equal(a.tris, b.tris)
         assert np.array_equal(a.voltage, b.voltage) and np.array_equal(a.current_density, b.current_density)
     assert (own.max_drop, own.power_loss, own.loss_vias) == (seam.max_drop, seam.power_loss, seam.loss_vias)
+
+
+def test_another_kipi_is_refused_and_nothing_is_patched(name, monkeypatch):
+    import kipi
+    import kipi.core.mesh.mesher as M
+    import kipi.core.mesh.parallel as P
+    import kipi.core.workers as W
+    before = (M.mesh_polygon, P.mesh_layers, W._start, os.environ.get("KIPI_SERIAL"))
+    monkeypatch.setattr(kipi, "__version__", "1.0.2")
+    assert meshing.seam_problem() == "written for KiPI 1.0.1, this is KiPI 1.0.2"
+    with pytest.raises(RuntimeError, match="not installed: written for KiPI 1.0.1, this is KiPI 1.0.2"):
+        meshing.install(name)
+    assert meshing.installed() is None
+    assert (M.mesh_polygon, P.mesh_layers, W._start, os.environ.get("KIPI_SERIAL")) == before
+
+
+def test_kipi_functions_of_other_signatures_are_refused(name, monkeypatch):
+    import kipi.core.mesh.mesher as M
+    import kipi.core.workers as W
+    assert meshing.seam_problem() is None
+    monkeypatch.setattr(W, "_start", lambda path, colors, extra: None)
+    with pytest.raises(RuntimeError, match=r"kipi.core.workers._start takes \(path, colors, extra\)"):
+        meshing.install(name)
+    monkeypatch.undo()
+    monkeypatch.delattr(M, "_carve_holes")
+    with pytest.raises(RuntimeError, match="no kipi.core.mesh.mesher._carve_holes"):
+        meshing.install(name)
+    assert meshing.installed() is None
