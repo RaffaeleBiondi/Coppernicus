@@ -1,4 +1,4 @@
-"""KiPI's worker pools on the installed mesher (experimental).
+"""KiPI's worker pools on the installed mesher.
 
 KiPI's :class:`kipi.core.workers.BoardPool` (the layer pool of ``kipi.core.mesh.parallel``, and
 the 3D view's) starts spawned processes with ``initializer=_start``. It looks ``_start`` up in

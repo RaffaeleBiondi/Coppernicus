@@ -1,4 +1,4 @@
-"""The mesher seam: what a meshing backend receives and returns (experimental).
+"""The mesher seam: what a meshing backend receives and returns.
 
 KiPI meshes each connected copper polygon with ``kipi.core.mesh.mesher.mesh_polygon``.
 :mod:`coppernicus.engine.meshing.pipeline` keeps KiPI's own pre-processing and its contract

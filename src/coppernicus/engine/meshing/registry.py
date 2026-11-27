@@ -1,4 +1,4 @@
-"""Which meshing backend KiPI uses in this process (experimental).
+"""Which meshing backend KiPI uses in this process.
 
     available() -> names that can run here
     get(name) -> the backend

@@ -1,4 +1,4 @@
-"""Meshing backends behind one seam (experimental): KiPI's pre-processing and contract
+"""Meshing backends behind one seam: KiPI's pre-processing and contract
 in :mod:`.pipeline`, the backend contract in :mod:`.protocol`, the choice in :mod:`.registry`."""
 
 from coppernicus.engine.meshing.protocol import (
