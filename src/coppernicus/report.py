@@ -503,8 +503,6 @@ def write_report(results: Iterable[ResultLike], project: Optional[Project], path
         r, (project.rail(r.net).limits if project is not None and project.rail(r.net) else Limits()))
         for r in results]
     settings = dict(vars(project.settings)) if project is not None else {}
-    if "mesher" in settings and settings["mesher"] is None:
-        settings["mesher"] = "triangle"       # not chosen: KiPI's own, the default
     name = (Path(project.path).name if project is not None and project.path else "")
     builder, text = build_report(items, title=title or f"Coppernicus report: {name or board_name or 'rails'}",
                                  board_name=board_name, outline=outline, project=name,
@@ -1001,9 +999,12 @@ def _verdict_words(judged: Mapping[str, Any]) -> str:
 
 def _shown_settings(settings: Mapping[str, Any]) -> Dict[str, Any]:
     """The settings as the page lists them, one line each: a mapping (copper_thickness_mm)
-    as "B.Cu 0.07 mm, ...", left out when empty."""
+    as "B.Cu 0.07 mm, ...", left out when empty; a mesher not chosen as triangle (KiPI's own,
+    the default), as the summaries record it, whoever wrote the page (the CLI or the app)."""
     out = {}
     for key, value in settings.items():
+        if key == "mesher" and value is None:
+            value = "triangle"
         if isinstance(value, Mapping):
             if not value:
                 continue
