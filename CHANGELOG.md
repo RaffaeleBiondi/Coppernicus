@@ -15,6 +15,13 @@ results against your own judgement.
   the rest stays on the IC. Only the share you enter, from the parts' data: none is assumed. A
   name that is not a regulator, or one whose output is on its own part, is refused. The
   board-temperature assumptions say where each regulator's loss went.
+- Every result names the mesher that meshed its copper: `mesher` (`name`, `version`,
+  `experimental`) in each JSON summary (rail, project, tree, AC, noise, tolerance), and
+  `settings.mesher` in a rail's summary and HTML report. Triangle, KiPI's own meshing, stays the
+  default and its numbers do not change. An experimental mesher of our own, `rust`
+  (`tools/mesher_rs`, built only with `uv sync --group rust`), can be chosen with `--mesher rust`,
+  the project's `settings.mesher` or the MCP solve tools' `mesher`; `compare_results` and
+  `compare_revisions` warn when two results were meshed differently.
 
 ### Changed
 
