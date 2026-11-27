@@ -196,10 +196,14 @@ def test_without_the_dc_part_nothing_is_raised(order):
 
 
 def test_with_pardiso_the_default_keeps_kipis_rule(monkeypatch):
+    """With PARDISO KiPI's own rule reads the free memory at each call: it is held fixed here,
+    or two calls (KiPI's, then ours through it) see a few pages more or less on a busy machine."""
     so.uninstall()
     so.configure_from_env({})
     kipis = so.KIPI_SPD["direct_solve_max_unknowns"]
     monkeypatch.setattr(so.direct, "backend", lambda: "pardiso")
+    monkeypatch.setattr(spd, "free_memory", lambda: 64 * 2**30)
+    monkeypatch.setattr(so, "free_memory", lambda: 64 * 2**30)
     assert spd.direct_solve_max_unknowns() == kipis()
 
 
