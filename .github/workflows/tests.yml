@@ -52,6 +52,7 @@ jobs:
       - name: Install, with coppermesh built by maturin (--group rust)
         run: uv sync --frozen --group rust
       - name: No fused multiply-add in the built extension, and the recorded mesh bit for bit
+        shell: bash               # stops at the first failing command on every runner (not so pwsh)
         run: |
           uv run --frozen --group rust python tools/mesher_rs/check_fma.py
           uv run --frozen --group rust python tools/mesher_rs/check_digest.py
